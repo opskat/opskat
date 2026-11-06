@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, vi } from "vitest";
 import { buildGroupPathMap, filterAssets } from "@/lib/assetSearch";
-import { __ensurePinyinReady } from "@/lib/pinyin";
+import { pinyinMatch } from "@/lib/pinyin";
 import type { asset_entity, group_entity } from "../../wailsjs/go/models";
 
-beforeAll(() => __ensurePinyinReady());
+// The pinyin dictionary loads asynchronously at module load; wait until pinyin matching is live.
+beforeAll(() => vi.waitFor(() => expect(pinyinMatch("拼音", "py")).toBe(true)));
 
 function asset(id: number, name: string, groupId = 0): asset_entity.Asset {
   return { ID: id, Name: name, GroupID: groupId } as asset_entity.Asset;

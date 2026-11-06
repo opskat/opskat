@@ -64,8 +64,9 @@ export interface AssetTypeDefinition {
   labelNs?: string;
   /** 是否在右键菜单暴露 SFTP 文件管理动作(替代 AssetTree 的 `asset.Type === "ssh"` 特例);缺省 = 不暴露。 */
   canOpenFileManager?: boolean;
+  /** 内置类型注册的是 `lazy` 组件（不进主包），渲染处要包 `Suspense`（见 AssetTypeSectionSuspense）。 */
   DetailInfoCard: ComponentType<DetailInfoCardProps>;
-  /** 详情页头部资产名下方的副标题;缺省 = 大写的 asset.Type。 */
+  /** 详情页头部资产名下方的副标题;缺省 = 大写的 asset.Type。可能是 `lazy` 组件(渲染处包 Suspense)。 */
   DetailSubtitle?: ComponentType<DetailSubtitleProps>;
   /** 从已存资产读出类型选择器里的子类型(通用资产 = 自定义类型标识);与 ConfigSectionProps.variant 对应。 */
   variantOf?: (asset: asset_entity.Asset) => string | undefined;
@@ -74,7 +75,7 @@ export interface AssetTypeDefinition {
    * 图标来自所选自定义类型,类型没有图标就留空,显示时由 getIconComponent 取默认图标)。
    */
   formIcon?: string;
-  /** 资产表单的 per-type config 区(注册化表单);缺省 = 走遗留/扩展路径。 */
+  /** 资产表单的 per-type config 区(注册化表单);缺省 = 走遗留/扩展路径。同样可能是 `lazy` 组件。 */
   ConfigSection?: ConfigSectionComponent;
   /** 是否支持"测试连接"(替代 isTestableAssetType 链)。 */
   testable?: boolean;

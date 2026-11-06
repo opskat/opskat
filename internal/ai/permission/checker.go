@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -78,6 +79,15 @@ func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []Gra
 		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "no grant approval mechanism", "无 Grant 审批机制")}
 	}
 
+	items, autopilot := splitAutopilotGrants(ctx, items)
+	autopilotNote := ""
+	if len(autopilot) > 0 {
+		autopilotNote = autopilotGrantMessage(ctx, autopilot)
+		if len(items) == 0 {
+			return aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceAutopilotDeny, Message: autopilotNote}
+		}
+	}
+
 	approvalItems := make([]ApprovalItem, 0)
 	var allPatterns []string
 	for _, item := range items {
@@ -121,10 +131,18 @@ func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []Gra
 
 	approved, finalPatterns := c.grantRequestFunc(ctx, approvalItems, reason)
 	if !approved {
-		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "USER DENIED: The user has denied the grant approval request. Stop the current task immediately.", "用户拒绝：用户已拒绝 Grant 审批请求。请立即停止当前任务。"), DecisionSource: aictx.SourceGrantDeny, MatchedPattern: strings.Join(allPatterns, "; ")}
+		return aictx.CheckResult{Decision: aictx.Deny, Message: joinNote(policy.PolicyMsg(ctx, "USER DENIED: The user has denied the grant approval request. Stop the current task immediately.", "用户拒绝：用户已拒绝 Grant 审批请求。请立即停止当前任务。"), autopilotNote), DecisionSource: aictx.SourceGrantDeny, MatchedPattern: strings.Join(allPatterns, "; ")}
 	}
 
-	return aictx.CheckResult{Decision: aictx.Allow, Message: policy.PolicyFmt(ctx, "grant approved, %d patterns", "Grant 已批准，共 %d 条模式", len(finalPatterns)), DecisionSource: aictx.SourceGrantAllow, MatchedPattern: strings.Join(finalPatterns, "; ")}
+	return aictx.CheckResult{Decision: aictx.Allow, Message: joinNote(policy.PolicyFmt(ctx, "grant approved, %d patterns", "Grant 已批准，共 %d 条模式", len(finalPatterns)), autopilotNote), DecisionSource: aictx.SourceGrantAllow, MatchedPattern: strings.Join(finalPatterns, "; ")}
+}
+
+// joinNote 在消息后附上一段说明；说明为空时原样返回。
+func joinNote(msg, note string) string {
+	if note == "" {
+		return msg
+	}
+	return msg + "\n" + note
 }
 
 // grantItemAppliesTo 判断一条 grant item 是否属于当前检查的工具面。
@@ -242,7 +260,7 @@ func (c *CommandPolicyChecker) Check(ctx context.Context, assetID int64, command
 	if result.Decision != aictx.NeedConfirm {
 		return result
 	}
-	return c.HandleConfirm(ctx, assetID, asset_entity.AssetTypeSSH, command)
+	return c.handleConfirm(ctx, assetID, asset_entity.AssetTypeSSH, command, result.Review)
 }
 
 // CheckForAsset 按资产类型分发权限检查。
@@ -252,13 +270,21 @@ func (c *CommandPolicyChecker) CheckForAsset(ctx context.Context, assetID int64,
 	if result.Decision != aictx.NeedConfirm {
 		return result
 	}
-	return c.HandleConfirm(ctx, assetID, assetType, command, detail...)
+	return c.handleConfirm(ctx, assetID, assetType, command, result.Review, detail...)
 }
 
 // HandleConfirm 处理需要用户确认的情况。
 // detail 是可选的展示补充（沿用本包 RegisterExecutor 的可选参数写法），
-// 只影响审批项在前端的呈现，不参与任何匹配。
+// 只影响审批项在前端的呈现，不参与任何匹配；审批项由 ApprovalItemFor 的同一构造给出。
 func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64, assetType, command string, detail ...string) aictx.CheckResult {
+	return c.handleConfirm(ctx, assetID, assetType, command, nil, detail...)
+}
+
+// handleConfirm 同 HandleConfirm，review 是这条命令的模型审核结果（辅助审批下审核未通过或失败时才有）：
+// 放进审批项给人看，每一种结局（确认、拒绝、无从确认）的结果里也带上它，审计据此记下
+// "模型没通过、人批准了"。
+func (c *CommandPolicyChecker) handleConfirm(ctx context.Context, assetID int64, assetType, command string, review *aictx.ReviewInfo, detail ...string) (result aictx.CheckResult) {
+	defer func() { result.Review = review }()
 	if c.confirmFunc == nil {
 		return aictx.CheckResult{Decision: aictx.Deny, Message: policy.PolicyMsg(ctx, "command not authorized and no confirmation mechanism", "命令未授权且无确认机制"), DecisionSource: aictx.SourcePolicyDeny}
 	}
@@ -272,42 +298,9 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		assetName = asset.Name
 	}
 
-	// 与 ApprovalTypeFor 同一张表、同一条不变式：未注册类型回落到原样的 assetType，
-	// 不是静默变成 "exec"（type_registry.go 的 ApprovalTypeFor doc comment 有论证）。
-	approvalType := ApprovalTypeFor(assetType)
-
-	// classify is non-nil only for extension types (RegisterPolicyCheck); every
-	// built-in type falls through with classified=false and an approval item that
-	// looks exactly as it did before this classification existed.
-	classify, isExtension := classifyFor(assetType)
-	var classification ExtensionClassification
-	var classified bool
-	if isExtension {
-		classification, classified = classify(ctx, command)
-	}
-
-	item := ApprovalItem{
-		Type:      approvalType,
-		AssetID:   assetID,
-		AssetName: assetName,
-		Command:   command,
-	}
-	if classified {
-		item.Action = classification.Action
-		for _, resource := range classification.Resources {
-			item.Resources = append(item.Resources, policy.DisplayExtensionResource(resource))
-		}
-		if resources := policy.ExtensionResources(classification.Resources); len(resources) == 1 {
-			item.Resource = policy.DisplayExtensionResource(resources[0])
-			item.RememberPattern = extGrantTail(classification.Action, resources[0])
-		} else {
-			item.RememberPattern = multiResourceRememberPattern(classification.Action, resources)
-		}
-		item.Detail = formatExtensionRequestDetail(classification)
-	}
-	if len(detail) > 0 {
-		item.Detail = detail[0]
-	}
+	item, cls := buildApprovalItem(ctx, assetID, assetName, assetType, command, detail...)
+	item.Review = review
+	approvalType := item.Type
 	kind := ApprovalKindFor(approvalType, command)
 	resp := c.confirmFunc(ctx, kind, []ApprovalItem{item})
 	parsed, parseErr := ParseApprovalResponse(kind, resp, []ApprovalItem{item})
@@ -339,14 +332,14 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 		// 掉进兜底，把用户的编辑**静默换成系统主体**——用户改这一栏通常是想收窄，
 		// 却反手拿到一条他没要的更宽授权。用不了就什么都不授权。
 		var patterns []string
-		if isExtension {
+		if cls.isExtension {
 			// Extension "always allow" never falls back to NormalizeGrantPatterns'
 			// whole-command-string default: the grant is the check_policy
 			// classification (extGrantKey), not the command text, so a later call
 			// spelling the same request differently still matches (spec 参数级策略 ›
 			// 审批展示) and matching stays keyed on (action, resource) — see
 			// extGrantMatch / MatchExtensionGrant.
-			patterns = extensionGrantPatterns(ctx, classify, parsed.EditedItems, classification, classified)
+			patterns = extensionGrantPatterns(ctx, cls, item, parsed.EditedItems)
 		} else if len(parsed.EditedItems) > 0 {
 			for _, item := range parsed.EditedItems {
 				patterns = append(patterns, NormalizeGrantPatterns(assetType, item.Command, GrantOriginUser)...)
@@ -388,39 +381,172 @@ func (c *CommandPolicyChecker) HandleConfirm(ctx context.Context, assetID int64,
 // later call stays keyed on (action, resource) (see extGrantMatch /
 // MatchExtensionGrant).
 //
-// Unedited, a classified call persists the Remember pre-fill it showed
-// (classificationGrantKeys): for one resource its exact grant key (extGrantKey) —
-// the key the next identical call is matched as — and for several the one rule
-// covering them all. A classified call's Remember editor edits the grant tail itself
-// (ApprovalItem.RememberPattern); ParseApprovalResponse has already held every edit
-// to "<action>:<resource-glob>" with the classified action, so an edit is persisted
-// verbatim — its glob characters are the user's intent.
+// A classified call persists classifiedItemGrants.
 //
 // An unclassified call's editor shows command text, so its edits are classified
 // here: an item whose command no longer classifies (parse error, or an action the
 // type never declared) contributes nothing — same "empty is an answer, not a
 // failure" rule the generic NormalizeGrantPatterns path already follows — rather than
 // a phantom, ungrantable pattern.
-func extensionGrantPatterns(ctx context.Context, classify ClassifyFunc, edited []ApprovalItem, classification ExtensionClassification, classified bool) []string {
-	if classified {
-		if len(edited) == 0 {
-			return classificationGrantKeys(classification)
-		}
-		patterns := make([]string, 0, len(edited))
-		for _, item := range edited {
-			patterns = append(patterns, extGrantRule(classification.PolicyType, item.Command))
-		}
-		return patterns
+func extensionGrantPatterns(ctx context.Context, cls itemClassification, item ApprovalItem, edited []ApprovalItem) []string {
+	if cls.classified {
+		return classifiedItemGrants(cls.classification.PolicyType, item, edited)
 	}
 	var patterns []string
-	for _, item := range edited {
-		cls, ok := classify(ctx, item.Command)
+	for _, e := range edited {
+		c, ok := cls.classify(ctx, e.Command)
 		if !ok {
 			continue
 		}
-		patterns = append(patterns, classificationGrantKeys(cls)...)
+		patterns = append(patterns, classificationGrantKeys(c)...)
 	}
 	return patterns
+}
+
+// classifiedItemGrants is the grant an "always allow" of a classified extension item
+// persists, under policyType's namespace (extGrantRule). Unedited, the Remember
+// pre-fill the item showed (ApprovalItem.RememberPattern): for one resource its exact
+// grant key (extGrantKey) — the key the next identical call is matched as — and for
+// several the one rule covering them all. A classified item's Remember editor edits
+// that tail itself; ParseApprovalResponse has already held every edit to
+// "<action>:<resource-glob>" with the classified action, so an edit is persisted
+// verbatim — its glob characters are the user's intent.
+func classifiedItemGrants(policyType string, item ApprovalItem, edited []ApprovalItem) []string {
+	if len(edited) == 0 {
+		return []string{extGrantRule(policyType, item.RememberPattern)}
+	}
+	patterns := make([]string, 0, len(edited))
+	for _, e := range edited {
+		patterns = append(patterns, extGrantRule(policyType, e.Command))
+	}
+	return patterns
+}
+
+// SaveExtensionItemGrant persists the "always allow" of a classified extension
+// approval item (item.Action set) answered outside HandleConfirm — the desktop's
+// answer to an opsctl single approval, whose item carries the classification opsctl
+// made with ApprovalItemFor. It persists exactly what HandleConfirm persists for the
+// same item and answer (classifiedItemGrants), so the next identical call is let
+// through by MatchExtensionGrant whichever process runs it. edited is the
+// ParseApprovalResponse output for item: empty when the user left the Remember value
+// as shown.
+func SaveExtensionItemGrant(ctx context.Context, sessionID string, item ApprovalItem, edited []ApprovalItem) error {
+	landing, ok := ruleLandingFor(item.Type)
+	if !ok || !landing.grantsAreRules || item.Action == "" {
+		return fmt.Errorf("approval item of type %q is not a classified extension call", item.Type)
+	}
+	for _, p := range classifiedItemGrants(landing.refPolicyType, item, edited) {
+		SaveGrantPattern(ctx, sessionID, item.AssetID, item.AssetName, item.Type, p)
+	}
+	return nil
+}
+
+// itemClassification is what buildApprovalItem learned about a call besides the
+// item: whether its type is a classify-registered extension type and, if the call
+// classified, the classification — HandleConfirm's "always allow" persists from it.
+type itemClassification struct {
+	classify       ClassifyFunc
+	isExtension    bool
+	classification ExtensionClassification
+	classified     bool
+}
+
+// ApprovalItemFor builds the approval item for one call on an asset: the one builder
+// every single approval shares — the AI's HandleConfirm, and opsctl's terminal
+// prompt, desktop request and NEEDS AUTHORIZATION — so a human is asked about the
+// same item wherever they are asked.
+//
+// assetType is the asset's type (an approval face such as "exec" or "cp" names the
+// same entry); the item's Type is its approval face label (ApprovalTypeFor). For a
+// built-in type the item is the plain {Type, AssetID, AssetName, Command, Detail}.
+// For an extension type registered with a ClassifyFunc whose call classifies, it also
+// carries the check_policy classification: Action, the Resources the call touches as
+// the extension returned them (Resource when there is exactly one), the
+// RememberPattern "always allow" persists, and Detail — the tool call (tool + args
+// JSON), which the approval surfaces render as such and which therefore takes the
+// place of the caller's detail. detail is the caller's optional display supplement
+// (cp's "local → remote"); it never takes part in any matching.
+func ApprovalItemFor(ctx context.Context, assetID int64, assetName, assetType, command string, detail ...string) ApprovalItem {
+	item, _ := buildApprovalItem(ctx, assetID, assetName, assetType, command, detail...)
+	return item
+}
+
+func buildApprovalItem(ctx context.Context, assetID int64, assetName, assetType, command string, detail ...string) (ApprovalItem, itemClassification) {
+	// 与 ApprovalTypeFor 同一张表、同一条不变式：未注册类型回落到原样的 assetType，
+	// 不是静默变成 "exec"（type_registry.go 的 ApprovalTypeFor doc comment 有论证）。
+	item := ApprovalItem{
+		Type:      ApprovalTypeFor(assetType),
+		AssetID:   assetID,
+		AssetName: assetName,
+		Command:   command,
+	}
+	if len(detail) > 0 {
+		item.Detail = detail[0]
+	}
+
+	// classify is non-nil only for extension types (RegisterPolicyCheck); every
+	// built-in type falls through with classified=false and an approval item that
+	// looks exactly as it did before this classification existed.
+	var cls itemClassification
+	cls.classify, cls.isExtension = classifyFor(assetType)
+	if cls.isExtension {
+		cls.classification, cls.classified = cls.classify(ctx, command)
+	}
+	if !cls.classified {
+		return item, cls
+	}
+	c := cls.classification
+	item.Action = c.Action
+	for _, resource := range c.Resources {
+		item.Resources = append(item.Resources, policy.DisplayExtensionResource(resource))
+	}
+	if resources := policy.ExtensionResources(c.Resources); len(resources) == 1 {
+		item.Resource = policy.DisplayExtensionResource(resources[0])
+		item.RememberPattern = extGrantTail(c.Action, resources[0])
+	} else {
+		item.RememberPattern = multiResourceRememberPattern(c.Action, resources)
+	}
+	item.Detail = formatExtensionRequestDetail(c)
+	return item, cls
+}
+
+// ApprovalRuleSubjects returns the subjects of an approval of item as permanent-rule
+// patterns — the shape `opsctl policy allow` takes on the asset: what a terminal
+// prompt lists, what its "always allow" writes, and what NEEDS AUTHORIZATION tells a
+// human to allow. face is the approval face the call was checked under (cp keeps its
+// read/write direction; otherwise the item's own type).
+//
+// A classified extension call has one subject, its rule
+// "<action>[:<resource-glob>]": the Remember pre-fill, except that a call touching
+// no resource — whose exact tail "<action>:" no permanent rule can hold (the
+// extension rule sink refuses an empty glob) — is covered by its bare action. An
+// extension call that did not classify has none: no rule can match it. Every other
+// call has its normalized command (NormalizeGrantPatterns, system origin).
+func ApprovalRuleSubjects(face string, item ApprovalItem) []string {
+	if item.Action != "" {
+		if len(item.Resources) == 0 {
+			return []string{item.Action}
+		}
+		return []string{item.RememberPattern}
+	}
+	if _, isExtension := classifyFor(face); isExtension {
+		return nil
+	}
+	return NormalizeGrantPatterns(face, item.Command, GrantOriginSystem)
+}
+
+// ApprovalKindForItem is ApprovalKindFor for an approval whose "always allow"
+// persists ApprovalRuleSubjects(face, item) — opsctl's terminal prompt and the
+// desktop dialog answering opsctl. An item with no subject (an extension call that
+// did not classify) has nothing an "always allow" could persist, so it is approved
+// once: persisting its command text instead would land as a rule spelled like the
+// command, matching something other than what the user was shown.
+func ApprovalKindForItem(face string, item ApprovalItem) string {
+	kind := ApprovalKindFor(face, item.Command)
+	if kind == ApprovalKindSingle && len(ApprovalRuleSubjects(face, item)) == 0 {
+		return ApprovalKindOnce
+	}
+	return kind
 }
 
 // classificationGrantKeys is the grant an unedited "always allow" persists: for a

@@ -174,16 +174,6 @@ describe("OpsctlApprovalDialog", () => {
     expect(response?.edited_items?.[0].command).toBe("object.read mybucket/safe/*");
   });
 
-  it("扩展审批（type=ext_tool）不提供 remember/allowAll", () => {
-    const handlers = captureHandlers();
-    render(<OpsctlApprovalDialog />);
-
-    fireSingleApproval(handlers, { kind: "extension", type: "ext_tool", session_id: "session-1" });
-
-    expect(screen.queryByText("opsctlApproval.remember")).not.toBeInTheDocument();
-    expect(screen.getByText("opsctlApproval.allow")).toBeInTheDocument();
-  });
-
   it("普通一次性审批（kind=once）不提供 remember/allowAll", () => {
     const handlers = captureHandlers();
     render(<OpsctlApprovalDialog />);
@@ -296,6 +286,31 @@ describe("OpsctlApprovalDialog 批量审批折叠（kind=batch，D17）", () => 
 
     expect(screen.queryByTestId("opsctl-approval-batch-summary")).not.toBeInTheDocument();
     expect(screen.getByText("/var/log/app-0.log")).toBeVisible();
+  });
+
+  // opsctl batch 里的扩展资产条目带着扩展分类出的动作与资源，与单条审批一样展示在命令上方；
+  // 内置条目没有分类，不出现动作行。batch 仍只有拒绝 / 允许，没有「记住」。
+  it("batch 里的扩展条目显示动作与资源，内置条目不显示，且不提供「记住」", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+
+    fireBatchApproval(handlers, [
+      {
+        type: "fixture",
+        asset_id: 1,
+        asset_name: "fx-1",
+        command: "classify_many --resources=logs-a --resources=logs-b",
+        action: "write",
+        resource: "",
+        resources: ["logs-a", "logs-b"],
+      },
+      { type: "kafka", asset_id: 2, asset_name: "kf-1", command: "message.write orders" },
+    ]);
+
+    expect(screen.getAllByTestId("approval-action").map((el) => el.textContent)).toEqual(["write"]);
+    expect(screen.getAllByTestId("approval-resource").map((el) => el.textContent)).toEqual(["logs-a", "logs-b"]);
+    expect(screen.getByText("message.write orders")).toBeVisible();
+    expect(screen.queryByText("opsctlApproval.remember")).not.toBeInTheDocument();
   });
 
   // batch verb（exec/sql/redis 混合批）同样走 opsctl:batch-approval，但 cmd/opsctl/command/

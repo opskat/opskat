@@ -6,7 +6,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Microsoft/go-winio v0.6.3
 	github.com/bouncyball-git/gopher-rdp v1.0.8
-	github.com/cago-frame/agents v0.0.0-20260923025819-54e31427355a
+	github.com/cago-frame/agents v0.0.0-20261027034639-d00ec537a3fe
 	github.com/cago-frame/cago v0.0.0-20260926025905-604723c9e69d
 	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.10.1
@@ -16,6 +16,8 @@ require (
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
+	github.com/jcmturner/gofork v1.7.6
+	github.com/jcmturner/gokrb5/v8 v8.4.4
 	github.com/microsoft/go-mssqldb v1.11.2
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/ncruces/go-sqlite3 v0.35.6
@@ -120,11 +122,15 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
+	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/hashicorp/go-version v1.9.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jchv/go-winloader v0.0.0-20210711035445-715c2860da7e // indirect
+	github.com/jcmturner/aescts/v2 v2.0.0 // indirect
+	github.com/jcmturner/dnsutils/v2 v2.0.0 // indirect
+	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/jonboulle/clockwork v0.5.0 // indirect
@@ -252,4 +258,4 @@ require (
 
 // replace github.com/wailsapp/wails/v2 v2.10.2 => /Users/codfrm/go/pkg/mod
 
-replace github.com/bouncyball-git/gopher-rdp => github.com/opskat/gopher-rdp v0.0.0-20260828065430-f5b7d773211f
+replace github.com/bouncyball-git/gopher-rdp => github.com/opskat/gopher-rdp v0.0.0-20261105074210-e501ef089065

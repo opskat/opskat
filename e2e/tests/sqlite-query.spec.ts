@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { test, expect } from "@playwright/test";
 
-import { createSQLiteAssetViaUI } from "../fixtures/assets";
+import { createSQLiteAssetViaUI, assetTreeRow } from "../fixtures/assets";
 
 test("run a SQLite query through the database workspace and render the persisted row", async ({ page }) => {
   const targetPath = join(process.env.OPSKAT_DATA_DIR!, `query-target-${Date.now()}.db`);
@@ -16,7 +16,7 @@ test("run a SQLite query through the database workspace and render the persisted
   const name = `e2e-sqlite-${Date.now()}`;
   await createSQLiteAssetViaUI(page, { name, path: targetPath });
 
-  await page.getByTestId("asset-tree").getByText(name, { exact: true }).dblclick();
+  await (await assetTreeRow(page, name)).dblclick();
   await expect(page.getByTestId("database-query-panel")).toBeVisible({ timeout: 30_000 });
   await page.getByTestId("database-new-sql-button").click();
   const editor = page.getByTestId("sql-editor");

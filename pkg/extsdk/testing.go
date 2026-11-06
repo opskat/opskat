@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// TestEvent represents a captured action event.
+// TestEvent represents a captured tool event.
 type TestEvent struct {
 	Type string          `json:"type"`
 	Data json.RawMessage `json:"data"`
@@ -29,6 +29,14 @@ func WithAssetConfig(assetID int64, config any) TestOption {
 	}
 }
 
+// WithSettings sets the extension's settings as ctx.Settings reads them in a
+// call without an asset: values are the non-secret fields, secrets whether each
+// format:"password" field is set. Without it the view is empty, as for an
+// extension that saved none.
+func WithSettings(values map[string]any, secrets map[string]bool) TestOption {
+	return func(h *TestHost) { h.settings = SettingsView{Values: values, Secrets: secrets} }
+}
+
 // WithMockHTTP sets an HTTP mock handler for all HTTP requests.
 func WithMockHTTP(handler http.HandlerFunc) TestOption {
 	return func(h *TestHost) { h.httpHandler = handler }
@@ -41,24 +49,34 @@ func WithMockTCP(dial func(addr string) (net.Conn, error)) TestOption {
 	return func(h *TestHost) { h.mockTCP = dial }
 }
 
-// WithActionCancel marks the TestHost as already-canceled, so ActionShouldStop
-// returns true. Used to exercise cooperative-cancel paths in action handlers.
-func WithActionCancel() TestOption {
-	return func(h *TestHost) { h.actionStopped.Store(true) }
+// WithToolCancel marks the TestHost as already-canceled, so ToolContext.ShouldStop
+// returns true. Used to exercise cooperative-cancel paths in tool handlers.
+func WithToolCancel() TestOption {
+	return func(h *TestHost) { h.toolStopped.Store(true) }
+}
+
+// WithKerberosTickets installs the source KerberosTicket answers from, standing
+// in for the host's Kerberos client: it gets the SPN the driver asked for.
+func WithKerberosTickets(source func(spn string) ([]byte, error)) TestOption {
+	return func(h *TestHost) { h.kerberosTickets = source }
 }
 
 // TestHost simulates the host environment for extension unit testing.
 type TestHost struct {
-	assetConfigs  map[int64]json.RawMessage
-	kv            map[string][]byte
-	httpHandler   http.HandlerFunc
-	mockTCP       func(addr string) (net.Conn, error)
-	mockTCPMu     sync.Mutex
-	mockTCPConns  map[uint32]net.Conn
-	actionStopped atomic.Bool
-	events        []TestEvent
-	eventCb       func(TestEvent)
-	mu            sync.Mutex
+	assetConfigs map[int64]json.RawMessage
+	settings     SettingsView
+	callAsset    Asset // the asset of the call in progress (CallTool)
+	kv           map[string][]byte
+	httpHandler  http.HandlerFunc
+	mockTCP      func(addr string) (net.Conn, error)
+	mockTCPMu    sync.Mutex
+	mockTCPConns map[uint32]net.Conn
+	toolStopped  atomic.Bool
+	events       []TestEvent
+	mu           sync.Mutex
+
+	// kerberosTickets is the source set via WithKerberosTickets.
+	kerberosTickets func(spn string) ([]byte, error)
 }
 
 // NewTestHost creates a TestHost and installs it as the active host.
@@ -80,9 +98,15 @@ func (h *TestHost) Close() {
 }
 
 // CallTool invokes a registered tool handler against asset, the way the host
-// invokes it for `exec <asset> -- <tool>`. Pass the zero Asset for a call that is
-// not scoped to one.
+// invokes it for `exec <asset> -- <tool>` or a page's call. Pass the zero Asset
+// for a call that is not scoped to one. The events the call emits are what
+// Events returns afterwards.
 func (h *TestHost) CallTool(asset Asset, name string, args any) (any, error) {
+	h.mu.Lock()
+	h.events = nil
+	h.callAsset = asset
+	h.mu.Unlock()
+
 	argsJSON, _ := json.Marshal(args)
 	input, _ := json.Marshal(map[string]any{
 		"tool":  name,
@@ -90,31 +114,6 @@ func (h *TestHost) CallTool(asset Asset, name string, args any) (any, error) {
 		"asset": asset,
 	})
 	result, err := dispatch("execute_tool", input)
-	if err != nil {
-		return nil, err
-	}
-	var out any
-	if err := json.Unmarshal(result, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// CallAction invokes a registered action handler with event capture, scoped to
-// asset (the zero Asset for an action the caller has no asset for).
-func (h *TestHost) CallAction(asset Asset, name string, args any, onEvent func(TestEvent)) (any, error) {
-	h.mu.Lock()
-	h.events = nil
-	h.eventCb = onEvent
-	h.mu.Unlock()
-
-	argsJSON, _ := json.Marshal(args)
-	input, _ := json.Marshal(map[string]any{
-		"action": name,
-		"args":   json.RawMessage(argsJSON),
-		"asset":  asset,
-	})
-	result, err := dispatch("execute_action", input)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +161,7 @@ func (h *TestHost) CheckPolicy(tool string, args any) (action string, resources 
 	return out.Action, []string{out.Resource}, nil
 }
 
-// Events returns all captured action events.
+// Events returns the events the last CallTool emitted.
 func (h *TestHost) Events() []TestEvent {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -179,6 +178,25 @@ func (h *TestHost) AssetGetConfig(assetID int64) (json.RawMessage, error) {
 		return nil, fmt.Errorf("config not found for asset %d", assetID)
 	}
 	return v, nil
+}
+
+// ConfigGet answers config.get as the host does: in a call without an asset the
+// settings set via WithSettings (an empty view without it); a call scoped to an
+// asset is refused.
+func (h *TestHost) ConfigGet() (json.RawMessage, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.callAsset != (Asset{}) {
+		return nil, fmt.Errorf("config.get: this call is scoped to the asset %q, whose scope carries no config; read the asset's own with AssetConfig", h.callAsset.Name)
+	}
+	view := h.settings
+	if view.Values == nil {
+		view.Values = map[string]any{}
+	}
+	if view.Secrets == nil {
+		view.Secrets = map[string]bool{}
+	}
+	return json.Marshal(view)
 }
 
 func (h *TestHost) FileDialog(params []byte) (string, error) {
@@ -202,14 +220,11 @@ func (h *TestHost) KVSet(key string, value []byte) error {
 	return nil
 }
 
-func (h *TestHost) ActionEvent(eventType string, data []byte) {
+func (h *TestHost) ToolEvent(eventType string, data []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	e := TestEvent{Type: eventType, Data: data}
 	h.events = append(h.events, e)
-	if h.eventCb != nil {
-		h.eventCb(e)
-	}
 }
 
 // IOSetDeadline applies a deadline to a TCP mock handle registered via WithMockTCP.
@@ -237,7 +252,16 @@ func (h *TestHost) IOSetDeadline(handleID uint32, kind string, unixNanos int64) 
 	}
 }
 
-// ActionShouldStop returns the cancellation flag (default false; set via WithActionCancel).
-func (h *TestHost) ActionShouldStop() bool {
-	return h.actionStopped.Load()
+// KerberosTicket answers from the source set via WithKerberosTickets; without
+// one it refuses, as the host does for an asset that does not use Kerberos.
+func (h *TestHost) KerberosTicket(spn string) ([]byte, error) {
+	if h.kerberosTickets == nil {
+		return nil, fmt.Errorf("kerberos ticket refused: no ticket source in test (use WithKerberosTickets)")
+	}
+	return h.kerberosTickets(spn)
+}
+
+// ToolShouldStop returns the cancellation flag (default false; set via WithToolCancel).
+func (h *TestHost) ToolShouldStop() bool {
+	return h.toolStopped.Load()
 }

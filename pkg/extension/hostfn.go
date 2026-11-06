@@ -3,6 +3,9 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/tetratelabs/wazero/api"
@@ -56,4 +59,35 @@ func deadlineTime(unixNanos int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(0, unixNanos)
+}
+
+func init() {
+	for op, fn := range hostOps {
+		hostOps[op] = gateScopeOps(op, fn)
+	}
+}
+
+// gateScopeOps makes fn refuse a call whose scope does not list op (Scope.Ops),
+// before anything reaches the host. io.open is checked per stream type.
+func gateScopeOps(op string, fn hostOpFunc) hostOpFunc {
+	return func(env hostCallEnv, params json.RawMessage) ([]byte, error) {
+		scope := env.inv.boundScope()
+		if scope == nil || scope.Ops == nil { // nil: a tool call, before or after its scope resolves
+			return fn(env, params)
+		}
+		name := op
+		if op == OpIOOpen {
+			var p struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, err
+			}
+			name = IOOpenOp(p.Type)
+		}
+		if !scope.allows(name) {
+			return nil, fmt.Errorf("host call %q is not allowed in this call's scope, which allows only %s", name, strings.Join(scope.Ops, ", "))
+		}
+		return fn(env, params)
+	}
 }

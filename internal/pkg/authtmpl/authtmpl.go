@@ -1,7 +1,7 @@
 // Package authtmpl 实现自定义类型的模板语言：`{{ 表达式 }}` 出现在 HTTP
 // 认证绑定、命令模板与环境变量绑定三处，共享同一套语法与函数实现（见
 // docs/specs/2026-09-28-generic-asset.md 「模板语言」一节，Design decision 18）。
-// 扩展 auth 绑定的值模板（pkg/extension）也由这个包解析与渲染：语法是扩展既有
+// 扩展 auth 绑定的值模板（internal/extreg）也由这个包解析与渲染：语法是扩展既有
 // 写法的超集（Design decision 19），已发布扩展的模板必须原样可用。
 //
 // 求值时的中间值一律是原始字节（哈希/HMAC 返回摘要字节，未经 base64/hex 编码），

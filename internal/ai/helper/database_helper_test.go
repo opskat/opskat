@@ -2,183 +2,191 @@ package helper
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"strings"
 	"testing"
 
-	"github.com/DATA-DOG/go-sqlmock"
-	_ "github.com/glebarez/go-sqlite"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	. "github.com/smartystreets/goconvey/convey"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
-func TestFormatRowsJSONContracts(t *testing.T) {
-	tests := []struct {
-		name       string
-		paged      bool
-		totalCount int
-	}{
-		{name: "unpaged", paged: false},
-		{name: "paged", paged: true, totalCount: 7},
+// 连接串、只读、分页方言与关闭顺序的断言随代码迁到了驱动一侧（pkg/dbdriver/sqldb 与
+// 各驱动包）；这里测的是共享的这一段：经资产的驱动拿会话，把驱动给的结构化结果排成对外
+// 的 JSON。假驱动的会话不是 *sql.DB，所以这些测试同时证明共享代码不依赖它。
+
+func fakeDatabaseAsset(t *testing.T, cfg *asset_entity.DatabaseConfig) *asset_entity.Asset {
+	t.Helper()
+	asset := &asset_entity.Asset{ID: 1, Type: asset_entity.AssetTypeDatabase}
+	require.NoError(t, asset.SetDatabaseConfig(cfg))
+	return asset
+}
+
+func openFakeSession(t *testing.T, fake *dbdrivertest.Fake) dbdriver.Session {
+	t.Helper()
+	session, err := fake.Open(context.Background(), dbdriver.OpenRequest{
+		Config: &dbdriver.Config{Driver: fake.Desc.ID, Host: "h"},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = session.Close() })
+	return session
+}
+
+func TestExecuteSQLFormatsTheDriversResult(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Columns = []string{"name", "nullable"}
+	fake.Rows = [][]any{{"alice", nil}}
+	session := openFakeSession(t, fake)
+
+	result, err := ExecuteSQL(context.Background(), session, "SELECT name, nullable FROM t")
+	require.NoError(t, err)
+	// 行按列名成对象；没分页的结果不带 total_count。
+	assert.JSONEq(t, `{"columns":["name","nullable"],"rows":[{"name":"alice","nullable":null}],"count":1}`, result)
+
+	result, err = ExecuteSQL(context.Background(), session, "DELETE FROM t")
+	require.NoError(t, err)
+	assert.Equal(t, `{"affected_rows":1}`, result)
+}
+
+func TestExecuteSQLKeepsAnEmptyResultSetAsNullRows(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Rows = nil
+	session := openFakeSession(t, fake)
+
+	result, err := ExecuteSQL(context.Background(), session, "SELECT * FROM t")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"columns":["id","name"],"rows":null,"count":0}`, result)
+}
+
+func TestExecuteSQLRowLimitTruncatesRowsAndStatesTotal(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Columns = []string{"id"}
+	fake.Rows = nil
+	for i := 0; i < 1000; i++ {
+		fake.Rows = append(fake.Rows, []any{i})
 	}
+	session := openFakeSession(t, fake)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			db, mock, err := sqlmock.New()
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = db.Close() }()
+	result, err := ExecuteSQL(WithMaxRows(context.Background(), 10), session, "SELECT id FROM t")
+	require.NoError(t, err)
 
-			mock.ExpectQuery("SELECT").WillReturnRows(
-				sqlmock.NewRows([]string{"name", "nullable"}).
-					AddRow([]byte("alice"), nil),
-			)
-			rows, err := db.Query("SELECT")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = rows.Close() }()
-
-			var result string
-			if tt.paged {
-				result, err = formatRowsPagedJSON(rows, tt.totalCount)
-			} else {
-				result, err = formatRowsJSON(rows)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			var got map[string]any
-			if err := json.Unmarshal([]byte(result), &got); err != nil {
-				t.Fatal(err)
-			}
-			if got["count"] != float64(1) {
-				t.Fatalf("count = %#v, want 1", got["count"])
-			}
-			if tt.paged {
-				if got["total_count"] != float64(tt.totalCount) {
-					t.Fatalf("total_count = %#v, want %d", got["total_count"], tt.totalCount)
-				}
-			} else if _, ok := got["total_count"]; ok {
-				t.Fatal("unpaged result unexpectedly contains total_count")
-			}
-			resultRows := got["rows"].([]any)
-			row := resultRows[0].(map[string]any)
-			if row["name"] != "alice" || row["nullable"] != nil {
-				t.Fatalf("row = %#v, want converted bytes and preserved nil", row)
-			}
-			if err := mock.ExpectationsWereMet(); err != nil {
-				t.Fatal(err)
-			}
-		})
+	var got struct {
+		Rows      []map[string]any `json:"rows"`
+		Count     int              `json:"count"`
+		TotalRows int              `json:"total_rows"`
+		Note      string           `json:"note"`
 	}
+	require.NoError(t, json.Unmarshal([]byte(result), &got))
+	assert.Len(t, got.Rows, 10)
+	assert.Equal(t, 10, got.Count)
+	assert.Equal(t, 1000, got.TotalRows)
+	assert.Contains(t, got.Note, "1000")
+
+	// Without the option (opsctl) every row comes back and no note is added.
+	full, err := ExecuteSQL(context.Background(), session, "SELECT id FROM t")
+	require.NoError(t, err)
+	assert.NotContains(t, full, "total_rows")
+	assert.Contains(t, full, `"count":1000`)
+
+	// Under the limit: unchanged.
+	small, err := ExecuteSQL(WithMaxRows(context.Background(), 5000), session, "SELECT id FROM t")
+	require.NoError(t, err)
+	assert.Equal(t, full, small)
 }
 
-type recordCloser struct {
-	name   string
-	order  *[]string
-	closed bool
+func TestExecuteSQLPagedReportsThePageAndTheTotal(t *testing.T) {
+	session := openFakeSession(t, dbdrivertest.NewFake())
+
+	result, err := ExecuteSQLPaged(context.Background(), session, "SELECT * FROM t", dbdriver.Page{Index: 1, Size: 2})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"columns":["id","name"],"rows":[{"id":3,"name":"carol"}],"count":1,"total_count":3}`, result)
+
+	// 驱动没有分页的语句：照普通执行的格式返回，不带 total_count。
+	result, err = ExecuteSQLPaged(context.Background(), session, "DELETE FROM t", dbdriver.Page{Index: 0, Size: 2})
+	require.NoError(t, err)
+	assert.Equal(t, `{"affected_rows":3}`, result)
 }
 
-func (c *recordCloser) Close() error {
-	c.closed = true
-	*c.order = append(*c.order, c.name)
-	return nil
+// 翻页时调用方已有总数：结果只有这一页，不带 total_count。
+func TestExecuteSQLPagedOmitsTheTotalWhenAskedToSkipIt(t *testing.T) {
+	session := openFakeSession(t, dbdrivertest.NewFake())
+
+	result, err := ExecuteSQLPaged(context.Background(), session, "SELECT * FROM t", dbdriver.Page{Index: 1, Size: 2, SkipTotal: true})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"columns":["id","name"],"rows":[{"id":3,"name":"carol"}],"count":1}`, result)
 }
 
-func TestCloseDatabaseConnOrder(t *testing.T) {
-	Convey("closeDatabaseConn 先关 *sql.DB 再关传输层 closer", t, func() {
-		// WAL 远端库的 db.Close() 会回调 VFS 删除 -wal/-shm，所以 db 必须先于
-		// 注销该 VFS 的 closer 关闭，否则回调会命中已注销的 VFS 而 panic。
-		var order []string
-		db := &recordCloser{name: "db", order: &order}
-		closer := &recordCloser{name: "closer", order: &order}
+func TestExecuteSQLReturnsTheDriversError(t *testing.T) {
+	session := openFakeSession(t, dbdrivertest.NewFake())
+	require.NoError(t, session.Close())
 
-		closeDatabaseConn(db, closer)
-
-		So(order, ShouldResemble, []string{"db", "closer"})
-		So(db.closed, ShouldBeTrue)
-		So(closer.closed, ShouldBeTrue)
-	})
-
-	Convey("closeDatabaseConn 容忍 nil db / nil closer", t, func() {
-		So(func() { closeDatabaseConn(nil, nil) }, ShouldNotPanic)
-
-		var order []string
-		closer := &recordCloser{name: "closer", order: &order}
-		closeDatabaseConn(nil, closer)
-		So(order, ShouldResemble, []string{"closer"})
-	})
+	_, err := ExecuteSQL(context.Background(), session, "SELECT * FROM t")
+	require.ErrorIs(t, err, dbdrivertest.ErrFakeSessionClosed)
+	_, err = ExecuteSQLPaged(context.Background(), session, "SELECT * FROM t", dbdriver.Page{Index: 0, Size: 10})
+	require.ErrorIs(t, err, dbdrivertest.ErrFakeSessionClosed)
 }
 
-func TestExecuteSQLSQLitePragmaQuery(t *testing.T) {
-	Convey("ExecuteSQL treats SQLite PRAGMA as a row-returning query", t, func() {
-		db, err := sql.Open("sqlite", ":memory:")
-		So(err, ShouldBeNil)
-		defer func() { _ = db.Close() }()
-		// :memory: 是 per-connection 的,必须固定单连接,否则 CREATE 和
-		// 后续 PRAGMA 会落到不同的内存库上,造成测试偶发失败。
-		db.SetMaxOpenConns(1)
+// AI / opsctl 执行 SQL：连接与执行都经资产的驱动；不带缓存时会话用完即关。
+func TestExecSQLOnAssetRunsThroughTheAssetsDriver(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	dbdrivertest.Register(t, fake)
+	asset := fakeDatabaseAsset(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777, Database: "app"})
 
-		_, err = db.ExecContext(context.Background(), `CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)`)
-		So(err, ShouldBeNil)
+	result, err := ExecSQLOnAsset(context.Background(), asset, "SELECT * FROM t", "reporting")
+	require.NoError(t, err)
+	assert.JSONEq(t,
+		`{"columns":["id","name"],"rows":[{"id":1,"name":"alice"},{"id":2,"name":"bob"},{"id":3,"name":"carol"}],"count":3}`,
+		result)
 
-		result, err := ExecuteSQL(context.Background(), db, `PRAGMA table_info("users")`)
-		So(err, ShouldBeNil)
-		So(result, ShouldContainSubstring, `"columns"`)
-		So(result, ShouldContainSubstring, `"rows"`)
-		So(result, ShouldContainSubstring, `"name"`)
-		So(strings.Contains(result, "affected_rows"), ShouldBeFalse)
-	})
+	sessions := fake.Sessions()
+	require.Len(t, sessions, 1)
+	assert.Equal(t, "reporting", sessions[0].Request.Config.Database, "scope overrides the asset's default database")
+	assert.Equal(t, []string{"SELECT * FROM t"}, sessions[0].Statements())
+	assert.True(t, sessions[0].Closed(), "an uncached session is closed once the statement has run")
 }
 
-func TestExecuteSQLPagedDialect(t *testing.T) {
-	Convey("MSSQL 分页用 OFFSET/FETCH 而非 LIMIT", t, func() {
-		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-		So(err, ShouldBeNil)
-		defer func() { _ = db.Close() }()
+// 同一次 AI Send 里的多条语句共用一条会话，由缓存统一关闭。
+func TestExecSQLOnAssetReusesTheCachedSession(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	dbdrivertest.Register(t, fake)
+	asset := fakeDatabaseAsset(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+	cache := NewDatabaseClientCache()
+	ctx := WithDatabaseCache(context.Background(), cache)
 
-		mock.ExpectQuery("SELECT COUNT(*) FROM (SELECT * FROM users) AS _t").
-			WillReturnRows(sqlmock.NewRows([]string{"c"}).AddRow(2))
-		mock.ExpectQuery(
-			"SELECT * FROM (SELECT * FROM users) AS _t ORDER BY (SELECT NULL) OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY").
-			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1).AddRow(2))
+	_, err := ExecSQLOnAsset(ctx, asset, "SELECT * FROM t", "")
+	require.NoError(t, err)
+	_, err = ExecSQLOnAsset(ctx, asset, "DELETE FROM t", "")
+	require.NoError(t, err)
 
-		_, err = ExecuteSQLPaged(context.Background(), db, "SELECT * FROM users", 0, 10, asset_entity.DriverMSSQL)
-		So(err, ShouldBeNil)
-		So(mock.ExpectationsWereMet(), ShouldBeNil)
+	sessions := fake.Sessions()
+	require.Len(t, sessions, 1)
+	assert.Equal(t, []string{"SELECT * FROM t", "DELETE FROM t"}, sessions[0].Statements())
+	assert.False(t, sessions[0].Closed())
+
+	require.NoError(t, cache.Close())
+	assert.True(t, sessions[0].Closed())
+}
+
+func TestExecSQLOnAssetReturnsTheDriversConnectionError(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.OpenErr = assert.AnError
+	dbdrivertest.Register(t, fake)
+	asset := fakeDatabaseAsset(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+	_, err := ExecSQLOnAsset(context.Background(), asset, "SELECT * FROM t", "")
+	require.ErrorIs(t, err, assert.AnError)
+}
+
+// 资产配置的驱动没注册：AI / opsctl 执行 SQL 必须报「驱动不可用」并点名驱动。
+func TestExecSQLOnAssetRejectsUnregisteredDriver(t *testing.T) {
+	asset := fakeDatabaseAsset(t, &asset_entity.DatabaseConfig{
+		Driver: "oracle", Host: "127.0.0.1", Port: 1521, Username: "u",
 	})
 
-	Convey("MSSQL 分页保留顶层 ORDER BY 且 count 去掉 ORDER BY", t, func() {
-		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-		So(err, ShouldBeNil)
-		defer func() { _ = db.Close() }()
-
-		mock.ExpectQuery("SELECT COUNT(*) FROM (SELECT * FROM users) AS _t").
-			WillReturnRows(sqlmock.NewRows([]string{"c"}).AddRow(2))
-		mock.ExpectQuery("SELECT * FROM users ORDER BY id DESC OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY").
-			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(2))
-
-		_, err = ExecuteSQLPaged(context.Background(), db, "SELECT * FROM users ORDER BY id DESC", 2, 10, asset_entity.DriverMSSQL)
-		So(err, ShouldBeNil)
-		So(mock.ExpectationsWereMet(), ShouldBeNil)
-	})
-
-	Convey("MySQL/其他 driver 仍用 LIMIT/OFFSET（不受影响）", t, func() {
-		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
-		So(err, ShouldBeNil)
-		defer func() { _ = db.Close() }()
-
-		mock.ExpectQuery("SELECT COUNT(*) FROM (SELECT * FROM users) AS _t").
-			WillReturnRows(sqlmock.NewRows([]string{"c"}).AddRow(2))
-		mock.ExpectQuery("SELECT * FROM (SELECT * FROM users) AS _t LIMIT 10 OFFSET 20").
-			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
-
-		_, err = ExecuteSQLPaged(context.Background(), db, "SELECT * FROM users", 2, 10, asset_entity.DriverMySQL)
-		So(err, ShouldBeNil)
-		So(mock.ExpectationsWereMet(), ShouldBeNil)
-	})
+	_, err := ExecSQLOnAsset(context.Background(), asset, "SELECT 1", "")
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
+	assert.Contains(t, err.Error(), "oracle")
 }

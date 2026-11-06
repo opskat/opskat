@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -83,8 +84,9 @@ func TestParseTransferEndpoint_Local(t *testing.T) {
 		{"./local-file.txt", nil},
 		{"/absolute/path", nil},
 		{":foo", nil},
-		// D15 守卫会查一次前缀（"C" 不是资产），查不到就仍是本地路径。
-		{`C:\windows`, []string{"C"}},
+		// 非 Windows 上 D15 守卫会查一次前缀（"C" 不是资产），查不到就仍是本地路径；
+		// Windows 上带盘符的路径直接是本地路径，不查（见 TestParseTransferEndpoint_WindowsDrivePathIsLocal）。
+		{`C:\windows`, drivePrefixRefs("C")},
 		{"note:todo", []string{"note"}},
 	}
 	for _, c := range cases {
@@ -101,6 +103,41 @@ func TestParseTransferEndpoint_Local(t *testing.T) {
 		}
 		if strings.Join(r.refs, ",") != strings.Join(c.wantRefs, ",") {
 			t.Fatalf("ParseTransferEndpoint(%q) asked resolver for %q, want %q", c.in, r.refs, c.wantRefs)
+		}
+	}
+}
+
+// drivePrefixRefs 是解析一个带盘符的路径时解析器被问到的前缀：Windows 上不问。
+func drivePrefixRefs(prefix string) []string {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	return []string{prefix}
+}
+
+// Windows 上带盘符的路径（C:\ 和 C:/ 两种写法）是本地路径，也不去查叫 "C" 的资产——
+// 否则 C:/Users/me/a.txt 会被当成资产 C 上的 /Users/me/a.txt。
+func TestParseTransferEndpoint_WindowsDrivePathIsLocal(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("drive-letter paths exist only on Windows")
+	}
+	// 任意盘符（大小写、A–Z 两端）、两种分隔符、"C:foo" 这种盘内相对路径和只写盘符，都是本地。
+	for _, in := range []string{
+		`C:\Users\me\a.txt`, "C:/Users/me/a.txt", `d:\backup`, "Z:/x", `a:\x`, "C:foo", "C:",
+	} {
+		r := newStubResolver(
+			&asset_entity.Asset{ID: 1, Name: "C", Type: asset_entity.AssetTypeSSH},
+			&asset_entity.Asset{ID: 2, Name: "Z", Type: asset_entity.AssetTypeSSH},
+		)
+		asset, path, err := ParseTransferEndpoint(context.Background(), in, r.resolve)
+		if err != nil {
+			t.Fatalf("ParseTransferEndpoint(%q) unexpected error: %v", in, err)
+		}
+		if asset != nil || path != in {
+			t.Fatalf("ParseTransferEndpoint(%q) = (%+v, %q), want a local path", in, asset, path)
+		}
+		if len(r.refs) != 0 {
+			t.Fatalf("ParseTransferEndpoint(%q) asked resolver for %q, want no lookup", in, r.refs)
 		}
 	}
 }

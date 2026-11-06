@@ -13,6 +13,7 @@ import { RedisCollectionTable } from "@/components/query/RedisCollectionTable";
 import { RedisStreamViewer } from "@/components/query/RedisStreamViewer";
 import { parseRedisCommandLine } from "@/lib/redisCommand";
 import { redisKeyDeleted, toastRedisDeleteFailures } from "@/lib/redisDelete";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface RedisKeyDetailProps {
   tabId: string;
@@ -116,7 +117,7 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
       const parsed: RedisResult = JSON.parse(result);
       setCmdResult(formatResult(parsed));
     } catch (err) {
-      const message = String(err);
+      const message = errorMessage(err);
       if (isCluster && !scope && isRedisNodeRequiredError(message)) {
         setCmdError(t("query.redisSelectNodeHint"));
       } else {
@@ -168,7 +169,7 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
       }
       loadDbKeyCounts(tabId);
     } catch (err) {
-      toast.error(String(err));
+      toast.error(errorMessage(err));
     }
     setDeleting(false);
   }, [tabMeta, state, tabId, removeKey, loadDbKeyCounts, t]);
@@ -201,7 +202,7 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
       await RedisSetKeyTTL(tabMeta.assetId, state.currentDb, state.selectedKey, seconds);
       selectKey(tabId, state.selectedKey);
     } catch (err) {
-      toast.error(String(err));
+      toast.error(errorMessage(err));
     }
     setEditingTtl(false);
   }, [tabMeta, state, ttlInput, tabId, selectKey]);
@@ -212,7 +213,7 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
       await RedisPersistKey(tabMeta.assetId, state.currentDb, state.selectedKey);
       selectKey(tabId, state.selectedKey);
     } catch (err) {
-      toast.error(String(err));
+      toast.error(errorMessage(err));
     }
     setEditingTtl(false);
   }, [tabMeta, state, tabId, selectKey]);

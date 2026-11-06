@@ -29,8 +29,7 @@ import { ImportDialog, ImportCallOptions } from "@/components/settings/ImportDia
 import { CircleHelp, FileSpreadsheet, Import } from "lucide-react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
-
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+import { errorMessage } from "@/lib/errorMessage";
 
 export function ImportSection() {
   const { t } = useTranslation();
@@ -62,7 +61,7 @@ export function ImportSection() {
         setImportDialogOpen(true);
       }
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setTabbyLoading(false);
     }
@@ -83,7 +82,7 @@ export function ImportSection() {
         setImportDialogOpen(true);
       }
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setWindTermLoading(false);
     }
@@ -102,7 +101,7 @@ export function ImportSection() {
         setImportDialogOpen(true);
       }
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setSSHConfigLoading(false);
     }
@@ -123,7 +122,7 @@ export function ImportSection() {
         setImportDialogOpen(true);
       }
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setRDPLoading(false);
     }
@@ -144,7 +143,7 @@ export function ImportSection() {
         setImportDialogOpen(true);
       }
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setRDPExcelLoading(false);
     }
@@ -156,7 +155,7 @@ export function ImportSection() {
       const path = await DownloadRDPExcelTemplate();
       if (path) notifySuccess(t("import.rdpExcelTemplateSaved", { path }));
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setTemplateLoading(false);
     }

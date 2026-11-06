@@ -99,8 +99,11 @@ type ruleLanding struct {
 	// runtimeShape 非空时是随这个落点一起在运行期注册的策略面（扩展的策略面），
 	// 注销落点时一并注销。
 	runtimeShape string
-	// land 把一条已归一化的 pattern 变成落库的规则。
+	// land 把一条已归一化的 pattern 变成落库的规则；落法与被写入的 holder 无关的类型给它。
 	land func(pattern string) ([]LandedRule, error)
+	// landFor 是落法随被写入的 holder 而变的类型给的落点（SQL 的语句类型由资产自己的驱动
+	// 给出，组用宿主解析），与 land 二选一。
+	landFor func(holder policyent.Holder) func(pattern string) ([]LandedRule, error)
 	// grantsAreRules 为真时，该类型的 grant 请求（request_permission、opsctl 审批通道）与永久
 	// 规则同一语法、经 land 落库（见 rule_ext.go 的 extensionGrantFor）。只有扩展类型设它：
 	// 内置类型的 grant 请求是命令形状，原样落库。
@@ -145,7 +148,9 @@ func registerRuleSink(canonical string, landing *ruleLanding) {
 // addRuleSink 是 init 期与运行期共用的写入：重复/非法注册报错，由调用方决定是 panic
 // （内置类型的编程错误）还是拒绝加载（用户启用的扩展）。
 func addRuleSink(canonical string, landing *ruleLanding) error {
-	if landing.shape == nil || landing.land == nil || landing.match == nil {
+	// grant 请求经 land 落库（extensionGrantFor），所以 grantsAreRules 的类型须给 land。
+	if landing.shape == nil || (landing.land == nil) == (landing.landFor == nil) || landing.match == nil ||
+		(landing.grantsAreRules && landing.land == nil) {
 		return fmt.Errorf("permission: invalid rule sink registration %q", canonical)
 	}
 	landingMu.Lock()
@@ -177,7 +182,11 @@ func AppendTypeRules(holder policyent.Holder, canonicalType string, side RuleSid
 	if !ok {
 		return nil, fmt.Errorf("no permanent rule support for type %q", canonicalType)
 	}
-	return landing.shape.appendRules(holder, side, landing.land, patterns)
+	land := landing.land
+	if landing.landFor != nil {
+		land = landing.landFor(holder)
+	}
+	return landing.shape.appendRules(holder, side, land, patterns)
 }
 
 // HolderOwnTypeRules 列出 holder 自身那一列（该类型形状）的 allow/deny 规则原文，
@@ -579,11 +588,18 @@ func identityLand(pattern string) ([]LandedRule, error) {
 	return []LandedRule{{Rule: pat}}, nil
 }
 
-// queryLand 把一条 SQL pattern 落成语句类型（QueryPolicy.AllowTypes/DenyTypes 是
+// queryLandForHolder 把一条 SQL pattern 落成语句类型（QueryPolicy.AllowTypes/DenyTypes 是
 // 类型级语义）。每个语句落一个类型，全部标 Broader——允许一条具体 SELECT 只能落成
-// "允许 SELECT 类型"（决策 12）。解析失败在写入前报错，不落一条含义不明的规则。
-func queryLand(pattern string) ([]LandedRule, error) {
-	stmts, err := policy.ClassifyStatements(strings.TrimSpace(pattern))
+// "允许 SELECT 类型"（决策 12）。解析失败在写入前报错，不落一条含义不明的规则。资产 holder
+// 用它自己的驱动切分，组 holder（没有驱动）用宿主的 TiDB 解析。
+func queryLandForHolder(holder policyent.Holder) func(pattern string) ([]LandedRule, error) {
+	asset, _ := holder.(*asset_entity.Asset)
+	return func(pattern string) ([]LandedRule, error) { return landStatementTypes(asset, pattern) }
+}
+
+func landStatementTypes(asset *asset_entity.Asset, pattern string) ([]LandedRule, error) {
+	// 落规则没有请求上下文；扩展驱动的切分是一次本地调用，不挂取消。
+	stmts, err := policy.ClassifyForAsset(context.Background(), asset, strings.TrimSpace(pattern))
 	if err != nil {
 		return nil, fmt.Errorf("cannot turn %q into a statement type rule: %w", pattern, err)
 	}

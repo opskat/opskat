@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -30,13 +31,44 @@ type ForwardManager struct {
 	mu      sync.Mutex
 	clients map[int64]*forwardClient  // assetID → SSH 连接
 	running map[int64]*runningForward // ruleID → 运行状态
+	dialing map[int64]*dialCall       // assetID → 进行中的拨号（同资产并发只拨一次）
+	// starting 按配置串行化 StartConfig / StopConfig：同一配置并发启动不互相覆盖，
+	// 启动途中（拨号、Listen）到达的停止排在启动之后执行，不会被启动覆盖。
+	// 锁序：starting 里的锁在 m.mu 之前取。
+	starting map[int64]*sync.Mutex
 }
+
+// dialCall 一次进行中的 SSH 拨号，等待者共享结果。字段在 m.mu 下读写，done 关闭后只读。
+type dialCall struct {
+	done chan struct{}
+	fc   *forwardClient
+	err  error
+	// abandoned：拨号用的是发起方的 ctx，失败是因为它结束了；等待者 ctx 仍有效时重新拨号。
+	abandoned bool
+	// closed：拨号期间 CloseAsset / StopAll 要求关掉这个资产的连接，拨出的连接不再入表。
+	closed bool
+}
+
+// errForwardClientClosed 连接在拨号或启动规则期间被 CloseAsset / StopAll 关闭。
+var errForwardClientClosed = errors.New("SSH 连接已被关闭")
 
 // forwardClient 每个资产对应的 SSH 连接
 type forwardClient struct {
 	client  *ssh.Client
 	closers []io.Closer
 	refs    int32
+}
+
+// close 关闭 SSH 连接及其中间连接。
+func (fc *forwardClient) close(assetID int64) {
+	if err := fc.client.Close(); err != nil {
+		logger.Default().Warn("close SSH client", zap.Int64("assetID", assetID), zap.Error(err))
+	}
+	for _, c := range fc.closers {
+		if err := c.Close(); err != nil {
+			logger.Default().Warn("close closer", zap.Int64("assetID", assetID), zap.Error(err))
+		}
+	}
 }
 
 // runningForward 单条转发规则的运行状态
@@ -70,9 +102,11 @@ type poolDialer = sshadapt.PoolDialer
 
 func NewForwardManager(dialer SSHDialer) *ForwardManager {
 	return &ForwardManager{
-		dialer:  dialer,
-		clients: make(map[int64]*forwardClient),
-		running: make(map[int64]*runningForward),
+		dialer:   dialer,
+		clients:  make(map[int64]*forwardClient),
+		running:  make(map[int64]*runningForward),
+		dialing:  make(map[int64]*dialCall),
+		starting: make(map[int64]*sync.Mutex),
 	}
 }
 
@@ -90,41 +124,77 @@ func (m *ForwardManager) StartConfig(ctx context.Context, configID int64) error 
 		return fmt.Errorf("配置中没有转发规则")
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	startMu := m.configStartLock(configID)
+	startMu.Lock()
+	defer startMu.Unlock()
 
 	// 先停掉已有的（同一配置重新启动）
-	m.stopConfigLocked(configID)
+	m.stopConfig(configID)
 
-	// 获取或创建 SSH 连接
-	fc, err := m.getOrDialLocked(ctx, config.AssetID)
+	// 获取或创建 SSH 连接；拨号期间不持有 m.mu。
+	// 引用计数在拿到连接的同一把锁内一次性加上，避免其它配置的 Stop 在
+	// 我们注册规则前把连接引用归零而关掉。
+	fc, err := m.acquireClient(ctx, config.AssetID, int32(len(rules)))
 	if err != nil {
 		return fmt.Errorf("SSH 连接失败: %w", err)
 	}
 
-	// 启动每条规则
+	// 先注册运行状态、再在锁外启动（Listen / 远端 listen）：启动途中到达的 CloseAsset /
+	// StopAll 能看到并取消这些规则，规则的 ctx 一取消监听随之关闭。注册与"连接仍是这个
+	// 资产的连接"的确认在同一把锁内，连接已被关掉就不再注册。
+	m.mu.Lock()
+	if m.clients[config.AssetID] != fc {
+		m.mu.Unlock()
+		return fmt.Errorf("SSH 连接失败: %w", errForwardClientClosed)
+	}
+	type pendingRule struct {
+		rule *forward_entity.ForwardRule
+		rf   *runningForward
+		ctx  context.Context
+	}
+	pending := make([]pendingRule, 0, len(rules))
 	for _, rule := range rules {
 		rctx, cancel := context.WithCancel(context.Background())
-		rf := &runningForward{
-			configID: configID,
-			assetID:  config.AssetID,
-			cancel:   cancel,
-		}
-		startErr := startForwardRule(rctx, fc.client, rule)
-		if startErr != nil {
-			rf.errMsg = startErr.Error()
-			cancel()
-			logger.Default().Error("rule failed", zap.Int64("ruleID", rule.ID), zap.Error(startErr))
-		}
+		rf := &runningForward{configID: configID, assetID: config.AssetID, cancel: cancel}
 		m.running[rule.ID] = rf
-		atomic.AddInt32(&fc.refs, 1)
+		pending = append(pending, pendingRule{rule: rule, rf: rf, ctx: rctx})
+	}
+	m.mu.Unlock()
+
+	for _, p := range pending {
+		if startErr := startForwardRule(p.ctx, fc.client, p.rule); startErr != nil {
+			p.rf.cancel()
+			logger.Default().Error("rule failed", zap.Int64("ruleID", p.rule.ID), zap.Error(startErr))
+			m.mu.Lock()
+			p.rf.errMsg = startErr.Error()
+			m.mu.Unlock()
+		}
 	}
 
 	return nil
 }
 
-// StopConfig 停止一个转发配置的所有规则
+func (m *ForwardManager) configStartLock(configID int64) *sync.Mutex {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	l, ok := m.starting[configID]
+	if !ok {
+		l = &sync.Mutex{}
+		m.starting[configID] = l
+	}
+	return l
+}
+
+// StopConfig 停止一个转发配置的所有规则。该配置正在启动时，等启动完成后再停。
 func (m *ForwardManager) StopConfig(configID int64) {
+	startMu := m.configStartLock(configID)
+	startMu.Lock()
+	defer startMu.Unlock()
+	m.stopConfig(configID)
+}
+
+// stopConfig 是 StopConfig 去掉启动锁的部分，调用方持有该配置的启动锁。
+func (m *ForwardManager) stopConfig(configID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.stopConfigLocked(configID)
@@ -152,19 +222,15 @@ func (m *ForwardManager) CloseAsset(assetID int64) {
 			delete(m.running, ruleID)
 		}
 	}
+	if call, ok := m.dialing[assetID]; ok {
+		call.closed = true
+	}
 	fc, ok := m.clients[assetID]
 	if !ok {
 		return
 	}
 	delete(m.clients, assetID)
-	if err := fc.client.Close(); err != nil {
-		logger.Default().Warn("close SSH client", zap.Int64("assetID", assetID), zap.Error(err))
-	}
-	for _, c := range fc.closers {
-		if err := c.Close(); err != nil {
-			logger.Default().Warn("close closer", zap.Int64("assetID", assetID), zap.Error(err))
-		}
-	}
+	fc.close(assetID)
 }
 
 // StopAll 停止所有转发
@@ -175,15 +241,11 @@ func (m *ForwardManager) StopAll() {
 		rf.cancel()
 		delete(m.running, ruleID)
 	}
+	for _, call := range m.dialing {
+		call.closed = true
+	}
 	for assetID, fc := range m.clients {
-		if err := fc.client.Close(); err != nil {
-			logger.Default().Warn("close SSH client", zap.Int64("assetID", assetID), zap.Error(err))
-		}
-		for _, c := range fc.closers {
-			if err := c.Close(); err != nil {
-				logger.Default().Warn("close closer", zap.Int64("assetID", assetID), zap.Error(err))
-			}
-		}
+		fc.close(assetID)
 		delete(m.clients, assetID)
 	}
 }
@@ -243,19 +305,59 @@ func (m *ForwardManager) IsConfigRunning(configID int64) bool {
 
 // --- SSH 连接管理 ---
 
-func (m *ForwardManager) getOrDialLocked(ctx context.Context, assetID int64) (*forwardClient, error) {
-	if fc, ok := m.clients[assetID]; ok {
-		return fc, nil
-	}
+// acquireClient 返回资产的 SSH 连接并给它加 refs 个引用。拨号在锁外进行，
+// 同一资产的并发调用共享同一次拨号。
+func (m *ForwardManager) acquireClient(ctx context.Context, assetID int64, refs int32) (*forwardClient, error) {
+	for {
+		m.mu.Lock()
+		if fc, ok := m.clients[assetID]; ok {
+			atomic.AddInt32(&fc.refs, refs)
+			m.mu.Unlock()
+			return fc, nil
+		}
+		if call, ok := m.dialing[assetID]; ok {
+			m.mu.Unlock()
+			select {
+			case <-call.done:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			if call.abandoned {
+				continue // 发起方的 ctx 结束了，我们的还在：重新拨号
+			}
+			if call.err != nil {
+				return nil, call.err
+			}
+			continue // 重新取锁，按普通路径拿到连接并加引用
+		}
+		call := &dialCall{done: make(chan struct{})}
+		m.dialing[assetID] = call
+		m.mu.Unlock()
 
-	client, closers, err := m.dialer.DialAsset(ctx, assetID)
-	if err != nil {
-		return nil, fmt.Errorf("SSH 连接失败: %w", err)
-	}
+		client, closers, err := m.dialer.DialAsset(ctx, assetID)
 
-	fc := &forwardClient{client: client, closers: closers}
-	m.clients[assetID] = fc
-	return fc, nil
+		m.mu.Lock()
+		delete(m.dialing, assetID)
+		var orphan *forwardClient
+		switch {
+		case err != nil:
+			call.err = err
+			call.abandoned = ctx.Err() != nil
+		case call.closed:
+			orphan = &forwardClient{client: client, closers: closers}
+			call.err = errForwardClientClosed
+		default:
+			call.fc = &forwardClient{client: client, closers: closers}
+			m.clients[assetID] = call.fc
+			atomic.AddInt32(&call.fc.refs, refs)
+		}
+		m.mu.Unlock()
+		close(call.done)
+		if orphan != nil {
+			orphan.close(assetID)
+		}
+		return call.fc, call.err
+	}
 }
 
 func (m *ForwardManager) releaseClientLocked(assetID int64) {
@@ -264,14 +366,7 @@ func (m *ForwardManager) releaseClientLocked(assetID int64) {
 		return
 	}
 	if atomic.AddInt32(&fc.refs, -1) <= 0 {
-		if err := fc.client.Close(); err != nil {
-			logger.Default().Warn("close SSH client", zap.Int64("assetID", assetID), zap.Error(err))
-		}
-		for _, c := range fc.closers {
-			if err := c.Close(); err != nil {
-				logger.Default().Warn("close closer", zap.Int64("assetID", assetID), zap.Error(err))
-			}
-		}
+		fc.close(assetID)
 		delete(m.clients, assetID)
 	}
 }

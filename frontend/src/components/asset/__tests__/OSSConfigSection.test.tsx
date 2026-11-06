@@ -54,4 +54,19 @@ describe("OSSConfigSection ref 契约", () => {
     render(<OSSConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={onValidity} />);
     expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" });
   });
+
+  it('默认桶带 "/"(预设子路径):不可保存/测试,给出 oss.error.bucketName', () => {
+    const editAsset = new asset_entity.Asset({
+      Type: "oss",
+      Config: '{"endpoint":"http://localhost:9000","access_key_id":"AKIA","bucket":"ootd/users"}',
+    });
+    const onValidity = vi.fn();
+    const ref = createRef<AssetFormHandle>();
+    render(<OSSConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={onValidity} />);
+    expect(onValidity).toHaveBeenLastCalledWith({
+      canTest: false,
+      canSave: false,
+      saveDisabledReason: "oss.error.bucketName",
+    });
+  });
 });

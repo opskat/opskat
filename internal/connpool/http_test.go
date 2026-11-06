@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -159,15 +158,6 @@ func TestNewHTTPTransport_ProxyChainRoutesThroughProxy(t *testing.T) {
 	_, err = httpGet(t, transport, srv.URL)
 	require.Error(t, err)
 	assert.Equal(t, 1, hits, "the request must not reach the server directly")
-}
-
-func splitHostPort(t *testing.T, addr string) (string, int) {
-	t.Helper()
-	host, portStr, err := net.SplitHostPort(addr)
-	require.NoError(t, err)
-	port, err := strconv.Atoi(portStr)
-	require.NoError(t, err)
-	return host, port
 }
 
 // closedAddr 返回一个当前没有监听者的本地地址。

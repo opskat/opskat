@@ -6,6 +6,7 @@ import { registerAssetType, unregisterAssetType } from "@/lib/assetTypes";
 import type { AssetTypeDefinition } from "@/lib/assetTypes/types";
 import { useAssetStore } from "@/stores/assetStore";
 import { asset_entity } from "../../../../wailsjs/go/models";
+import { GetCommandReviewState } from "../../../../wailsjs/go/extension/Extension";
 
 const TYPE = "late-ext-type";
 
@@ -47,6 +48,13 @@ describe("AssetDetail policy when the type definition registers late", () => {
   beforeEach(() => {
     updateAsset.mockClear();
     useAssetStore.setState({ updateAsset });
+    // 详情页里的权限模式卡片读审核状态：真实绑定总会返回一个 State。
+    vi.mocked(GetCommandReviewState).mockResolvedValue({
+      reviewers: [],
+      selected: "",
+      active: "",
+      problem: "no_reviewer",
+    } as never);
   });
 
   afterEach(() => {

@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, cleanup, within, screen } from "@testing-library/react";
 import { asset_entity, system } from "../../../../../wailsjs/go/models";
+import { ListDatabaseDrivers } from "../../../../../wailsjs/go/query/Query";
+import { refreshDatabaseDrivers } from "@/lib/dbDrivers";
+import { BUILTIN_DRIVERS, EXT_DRIVER } from "@/__tests__/dbDriverFixtures";
 import { SSHDetailInfoCard } from "../SSHDetailInfoCard";
 import { DatabaseDetailInfoCard } from "../DatabaseDetailInfoCard";
 import { RedisDetailInfoCard } from "../RedisDetailInfoCard";
@@ -188,7 +191,22 @@ describe("SSHDetailInfoCard Agent 认证", () => {
 });
 
 describe("DatabaseDetailInfoCard", () => {
-  it("renders database connection fields", () => {
+  beforeEach(() => {
+    refreshDatabaseDrivers();
+    vi.mocked(ListDatabaseDrivers).mockResolvedValue(BUILTIN_DRIVERS);
+  });
+
+  it.each([
+    ["sqlite", "SQLite"],
+    ["mssql", "SQL Server"],
+    ["mysql", "MySQL"],
+  ])("driver row shows the descriptor display name for %s", async (id, name) => {
+    const asset = makeAsset("database", { driver: id, host: "h", port: 1, username: "u" });
+    const { findByText } = render(<DatabaseDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(await findByText(name)).toBeInTheDocument();
+  });
+
+  it("renders database connection fields", async () => {
     const asset = makeAsset("database", {
       driver: "postgresql",
       host: "db.example.com",
@@ -197,8 +215,8 @@ describe("DatabaseDetailInfoCard", () => {
       password: "secret",
       database: "mydb",
     });
-    const { getByText } = render(<DatabaseDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
-    expect(getByText("PostgreSQL")).toBeInTheDocument();
+    const { getByText, findByText } = render(<DatabaseDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+    expect(await findByText("PostgreSQL")).toBeInTheDocument();
     expect(getByText("db.example.com:5432")).toBeInTheDocument();
     expect(getByText("admin")).toBeInTheDocument();
     expect(getByText("mydb")).toBeInTheDocument();
@@ -245,6 +263,38 @@ describe("DatabaseDetailInfoCard", () => {
     );
     const { getByText } = render(<DatabaseDetailInfoCard asset={asset} sshTunnelName={tunnelFn} />);
     expect(getByText("db-bastion")).toBeInTheDocument();
+  });
+
+  it("lists the driver's non-password driver fields after the built-in connection info", async () => {
+    vi.mocked(ListDatabaseDrivers).mockResolvedValue([...BUILTIN_DRIVERS, EXT_DRIVER]);
+    const asset = makeAsset("database", {
+      driver: "extdb",
+      host: "db.internal",
+      port: 7357,
+      username: "app",
+      database: "sales",
+      driver_options: {
+        service_name: "ORCL",
+        wallet_password: "STORED-CIPHERTEXT",
+        role: "sysdba",
+        native_encryption: true,
+      },
+    });
+    render(<DatabaseDetailInfoCard asset={asset} sshTunnelName={noopTunnel} />);
+
+    const serviceName = await screen.findByText("Service name");
+    expect(screen.getByText("ORCL")).toBeInTheDocument();
+    expect(screen.getByText("Role")).toBeInTheDocument();
+    expect(screen.getByText("sysdba")).toBeInTheDocument();
+    expect(screen.getByText("Native encryption")).toBeInTheDocument();
+    // Built-in connection info comes first.
+    const database = screen.getByText("sales");
+    expect(database.compareDocumentPosition(serviceName) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Password-type fields are not listed at all, not even masked.
+    expect(screen.queryByText("Wallet password")).not.toBeInTheDocument();
+    expect(screen.queryByText("STORED-CIPHERTEXT")).not.toBeInTheDocument();
+    // Declared but unset fields are not listed.
+    expect(screen.queryByText("Fetch size")).not.toBeInTheDocument();
   });
 
   it("handles empty config without crashing", () => {

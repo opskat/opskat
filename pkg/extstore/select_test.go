@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/pkg/appversion"
-	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 func ver(version, hostABI, minApp string) Version {
@@ -24,11 +24,11 @@ func TestVersionInstallable(t *testing.T) {
 	release := appversion.Info{Version: "1.14.0", Kind: appversion.KindRelease}
 
 	t.Run("compatible oci version is installable", func(t *testing.T) {
-		require.NoError(t, ver("1.0.0", "2.2", "1.14.0").Installable(release))
+		require.NoError(t, ver("1.0.0", "1.0", "1.14.0").Installable(release))
 	})
 
 	t.Run("unknown source type is not installable", func(t *testing.T) {
-		err := withSource(ver("1.0.0", "2.2", ""), "ipfs").Installable(release)
+		err := withSource(ver("1.0.0", "1.0", ""), "ipfs").Installable(release)
 		var se *UnsupportedSourceError
 		require.True(t, errors.As(err, &se), "want UnsupportedSourceError, got %v", err)
 		assert.Equal(t, "ipfs", se.Type)
@@ -36,9 +36,9 @@ func TestVersionInstallable(t *testing.T) {
 
 	t.Run("incompatible version carries the compatibility reason", func(t *testing.T) {
 		err := ver("1.0.0", "9.0", "").Installable(release)
-		var inc *extension.IncompatibleError
+		var inc *extmanifest.IncompatibleError
 		require.True(t, errors.As(err, &inc), "want IncompatibleError, got %v", err)
-		assert.Equal(t, extension.ReasonHostABI, inc.Reason)
+		assert.Equal(t, extmanifest.ReasonHostABI, inc.Reason)
 	})
 }
 
@@ -48,10 +48,10 @@ func TestSelectInstallable(t *testing.T) {
 
 	// Deliberately out of order: selection must go by version, not position.
 	ext := Extension{Name: "es", Versions: []Version{
-		ver("1.2.0", "2.2", "1.14.0"),
-		ver("1.0.0", "2.0", ""),
+		ver("1.2.0", "1.0", "1.14.0"),
+		ver("1.0.0", "1.0", ""),
 		ver("1.3.0", "9.0", ""), // needs a host ABI this app lacks
-		ver("1.1.0", "2.2", ""),
+		ver("1.1.0", "1.0", ""),
 	}}
 
 	tests := []struct {
@@ -81,7 +81,7 @@ func TestSelectInstallable(t *testing.T) {
 	}
 
 	t.Run("release app skips versions whose minAppVersion is above it", func(t *testing.T) {
-		e := Extension{Name: "es", Versions: []Version{ver("1.0.0", "2.2", ""), ver("2.0.0", "2.2", "1.15.0")}}
+		e := Extension{Name: "es", Versions: []Version{ver("1.0.0", "1.0", ""), ver("2.0.0", "1.0", "1.15.0")}}
 		choice, reason := SelectInstallable(e, release, "")
 		require.NoError(t, reason)
 		require.NotNil(t, choice.Version)
@@ -89,7 +89,7 @@ func TestSelectInstallable(t *testing.T) {
 	})
 
 	t.Run("nightly app ignores minAppVersion", func(t *testing.T) {
-		e := Extension{Name: "es", Versions: []Version{ver("1.0.0", "2.2", ""), ver("2.0.0", "2.2", "1.15.0")}}
+		e := Extension{Name: "es", Versions: []Version{ver("1.0.0", "1.0", ""), ver("2.0.0", "1.0", "1.15.0")}}
 		choice, reason := SelectInstallable(e, nightly, "")
 		require.NoError(t, reason)
 		require.NotNil(t, choice.Version)
@@ -97,7 +97,7 @@ func TestSelectInstallable(t *testing.T) {
 	})
 
 	t.Run("newer version with unknown source is skipped", func(t *testing.T) {
-		e := Extension{Name: "es", Versions: []Version{ver("1.0.0", "2.2", ""), withSource(ver("2.0.0", "2.2", ""), "ipfs")}}
+		e := Extension{Name: "es", Versions: []Version{ver("1.0.0", "1.0", ""), withSource(ver("2.0.0", "1.0", ""), "ipfs")}}
 		choice, reason := SelectInstallable(e, release, "")
 		require.NoError(t, reason)
 		require.NotNil(t, choice.Version)
@@ -105,18 +105,32 @@ func TestSelectInstallable(t *testing.T) {
 	})
 
 	t.Run("no compatible version → unavailable with the newest version's reason", func(t *testing.T) {
-		e := Extension{Name: "es", Versions: []Version{ver("2.0.0", "2.2", "1.16.0"), ver("1.0.0", "9.0", "")}}
+		e := Extension{Name: "es", Versions: []Version{ver("2.0.0", "1.0", "1.16.0"), ver("1.0.0", "9.0", "")}}
 		choice, reason := SelectInstallable(e, release, "")
 		assert.Equal(t, ActionUnavailable, choice.Action)
 		assert.Nil(t, choice.Version)
-		var inc *extension.IncompatibleError
+		var inc *extmanifest.IncompatibleError
 		require.True(t, errors.As(reason, &inc), "want IncompatibleError, got %v", reason)
-		assert.Equal(t, extension.ReasonMinAppVersion, inc.Reason)
+		assert.Equal(t, extmanifest.ReasonMinAppVersion, inc.Reason)
 		assert.Equal(t, "1.16.0", inc.MinAppVersion)
 	})
 
+	t.Run("only nightly-era hostABI 2.x versions → unavailable, naming the declared and supported ABIs", func(t *testing.T) {
+		e := Extension{Name: "oracle", Versions: []Version{ver("0.1.0", "2.5", ""), ver("0.0.9", "2.3", "")}}
+		for _, app := range []appversion.Info{release, nightly} {
+			choice, reason := SelectInstallable(e, app, "")
+			assert.Equal(t, ActionUnavailable, choice.Action)
+			assert.Nil(t, choice.Version)
+			var inc *extmanifest.IncompatibleError
+			require.True(t, errors.As(reason, &inc), "want IncompatibleError, got %v", reason)
+			assert.Equal(t, extmanifest.ReasonHostABI, inc.Reason)
+			assert.Equal(t, "2.5", inc.HostABI)
+			assert.Equal(t, []string{"1.0"}, inc.SupportedHostABIs)
+		}
+	})
+
 	t.Run("only an unknown source → unavailable, needs an OpsKat update", func(t *testing.T) {
-		e := Extension{Name: "es", Versions: []Version{withSource(ver("1.0.0", "2.2", ""), "ipfs")}}
+		e := Extension{Name: "es", Versions: []Version{withSource(ver("1.0.0", "1.0", ""), "ipfs")}}
 		choice, reason := SelectInstallable(e, release, "")
 		assert.Equal(t, ActionUnavailable, choice.Action)
 		var se *UnsupportedSourceError

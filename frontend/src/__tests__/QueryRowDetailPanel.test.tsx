@@ -6,6 +6,7 @@ import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { ExecuteSQL, OpenTable } from "../../wailsjs/go/query/Query";
+import { BUILTIN_DRIVERS, provideDrivers } from "./dbDriverFixtures";
 
 vi.mock("@/components/CodeEditor", () => ({
   CodeEditor: ({ value, language, readOnly }: { value: string; language?: string; readOnly?: boolean }) => (
@@ -94,6 +95,7 @@ function setupStores() {
 
 describe("TableDataTab row detail panel", () => {
   beforeEach(() => {
+    provideDrivers(BUILTIN_DRIVERS);
     vi.mocked(ExecuteSQL).mockReset();
     vi.mocked(OpenTable).mockReset();
     setupStores();

@@ -480,7 +480,7 @@ func TestHandleExec_ExecutorReceivesRawCommand(t *testing.T) {
 			return "ok", nil
 		},
 		"fake help doc for "+fakeType,
-		func(_ *asset_entity.Asset, command string) (string, error) {
+		func(_ context.Context, _ *asset_entity.Asset, command string) (string, error) {
 			// Deliberately lossy, like k8s's EffectiveCommand: a display-form rewrite that
 			// would betray itself immediately if it ever reached the executor instead of
 			// the permission check.

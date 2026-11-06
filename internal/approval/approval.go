@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/localipc"
 	"go.uber.org/zap"
 )
@@ -18,34 +19,57 @@ import (
 // BatchItem 批量执行中的单条操作
 type BatchItem struct {
 	Type string `json:"type"` // 审批类型，由 permission.ApprovalTypeFor(资产类型) 得出：
-	// "exec"|"serial"|"sql"|"redis"|"etcd"|"mongo"|"kafka"|"k8s"|"oss"
+	// "exec"|"serial"|"sql"|"redis"|"etcd"|"mongo"|"kafka"|"k8s"|"oss"，扩展资产是它的扩展类型名
 	AssetID   int64  `json:"asset_id"`
 	AssetName string `json:"asset_name"`
 	Command   string `json:"command"`
 	// Detail 是这一条的补充说明，供折叠摘要展示"两端基点"一类信息（如 cp 的
 	// "opsctl cp <src> → <dst>"）；batch_exec 的命令条目不产出，留空。
 	Detail string `json:"detail"`
+	// Action / Resource / Resources / RememberPattern: the same classification
+	// ApprovalRequest carries, set only for an item on an extension asset its extension
+	// classified (permission.ApprovalItemFor). The approver sees the action and
+	// resources; RememberPattern is the item's rule subject (the policy allow line of
+	// NEEDS AUTHORIZATION) — batch itself offers no "always allow".
+	Action          string   `json:"action,omitempty"`
+	Resource        string   `json:"resource,omitempty"`
+	Resources       []string `json:"resources,omitempty"`
+	RememberPattern string   `json:"remember_pattern,omitempty"`
+	// Review 是这一条的模型审核结果（辅助审批下审核未通过或失败时才有）。
+	Review *aictx.ReviewInfo `json:"review,omitempty"`
 }
 
 // ApprovalRequest is sent from opsctl to the desktop app.
 type ApprovalRequest struct {
-	Token       string          `json:"token,omitempty"`      // 认证 token
-	Type        string          `json:"type"`                 // "exec"|"cp"|"create"|"update"|"delete"|"grant"|"batch"|"ext_tool"|"ext_dev_install"|"ext_store_search"|"ext_store_install"
-	CheckType   string          `json:"check_type,omitempty"` // internal permission face; cp keeps read/write direction while Type stays "cp"
-	AssetID     int64           `json:"asset_id,omitempty"`
-	AssetName   string          `json:"asset_name,omitempty"`
-	Command     string          `json:"command,omitempty"`
-	Detail      string          `json:"detail"`
-	SessionID   string          `json:"session_id,omitempty"`  // 统一 session 标识（审批 session 或 grant session）
-	GrantItems  []GrantItem     `json:"grant_items,omitempty"` // type="grant" 时使用
-	BatchItems  []BatchItem     `json:"batch_items,omitempty"` // type="batch" 时使用
-	Description string          `json:"description,omitempty"` // 授权描述
-	Extension   string          `json:"extension,omitempty"`   // type="ext_tool" / "ext_store_install": extension name
-	Tool        string          `json:"tool,omitempty"`        // type="ext_tool": tool name
-	ToolArgs    json.RawMessage `json:"tool_args,omitempty"`   // type="ext_tool": tool arguments
-	Path        string          `json:"path,omitempty"`        // type="ext_dev_install": extension source directory
-	MFA         *MFAChallenge   `json:"mfa,omitempty"`         // type="mfa": SSH keyboard-interactive challenge
-	Lang        string          `json:"lang,omitempty"`        // type="ext_store_search": index language tag ("en", "zh-CN") for display text
+	Token       string        `json:"token,omitempty"`      // 认证 token
+	Type        string        `json:"type"`                 // "exec"|"cp"|"create"|"update"|"delete"|"grant"|"batch"|"ext_dev_install"|"ext_store_search"|"ext_store_install"
+	CheckType   string        `json:"check_type,omitempty"` // internal permission face; cp keeps read/write direction while Type stays "cp"
+	AssetID     int64         `json:"asset_id,omitempty"`
+	AssetName   string        `json:"asset_name,omitempty"`
+	Command     string        `json:"command,omitempty"`
+	Detail      string        `json:"detail"`
+	SessionID   string        `json:"session_id,omitempty"`  // 统一 session 标识（审批 session 或 grant session）
+	GrantItems  []GrantItem   `json:"grant_items,omitempty"` // type="grant" 时使用
+	BatchItems  []BatchItem   `json:"batch_items,omitempty"` // type="batch" 时使用
+	Description string        `json:"description,omitempty"` // 授权描述
+	Extension   string        `json:"extension,omitempty"`   // type="ext_store_install": extension name
+	Path        string        `json:"path,omitempty"`        // type="ext_dev_install": extension source directory
+	MFA         *MFAChallenge `json:"mfa,omitempty"`         // type="mfa": SSH keyboard-interactive challenge
+	Lang        string        `json:"lang,omitempty"`        // type="ext_store_search": index language tag ("en", "zh-CN") for display text
+	// Action / Resource / Resources / RememberPattern are set only for a call on an
+	// extension asset that its extension classified: the fields of the shared approval
+	// item (permission.ApprovalItemFor), so the desktop shows the same action and
+	// resources the terminal prompt does and "always allow" saves the extension grant
+	// ext:<policyType>:<RememberPattern> rather than the command text.
+	Action          string   `json:"action,omitempty"`
+	Resource        string   `json:"resource,omitempty"`
+	Resources       []string `json:"resources,omitempty"`
+	RememberPattern string   `json:"remember_pattern,omitempty"`
+	// Review 是模型审核结果（辅助审批下审核未通过或失败时才有），审批提示据此说明为什么要确认。
+	Review *aictx.ReviewInfo `json:"review,omitempty"`
+	// PipedInput 表示命令执行时还会从管道读入内容（opsctl exec 转发 stdin），只在 opsctl
+	// 本地做权限检查时用（见 permission.PermissionRequest.PipedInput），不发给桌面端。
+	PipedInput bool `json:"-"`
 }
 
 // MFACanceledReason 是桌面端在用户取消 / 关闭 MFA 对话框时回给 opsctl 的
@@ -80,8 +104,6 @@ type ApprovalResponse struct {
 	ApproveGrant   bool        `json:"approve_grant,omitempty"`   // 用户选择了"记住并允许"
 	MatchedPattern string      `json:"matched_pattern,omitempty"` // session 匹配时命中的规则模式
 	EditedItems    []GrantItem `json:"edited_items,omitempty"`    // 用户编辑后的 grant items
-	ToolResult     string      `json:"tool_result,omitempty"`     // type="ext_tool": execution result (JSON)
-	ToolError      string      `json:"tool_error,omitempty"`      // type="ext_tool": execution error message
 	Extension      string      `json:"extension,omitempty"`       // type="ext_dev_install" / "ext_store_install": installed extension name
 	Version        string      `json:"version,omitempty"`         // type="ext_dev_install" / "ext_store_install": installed extension version
 	MFAAnswers     []string    `json:"mfa_answers,omitempty"`     // type="mfa": answers in prompt order; never logged

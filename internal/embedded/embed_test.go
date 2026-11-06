@@ -46,8 +46,9 @@ func TestDefaultInstallDir(t *testing.T) {
 
 		got := DefaultInstallDir()
 
-		if got != "/tmp/opskat-portable" {
-			t.Errorf("DefaultInstallDir() = %q, 期望 %q（data 目录的父目录，即 exe 同级）", got, "/tmp/opskat-portable")
+		want := filepath.FromSlash("/tmp/opskat-portable")
+		if got != want {
+			t.Errorf("DefaultInstallDir() = %q, 期望 %q（data 目录的父目录，即 exe 同级）", got, want)
 		}
 	})
 

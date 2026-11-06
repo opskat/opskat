@@ -41,7 +41,7 @@ func unifiedTools() []tool.Tool {
 			},
 			IsSerial: true,
 			Handler: func(ctx context.Context, in map[string]any) (*agent.ToolResultBlock, error) {
-				out, err := handleExec(ctx, in)
+				out, err := handleAIExec(ctx, in)
 				if err != nil {
 					return nil, err
 				}

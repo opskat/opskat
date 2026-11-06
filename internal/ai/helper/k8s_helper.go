@@ -80,10 +80,25 @@ func ExecK8sOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _ s
 		return "", fmt.Errorf("decrypt kubeconfig: %w", err)
 	}
 
-	if asset.SSHTunnelID != 0 {
-		return executeK8sCommandOverSSH(ctx, asset.SSHTunnelID, kubeconfig, plan.Args)
+	if sshAssetID := k8sSSHAssetID(asset, cfg); sshAssetID != 0 {
+		return executeK8sCommandOverSSH(ctx, sshAssetID, kubeconfig, plan.Args)
 	}
 	return ExecuteK8sCommandLocal(ctx, kubeconfig, plan.Args)
+}
+
+// k8sSSHAssetID 经 EffectiveProxyChain 解析 K8S 资产用于执行 kubectl 的 SSH 跳板资产 ID。
+// 与 k8s_ops.go 的 k8sClientOptions 对齐：proxy_chain 优先于资产 SSHTunnelID 列。
+func k8sSSHAssetID(asset *asset_entity.Asset, cfg *asset_entity.K8sConfig) int64 {
+	chain := asset_entity.EffectiveProxyChain(cfg.ProxyChain, asset.SSHTunnelID, cfg.Proxy)
+	if chain == nil {
+		return 0
+	}
+	for i := len(chain.Layers) - 1; i >= 0; i-- {
+		if chain.Layers[i].Type == asset_entity.ProxyChainLayerSSH && chain.Layers[i].SSHAssetID > 0 {
+			return chain.Layers[i].SSHAssetID
+		}
+	}
+	return 0
 }
 
 func parseK8sCommandArgs(command string) ([]string, error) {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/opskat/opskat/internal/pkg/appversion"
-	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // Action is what the store offers for one extension.
@@ -41,13 +41,13 @@ func (e *UnsupportedSourceError) Error() string {
 }
 
 // Installable reports whether this app can install the version: its source type
-// must be one this build fetches, and it must pass extension.CheckCompatible. The
-// error is an *UnsupportedSourceError or an *extension.IncompatibleError.
+// must be one this build fetches, and it must pass extmanifest.CheckCompatible. The
+// error is an *UnsupportedSourceError or an *extmanifest.IncompatibleError.
 func (v Version) Installable(app appversion.Info) error {
 	if v.Source.Type != SourceOCI {
 		return &UnsupportedSourceError{Type: v.Source.Type}
 	}
-	return extension.CheckCompatible(v.HostABI, v.MinAppVersion, app)
+	return extmanifest.CheckCompatible(v.HostABI, v.MinAppVersion, app)
 }
 
 // SelectInstallable picks what the store offers for ext: its newest installable

@@ -31,6 +31,27 @@ func TestTestHost(t *testing.T) {
 			So(out["echo"], ShouldEqual, "hi")
 		})
 
+		// A registration mistake no longer panics in init, so an extension's own
+		// unit tests are where it must still surface: every call fails with it, as
+		// the host's load does, instead of the tool running as if declared.
+		Convey("a registration mistake fails CallTool and CheckPolicy with its message", func() {
+			resetRegistries()
+			Tool("echo", func(_ *ToolContext, _ struct{}) (any, error) {
+				return "ran", nil
+			}).Policy("read").Timeout(0)
+
+			th := NewTestHost()
+			defer th.Close()
+
+			result, err := th.CallTool(Asset{}, "echo", nil)
+			So(result, ShouldBeNil)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `tool "echo": timeout 0s is outside`)
+			_, _, err = th.CheckPolicy("echo", nil)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `tool "echo": timeout 0s is outside`)
+		})
+
 		Convey("WithAssetConfig serves ctx.AssetConfig for the call's asset", func() {
 			resetRegistries()
 			Tool("config_test", func(ctx *ToolContext, _ struct{}) (any, error) {
@@ -111,24 +132,27 @@ func TestTestHost(t *testing.T) {
 			So(out["val"], ShouldEqual, "42")
 		})
 
-		Convey("CallAction captures events", func() {
+		Convey("CallTool captures the events the call emits", func() {
 			resetRegistries()
-			RegisterAction("upload", func(ctx *ActionContext) (any, error) {
+			Tool("upload", func(ctx *ToolContext, _ struct{}) (any, error) {
 				_ = ctx.Events.Send("progress", map[string]int{"done": 50, "total": 100})
 				_ = ctx.Events.Send("progress", map[string]int{"done": 100, "total": 100})
 				return map[string]string{"status": "done"}, nil
-			})
+			}).PageOnly().NoTimeout()
 
 			th := NewTestHost()
 			defer th.Close()
 
-			var events []TestEvent
-			result, err := th.CallAction(Asset{}, "upload", map[string]any{}, func(e TestEvent) {
-				events = append(events, e)
-			})
+			result, err := th.CallTool(Asset{}, "upload", map[string]any{})
 			So(err, ShouldBeNil)
+			events := th.Events()
 			So(len(events), ShouldEqual, 2)
 			So(events[0].Type, ShouldEqual, "progress")
+			So(string(events[1].Data), ShouldEqual, `{"done":100,"total":100}`)
+
+			_, err = th.CallTool(Asset{}, "upload", map[string]any{})
+			So(err, ShouldBeNil)
+			So(len(th.Events()), ShouldEqual, 2) // each call starts a fresh capture
 
 			b, _ := json.Marshal(result)
 			var out map[string]string

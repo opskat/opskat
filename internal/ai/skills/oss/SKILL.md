@@ -6,8 +6,9 @@ description: "List, read, upload, copy, move, delete and presign objects in S3-c
 # OSS assets
 
 OSS assets connect to an S3-compatible object storage endpoint (AWS S3, MinIO, Aliyun OSS,
-…). The asset names the endpoint and credentials only — the bucket is part of every
-command's target, not part of the asset.
+…). The asset names the endpoint and credentials — the bucket is part of every command's
+target. An asset may also carry a default bucket (`bucket` in its config) for credentials
+scoped to one bucket; it never fills in a missing bucket in a target.
 
 ## Command syntax
 
@@ -90,7 +91,9 @@ wrong value, after approval and a round trip:
 
 ## Results
 
-- `bucket list` returns `{"buckets":[…]}`.
+- `bucket list` returns `{"buckets":[…]}`. On an asset with a default bucket it returns
+  that one bucket without asking the storage service, since a bucket-scoped credential is
+  not allowed to list the account's buckets.
 - `object list` returns the raw listing: `prefixes` (one level of "folders"),
   `objects`, plus `isTruncated` and `nextContinuationToken` for paging.
 - `object stat` returns the object's metadata.
@@ -159,8 +162,9 @@ Rules are written the same way, with `*` wildcards that do not cross `/` inside 
   prefix, such an approval is never turned into a standing grant: repeating it asks again.
   `object list` is the exception — a listing approval on `mybucket/logs/` *does* become a
   standing grant, because there the command and the rule cover the same range.
-- Targets must not start with `/` or `--`, and the bucket is part of the target rather
-  than of the asset — there is no per-asset default bucket.
+- Targets must not start with `/` or `--`, and the bucket is always part of the target:
+  an asset's default bucket is not implied, so `object list` with no target is still an
+  error.
 - `object copy` and `object move` are single-object and server-side; both endpoints must
   be on this same asset. Use the `cp` tool to move data between different assets or
   between object storage and a server, and to copy whole prefixes.
@@ -180,6 +184,7 @@ Rules are written the same way, with `*` wildcards that do not cross `/` inside 
 | `credential_id` | number | no | Existing managed password credential ID; mutually exclusive with `secret_access_key` |
 | `provider` | string | no | UI provider preset label (e.g. `"s3"`, `"minio"`); does not change connection behavior |
 | `region` | string | no | |
+| `bucket` | string | no | Default bucket, a bare bucket name (no `/`). When set, the asset is limited to this bucket in the desktop browser and in `bucket list`, and the connection test probes it instead of listing buckets. Set it for credentials scoped to one bucket (e.g. Cloudflare R2 object tokens); `""` clears it |
 | `use_path_style` | bool | no | `true` to force path-style addressing (needed by most self-hosted S3-compatible services) |
 | `use_ssl` | bool | no | `true` to connect over HTTPS |
 | `connect_timeout` | number | no | Seconds; 0 uses the default |

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useRef, useState, useEffect } from "react";
 import { cn, useResizeHandle } from "@opskat/ui";
+import { useShallow } from "zustand/shallow";
 import { useAIStore } from "@/stores/aiStore";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { SideAssistantHeader } from "./SideAssistantHeader";
@@ -23,7 +24,6 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
     activeSidebarTabId,
     configured,
     fetchConversations,
-    getSidebarTabStatus,
     openNewSidebarTab,
     bindSidebarTabToConversation,
     openSidebarConversationInSidebar,
@@ -32,7 +32,28 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
     promoteSidebarToTab,
     sendFromSidebarTab,
     stopSidebarTab,
-  } = useAIStore();
+  } = useAIStore(
+    useShallow((s) => ({
+      sidebarTabs: s.sidebarTabs,
+      activeSidebarTabId: s.activeSidebarTabId,
+      configured: s.configured,
+      fetchConversations: s.fetchConversations,
+      openNewSidebarTab: s.openNewSidebarTab,
+      bindSidebarTabToConversation: s.bindSidebarTabToConversation,
+      openSidebarConversationInSidebar: s.openSidebarConversationInSidebar,
+      activateSidebarTab: s.activateSidebarTab,
+      closeSidebarTab: s.closeSidebarTab,
+      promoteSidebarToTab: s.promoteSidebarToTab,
+      sendFromSidebarTab: s.sendFromSidebarTab,
+      stopSidebarTab: s.stopSidebarTab,
+    }))
+  );
+  // 只订阅侧栏标签各自的状态值：其它会话（含非侧栏会话）的流式刷新不会改变它们，面板就不重渲染。
+  const sidebarTabStatuses = useAIStore(useShallow((s) => s.sidebarTabs.map((tab) => s.getSidebarTabStatus(tab.id))));
+  const getSidebarTabStatus = (tabId: string) => {
+    const index = sidebarTabs.findIndex((tab) => tab.id === tabId);
+    return index >= 0 ? (sidebarTabStatuses[index] ?? null) : null;
+  };
   const activeSidebarTab = sidebarTabs.find((tab) => tab.id === activeSidebarTabId) ?? null;
   const activeConversationId = activeSidebarTab?.conversationId ?? null;
 

@@ -10,6 +10,7 @@ import { ImportCustomTypeDialog } from "@/components/settings/ImportCustomTypeDi
 import { useCustomTypeList, useCustomTypeStore } from "@/stores/customTypeStore";
 import { ExportCustomType, SelectImportTypeFile } from "../../../wailsjs/go/customtype/CustomType";
 import type { customtype } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** 设置 → 自定义类型:列表(执行方式 + 在用资产数)+ 新建 / 编辑 / 删除。 */
 export function CustomTypeSection() {
@@ -36,7 +37,7 @@ export function CustomTypeSection() {
     try {
       await ExportCustomType(id);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -45,7 +46,7 @@ export function CustomTypeSection() {
       const preview = await SelectImportTypeFile();
       if (preview) setImportPreview(preview);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -62,7 +63,7 @@ export function CustomTypeSection() {
       }
       setDeleteTarget(ct);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -77,7 +78,7 @@ export function CustomTypeSection() {
       }
       setDeleteTarget(null);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 

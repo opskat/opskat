@@ -141,3 +141,18 @@ describe("ossCredentialFragment(编辑态映射 secret_access_key/credential_id 
     expect(ossCredentialFragment("nope")).toEqual({});
   });
 });
+
+describe("默认桶(bucket)", () => {
+  it("写在 region 之后,去首尾空格", () => {
+    expect(buildOSSConfig({ ...OSS_DEFAULTS, endpoint: "e", region: "auto", bucket: "  ootd " }, {})).toBe(
+      '{"provider":"s3","endpoint":"e","region":"auto","bucket":"ootd","use_ssl":true}'
+    );
+  });
+  it("留空或只有空格时省略该键", () => {
+    expect(buildOSSConfig({ ...OSS_DEFAULTS, bucket: "   " }, {})).not.toContain("bucket");
+  });
+  it("parse 回填;缺省为空串", () => {
+    expect(parseOSSConfig('{"endpoint":"e","bucket":"ootd"}').bucket).toBe("ootd");
+    expect(parseOSSConfig('{"endpoint":"e"}').bucket).toBe("");
+  });
+});

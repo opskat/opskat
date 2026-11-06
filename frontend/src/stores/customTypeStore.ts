@@ -10,6 +10,7 @@ import {
 } from "../../wailsjs/go/customtype/CustomType";
 import type { customtype, custom_type_entity } from "../../wailsjs/go/models";
 import { useAssetStore } from "./assetStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface CustomTypeState {
   types: customtype.Summary[];
@@ -37,7 +38,7 @@ function followAssetChanges() {
     if (ownAssetRefresh || state.assets === prev.assets) return;
     const { loaded, load } = useCustomTypeStore.getState();
     if (!loaded) return;
-    load().catch((e) => toast.error(String(e)));
+    load().catch((e) => toast.error(errorMessage(e)));
   });
 }
 
@@ -52,7 +53,7 @@ async function reloadAfterWrite(load: () => Promise<void>, withAssets: boolean) 
   try {
     await Promise.all([load(), withAssets ? useAssetStore.getState().refresh() : undefined]);
   } catch (e) {
-    toast.error(String(e));
+    toast.error(errorMessage(e));
   } finally {
     ownAssetRefresh = false;
   }
@@ -72,7 +73,7 @@ export const useCustomTypeStore = create<CustomTypeState>((set, get) => ({
       set({ types: list ?? [], loaded: true, loadError: "" });
       followAssetChanges();
     } catch (e) {
-      set({ loadError: String(e) });
+      set({ loadError: errorMessage(e) });
       throw e;
     } finally {
       set({ loading: false });
@@ -122,7 +123,7 @@ export function useCustomTypeList(): {
   const [requested, setRequested] = useState(false);
   if (!requested && !loaded && !loading) {
     setRequested(true);
-    load().catch((e) => toast.error(String(e)));
+    load().catch((e) => toast.error(errorMessage(e)));
   }
   return { types, loaded, loading, loadError };
 }

@@ -43,15 +43,15 @@ type Layer struct {
 	Port           int
 	Username       string
 	Password       string
-	SSHConfig      *ssh.ClientConfig
 	URL            string
 	Token          string
 	TimeoutSeconds int
 	// EstablishTimeout 是建立这一层时单个步骤的时限：SSH 层的握手认证、经它打开到下一
-	// 地址的通道，SOCKS5 层的握手。0 表示只受调用方 ctx 约束。
+	// 地址的通道，SOCKS5 层的握手。0 表示只受调用方 ctx 约束。SSH 握手里等人回答 MFA
+	// 的时间不计（WithDialTimeout / AwaitAnswer）。
 	EstablishTimeout time.Duration
-	// Handshake 覆盖该 SSH 层的握手（SSH Agent 认证需要持有 Agent 传输走完整握手）。
-	// 为 nil 时使用标准 ssh.NewClientConn。调用方负责在握手前关闭 conn 的失败路径。
+	// Handshake 完成该 SSH 层的握手认证（SSH 层必填；由 ssh_svc.ProxyChainHandshake 构造，
+	// 口令 / 密钥 / Agent 认证与跳板 MFA 都在里面）。失败时 conn 由本包关闭。
 	Handshake func(ctx context.Context, conn net.Conn, addr string) (*ssh.Client, error)
 }
 
@@ -149,7 +149,7 @@ func normalizeLayers(layers []Layer) []Layer {
 }
 
 func dialSSHLayer(ctx context.Context, dial DialFunc, layer Layer) (*ssh.Client, error) {
-	if layer.SSHConfig == nil && layer.Handshake == nil {
+	if layer.Handshake == nil {
 		return nil, fmt.Errorf("SSH 代理层缺少认证配置")
 	}
 	addr := layerAddr(layer)
@@ -158,24 +158,16 @@ func dialSSHLayer(ctx context.Context, dial DialFunc, layer Layer) (*ssh.Client,
 		return nil, fmt.Errorf("连接 SSH 代理层失败: %w", err)
 	}
 	// ssh.NewClientConn 自己没有握手时限（ClientConfig.Timeout 只管 ssh.Dial 的 TCP 连接），
-	// 对端连上后不再应答就会一直等下去。
-	hsCtx, cancel := stepContext(ctx, layer.EstablishTimeout)
+	// 对端连上后不再应答就会一直等下去。握手里等人回答这台跳板的 MFA 时（AwaitAnswer）
+	// 不计时。
+	hsCtx, cancel := WithDialTimeout(ctx, layer.EstablishTimeout)
 	defer cancel()
 	done := make(chan struct{})
 	var client *ssh.Client
 	var hsErr error
 	go func() {
 		defer close(done)
-		if layer.Handshake != nil {
-			client, hsErr = layer.Handshake(hsCtx, conn, addr)
-			return
-		}
-		c, chans, reqs, err := ssh.NewClientConn(conn, addr, layer.SSHConfig)
-		if err != nil {
-			hsErr = err
-			return
-		}
-		client = ssh.NewClient(c, chans, reqs)
+		client, hsErr = layer.Handshake(hsCtx, conn, addr)
 	}()
 	select {
 	case <-hsCtx.Done():
@@ -196,8 +188,12 @@ type connWithClosers struct {
 	once    sync.Once
 }
 
+// Close closes the SSH client the channel was opened on, which tears the
+// channel down with it. It does not send channel-close first: that waits for
+// any write already stuck on the client's transport (remote stopped draining),
+// so Close would hang until TCP gives up instead of failing the stuck write.
 func (c *connWithClosers) Close() error {
-	err := c.Conn.Close()
+	var err error
 	c.once.Do(func() {
 		for _, closer := range c.closers {
 			if closeErr := closer.Close(); err == nil {

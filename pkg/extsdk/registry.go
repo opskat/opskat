@@ -6,6 +6,10 @@ import (
 	"reflect"
 	"slices"
 	"time"
+
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/extsdk/internal/registration"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // The registration API is the single place an extension declares what it can do.
@@ -32,8 +36,9 @@ type Meta struct {
 	DisplayName string
 	Description string
 	// PolicyType names the policy face the extension's asset types are checked
-	// under. Required: without it the host has no policy surface to attach the
-	// extension's permission groups to.
+	// under. Required when the extension registers asset types: without it the
+	// host has no policy surface to attach the extension's permission groups to.
+	// An extension that only provides database drivers may leave it empty.
 	PolicyType string
 }
 
@@ -81,8 +86,30 @@ type toolEntry struct {
 	reject func(args json.RawMessage) (*ArgsRejectedError, error)
 	// timeout is the tool's own call timeout; 0 leaves the host default.
 	timeout time.Duration
-	// fileParams are the string parameters opsctl may read from a file (FileParam).
-	fileParams []string
+	// large are the string parameters that carry large content, which opsctl may
+	// read from a file (Large).
+	large []string
+	// pageOnly and noTimeout are the page-only declaration (PageOnly, NoTimeout).
+	pageOnly  bool
+	noTimeout bool
+	// hostOnly is the host-only declaration (HostOnly).
+	hostOnly bool
+}
+
+// declaresPolicy reports whether a policy action was declared.
+func (e *toolEntry) declaresPolicy() bool { return e.action != "" || e.classify != nil }
+
+// check is the registration rule that every tool is exactly a policy tool, a
+// page-only tool or a host-only tool; describe runs it once the whole declaration
+// chain has run.
+func (e *toolEntry) check() error {
+	switch {
+	case !e.pageOnly && !e.hostOnly && !e.declaresPolicy():
+		return fmt.Errorf("opskat: tool %q declares neither a policy action (Policy / PolicyFunc / PolicyResources) nor PageOnly nor HostOnly", e.name)
+	case e.noTimeout && !e.pageOnly:
+		return fmt.Errorf("opskat: tool %q: only a PageOnly tool may declare NoTimeout", e.name)
+	}
+	return nil
 }
 
 type assetTypeEntry struct {
@@ -124,8 +151,9 @@ var (
 	frontendSpec    FrontendSpec
 	snippetCats     []snippetCategoryEntry
 	snippetSeeds    []Seed
-	actions         = map[string]ActionHandler{}
 	configValidator ConfigValidator
+	databaseDrivers []dbdriver.Descriptor
+	settings        *extwire.Settings
 )
 
 // Extension declares the extension's presentation metadata and policy face.
@@ -156,19 +184,26 @@ const injectedAssetParam = "asset_id"
 // Tool registers a tool and reflects its parameter schema from T.
 //
 // T must be a struct whose fields the exec flag DSL can express (string, bool,
-// integer, number, []string). Anything else panics at registration — that is
-// init() time in the guest, so a schema the host could not use fails the whole
-// extension at load instead of the first time a model calls the tool.
+// integer, number, []string). Anything else is a registration error, which
+// describe returns — so a schema the host could not use fails the whole extension
+// at load, naming the tool, instead of the first time a model calls the tool.
 func Tool[T any](name string, handler func(ctx *ToolContext, args T) (any, error)) *ToolReg[T] {
 	if name == "" {
-		panic("opskat: tool name is required")
+		failRegistration("opskat: tool name is required")
+		return detachedTool[T](name)
 	}
 	if _, dup := tools[name]; dup {
-		panic(fmt.Sprintf("opskat: tool %q is already registered", name))
+		failRegistration("opskat: tool %q is already registered", name)
+		return detachedTool[T](name)
 	}
-	schema := reflectSchema(reflect.TypeFor[T](), fmt.Sprintf("tool %q arguments", name), schemaModeParams)
+	schema, err := reflectSchema(reflect.TypeFor[T](), fmt.Sprintf("tool %q arguments", name), schemaModeParams)
+	if err != nil {
+		registration.Fail(err)
+		return detachedTool[T](name)
+	}
 	if _, declared := schema["properties"].(map[string]any)[injectedAssetParam]; declared {
-		panic(fmt.Sprintf("opskat: tool %q declares parameter %q — the asset a tool runs against is the exec target, injected by the host; read ctx.Asset instead", name, injectedAssetParam))
+		failRegistration("opskat: tool %q declares parameter %q — the asset a tool runs against is the exec target, injected by the host; read ctx.Asset instead", name, injectedAssetParam)
+		return detachedTool[T](name)
 	}
 	entry := &toolEntry{
 		name:   name,
@@ -186,33 +221,99 @@ func Tool[T any](name string, handler func(ctx *ToolContext, args T) (any, error
 	return &ToolReg[T]{e: entry}
 }
 
-// FileParam marks the string parameter name (its JSON field name) as file-readable:
-// `opsctl exec <asset> -- <tool> --<name>-file <path>` (or `-` for stdin) is
-// exactly `--<name> <file content>`, so a large payload — an NDJSON bulk body —
+// detachedTool is the handle Tool returns for a registration it rejected: the
+// builder chain that follows still runs, but into an entry no registry holds,
+// so the one error already recorded is the reason the extension fails to load.
+func detachedTool[T any](name string) *ToolReg[T] {
+	return &ToolReg[T]{e: &toolEntry{name: name, schema: map[string]any{"type": "object", "properties": map[string]any{}}}}
+}
+
+// failRegistration records an invalid registration (see package registration):
+// every call, describe first, fails with the first one.
+func failRegistration(format string, args ...any) {
+	registration.Fail(fmt.Errorf(format, args...))
+}
+
+// Large marks the string parameter name (its JSON field name) as carrying large
+// content: `opsctl exec <asset> -- <tool> --<name>-file <path>` (or `-` for stdin)
+// is exactly `--<name> <file content>`, so a large payload — an NDJSON bulk body —
 // need not be squeezed onto a command line. The marker changes nothing in the
 // handler, which still receives the content as the ordinary argument, and nothing
 // in policy, approval or audit, which see the content too. Only opsctl reads files:
 // AI exec and extension pages reject the `-file` form.
 //
-// It panics unless name is a declared string parameter whose `<name>-file`
+// It is a registration error unless name is a declared string parameter whose `<name>-file`
 // spelling is not a parameter too, and on a repeat: like every other registration
 // error it fails the extension at load, not at first use.
-func (r *ToolReg[T]) FileParam(name string) *ToolReg[T] {
+func (r *ToolReg[T]) Large(name string) *ToolReg[T] {
 	props, _ := r.e.schema["properties"].(map[string]any)
 	prop, ok := props[name].(map[string]any)
 	if !ok {
-		panic(fmt.Sprintf("opskat: tool %q FileParam(%q): no such parameter", r.e.name, name))
+		failRegistration("opskat: tool %q Large(%q): no such parameter", r.e.name, name)
+		return r
 	}
 	if _, clash := props[name+"-file"]; clash {
-		panic(fmt.Sprintf("opskat: tool %q FileParam(%q): %q is itself a parameter, which opsctl would read as the file form", r.e.name, name, name+"-file"))
+		failRegistration("opskat: tool %q Large(%q): %q is itself a parameter, which opsctl would read as the file form", r.e.name, name, name+"-file")
+		return r
 	}
 	if typ, _ := prop["type"].(string); typ != "string" {
-		panic(fmt.Sprintf("opskat: tool %q FileParam(%q): only a string parameter can be read from a file, not %v", r.e.name, name, prop["type"]))
+		failRegistration("opskat: tool %q Large(%q): only a string parameter can be read from a file, not %v", r.e.name, name, prop["type"])
+		return r
 	}
-	if slices.Contains(r.e.fileParams, name) {
-		panic(fmt.Sprintf("opskat: tool %q FileParam(%q) is already declared", r.e.name, name))
+	if slices.Contains(r.e.large, name) {
+		failRegistration("opskat: tool %q Large(%q) is already declared", r.e.name, name)
+		return r
 	}
-	r.e.fileParams = append(r.e.fileParams, name)
+	r.e.large = append(r.e.large, name)
+	return r
+}
+
+// PageOnly declares the tool is called only by the extension's pages: it has no
+// policy action, is left out of help and exec refuses it. Every tool declares
+// exactly one of this and a policy action (Policy, PolicyFunc, PolicyResources);
+// declaring both fails describe, as does declaring neither, naming the tool.
+func (r *ToolReg[T]) PageOnly() *ToolReg[T] {
+	if r.e.declaresPolicy() {
+		failRegistration("opskat: tool %q already declares a policy action; PageOnly is exclusive with it", r.e.name)
+		return r
+	}
+	if r.e.hostOnly {
+		failRegistration("opskat: tool %q is HostOnly; PageOnly is exclusive with it", r.e.name)
+		return r
+	}
+	r.e.pageOnly = true
+	return r
+}
+
+// HostOnly declares the tool is called only by host subsystems (a contribution
+// point's tool, such as the command reviewer): it has no policy action, is left
+// out of help, and exec and pages refuse it. It needs no asset type and keeps a
+// policy tool's timeout rules (Timeout up to 10 minutes, never NoTimeout). Every
+// tool declares exactly one of this, PageOnly and a policy action; declaring two
+// fails describe, as does declaring none, naming the tool.
+func (r *ToolReg[T]) HostOnly() *ToolReg[T] {
+	if r.e.declaresPolicy() {
+		failRegistration("opskat: tool %q already declares a policy action; HostOnly is exclusive with it", r.e.name)
+		return r
+	}
+	if r.e.pageOnly {
+		failRegistration("opskat: tool %q is PageOnly; HostOnly is exclusive with it", r.e.name)
+		return r
+	}
+	r.e.hostOnly = true
+	return r
+}
+
+// NoTimeout lets a PageOnly tool run without a call timeout, for work that lasts
+// as long as the page keeps it going — until the page cancels it by invocation
+// id (ToolContext.ShouldStop) or stops waiting. A policy tool cannot declare it, and it
+// excludes Timeout.
+func (r *ToolReg[T]) NoTimeout() *ToolReg[T] {
+	if r.e.timeout != 0 {
+		failRegistration("opskat: tool %q declares both Timeout and NoTimeout", r.e.name)
+		return r
+	}
+	r.e.noTimeout = true
 	return r
 }
 
@@ -220,8 +321,17 @@ func (r *ToolReg[T]) FileParam(name string) *ToolReg[T] {
 // against the user's permission groups before the tool runs; every tool needs
 // either this, PolicyFunc or PolicyResources.
 func (r *ToolReg[T]) Policy(action string) *ToolReg[T] {
+	if r.e.pageOnly {
+		failRegistration("opskat: tool %q is PageOnly; Policy is exclusive with it", r.e.name)
+		return r
+	}
+	if r.e.hostOnly {
+		failRegistration("opskat: tool %q is HostOnly; Policy is exclusive with it", r.e.name)
+		return r
+	}
 	if r.e.classify != nil {
-		panic(fmt.Sprintf("opskat: tool %q already classifies its calls with PolicyFunc/PolicyResources; Policy is exclusive with both", r.e.name))
+		failRegistration("opskat: tool %q already classifies its calls with PolicyFunc/PolicyResources; Policy is exclusive with both", r.e.name)
+		return r
 	}
 	r.e.action = action
 	return r
@@ -262,9 +372,7 @@ func (r *ToolReg[T]) PolicyFunc(actions []string, fn func(args T) (action, resou
 // about otherwise. Zero resources is judged like PolicyFunc's empty resource.
 //
 // actions is the set fn can return, as for PolicyFunc. The reply is
-// {"action","resources"}, which only a host speaking hostABI 2.2 understands — an
-// extension using PolicyResources must declare hostABI "2.2" so an older app
-// refuses it instead of judging the call on no resource at all.
+// {"action","resources"}.
 func (r *ToolReg[T]) PolicyResources(actions []string, fn func(args T) (action string, resources []string)) *ToolReg[T] {
 	r.setClassify("PolicyResources", actions, true, fn)
 	return r
@@ -273,10 +381,20 @@ func (r *ToolReg[T]) PolicyResources(actions []string, fn func(args T) (action s
 // setClassify installs a per-call classification (PolicyFunc / PolicyResources).
 func (r *ToolReg[T]) setClassify(method string, actions []string, multiResource bool, fn func(args T) (string, []string)) {
 	if len(actions) == 0 {
-		panic(fmt.Sprintf("opskat: tool %q: %s needs the set of actions it can return", r.e.name, method))
+		failRegistration("opskat: tool %q: %s needs the set of actions it can return", r.e.name, method)
+		return
+	}
+	if r.e.pageOnly {
+		failRegistration("opskat: tool %q is PageOnly; %s is exclusive with it", r.e.name, method)
+		return
+	}
+	if r.e.hostOnly {
+		failRegistration("opskat: tool %q is HostOnly; %s is exclusive with it", r.e.name, method)
+		return
 	}
 	if r.e.action != "" || r.e.resource != nil || r.e.classify != nil {
-		panic(fmt.Sprintf("opskat: tool %q already declares its policy; %s replaces Policy/Resource and excludes the other classifier", r.e.name, method))
+		failRegistration("opskat: tool %q already declares its policy; %s replaces Policy/Resource and excludes the other classifier", r.e.name, method)
+		return
 	}
 	r.e.actions = append([]string(nil), actions...)
 	r.e.multiResource = multiResource
@@ -306,12 +424,12 @@ func (r *ToolReg[T]) setClassify(method string, actions []string, multiResource 
 // as they always have.
 //
 // Reserve it for arguments that are wrong whatever the user's rules say; what a
-// user may or may not do is the policy's to decide. The {"reject"} reply is part
-// of hostABI 2.2: an extension using RejectArgs must declare "2.2", like
-// PolicyResources. It panics when the tool already declares one.
+// user may or may not do is the policy's to decide. Declaring one twice is a
+// registration error.
 func (r *ToolReg[T]) RejectArgs(fn func(args T) error) *ToolReg[T] {
 	if r.e.reject != nil {
-		panic(fmt.Sprintf("opskat: tool %q already declares RejectArgs", r.e.name))
+		failRegistration("opskat: tool %q already declares RejectArgs", r.e.name)
+		return r
 	}
 	r.e.reject = func(raw json.RawMessage) (*ArgsRejectedError, error) {
 		args, err := decodeArgs[T](raw)
@@ -344,18 +462,23 @@ func (e *toolEntry) checkArgs(args json.RawMessage) (*ArgsRejectedError, error) 
 	return e.reject(args)
 }
 
-// maxToolTimeout mirrors the host's ceiling (pkg/extension MaxToolTimeout): a
+// maxToolTimeout mirrors the host's ceiling (extreg's maxToolTimeout): a
 // tool call holds one of the extension's few instance slots while it runs, so
-// work that needs longer belongs in an action.
+// work that needs longer belongs in a PageOnly tool declaring NoTimeout.
 const maxToolTimeout = 10 * time.Minute
 
 // Timeout sets how long one call of this tool may run before the host stops it,
 // replacing the host default of 30 seconds. d must be at least a millisecond and
-// at most 10 minutes; anything else panics at registration, so the extension
+// at most 10 minutes; anything else is a registration error, so the extension
 // fails at load instead of at its first slow call.
 func (r *ToolReg[T]) Timeout(d time.Duration) *ToolReg[T] {
 	if d < time.Millisecond || d > maxToolTimeout {
-		panic(fmt.Sprintf("opskat: tool %q: timeout %s is outside [1ms, %s]", r.e.name, d, maxToolTimeout))
+		failRegistration("opskat: tool %q: timeout %s is outside [1ms, %s]", r.e.name, d, maxToolTimeout)
+		return r
+	}
+	if r.e.noTimeout {
+		failRegistration("opskat: tool %q declares both Timeout and NoTimeout", r.e.name)
+		return r
 	}
 	r.e.timeout = d
 	return r
@@ -370,7 +493,8 @@ func (r *ToolReg[T]) Doc(description string) *ToolReg[T] {
 // Resource derives the resource string reported alongside the fixed policy action.
 func (r *ToolReg[T]) Resource(fn func(args T) string) *ToolReg[T] {
 	if r.e.classify != nil {
-		panic(fmt.Sprintf("opskat: tool %q already classifies its calls with PolicyFunc/PolicyResources, which return the resource", r.e.name))
+		failRegistration("opskat: tool %q already classifies its calls with PolicyFunc/PolicyResources, which return the resource", r.e.name)
+		return r
 	}
 	r.e.resource = func(raw json.RawMessage) string {
 		args, err := decodeArgs[T](raw)
@@ -398,13 +522,15 @@ type AssetTypeReg[C any] struct{ e *assetTypeEntry }
 // without `,omitempty` is required.
 func AssetType[C any](typ string) *AssetTypeReg[C] {
 	if typ == "" {
-		panic("opskat: asset type is required")
+		failRegistration("opskat: asset type is required")
+		return &AssetTypeReg[C]{e: &assetTypeEntry{}}
 	}
-	entry := &assetTypeEntry{
-		typ:    typ,
-		name:   typ,
-		schema: reflectSchema(reflect.TypeFor[C](), fmt.Sprintf("asset type %q config", typ), schemaModeConfig),
+	schema, err := reflectSchema(reflect.TypeFor[C](), fmt.Sprintf("asset type %q config", typ), schemaModeConfig)
+	if err != nil {
+		registration.Fail(err)
+		return &AssetTypeReg[C]{e: &assetTypeEntry{typ: typ, name: typ}}
 	}
+	entry := &assetTypeEntry{typ: typ, name: typ, schema: schema}
 	assetTypes = append(assetTypes, entry)
 	return &AssetTypeReg[C]{e: entry}
 }
@@ -421,16 +547,12 @@ func (r *AssetTypeReg[C]) Name(name string) *AssetTypeReg[C] {
 // detail card and applies it whenever the extension opens a connection to the
 // asset's endpoint. The extension never reads or handles them — they are not
 // part of the config struct. An item left out is neither shown nor applied.
-type Connection struct {
-	// SSHTunnel routes connections to the endpoint through an SSH asset the user
-	// picks on the asset.
-	SSHTunnel bool `json:"sshTunnel,omitempty"`
-	// ProxyChain routes connections through the asset's proxy chain.
-	ProxyChain bool `json:"proxyChain,omitempty"`
-	// TLS applies the asset's TLS settings (verification, server name, CA,
-	// client certificate) to connections.
-	TLS bool `json:"tls,omitempty"`
-}
+//
+// Fields: SSHTunnel routes connections to the endpoint through an SSH asset the
+// user picks on the asset; ProxyChain routes them through the asset's proxy
+// chain; TLS applies the asset's TLS settings (verification, server name, CA,
+// client certificate).
+type Connection = extwire.Connection
 
 // Connection declares the host-owned connection settings the asset type supports.
 func (r *AssetTypeReg[C]) Connection(c Connection) *AssetTypeReg[C] {
@@ -449,16 +571,10 @@ func (r *AssetTypeReg[C]) Connection(c Connection) *AssetTypeReg[C] {
 // always-active group. The host refuses the extension at load when a template
 // references a field the config does not declare, or the selector is a
 // format:"password" field.
-type Auth struct {
-	Selector string      `json:"selector,omitempty"`
-	Groups   []AuthGroup `json:"groups"`
-}
+type Auth = extwire.Auth
 
 // AuthGroup is the set of bindings injected when the selector field equals When.
-type AuthGroup struct {
-	When     string        `json:"when,omitempty"`
-	Bindings []AuthBinding `json:"bindings"`
-}
+type AuthGroup = extwire.AuthGroup
 
 // AuthBinding injects one value. In is "header" (Name = header name), "query"
 // (Name = parameter name) or "basic" (no Name; Value renders "user:password"
@@ -475,11 +591,7 @@ type AuthGroup struct {
 //     hmac_sha256 return raw bytes — wrap them in base64 or hex;
 //   - now.unix / now.unix_ms, read once per request: every binding of the group
 //     sees the same instant.
-type AuthBinding struct {
-	In    string `json:"in"`
-	Name  string `json:"name,omitempty"`
-	Value string `json:"value"`
-}
+type AuthBinding = extwire.AuthBinding
 
 // Auth declares the credentials the host injects into requests to the asset's endpoint.
 func (r *AssetTypeReg[C]) Auth(a Auth) *AssetTypeReg[C] {
@@ -506,6 +618,41 @@ func (r *AssetTypeReg[C]) TestConnection(fn func(cfg C) error) *AssetTypeReg[C] 
 		}
 		return fn(cfg)
 	}
+	return r
+}
+
+// SettingsReg is the registration handle returned by Settings.
+type SettingsReg[C any] struct{ s *extwire.Settings }
+
+// Settings declares the extension's own settings, a form reflected from C with
+// the same tags as an asset type's config (see AssetType): the user fills it in
+// under Settings › Extensions, and the host stores it — format:"password"
+// fields encrypted — outside the extension's KV store. A format:"endpoint"
+// field (or Auth) needs the manifest's permissions.network.settingsEndpoint,
+// and that permission needs such a field: the host refuses the extension at
+// load otherwise. Declare a secret as a string tagged format:"password"; the
+// host never hands the extension its plaintext. An extension has one settings
+// form: a second call fails describe.
+func Settings[C any]() *SettingsReg[C] {
+	if settings != nil {
+		failRegistration("opskat: settings are already declared")
+		return &SettingsReg[C]{s: &extwire.Settings{}}
+	}
+	schema, err := reflectSchema(reflect.TypeFor[C](), "settings", schemaModeConfig)
+	if err != nil {
+		registration.Fail(err)
+		return &SettingsReg[C]{s: &extwire.Settings{}}
+	}
+	settings = &extwire.Settings{ConfigSchema: schema}
+	return &SettingsReg[C]{s: settings}
+}
+
+// Auth declares the credentials the host renders from the settings — format:
+// "password" fields decrypted host-side — and injects into the extension's HTTP
+// requests to the addresses in the settings' format:"endpoint" fields, the same
+// declaration an asset type's Auth is.
+func (r *SettingsReg[C]) Auth(a Auth) *SettingsReg[C] {
+	r.s.Auth = &a
 	return r
 }
 
@@ -550,12 +697,6 @@ func (r *PolicyGroupReg) Default() *PolicyGroupReg {
 	return r
 }
 
-// RegisterAction registers an action handler. Actions are driven by the
-// extension's own UI, not by the model, so they carry no schema or policy action.
-func RegisterAction(name string, handler ActionHandler) {
-	actions[name] = handler
-}
-
 // RegisterConfigValidator registers the config validator.
 func RegisterConfigValidator(validator ConfigValidator) {
 	configValidator = validator
@@ -577,11 +718,15 @@ func resetRegistries() {
 	meta = Meta{}
 	tools = map[string]*toolEntry{}
 	toolOrder = nil
+	registration.Reset()
 	assetTypes = nil
 	policyGroups = nil
 	frontendSpec = FrontendSpec{}
 	snippetCats = nil
 	snippetSeeds = nil
-	actions = map[string]ActionHandler{}
+	databaseDrivers = nil
+	databaseDriverServe = nil
+	settings = nil
+	commandReviewer = nil
 	configValidator = nil
 }

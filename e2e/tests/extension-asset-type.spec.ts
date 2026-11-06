@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openAssetForm } from "../fixtures/assets";
+import { openAssetForm, assetTreeRow } from "../fixtures/assets";
 import { findAssetByName, findAssetPersistenceByName, findAuditLogs, type AuditRow } from "../fixtures/db";
 
 // An extension's asset type is not a special species in the frontend: it registers
@@ -149,7 +149,7 @@ test("a saved extension asset persists its schema config and renders the detail 
   await page.getByTestId("asset-form-dialog").locator(`#${CONFIG.optionalField}`).fill("5");
   await page.getByTestId("asset-form-submit").click();
   await expect(page.getByTestId("asset-form-dialog")).toBeHidden();
-  await expect(page.getByTestId("asset-tree").getByText(name, { exact: true })).toBeVisible();
+  await expect(await assetTreeRow(page, name)).toBeVisible();
 
   // DB oracle: the row carries the extension-owned type, and the config JSON holds
   // the declared types — a number for the `integer` property.
@@ -161,7 +161,7 @@ test("a saved extension asset persists its schema config and renders the detail 
 
   // The detail card is generated from the same configSchema and fills the built-in
   // DetailInfoCard slot: every property that has a value, labelled by its title.
-  await page.getByTestId("asset-tree").getByText(name, { exact: true }).click({ button: "right" });
+  await (await assetTreeRow(page, name)).click({ button: "right" });
   await page.getByTestId("asset-context-detail").click();
   await expect(page.getByText(CONFIG.requiredLabel)).toBeVisible();
   await expect(page.getByText("team-runbooks")).toBeVisible();
@@ -179,7 +179,7 @@ test("the extension's policy card offers its ext: groups and referencing one per
   await expect(page.getByTestId("asset-form-dialog")).toBeHidden();
   await expect.poll(() => findAssetByName(name)?.type, { timeout: 10_000 }).toBe(EXT);
 
-  await page.getByTestId("asset-tree").getByText(name, { exact: true }).click({ button: "right" });
+  await (await assetTreeRow(page, name)).click({ button: "right" });
   await page.getByTestId("asset-context-detail").click();
 
   // The groups the manifest marks as defaults are attached at creation and shown as
@@ -214,7 +214,7 @@ async function createNotebookAssetAndOpenPage(page: Page, name: string): Promise
   await expect(page.getByTestId("asset-form-dialog")).toBeHidden();
   await expect.poll(() => findAssetByName(name)?.type, { timeout: 10_000 }).toBe(EXT);
 
-  await page.getByTestId("asset-tree").getByText(name, { exact: true }).dblclick();
+  await (await assetTreeRow(page, name)).dblclick();
   await expect(page.getByTestId("notebook-page")).toBeVisible({ timeout: 15_000 });
 }
 
@@ -239,9 +239,9 @@ test("a page call that would need confirmation for AI/opsctl runs with no approv
   await expect(page.getByTestId("opsctl-approval-dialog")).not.toBeVisible();
   await expect(page.getByTestId(`notebook-note-${key}`)).toBeVisible();
 
-  // The page also renders the note list through window.__OPSKAT_EXT__.hostUI.QueryResultTable
-  // (@opskat/host-ui, hostABI 2.1) — proving the host's own result-table
-  // component, not a copy, is what the injected module actually hands to the page.
+  // The page also renders the note list through window.__OPSKAT_EXT__.hostUI.DataTable
+  // (@opskat/host-ui, hostABI 1.0) — proving the injected module hands the page a
+  // working table component.
   await expect(page.getByTestId("notebook-table").getByText(key)).toBeVisible();
 
   expect(auditRowsForAsset(name)).toEqual([]);

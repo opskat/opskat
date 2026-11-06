@@ -7,6 +7,7 @@ import { useWailsEvent } from "@/hooks/useWailsEvent";
 import { EntityIcon } from "@/components/asset/AssetIcon";
 import { formatBytes } from "@/lib/formatBytes";
 import { RespondExtensionInstallConfirm } from "../../wailsjs/go/extension/Extension";
+import { errorMessage } from "@/lib/errorMessage";
 
 const INSTALL_MODE_KEYS = {
   install: {
@@ -30,6 +31,8 @@ const INSTALL_MODE_KEYS = {
 interface CapabilityGrant {
   kind: string;
   value: string;
+  /** Hands over secrets or widens the network path: credentials read, assetRoute, kerberos, commandReviewer. */
+  highRisk: boolean;
 }
 
 /** The ext:install-confirm payload (internal/app/extension installConfirmRequest). */
@@ -53,6 +56,41 @@ const SOURCE_LABEL: Record<InstallConfirmRequest["source"], string> = {
   store: "extension.installConfirm.sourceStore",
   file: "extension.installConfirm.sourceFile",
   dir: "extension.installConfirm.sourceDir",
+};
+
+/** extension_svc.CapDatabaseDriver: one grant per driver id the extension provides. */
+const DATABASE_DRIVER_KIND = "databaseDriver";
+
+/** extension_svc.CapAssetRoute: a call on an asset may dial any address along that asset's connection path. */
+const ASSET_ROUTE_KIND = "network.assetRoute";
+
+/** extension_svc.CapKerberos: a call whose scope carries a ticket source may fetch Kerberos tickets. */
+const KERBEROS_KIND = "kerberos";
+
+/** extension_svc.CapSettingsEndpoint: the extension may reach the addresses typed into its own settings. */
+const SETTINGS_ENDPOINT_KIND = "network.settingsEndpoint";
+
+/** extension_svc.CapCommandReviewer: the extension provides the command reviewer. */
+const COMMAND_REVIEWER_KIND = "commandReviewer";
+
+/** Why a high-risk grant matters, by kind; databaseDriver warns on its own, not through highRisk. */
+const HIGH_RISK_WARNING_KEYS: Record<string, string> = {
+  credentials: "extension.credentialsReadWarning",
+  [ASSET_ROUTE_KIND]: "extension.assetRouteWarning",
+  [KERBEROS_KIND]: "extension.kerberosWarning",
+  [COMMAND_REVIEWER_KIND]: "extension.commandReviewerWarning",
+};
+
+/** The manifest.json name a grant is labelled with (opsctl ext dev uses the same): the kind, except databaseDriver is declared as databaseDrivers. */
+const grantLabel = (kind: string) => (kind === DATABASE_DRIVER_KIND ? "databaseDrivers" : kind);
+
+/** Kinds that carry an explanation sentence under their manifest name. */
+const GRANT_EXPLANATION_KEYS: Record<string, string> = {
+  [DATABASE_DRIVER_KIND]: "extension.installConfirm.databaseDriver",
+  [ASSET_ROUTE_KIND]: "extension.installConfirm.assetRoute",
+  [KERBEROS_KIND]: "extension.installConfirm.kerberos",
+  [SETTINGS_ENDPOINT_KIND]: "extension.installConfirm.settingsEndpoint",
+  [COMMAND_REVIEWER_KIND]: "extension.installConfirm.commandReviewer",
 };
 
 const sameGrant = (a: CapabilityGrant, b: CapabilityGrant) => a.kind === b.kind && a.value === b.value;
@@ -86,7 +124,7 @@ export function ExtensionInstallConfirmDialog() {
   const respond = (ok: boolean) => {
     if (!current) return;
     remove(current.id);
-    RespondExtensionInstallConfirm(current.id, ok).catch((e) => toast.error(String(e)));
+    RespondExtensionInstallConfirm(current.id, ok).catch((e) => toast.error(errorMessage(e)));
   };
 
   // Answering swaps the next queued confirm in under the same buttons, so the rest
@@ -96,7 +134,19 @@ export function ExtensionInstallConfirmDialog() {
     respond(ok);
   };
 
-  const credentialsRead = current?.capabilities.some((c) => c.kind === "credentials" && c.value === "read");
+  const warningKeys = current
+    ? [
+        ...Object.entries(HIGH_RISK_WARNING_KEYS)
+          .filter(([kind]) => current.capabilities.some((c) => c.kind === kind && c.highRisk))
+          .map(([, key]) => key),
+        ...(current.capabilities.some((c) => c.kind === COMMAND_REVIEWER_KIND)
+          ? ["extension.commandReviewerDisclosure"]
+          : []),
+        ...(current.capabilities.some((c) => c.kind === DATABASE_DRIVER_KIND)
+          ? ["extension.databaseDriversWarning"]
+          : []),
+      ]
+    : [];
   const mode = !current?.from ? "install" : current.downgrade ? "downgrade" : "update";
   const confirmLabel = INSTALL_MODE_KEYS[mode].action;
 
@@ -121,15 +171,16 @@ export function ExtensionInstallConfirmDialog() {
                 </div>
               </div>
 
-              {credentialsRead && (
+              {warningKeys.map((key) => (
                 <div
+                  key={key}
                   role="alert"
                   className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/15 p-3 text-warning"
                 >
                   <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
-                  <span>{t("extension.credentialsReadWarning")}</span>
+                  <span>{t(key)}</span>
                 </div>
-              )}
+              ))}
 
               <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5">
                 <dt className="text-muted-foreground">{t("extension.version")}</dt>
@@ -159,15 +210,34 @@ export function ExtensionInstallConfirmDialog() {
                       <li
                         key={`${cap.kind}:${cap.value}`}
                         data-testid={`ext-install-cap-${cap.kind}`}
-                        className="flex items-center gap-2 text-xs p-2 rounded bg-muted/50"
+                        className="flex items-start gap-2 text-xs p-2 rounded bg-muted/50"
                       >
-                        <span className="font-mono font-medium shrink-0">{cap.kind}</span>
-                        {cap.value && <span className="font-mono text-muted-foreground break-all">{cap.value}</span>}
-                        {current.added.some((a) => sameGrant(a, cap)) && (
-                          <span className="ml-auto shrink-0 px-1.5 py-0.5 rounded bg-info/15 text-info">
-                            {t("extension.installConfirm.added")}
+                        <div className="min-w-0 flex-1 break-words">
+                          <span data-testid="ext-install-cap-label" className="font-mono font-medium">
+                            {grantLabel(cap.kind)}
                           </span>
-                        )}
+                          {cap.value && (
+                            <span className="ml-2 font-mono text-muted-foreground break-all">{cap.value}</span>
+                          )}
+                          {cap.kind in GRANT_EXPLANATION_KEYS && (
+                            <p data-testid="ext-install-cap-explanation" className="mt-0.5 text-muted-foreground">
+                              {t(GRANT_EXPLANATION_KEYS[cap.kind])}
+                            </p>
+                          )}
+                        </div>
+                        <span className="flex shrink-0 items-center gap-1.5">
+                          {cap.highRisk && (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-warning/15 text-warning">
+                              <ShieldAlert className="h-3 w-3" aria-hidden />
+                              {t("extension.installConfirm.highRisk")}
+                            </span>
+                          )}
+                          {current.added.some((a) => sameGrant(a, cap)) && (
+                            <span className="px-1.5 py-0.5 rounded bg-info/15 text-info">
+                              {t("extension.installConfirm.added")}
+                            </span>
+                          )}
+                        </span>
                       </li>
                     ))}
                   </ul>

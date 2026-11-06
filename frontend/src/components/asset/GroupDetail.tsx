@@ -7,7 +7,10 @@ import { DetailGrid, DetailSection, InfoItem } from "@/components/asset/detail/I
 import { group_entity } from "../../../wailsjs/go/models";
 import { UpdateGroup } from "../../../wailsjs/go/system/System";
 import { toast } from "sonner";
+import type { PermissionMode } from "@/lib/commandReview";
+import { PermissionModeCard } from "@/components/asset/PermissionModeCard";
 import { EntityIcon } from "@/components/asset/AssetIcon";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface GroupDetailProps {
   group: group_entity.Group;
@@ -54,7 +57,7 @@ export function GroupDetail({ group }: GroupDetailProps) {
       await UpdateGroup(updated);
       await fetchGroups();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -63,6 +66,11 @@ export function GroupDetail({ group }: GroupDetailProps) {
   const handleGroupsChange = (newGroups: string[]) => {
     setPolicyGroups(newGroups);
     savePolicy(allowList, denyList, newGroups);
+  };
+
+  const savePermissionMode = async (mode: PermissionMode) => {
+    await UpdateGroup(new group_entity.Group({ ...group, permissionMode: mode }));
+    await fetchGroups();
   };
 
   return (
@@ -92,6 +100,13 @@ export function GroupDetail({ group }: GroupDetailProps) {
             </div>
           )}
         </DetailSection>
+
+        <PermissionModeCard
+          value={group.permissionMode ?? ""}
+          subject="group"
+          parentGroupId={group.ParentID}
+          onChange={savePermissionMode}
+        />
 
         {/* Command Policy */}
         <CommandPolicyCard

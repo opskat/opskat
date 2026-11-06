@@ -7,6 +7,7 @@ import { Field, Segmented } from "@/components/asset/fields";
 import { SecretInput } from "@/components/SecretInput";
 import { credential_entity } from "../../../wailsjs/go/models";
 import { GetAssetPassword } from "../../../wailsjs/go/system/System";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface PasswordSourceFieldProps {
   source: "inline" | "managed";
@@ -72,7 +73,7 @@ export function PasswordSourceField({
             setDecryptedOnce(true);
           }
         } catch (error) {
-          toast.error(String(error));
+          toast.error(errorMessage(error));
           return;
         } finally {
           setDecrypting(false);

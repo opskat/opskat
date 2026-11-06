@@ -2,6 +2,7 @@ package assettype
 
 import (
 	"fmt"
+	"maps"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
@@ -111,43 +112,52 @@ func bindSSHCredential(args map[string]any, binding CredentialBinding) (map[stri
 
 func (*databaseHandler) AutomationContract() AutomationContract {
 	return newAutomationContract(
-		[]string{"driver", "host", "port", "username", "password", "credential_id", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "proxy_chain", "sqlite_source", "path"},
-		[]string{"driver", "host", "port", "username", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "proxy_chain", "sqlite_source", "path"},
+		// tls_* 是证书字段组：键在契约里固定，按驱动是否声明 FieldTLSCert 在 database.go 里判定。
+		// auth_method / krb_* 是 Kerberos 字段组，同样按驱动是否声明 FieldKerberos 判定。
+		withFields(withFields([]string{"driver", "host", "port", "username", "password", "credential_id", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "proxy_chain", "sqlite_source", "path", argDriverOptions}, tlsConfigArgs()...), kerberosConfigArgs()...),
+		// driver_options 留在审批字段里（不算 write-only：其中口令类明文由 DriverOptionsHaveSecret
+		// 按驱动声明单独判断），但它是复合值，approvalView 会整体省略；审批与审计里的呈现
+		// 由 approvalDriverOptions 给出（口令类只列出已设置）。
+		withFields(withFields([]string{"driver", "host", "port", "username", "database", "read_only", "query_timeout_seconds", "ssh_asset_id", "proxy_chain", "sqlite_source", "path", argDriverOptions}, tlsApprovalArgs()...), kerberosApprovalArgs()...),
 		normalizeDatabaseAutomation,
 		databaseCredentialPlan,
 		bindDatabaseCredential,
-	)
+	).withApprovalExtra(approvalDriverOptions)
 }
 
 func normalizeDatabaseAutomation(args map[string]any) error {
-	driver := asset_entity.DatabaseDriver(ArgString(args, "driver"))
-	if driver == "" {
-		return fmt.Errorf("database type requires driver parameter (mysql, postgresql, mssql, sqlite)")
+	drv, err := requestedDriver(args)
+	if err != nil {
+		return err
 	}
-	if driver == asset_entity.DriverSQLite {
-		if ArgString(args, "sqlite_source") == "" {
-			args["sqlite_source"] = string(asset_entity.SQLiteSourceLocal)
-		}
-		return nil
-	}
-	if ArgInt(args, "port") == 0 {
-		if port := driver.DefaultPort(); port > 0 {
-			args["port"] = port
-		}
-	}
+	maps.Copy(args, drv.CreateDefaults(driverArgs(args)))
 	return nil
 }
 
+// 入参不带 driver 只出现在局部更新里，这时口令规则照常适用：带凭据的局部更新会先经
+// AutomationUpdateContext 补上资产现有的 driver，到这里已经能判断驱动用不用口令。
 func databaseCredentialPlan(args map[string]any) (CredentialPlan, error) {
-	if asset_entity.DatabaseDriver(ArgString(args, "driver")) == asset_entity.DriverSQLite {
-		return noCredentialPlan("password", "credential_id")(args)
+	if ArgString(args, "driver") != "" {
+		drv, err := requestedDriver(args)
+		if err != nil {
+			return CredentialPlan{}, err
+		}
+		if !usesPassword(drv) {
+			return noCredentialPlan("password", "credential_id")(args)
+		}
 	}
 	return passwordReferencePlan(args, "password")
 }
 
 func bindDatabaseCredential(args map[string]any, binding CredentialBinding) (map[string]any, error) {
-	if asset_entity.DatabaseDriver(ArgString(args, "driver")) == asset_entity.DriverSQLite {
-		return nil, fmt.Errorf("credential_id is not applicable to SQLite")
+	if ArgString(args, "driver") != "" {
+		drv, err := requestedDriver(args)
+		if err != nil {
+			return nil, err
+		}
+		if !usesPassword(drv) {
+			return nil, fmt.Errorf("credential_id is not applicable to %s", drv.Descriptor().Name)
+		}
 	}
 	return bindPasswordCredential(args, binding)
 }
@@ -264,8 +274,8 @@ func normalizeVNCAutomation(args map[string]any) error {
 
 func (*ossHandler) AutomationContract() AutomationContract {
 	return newAutomationContract(
-		[]string{"provider", "endpoint", "region", "access_key_id", "secret_access_key", "credential_id", "use_path_style", "use_ssl", "connect_timeout"},
-		[]string{"provider", "endpoint", "region", "access_key_id", "use_path_style", "use_ssl", "connect_timeout"},
+		[]string{"provider", "endpoint", "region", "bucket", "access_key_id", "secret_access_key", "credential_id", "use_path_style", "use_ssl", "connect_timeout"},
+		[]string{"provider", "endpoint", "region", "bucket", "access_key_id", "use_path_style", "use_ssl", "connect_timeout"},
 		nil,
 		func(args map[string]any) (CredentialPlan, error) {
 			return passwordReferencePlan(args, "secret_access_key")

@@ -22,7 +22,7 @@ func logOSSEnd(ctx context.Context, operation string, assetID int64, err error) 
 	logger.Ctx(ctx).Info(operation+" end", zap.Int64("assetId", assetID))
 }
 
-// OSSTestConnection 用已保存的资产拨号并列 Bucket 以验证凭证。
+// OSSTestConnection 用已保存的资产拨号并验证凭证。
 func (o *OSS) OSSTestConnection(assetID int64) error {
 	if assetID <= 0 {
 		return fmt.Errorf("invalid assetID")
@@ -34,7 +34,7 @@ func (o *OSS) OSSTestConnection(assetID int64) error {
 	return err
 }
 
-// OSSListBuckets 列出账号下的所有 Bucket。
+// OSSListBuckets 列出资产可见的 Bucket(配了默认桶时只有它)。
 func (o *OSS) OSSListBuckets(assetID int64) ([]oss_svc.BucketItem, error) {
 	if assetID <= 0 {
 		return nil, fmt.Errorf("invalid assetID")

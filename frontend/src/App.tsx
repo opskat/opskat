@@ -16,6 +16,8 @@ import { LeftPanel } from "@/components/layout/LeftPanel";
 import { SideTabList } from "@/components/layout/SideTabList";
 import { PermissionDialog } from "@/components/ai/PermissionDialog";
 import { OpsctlApprovalDialog } from "@/components/approval/OpsctlApprovalDialog";
+import { CommandReviewConfigErrorListener } from "@/components/settings/CommandReviewConfigErrorListener";
+import { openGroupDetail, openInfoTab } from "@/lib/infoTab";
 import { OpsctlMFADialog } from "@/components/approval/OpsctlMFADialog";
 import { ExtensionInstallConfirmDialog } from "@/extension";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -39,6 +41,7 @@ import { useAIStore } from "@/stores/aiStore";
 import { asset_entity, group_entity } from "../wailsjs/go/models";
 import { EventsEmit, EventsOn, WindowToggleMaximise } from "../wailsjs/runtime/runtime";
 import { ConfirmQuit } from "../wailsjs/go/system/System";
+import { errorMessage } from "@/lib/errorMessage";
 
 function App() {
   const { t } = useTranslation();
@@ -257,8 +260,10 @@ function App() {
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<group_entity.Group | null>(null);
 
-  const { selectAsset, selectGroup, deleteAsset, getAsset } = useAssetStore();
-  const { connect } = useTerminalStore();
+  const selectAsset = useAssetStore((s) => s.selectAsset);
+  const deleteAsset = useAssetStore((s) => s.deleteAsset);
+  const getAsset = useAssetStore((s) => s.getAsset);
+  const connect = useTerminalStore((s) => s.connect);
 
   const handleAddAsset = (groupId?: number) => {
     setEditingAsset(null);
@@ -282,30 +287,13 @@ function App() {
       setEditingAsset(copied);
       setAssetFormOpen(true);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
   const handleSelectAsset = (asset: asset_entity.Asset) => {
     selectAsset(asset.ID);
   };
-
-  const handleOpenInfoTab = useCallback((type: "asset" | "group", id: number, name: string, icon?: string) => {
-    const tabStore = useTabStore.getState();
-    const infoTabId = `info-${type}-${id}`;
-    const existing = tabStore.tabs.find((t) => t.id === infoTabId);
-    if (existing) {
-      tabStore.activateTab(infoTabId);
-    } else {
-      tabStore.openTab({
-        id: infoTabId,
-        type: "info",
-        label: name,
-        icon,
-        meta: { type: "info", targetType: type, targetId: id, name, icon },
-      });
-    }
-  }, []);
 
   const handleDeleteAsset = async (id: number) => {
     await deleteAsset(id);
@@ -336,7 +324,7 @@ function App() {
     try {
       await connect(asset, "", true);
     } catch (e) {
-      toast.error(`${asset.Name}: ${String(e)}`);
+      toast.error(`${asset.Name}: ${errorMessage(e)}`);
     }
   };
 
@@ -350,7 +338,7 @@ function App() {
         sftp.toggleFileManager(tabId);
       }
     } catch (e) {
-      toast.error(`${asset.Name}: ${String(e)}`);
+      toast.error(`${asset.Name}: ${errorMessage(e)}`);
     }
   };
 
@@ -444,18 +432,14 @@ function App() {
                             setEditingGroup(group);
                             setGroupDialogOpen(true);
                           }}
-                          onGroupDetail={(group) => {
-                            selectGroup(group.ID);
-                            selectAsset(null);
-                            handleOpenInfoTab("group", group.ID, group.Name, group.Icon || undefined);
-                          }}
+                          onGroupDetail={openGroupDetail}
                           onEditAsset={handleEditAsset}
                           onCopyAsset={handleCopyAsset}
                           onConnectAsset={handleConnectAsset}
                           onConnectAssetInNewTab={handleConnectAssetInNewTab}
                           onOpenFileManager={handleOpenFileManager}
                           onSelectAsset={handleSelectAsset}
-                          onOpenInfoTab={handleOpenInfoTab}
+                          onOpenInfoTab={openInfoTab}
                         />
                       ) : (
                         <SideTabList />
@@ -489,18 +473,14 @@ function App() {
                         setEditingGroup(group);
                         setGroupDialogOpen(true);
                       }}
-                      onGroupDetail={(group) => {
-                        selectGroup(group.ID);
-                        selectAsset(null);
-                        handleOpenInfoTab("group", group.ID, group.Name, group.Icon || undefined);
-                      }}
+                      onGroupDetail={openGroupDetail}
                       onEditAsset={handleEditAsset}
                       onCopyAsset={handleCopyAsset}
                       onConnectAsset={handleConnectAsset}
                       onConnectAssetInNewTab={handleConnectAssetInNewTab}
                       onOpenFileManager={handleOpenFileManager}
                       onSelectAsset={handleSelectAsset}
-                      onOpenInfoTab={handleOpenInfoTab}
+                      onOpenInfoTab={openInfoTab}
                     />
                     {/* Resize handle */}
                     {!assetTreeCollapsed && (
@@ -538,6 +518,7 @@ function App() {
           </Suspense>
           <PermissionDialog suspended={quitActivities !== null} />
           <OpsctlApprovalDialog suspended={quitActivities !== null} />
+          <CommandReviewConfigErrorListener />
           <OpsctlMFADialog />
           <ExtensionInstallConfirmDialog />
           <ActiveTasksQuitDialog

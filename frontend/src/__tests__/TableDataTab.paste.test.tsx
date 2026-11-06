@@ -5,6 +5,7 @@ import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
 import { ExecuteSQL, OpenTable } from "../../wailsjs/go/query/Query";
+import { BUILTIN_DRIVERS, mockGridEditStatements, provideDrivers } from "./dbDriverFixtures";
 
 // Pasting a copied row into an editable table is the flow the report names: copy a row in
 // one table, add a blank row here, paste. These tests drive the real tab, so the row-index
@@ -80,6 +81,8 @@ async function renderLoaded() {
 
 describe("TableDataTab keyboard paste", () => {
   beforeEach(() => {
+    provideDrivers(BUILTIN_DRIVERS);
+    mockGridEditStatements();
     readText.mockReset();
     vi.mocked(ExecuteSQL).mockReset();
     vi.mocked(OpenTable).mockReset();
@@ -105,10 +108,10 @@ describe("TableDataTab keyboard paste", () => {
     expect(cell("2:name")).toHaveTextContent("zoe");
 
     fireEvent.click(screen.getByTitle("query.applyChanges"));
-    fireEvent.click(screen.getByText("query.confirmExecute"));
+    fireEvent.click(await screen.findByText("query.confirmExecute"));
 
     await waitFor(() => expect(insertCalls()).toHaveLength(1));
-    expect(insertCalls()[0]).toContain("(`id`, `name`) VALUES ('9', 'zoe')");
+    expect(insertCalls()[0]).toContain('{"id":"9","name":"zoe"}');
   });
 
   it("pastes into a newly added row right after its editor is closed", async () => {
@@ -160,11 +163,11 @@ describe("TableDataTab keyboard paste", () => {
     expect(cell("2:name")).toHaveTextContent("zoe");
 
     fireEvent.click(screen.getByTitle("query.applyChanges"));
-    fireEvent.click(screen.getByText("query.confirmExecute"));
+    fireEvent.click(await screen.findByText("query.confirmExecute"));
 
     await waitFor(() => expect(insertCalls()).toHaveLength(1));
-    expect(insertCalls()[0]).toContain("(`id`, `name`) VALUES ('9', 'zoe')");
+    expect(insertCalls()[0]).toContain('{"id":"9","name":"zoe"}');
     // The first pasted row overwrites the existing row 2, so it stages an UPDATE.
-    expect(executeSqlCalls().some((sql) => sql.startsWith("UPDATE") && sql.includes("'8'"))).toBe(true);
+    expect(executeSqlCalls().some((sql) => sql.startsWith("UPDATE") && sql.includes('"8"'))).toBe(true);
   });
 });

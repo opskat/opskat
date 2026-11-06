@@ -11,6 +11,9 @@ describe("TableDataTab toolbar", () => {
         submitting={false}
         canExport
         canImport
+        gridEdit
+        importAvailable
+        sqlExportAvailable
         filterSortOpen={false}
         onToggleFilterSort={vi.fn()}
         onSubmit={vi.fn()}
@@ -46,6 +49,9 @@ describe("TableDataTab toolbar", () => {
         submitting={false}
         canExport
         canImport
+        gridEdit
+        importAvailable
+        sqlExportAvailable
         filterSortOpen={false}
         onToggleFilterSort={onToggleFilterSort}
         onSubmit={onSubmit}
@@ -74,6 +80,7 @@ describe("TableDataTab toolbar", () => {
 
     render(
       <TableDataStatusBar
+        gridEdit
         pendingEditCount={2}
         sqlSummary="UPDATE `appdb`.`users` SET `name` = 'ally' WHERE `id` = '1' LIMIT 1;"
         totalRows={12}
@@ -122,6 +129,7 @@ describe("TableDataTab toolbar", () => {
 
     render(
       <TableDataStatusBar
+        gridEdit
         pendingEditCount={1}
         sqlSummary="UPDATE `users` SET `name` = 'ally' WHERE `id` = '1' LIMIT 1;"
         totalRows={12}
@@ -164,6 +172,7 @@ describe("TableDataTab toolbar", () => {
 
     render(
       <TableDataStatusBar
+        gridEdit
         pendingEditCount={0}
         sqlSummary=""
         totalRows={1200}

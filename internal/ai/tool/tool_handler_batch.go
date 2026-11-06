@@ -94,6 +94,9 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 		checkResult  aictx.CheckResult // 每项独立审计的授权/拒绝语义
 	}
 	resolved := make([]resolvedCmd, 0, len(commands))
+	// permReqs 是通过前置检查、要做权限检查的命令；permIndices 是它们在 resolved 里的位置。
+	var permReqs []permission.PermissionRequest
+	var permIndices []int
 
 	for _, cmd := range commands {
 		asset, resolveErr := assetref.Resolve(ctx, cmd.Asset)
@@ -166,7 +169,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 		// 与 handleExec 的第 8 步同一理由（kafka 的双 token 串就是靠这条才对得上）。
 		checkCommand := cmd.Command
 		if canonicalize, ok := permission.CanonicalizeFor(asset.Type); ok {
-			canonical, cerr := canonicalize(asset, cmd.Command)
+			canonical, cerr := canonicalize(ctx, asset, cmd.Command)
 			if cerr != nil {
 				resolved = append(resolved, resolvedCmd{
 					item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
@@ -213,21 +216,26 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			detail = d
 		}
 
-		decision, denyMsg := "allow", ""
-		result := permission.CheckPermission(ctx, asset.Type, asset.ID, checkCommand)
-		switch result.Decision {
-		case aictx.Deny:
-			decision, denyMsg = "deny", result.Message
-		case aictx.NeedConfirm:
-			decision = "needConfirm"
-		case aictx.Allow:
-			decision = "allow"
-		}
-
+		// 权限检查放到循环之后一次做：需要模型审核的命令并行审核，不逐条等待。
+		permIndices = append(permIndices, len(resolved))
+		permReqs = append(permReqs, permission.PermissionRequest{AssetType: asset.Type, AssetID: asset.ID, Command: checkCommand})
 		resolved = append(resolved, resolvedCmd{
 			item: cmd, asset: asset, assetID: asset.ID, assetName: asset.Name,
-			checkCommand: checkCommand, detail: detail, decision: decision, denyMsg: denyMsg, checkResult: result,
+			checkCommand: checkCommand, detail: detail,
 		})
+	}
+
+	for k, result := range permission.CheckPermissions(ctx, permReqs) {
+		r := &resolved[permIndices[k]]
+		r.checkResult = result
+		switch result.Decision {
+		case aictx.Deny:
+			r.decision, r.denyMsg = "deny", result.Message
+		case aictx.NeedConfirm:
+			r.decision = "needConfirm"
+		case aictx.Allow:
+			r.decision = "allow"
+		}
 	}
 
 	// 聚合 needConfirm，一次性弹审批。
@@ -242,6 +250,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 					AssetName: r.assetName,
 					Command:   r.checkCommand,
 					Detail:    r.detail,
+					Review:    r.checkResult.Review,
 				})
 				needConfirmIndices = append(needConfirmIndices, i)
 			}
@@ -250,6 +259,8 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 			resp := checker.ConfirmFunc()(ctx, permission.ApprovalKindBatch, needConfirmItems)
 			parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindBatch, resp, needConfirmItems)
 			for _, idx := range needConfirmIndices {
+				// 人确认后的结果保留模型审核结果，审计据此记下"模型没通过、人批准了"。
+				review := resolved[idx].checkResult.Review
 				switch {
 				case parseErr != nil:
 					resolved[idx].decision = "deny"
@@ -278,6 +289,7 @@ func handleBatchCommand(ctx context.Context, args map[string]any) (string, error
 						Message: resolved[idx].denyMsg,
 					}
 				}
+				resolved[idx].checkResult.Review = review
 			}
 		}
 	}

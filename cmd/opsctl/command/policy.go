@@ -337,6 +337,18 @@ func writePermanentRules(ctx context.Context, side permission.RuleSide, targets 
 	log.Info("opsctl policy rule write started",
 		zap.String("side", ruleSideName(side)), zap.Int("targets", len(targets)))
 
+	// 数据库资产的规则落点由资产驱动切分、分类语句得出；驱动来自扩展时，opsctl 启动只做
+	// 仅描述注册，规划前须像 exec 一样在本进程激活该扩展。组目标没有驱动，什么也不做；
+	// 没有配置的资产沿用 policy.ClassifyForAsset 的口径（走内置分类），也没有驱动可激活。
+	for _, t := range targets {
+		if t.Asset == nil || t.Asset.Config == "" {
+			continue
+		}
+		if err := activateDriverExtension(ctx, t.Asset, activateExtensionFn); err != nil {
+			return err
+		}
+	}
+
 	plans, err := policy_rule_svc.PolicyRule().PlanRules(ctx, side, targets)
 	if err != nil {
 		return err

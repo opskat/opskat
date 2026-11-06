@@ -1,7 +1,13 @@
+import { lazy } from "react";
 import { KafkaIcon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
-import { KafkaDetailInfoCard } from "@/components/asset/detail/KafkaDetailInfoCard";
-import { KafkaConfigSection } from "@/components/asset/KafkaConfigSection";
+
+const KafkaDetailInfoCard = lazy(() =>
+  import("@/components/asset/detail/KafkaDetailInfoCard").then((m) => ({ default: m.KafkaDetailInfoCard }))
+);
+const KafkaConfigSection = lazy(() =>
+  import("@/components/asset/KafkaConfigSection").then((m) => ({ default: m.KafkaConfigSection }))
+);
 
 registerAssetType({
   type: "kafka",

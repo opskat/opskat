@@ -12,6 +12,7 @@ import type { customtype } from "../../../../wailsjs/go/models";
 import { GetGenericAssetView, RevealGenericSecret } from "../../../../wailsjs/go/customtype/CustomType";
 import { DetailGrid, DetailSection, InfoItem, ProxyChainDetailSection } from "./InfoItem";
 import { MASKED_SECRET } from "./utils";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** POSIX shell 单引号转义:只含安全字符时原样返回。 */
 function shellQuote(s: string): string {
@@ -54,7 +55,7 @@ export function GenericDetailInfoCard({ asset, sshTunnelName, onEdit }: DetailIn
         }
       })
       .catch((e) => {
-        if (!cancelled) setLoaded({ assetId, error: String(e) });
+        if (!cancelled) setLoaded({ assetId, error: errorMessage(e) });
       });
     return () => {
       cancelled = true;
@@ -103,7 +104,7 @@ export function GenericDetailInfoCard({ asset, sshTunnelName, onEdit }: DetailIn
         values: { ...(cur?.assetId === assetId ? cur.values : {}), [field]: plain },
       }));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setRevealing("");
     }
@@ -114,7 +115,7 @@ export function GenericDetailInfoCard({ asset, sshTunnelName, onEdit }: DetailIn
       await navigator.clipboard.writeText(text);
       notifyCopied(t("action.copied"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 

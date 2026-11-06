@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -24,6 +25,11 @@ type AutomationContract struct {
 	// approvalView's default scalar-only rule — this allowlist is opt-in per field, not a
 	// blanket exception for "looks flat".
 	FlatMapFields []string
+	// ApprovalExtra adds approval entries computed from the prepared config that the
+	// scalar-only approvalView cannot carry (e.g. a driver's declared options). It must
+	// return only values safe to show, and fail when it cannot tell what is safe — the
+	// request must not reach approval with part of it unshown. nil means the type has none.
+	ApprovalExtra func(map[string]any) (map[string]any, error)
 	Normalize     func(map[string]any) error
 	// ValidateCreate / Validate are the contract-level counterparts of the handler's
 	// ValidateCreateArgs (create only) and ValidateAutomationConfig (create and update),
@@ -176,6 +182,11 @@ func newAutomationContract(configFields, approvalFields []string, normalize func
 	}
 }
 
+func (c AutomationContract) withApprovalExtra(extra func(map[string]any) (map[string]any, error)) AutomationContract {
+	c.ApprovalExtra = extra
+	return c
+}
+
 // PrepareCreate validates a create of the unsaved asset a (see NewAsset) through the
 // contract its type owns.
 func PrepareCreate(ctx context.Context, a *asset_entity.Asset, args map[string]any) (PreparedCreate, error) {
@@ -244,6 +255,13 @@ func validateAutomation(prepared PreparedCreate) error {
 func finalizeAutomation(prepared PreparedCreate) (PreparedCreate, error) {
 	contract := prepared.contract
 	prepared.Approval = approvalView(prepared.Config, contract.ApprovalFields, contract.FlatMapFields)
+	if contract.ApprovalExtra != nil {
+		extra, err := contract.ApprovalExtra(prepared.Config)
+		if err != nil {
+			return PreparedCreate{}, err
+		}
+		maps.Copy(prepared.Approval, extra)
+	}
 	// A proxy chain is a list of objects, which approvalView drops wholesale (a nested
 	// value could hide a secret). The approver still has to see the path, so it goes in
 	// as one summary line per hop.

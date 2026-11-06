@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pencil, Trash2, TerminalSquare, Loader2 } from "lucide-react";
 import Markdown from "react-markdown";
@@ -10,9 +10,12 @@ import { toast } from "sonner";
 import { useAssetStore } from "@/stores/assetStore";
 import { useAssetTypeDef } from "@/lib/assetTypes";
 import { AssetIcon } from "@/components/asset/AssetIcon";
+import { AssetTypeSectionSuspense } from "@/components/asset/AssetTypeSectionSuspense";
 import { CommandPolicyCard } from "@/components/asset/CommandPolicyCard";
+import { PermissionModeCard } from "@/components/asset/PermissionModeCard";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { GetDefaultPolicy } from "../../../wailsjs/go/system/System";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface AssetDetailProps {
   asset: asset_entity.Asset;
@@ -70,7 +73,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
     } catch (e) {
       // 没存上就丢掉乐观值，回到库里的真实策略
       setDraft(null);
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSavingPolicy(false);
     }
@@ -93,7 +96,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       }
       await savePolicy(fields, groups);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -114,7 +117,9 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
           <div>
             <h2 className="font-semibold leading-tight">{asset.Name}</h2>
             {Subtitle ? (
-              <Subtitle asset={asset} />
+              <Suspense fallback={null}>
+                <Subtitle asset={asset} />
+              </Suspense>
             ) : (
               <span className="text-xs text-muted-foreground uppercase">{asset.Type}</span>
             )}
@@ -166,7 +171,21 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
       />
       <div className="flex-1 p-4 space-y-4 overflow-y-auto">
         {/* 类型详情卡：内置类型手写，扩展类型由它的 configSchema 生成（同一个槽位） */}
-        {def && <def.DetailInfoCard asset={asset} sshTunnelName={sshTunnelName} onEdit={onEdit} />}
+        {def && (
+          <AssetTypeSectionSuspense>
+            <def.DetailInfoCard asset={asset} sshTunnelName={sshTunnelName} onEdit={onEdit} />
+          </AssetTypeSectionSuspense>
+        )}
+
+        {/* 权限模式：只对有命令权限策略的类型有意义 */}
+        {def?.policy && (
+          <PermissionModeCard
+            value={asset.permissionMode ?? ""}
+            subject="asset"
+            parentGroupId={asset.GroupID}
+            onChange={(mode) => updateAsset(new asset_entity.Asset({ ...asset, permissionMode: mode }))}
+          />
+        )}
 
         {/* 策略卡：内置类型与扩展类型走同一段渲染，差别只在定义里 */}
         {(() => {

@@ -29,9 +29,11 @@ function makeAsset(id: number, name: string, groupId: number, type = "ssh"): ass
 
 function renderTree({
   onAddAsset = vi.fn(),
+  onGroupDetail = vi.fn(),
   onOpenFileManager,
 }: {
   onAddAsset?: (groupId?: number) => void;
+  onGroupDetail?: (group: group_entity.Group) => void;
   onOpenFileManager?: (asset: asset_entity.Asset) => void;
 } = {}) {
   return render(
@@ -41,7 +43,7 @@ function renderTree({
         onAddAsset={onAddAsset}
         onAddGroup={vi.fn()}
         onEditGroup={vi.fn()}
-        onGroupDetail={vi.fn()}
+        onGroupDetail={onGroupDetail}
         onEditAsset={vi.fn()}
         onCopyAsset={vi.fn()}
         onConnectAsset={vi.fn()}
@@ -138,7 +140,7 @@ describe("AssetTree context menu", () => {
     expect(assetRow).toHaveAttribute("role", "button");
   });
 
-  it("does not render group detail or open in tab in group context menu", async () => {
+  it("does not render rename or open in tab in group context menu", async () => {
     renderTree();
 
     fireEvent.contextMenu(screen.getByText("Folder A"));
@@ -146,8 +148,28 @@ describe("AssetTree context menu", () => {
 
     expect(menu).toHaveTextContent("asset.editGroupSettings");
     expect(menu).not.toHaveTextContent("asset.renameGroup");
-    expect(menu).not.toHaveTextContent("asset.groupDetail");
     expect(menu).not.toHaveTextContent("action.openInTab");
+  });
+
+  // 分组详情页放着分组的命令权限和权限模式，右键菜单是它唯一的入口。
+  it("opens group details from the group context menu", async () => {
+    const onGroupDetail = vi.fn();
+    renderTree({ onGroupDetail });
+
+    fireEvent.contextMenu(screen.getByText("Folder B"));
+    fireEvent.click(within(await screen.findByRole("menu")).getByText("asset.groupDetailTitle"));
+
+    expect(onGroupDetail).toHaveBeenCalledTimes(1);
+    expect(onGroupDetail.mock.calls[0][0]).toMatchObject({ ID: 2, Name: "Folder B" });
+  });
+
+  it("disables group details for the ungrouped bucket", async () => {
+    useAssetStore.setState({ assets: [makeAsset(102, "Root Asset", 0)], groups: [] });
+    renderTree();
+
+    fireEvent.contextMenu(screen.getByText("asset.ungrouped"));
+    const item = within(await screen.findByRole("menu")).getByText("asset.groupDetailTitle");
+    expect(item.closest('[role="menuitem"]')).toHaveAttribute("data-disabled", "true");
   });
 
   it("shows the file-manager action for ssh assets", async () => {

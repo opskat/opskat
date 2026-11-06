@@ -6,85 +6,47 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	. "github.com/smartystreets/goconvey/convey"
+
+	_ "github.com/opskat/opskat/internal/dbdriver/sqlite"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-func TestDialDatabaseSQLite(t *testing.T) {
+// SQLite 自己的连接串、只读与远端打开的断言在 internal/dbdriver/sqlite；这里测的是经共享
+// 入口走到它的这一段。
+func TestOpenDatabaseSQLite(t *testing.T) {
 	Convey("SQLite 本地文件直连", t, func() {
-		dir := t.TempDir()
-		dbPath := filepath.Join(dir, "test.db")
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		asset := &asset_entity.Asset{ID: 1, Type: asset_entity.AssetTypeDatabase}
+		cfg := &asset_entity.DatabaseConfig{Driver: asset_entity.DriverSQLite, Path: dbPath}
 
-		asset := &asset_entity.Asset{
-			ID: 1, Type: asset_entity.AssetTypeDatabase,
-		}
-		cfg := &asset_entity.DatabaseConfig{
-			Driver: asset_entity.DriverSQLite, Path: dbPath,
-		}
-		db, closer, err := DialDatabase(context.Background(), asset, cfg, "", nil)
+		session, err := OpenDatabase(context.Background(), asset, cfg, "", nil)
 		So(err, ShouldBeNil)
-		So(db, ShouldNotBeNil)
-		So(closer, ShouldBeNil) // SQLite 无隧道,closer 应为 nil
-		defer func() { _ = db.Close() }()
+		So(session, ShouldNotBeNil)
+		defer func() { _ = session.Close() }()
 
-		_, execErr := db.Exec("CREATE TABLE t (id INTEGER)")
+		_, execErr := session.Execute(context.Background(), "CREATE TABLE t (id INTEGER)")
 		So(execErr, ShouldBeNil)
 		_, err = os.Stat(dbPath)
 		So(err, ShouldBeNil)
 	})
 
-	Convey("SQLite ReadOnly 用 PRAGMA query_only", t, func() {
-		dir := t.TempDir()
-		dbPath := filepath.Join(dir, "test.db")
-
+	Convey("SQLite ReadOnly 经共享入口同样生效", t, func() {
+		dbPath := filepath.Join(t.TempDir(), "test.db")
 		asset := &asset_entity.Asset{ID: 1, Type: asset_entity.AssetTypeDatabase}
-		// 先建表
-		initCfg := &asset_entity.DatabaseConfig{Driver: asset_entity.DriverSQLite, Path: dbPath}
-		db, _, err := DialDatabase(context.Background(), asset, initCfg, "", nil)
+		rw, err := OpenDatabase(context.Background(), asset,
+			&asset_entity.DatabaseConfig{Driver: asset_entity.DriverSQLite, Path: dbPath}, "", nil)
 		So(err, ShouldBeNil)
-		_, err = db.Exec("CREATE TABLE t (id INTEGER)")
+		_, err = rw.Execute(context.Background(), "CREATE TABLE t (id INTEGER)")
 		So(err, ShouldBeNil)
-		_ = db.Close()
+		So(rw.Close(), ShouldBeNil)
 
-		// 再以 ReadOnly 打开
-		roCfg := &asset_entity.DatabaseConfig{
-			Driver: asset_entity.DriverSQLite, Path: dbPath, ReadOnly: true,
-		}
-		roDB, _, err := DialDatabase(context.Background(), asset, roCfg, "", nil)
+		ro, err := OpenDatabase(context.Background(), asset,
+			&asset_entity.DatabaseConfig{Driver: asset_entity.DriverSQLite, Path: dbPath, ReadOnly: true}, "", nil)
 		So(err, ShouldBeNil)
-		defer func() { _ = roDB.Close() }()
+		defer func() { _ = ro.Close() }()
 
-		_, execErr := roDB.Exec("INSERT INTO t VALUES (1)")
-		So(execErr, ShouldNotBeNil)
-		So(execErr.Error(), ShouldContainSubstring, "read")
-	})
-
-	Convey("SQLite ReadOnly 对连接池里新建的连接同样生效", t, func() {
-		dir := t.TempDir()
-		dbPath := filepath.Join(dir, "test.db")
-
-		asset := &asset_entity.Asset{ID: 1, Type: asset_entity.AssetTypeDatabase}
-		initCfg := &asset_entity.DatabaseConfig{Driver: asset_entity.DriverSQLite, Path: dbPath}
-		db, _, err := DialDatabase(context.Background(), asset, initCfg, "", nil)
-		So(err, ShouldBeNil)
-		_, err = db.Exec("CREATE TABLE t (id INTEGER)")
-		So(err, ShouldBeNil)
-		_ = db.Close()
-
-		roCfg := &asset_entity.DatabaseConfig{
-			Driver: asset_entity.DriverSQLite, Path: dbPath, ReadOnly: true,
-		}
-		roDB, _, err := DialDatabase(context.Background(), asset, roCfg, "", nil)
-		So(err, ShouldBeNil)
-		defer func() { _ = roDB.Close() }()
-
-		// 占住一条连接，强制下面的写落到连接池新建的另一条连接上。
-		// 若只读只设在初次 dial 用过的那条连接上，这里会写成功 → 暴露 bug。
-		conn1, err := roDB.Conn(context.Background())
-		So(err, ShouldBeNil)
-		defer func() { _ = conn1.Close() }()
-
-		_, execErr := roDB.ExecContext(context.Background(), "INSERT INTO t VALUES (1)")
+		_, execErr := ro.Execute(context.Background(), "INSERT INTO t VALUES (1)")
 		So(execErr, ShouldNotBeNil)
 		So(execErr.Error(), ShouldContainSubstring, "read")
 	})
@@ -98,9 +60,21 @@ func TestDialDatabaseSQLite(t *testing.T) {
 			Path: "/tmp/remote.db",
 		}
 
-		db, closer, err := DialDatabase(context.Background(), asset, cfg, "", nil)
-		So(db, ShouldBeNil)
-		So(closer, ShouldBeNil)
+		session, err := OpenDatabase(context.Background(), asset, cfg, "", nil)
+		So(session, ShouldBeNil)
+		So(err, ShouldNotBeNil)
+		So(err.Error(), ShouldContainSubstring, "SSH")
+	})
+
+	Convey("远端 SQLite VFS 没有 SSH 资产时失败", t, func() {
+		asset := &asset_entity.Asset{ID: 1, Type: asset_entity.AssetTypeDatabase}
+		cfg := &asset_entity.DatabaseConfig{
+			Driver: asset_entity.DriverSQLite, SQLiteSource: asset_entity.SQLiteSourceRemoteSSHVFS,
+			Path: "/tmp/remote.db",
+		}
+
+		session, err := OpenDatabase(context.Background(), asset, cfg, "", nil)
+		So(session, ShouldBeNil)
 		So(err, ShouldNotBeNil)
 		So(err.Error(), ShouldContainSubstring, "SSH")
 	})

@@ -1,13 +1,14 @@
-// Package extreg 把一个已加载的扩展接进宿主的各张全局注册表：资产类型
-// （internal/assettype）、执行器与策略检查（internal/ai/permission）、默认策略与权限组
-// （internal/model/entity/policy*）。
+// Package extreg 是宿主自有子系统的扩展贡献点：资产类型（internal/assettype）、工具的
+// 执行面（internal/ai/permission、skills）、策略面（默认策略、权限组、永久规则落点）、
+// 数据库驱动（internal/dbdriver）与页面；片段的贡献点在 snippet_svc。Points 把它们交给
+// 运行时的 extension.ContributionRegistry——运行时不认识任何一种贡献的规则，只把
+// describe() 的每个键交给对应的贡献点去校验（Check）与接入（Attach）。
 //
 // 它存在的理由是方向：这些注册表都在 internal/ 下，而扩展的运行期对象在 pkg/extension，
-// 由 internal/service/extension_svc 的生命周期驱动。把接线集中在这里，Bridge 才能塌回
-// 一张 name → *Extension 的表，而消费点（exec / help / 审批 / 前端表单）不再需要"内置一
-// 条路、扩展一条路"。
+// 由 internal/service/extension_svc 的生命周期驱动。把规则与接线集中在这里，消费点
+// （exec / help / 审批 / 前端表单）不再需要"内置一条路、扩展一条路"。
 //
-// 注册是全有或全无：任何一步失败都会把这个扩展已经写进去的条目全部撤掉并返回错误，
+// 接入是全有或全无：任何一个贡献点接入失败，注册表撤掉这个扩展已接入的全部贡献，
 // 调用方据此拒绝加载该扩展。半注册的扩展比不注册更糟——资产类型在表单里出现，exec 却
 // 找不到执行器。
 package extreg
@@ -27,12 +28,12 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
 	aipolicy "github.com/opskat/opskat/internal/ai/policy"
-	"github.com/opskat/opskat/internal/ai/skills"
 	"github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/extreg/extdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	policyent "github.com/opskat/opskat/internal/model/entity/policy"
-	"github.com/opskat/opskat/internal/model/entity/policy_group_entity"
 	"github.com/opskat/opskat/internal/service/conntest"
+	"github.com/opskat/opskat/internal/service/snippet_svc"
+	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
 )
 
@@ -44,10 +45,11 @@ const helpLang = "en"
 // 收窄到这几个方法而不是直接吃 *Plugin，是为了让策略/执行/配置校验这几条闭包可以在
 // 没有 wazero 运行时的情况下被测试驱动——它们承载的是行为契约，不是 WASM 加载。
 type pluginCaller interface {
-	CallTool(ctx context.Context, toolName string, args json.RawMessage, asset *extension.AssetRef) (json.RawMessage, error)
+	CallTool(ctx context.Context, call extension.ToolCall) (json.RawMessage, error)
 	CheckPolicy(ctx context.Context, toolName string, args json.RawMessage) (action string, resources []string, err error)
 	ValidateConfig(ctx context.Context, config json.RawMessage) ([]extension.ValidationError, error)
 	TestConnectionCaller
+	driverOpener
 }
 
 // TestConnectionCaller is the one plugin capability a conntest tester needs:
@@ -61,231 +63,136 @@ type TestConnectionCaller interface {
 
 // ConnTestRegistrar builds the conntest.TestFunc a describe()-declared
 // test-connection handler is registered under. The one implementation
-// (internal/app/extension, wired once from main.go via SetConnTestRegistrar)
-// needs extension_svc and credential_svc to merge the form's unchanged
-// password fields with an edited asset's stored ones — internal/extreg
-// cannot import either without an import cycle (extension_svc already calls
-// extreg.Register), so the capability is injected instead of implemented here.
+// (internal/service/extension_svc, wired by each process that runs extensions via
+// SetConnTestRegistrar) needs the extension service to merge the form's unchanged
+// password fields with an edited asset's stored ones — and that service is built
+// on the manager the contribution registry (Points) is handed to, so the
+// capability is injected once the service exists instead of passed to Points.
 type ConnTestRegistrar interface {
-	Build(extName string, manifest *extension.Manifest, assetType string, plugin TestConnectionCaller) conntest.TestFunc
+	Build(extName string, manifest *Manifest, assetType string, plugin TestConnectionCaller) conntest.TestFunc
 }
 
 var connTestRegistrar ConnTestRegistrar
 
 // SetConnTestRegistrar wires the registrar main.go constructs at startup,
 // before any extension loads. Called more than once, the last call wins —
-// there is exactly one desktop process wiring this, same as every other
-// setter-injected seam in main.go.
+// each process (the desktop app, or opsctl when it activates an extension)
+// wires this once, same as every other setter-injected seam.
 func SetConnTestRegistrar(r ConnTestRegistrar) { connTestRegistrar = r }
 
-// loaded 是一个已加载扩展在本包内的最小画像。
+// Points 是宿主的全部贡献点。运行扩展的每个进程（桌面端、opsctl）都用它建自己的
+// extension.ContributionRegistry，因此两边认的贡献、校验的规则、接入的子系统都是同一组。
+// 顺序即接入顺序：驱动撞名最常见，先接；资产类型先于以它为键的执行面与策略面。
+func Points() []extension.ContributionPoint {
+	return newPoints(pluginOf)
+}
+
+// newPoints 按 guest 取扩展的运行中插件建贡献点；测试经它换上假插件。
+func newPoints(guest guestFunc) []extension.ContributionPoint {
+	return []extension.ContributionPoint{
+		dbDriversPoint{guest: guest},
+		assetTypesPoint{guest: guest},
+		toolsPoint{guest: guest},
+		policyPoint{},
+		pagesPoint{},
+		snippet_svc.ContributionPoint(),
+	}
+}
+
+// guestFunc 返回扩展运行中的插件；视图读自 describe 缓存（opsctl 启动、扩展列表）时为 nil，
+// 贡献点据此只接入不需要运行 WASM 的那一半。
+type guestFunc func(v extension.ExtensionView) pluginCaller
+
+func pluginOf(v extension.ExtensionView) pluginCaller {
+	if p := v.Plugin(); p != nil {
+		return runningPlugin{Plugin: p, drivers: &lazyDrivers{plugin: p}}
+	}
+	return nil
+}
+
+// driversOf 建插件提供的数据库驱动（extdriver）；测试经它观察驱动生命周期的创建与结束。
+var driversOf = func(p *extension.Plugin) driverOpener { return extdriver.New(p) }
+
+// runningPlugin 是运行中的插件，连同它提供的数据库驱动（extdriver）。
+//
+// 驱动的生命周期只在有人用到驱动时才建（lazyDrivers）：每个贡献点各取一份运行中的插件，
+// 只有数据库驱动贡献点用驱动，也只有它在撤销（含接入失败的回滚）时结束这份生命周期；
+// 资产类型与工具贡献点若也各建一份，就没有人会去结束它们。
+type runningPlugin struct {
+	*extension.Plugin
+	drivers *lazyDrivers
+}
+
+func (p runningPlugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+	return p.drivers.get().OpenDriverSession(ctx, id, req)
+}
+
+func (p runningPlugin) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdriver.Statement, error) {
+	return p.drivers.get().ClassifyStatements(ctx, id, sql)
+}
+
+func (p runningPlugin) CloseDrivers() { p.drivers.get().CloseDrivers() }
+
+type lazyDrivers struct {
+	plugin *extension.Plugin
+	once   sync.Once
+	d      driverOpener
+}
+
+func (l *lazyDrivers) get() driverOpener {
+	l.once.Do(func() { l.d = driversOf(l.plugin) })
+	return l.d
+}
+
+// loaded 是一个扩展在本包内的最小画像：manifest 是它贡献的结构化视图。plugin 为 nil 表示
+// 没有运行中的插件（仅描述接入）。
 type loaded struct {
 	name     string
-	manifest *extension.Manifest
+	manifest *Manifest
 	plugin   pluginCaller
+	// translate 解析扩展多语言里的键（数据库驱动专属字段的标签与说明）。
+	translate translateFunc
+}
+
+// loaded 解出 v 的结构化视图（ManifestOf）；贡献点的 Check 已按同样的线格式判过它。
+func (g guestFunc) loaded(v extension.ExtensionView) (loaded, error) {
+	m, err := ManifestOf(v.Manifest())
+	if err != nil {
+		return loaded{}, err
+	}
+	return loaded{name: v.Name(), manifest: m, plugin: g(v), translate: v.Translate}, nil
 }
 
 var (
-	mu         sync.Mutex
-	registered = make(map[string][]string)            // extension name → registered asset types
-	manifests  = make(map[string]*extension.Manifest) // extension name → its manifest, for ExpandFileFlags
-	// policyTypeOwner 记录每个策略面（manifest 的 policies.type）归哪个扩展。策略面是
+	mu sync.Mutex
+	// manifests 是已接入工具的扩展的清单，供 ExpandFileFlags 查工具声明。
+	manifests = make(map[string]*Manifest) // extension name → its typed view
+	// policyTypeOwner 记录每个策略面（describe 的 policy.type）归哪个扩展。策略面是
 	// 权限组 ID（ext:<policyType>:<name>）的命名空间段、组上扩展永久规则的落点键，也是
 	// CheckExtensionPolicy 筛权限组的键：两个扩展共用一个策略面，一方的组与规则就会被
 	// 当成另一方的来判。
 	policyTypeOwner = make(map[string]string) // policy type → extension name
 )
 
-// claimPolicyType 把 policyType 记到 extName 名下；已被别的扩展占用时拒绝。调用方持有 mu。
-func claimPolicyType(extName, policyType string) error {
-	if policy_group_entity.IsBuiltinPolicyType(policyType) {
-		return fmt.Errorf("extension %q: policy type %q is a built-in policy type", extName, policyType)
-	}
-	if owner, taken := policyTypeOwner[policyType]; taken {
-		return fmt.Errorf("extension %q: policy type %q is already owned by extension %q", extName, policyType, owner)
-	}
-	policyTypeOwner[policyType] = extName
-	return nil
-}
+// undo 是一串按登记顺序记下的撤销动作，逆序执行。
+type undo []func()
 
-// Register 把 ext 声明的每个资产类型接进宿主注册表。
-func Register(ext *extension.Extension) error {
-	localized := ext.Manifest.Localized(func(key string) string { return ext.Translate(helpLang, key) })
-	return register(
-		loaded{name: ext.Name, manifest: ext.Manifest, plugin: ext.Plugin},
-		helpDocument(ext.SkillMD, ext.Name, localized),
-		skillDescription(ext),
-	)
-}
-
-func register(l loaded, help, description string) error {
-	m := l.manifest
-	mu.Lock()
-	defer mu.Unlock()
-	if _, exists := registered[l.name]; exists {
-		return fmt.Errorf("extension %q is already registered", l.name)
+func (u undo) run() {
+	for i := len(u) - 1; i >= 0; i-- {
+		u[i]()
 	}
-	if err := claimPolicyType(l.name, m.Policies.Type); err != nil {
-		return err
-	}
-
-	var done []string
-	rollback := func() {
-		for _, t := range done {
-			unregisterType(t)
-		}
-		policy_group_entity.UnregisterExtensionGroupsByExtension(l.name)
-		delete(policyTypeOwner, m.Policies.Type)
-	}
-
-	for _, at := range m.AssetTypes {
-		if err := registerType(l, at, help, description); err != nil {
-			rollback()
-			return err
-		}
-		done = append(done, at.Type)
-	}
-
-	if err := registerPolicyGroups(l.name, m); err != nil {
-		rollback()
-		return err
-	}
-
-	registered[l.name] = done
-	manifests[l.name] = m
-	logger.Default().Info("extension registered",
-		zap.String("extension", l.name), zap.Strings("assetTypes", done))
-	return nil
-}
-
-// Unregister 撤掉一个扩展写进宿主注册表的全部条目。未注册的名字是 no-op。
-func Unregister(name string) {
-	mu.Lock()
-	defer mu.Unlock()
-	types, ok := registered[name]
-	if !ok {
-		return
-	}
-	for _, t := range types {
-		unregisterType(t)
-	}
-	policy_group_entity.UnregisterExtensionGroupsByExtension(name)
-	for policyType, owner := range policyTypeOwner {
-		if owner == name {
-			delete(policyTypeOwner, policyType)
-		}
-	}
-	delete(registered, name)
-	delete(manifests, name)
-	logger.Default().Info("extension unregistered",
-		zap.String("extension", name), zap.Strings("assetTypes", types))
-}
-
-func registerType(l loaded, at extension.AssetTypeDef, help, description string) error {
-	m := l.manifest
-	// 测试连接要跑 WASM，只有桌面进程接了 registrar；先查，免得登记到一半再回滚。
-	if at.TestConnection && connTestRegistrar == nil {
-		return fmt.Errorf("extension %q: asset type %q declares a test-connection handler but no registrar is wired", l.name, at.Type)
-	}
-	if err := assettype.RegisterExtensionType(extensionTypeSpec(l.name, m, at)); err != nil {
-		return fmt.Errorf("extension %q: %w", l.name, err)
-	}
-	if err := permission.RegisterPolicyCheck(at.Type, policyCheck(l, at.Type), classifyForApproval(l)); err != nil {
-		assettype.Unregister(at.Type)
-		return fmt.Errorf("extension %q: %w", l.name, err)
-	}
-	if err := permission.RegisterDynamicExecutor(at.Type, execTool(l), help, canonicalize(l)); err != nil {
-		assettype.Unregister(at.Type)
-		permission.UnregisterPolicyCheck(at.Type)
-		return fmt.Errorf("extension %q: %w", l.name, err)
-	}
-	// 技能清单与 help 文档分开登记，和内置类型完全一样（execimpl 也是先 skills.Get
-	// 再 RegisterExecutor）：清单进 prompt，让模型知道这个类型存在、help 能问；
-	// 正文只在模型真的调了 help 之后才下发。
-	if err := skills.RegisterDynamic(at.Type, help, description); err != nil {
-		assettype.Unregister(at.Type)
-		permission.UnregisterPolicyCheck(at.Type)
-		permission.UnregisterExecutor(at.Type)
-		return fmt.Errorf("extension %q: %w", l.name, err)
-	}
-	// 永久规则落点：opsctl policy allow/deny/rm/show 走它，规则形状
-	// `<action>[:<resource-glob>]`，按策略面落在资产 / 组各自的列上（rule_ext.go）。
-	if err := permission.RegisterExtensionRuleSink(at.Type, m.Policies.Type, m.Policies.Actions); err != nil {
-		assettype.Unregister(at.Type)
-		permission.UnregisterPolicyCheck(at.Type)
-		permission.UnregisterExecutor(at.Type)
-		skills.UnregisterDynamic(at.Type)
-		return fmt.Errorf("extension %q: %w", l.name, err)
-	}
-	// 配置校验：guest 的 RegisterConfigValidator 挂到资产写入口（asset_svc），桌面表单、
-	// put_asset、opsctl create 落库前都经它。仅描述注册（opsctl 进程）没有 plugin，不注册——
-	// 那边只有 configSchema 的必填/未知字段校验。
-	if err := asset_entity.RegisterConfigValidator(at.Type, validateConfig(l)); err != nil {
-		assettype.Unregister(at.Type)
-		permission.UnregisterPolicyCheck(at.Type)
-		permission.UnregisterExecutor(at.Type)
-		skills.UnregisterDynamic(at.Type)
-		permission.UnregisterRuleSink(at.Type)
-		return fmt.Errorf("extension %q: %w", l.name, err)
-	}
-	defaults := append([]string(nil), m.Policies.Default...)
-	policyent.RegisterDefaultPolicy(at.Type, func() any {
-		return &policyent.CommandPolicy{Groups: defaults}
-	})
-	// 测试连接：仅当 describe() 声明了处理器时才登记，且只在这条(而非
-	// RegisterDescribeOnly)路径——测试连接要跑 WASM，opsctl 进程没有运行时。
-	if at.TestConnection {
-		conntest.Register(at.Type, connTestRegistrar.Build(l.name, m, at.Type, l.plugin))
-	}
-	return nil
-}
-
-// validateConfig 把资产即将落库的配置交给 guest 的 validate_config。guest 看到的正是它的
-// 工具之后经 ctx.AssetConfig() 读回的那份（password 字段为密文），因此"表单一套规则、
-// 工具一套规则"不会分叉。guest 调用失败即拒绝保存：校验没跑成不等于校验通过。
-func validateConfig(l loaded) asset_entity.ConfigValidator {
-	return func(ctx context.Context, a *asset_entity.Asset) error {
-		errs, err := l.plugin.ValidateConfig(ctx, json.RawMessage(a.Config))
-		if err != nil {
-			return fmt.Errorf("extension %q: validate %s config: %w", l.name, a.Type, err)
-		}
-		if len(errs) == 0 {
-			return nil
-		}
-		msgs := make([]string, 0, len(errs))
-		for _, e := range errs {
-			if e.Field == "" {
-				msgs = append(msgs, e.Message)
-				continue
-			}
-			msgs = append(msgs, e.Field+": "+e.Message)
-		}
-		return fmt.Errorf("invalid %s config: %s", a.Type, strings.Join(msgs, "; "))
-	}
-}
-
-func unregisterType(assetType string) {
-	assettype.Unregister(assetType)
-	permission.UnregisterPolicyCheck(assetType)
-	permission.UnregisterExecutor(assetType)
-	permission.UnregisterRuleSink(assetType)
-	skills.UnregisterDynamic(assetType)
-	policyent.UnregisterDefaultPolicy(assetType)
-	asset_entity.UnregisterConfigValidator(assetType)
-	// 无条件调用：未声明测试连接处理器的类型从未在这张表里出现过，Unregister 对它是空操作。
-	conntest.Unregister(assetType)
 }
 
 // skillDescription 是技能清单里的那一行。优先用 SKILL.md frontmatter 的 description，
 // 其次是 manifest 的 i18n 描述——两者都缺时至少说清这个类型归谁，别在清单里留一行空白。
-func skillDescription(ext *extension.Extension) string {
-	if d := strings.TrimSpace(ext.SkillDescription); d != "" {
+func skillDescription(v extension.ExtensionView) string {
+	if d := strings.TrimSpace(v.SkillDescription()); d != "" {
 		return d
 	}
-	if d := strings.TrimSpace(ext.Translate(helpLang, ext.Manifest.I18n.Description)); d != "" {
+	if d := strings.TrimSpace(v.Translate(helpLang, v.Manifest().I18n.Description)); d != "" {
 		return d
 	}
-	return fmt.Sprintf("Asset type provided by the %q extension.", ext.Name)
+	return fmt.Sprintf("Asset type provided by the %q extension.", v.Name())
 }
 
 // helpDocument 是 help(asset) 对扩展类型返回的内容：SKILL.md 正文 + 由 manifest
@@ -294,12 +201,12 @@ func skillDescription(ext *extension.Extension) string {
 // 这两半各自补对方的洞：SKILL.md 是散文，说得清"这个扩展是干什么的"，但单靠它
 // flag 名与类型只能靠猜；参数表是权威的（同一份声明被 parseCommand 强制
 // 执行），但读不出语义。缺 SKILL.md 也照常给出参数表——没有散文不等于没有语法。
-func helpDocument(skillMD, extName string, localized *extension.Manifest) string {
+func helpDocument(skillMD, extName string, localized *Manifest) string {
 	var parts []string
 	if body := strings.TrimSpace(skillMD); body != "" {
 		parts = append(parts, body)
 	}
-	if ref := strings.TrimSpace(localized.ToolReference()); ref != "" {
+	if ref := strings.TrimSpace(toolReference(localized)); ref != "" {
 		parts = append(parts, ref)
 	}
 	if len(parts) == 0 {
@@ -318,7 +225,7 @@ func helpDocument(skillMD, extName string, localized *extension.Manifest) string
 // （assettype 的 AutomationContract）只在填错之后才以 "unknown config field" 的形式露面。
 // 两份都从契约的同一来源渲染——configSchema 与 assettype.ConnectionFieldDocs——所以不会
 // 列出一个实际不接受的字段。
-func configReference(localized *extension.Manifest) string {
+func configReference(localized *Manifest) string {
 	var b strings.Builder
 	for _, at := range localized.AssetTypes {
 		props, _ := at.ConfigSchema["properties"].(map[string]any)
@@ -331,9 +238,9 @@ func configReference(localized *extension.Manifest) string {
 		}
 		fmt.Fprintf(&b, "\n### %s\n\n", at.Type)
 		b.WriteString("| field | type | required | notes |\n| --- | --- | --- | --- |\n")
-		required := extension.ConfigSchemaRequired(at.ConfigSchema)
-		secret := extension.PasswordFieldsFromSchema(at.ConfigSchema)
-		for _, name := range extension.ConfigSchemaProperties(at.ConfigSchema) {
+		required := ConfigSchemaRequired(at.ConfigSchema)
+		secret := PasswordFieldsFromSchema(at.ConfigSchema)
+		for _, name := range ConfigSchemaProperties(at.ConfigSchema) {
 			prop, _ := props[name].(map[string]any)
 			typ, _ := prop["type"].(string)
 			req := "no"
@@ -349,7 +256,7 @@ func configReference(localized *extension.Manifest) string {
 			}
 			fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n", name, typ, req, tableCell(notes))
 		}
-		for _, doc := range assettype.ConnectionFieldDocs(connectionSpec(at)) {
+		for _, doc := range assettype.ConnectionFieldDocs(connectionSpec(at.Connection)) {
 			fmt.Fprintf(&b, "| `%s` | %s | no | %s |\n", doc.Name, doc.Type, tableCell(doc.Notes))
 		}
 	}
@@ -365,8 +272,8 @@ func tableCell(s string) string {
 // 一条 flag 写错、工具名不存在的命令会在弹出审批框之前失败，而不是让用户先点头、
 // 批准之后才发现命令根本调不动。返回的规范串同时是策略匹配、审批展示与 grant 的主体。
 func canonicalize(l loaded) permission.CanonicalizeFunc {
-	return func(_ *asset_entity.Asset, command string) (string, error) {
-		return canonicalCommand(l.manifest, command)
+	return func(ctx context.Context, _ *asset_entity.Asset, command string) (string, error) {
+		return canonicalCommand(ctx, l.manifest, command)
 	}
 }
 
@@ -374,7 +281,7 @@ func canonicalize(l loaded) permission.CanonicalizeFunc {
 // 顺序契约），因此这里不再做任何策略判断——那是 policyCheck 的事。
 func execTool(l loaded) permission.ExecFunc {
 	return func(ctx context.Context, asset *asset_entity.Asset, command, _ string) (string, error) {
-		toolName, argsJSON, err := parseCommand(l.manifest, command)
+		toolName, argsJSON, err := parseCommand(ctx, l.manifest, command)
 		if err != nil {
 			return "", err
 		}
@@ -384,8 +291,12 @@ func execTool(l loaded) permission.ExecFunc {
 		// The exec target travels in the call envelope, not in the arguments: it is
 		// the asset the policy check above just ran against, so a tool cannot be
 		// pointed at a different one by what the model wrote on the command line.
-		result, err := l.plugin.CallTool(ctx, toolName, argsJSON,
-			&extension.AssetRef{ID: asset.ID, Name: asset.Name, Type: asset.Type})
+		result, err := l.plugin.CallTool(ctx, extension.ToolCall{
+			Name:    toolName,
+			Args:    argsJSON,
+			Asset:   &extension.AssetRef{ID: asset.ID, Name: asset.Name, Type: asset.Type},
+			Timeout: ToolTimeout(l.manifest, toolName),
+		})
 		if err != nil {
 			// 不记 raw error：它可能包装用户输入或远端输出。Error 级别本身即失败状态。
 			log.Error("extension tool execution failed")
@@ -407,10 +318,11 @@ func execTool(l loaded) permission.ExecFunc {
 // 判定逐个资源进行：任一资源命中 deny 即拒；allow 规则没覆盖到的资源再逐个查 grant，
 // 每个资源都被某条规则或某个 grant 覆盖才放行（不同资源可由不同规则 / grant 覆盖）。
 //
-// guest 给出的 action 必须属于被调用工具在 describe() 里声明的动作（ToolDef.Actions，
+// guest 给出的 action 必须属于被调用工具在 describe() 里声明的动作（extwire.Tool.Actions，
 // 不是整个扩展的 policies.actions 并集）。集合外的 action——包括空串、带 ':' 想冒充 "动作:资源" 的串——
 // 是 guest 的缺陷：记一条错误，直接 NeedConfirm，既不撞规则也不查 grant，让用户看见
-// 这次调用本身。
+// 这次调用本身。check_policy 报错同理。这类结果标为 Unreviewable：没有 action / 资源，
+// 审核器无从判断，辅助审批问人，Autopilot 拒绝。
 //
 // 工具拒绝这次调用的参数（SDK 的 RejectArgs，guest 答 {"reject"}）则不是缺陷而是结论：
 // 这条调用在任何规则 / grant 下都不会执行，问用户只会让他批准一条随后必然失败的调用。
@@ -426,7 +338,14 @@ func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 			return argsRejected(ctx, call.tool, rejected)
 		}
 		if err != nil {
-			return aictx.CheckResult{Decision: aictx.NeedConfirm}
+			// 没有 action / resources，规则和审核器都无从判断：只能由人决定，不送审。
+			// 原因与权限模式无关（默认模式下照样随 NeedConfirm 给出），由各模式自己说明后果。
+			return aictx.CheckResult{
+				Decision: aictx.NeedConfirm,
+				Message: aipolicy.PolicyMsg(ctx, "the extension could not classify this command (its policy check failed or named an action the tool does not declare), so no rule can match it",
+					"扩展没能对这条命令分类（策略检查出错或给出了工具未声明的动作），没有规则能匹配它"),
+				Unreviewable: true,
+			}
 		}
 		action, resources := call.action, call.resources
 		policyType := l.manifest.Policies.Type
@@ -468,7 +387,7 @@ var errClassifyFailed = errors.New("extension policy classification failed")
 
 // classifyCommand parses a command and runs the guest's check_policy classification,
 // validating the action against the actions the called tool declares
-// (ToolDef.Actions) — not the extension-wide union, so one tool cannot answer with
+// (extwire.Tool.Actions) — not the extension-wide union, so one tool cannot answer with
 // an action only another tool may request.
 // It is the single place policyCheck and classifyForApproval both call, so "undeclared
 // action never classifies" can't drift between the check path and the approval/grant
@@ -477,7 +396,7 @@ var errClassifyFailed = errors.New("extension policy classification failed")
 // The error is either the tool refusing the arguments — an
 // *extension.ArgsRejectedError, with call.tool set — or errClassifyFailed.
 func classifyCommand(ctx context.Context, l loaded, command string) (classifiedCall, error) {
-	toolName, argsJSON, err := parseCommand(l.manifest, command)
+	toolName, argsJSON, err := parseCommand(ctx, l.manifest, command)
 	if err != nil {
 		// 到不了这里：canonicalize 已经用同一个解析器跑过一遍。真发生了就是
 		// fail-closed 的"分类失败"，而不是放行或落 grant。

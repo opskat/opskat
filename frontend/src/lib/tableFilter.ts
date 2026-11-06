@@ -1,4 +1,3 @@
-import { quoteIdent, sqlQuote } from "./tableSql";
 import type { TableFilterOperator } from "./tableFilterOperators";
 export type { TableFilterOperator } from "./tableFilterOperators";
 
@@ -107,91 +106,54 @@ export function toggleFilterJoin(items: TableFilterItem[], id: string): TableFil
   });
 }
 
-function hasValue(value: unknown): boolean {
-  return value !== undefined;
+/**
+ * 发给驱动的一个筛选项,与后端 dbdriver.FilterItem 对齐:只有条件本身,没有 SQL。
+ * 一个条件怎么变成查询、哪些条件不产生限制(停用、没填值、区间缺一端……)由驱动决定。
+ */
+export interface TableFilterRequestItem {
+  kind: "condition" | "group";
+  join: TableFilterJoin;
+  disabled: boolean;
+  column?: string;
+  operator?: TableFilterOperator;
+  /** null 表示 NULL。 */
+  value?: unknown;
+  /** 还没有填值(不同于填了 NULL)。 */
+  unset?: boolean;
+  negated?: boolean;
+  items?: TableFilterRequestItem[];
 }
 
-function toRangeValues(value: unknown): [unknown, unknown] | null {
-  if (!Array.isArray(value) || value.length < 2) return null;
-  if (!hasValue(value[0]) || !hasValue(value[1])) return null;
-  return [value[0], value[1]];
+export function toFilterRequest(items: TableFilterItem[]): TableFilterRequestItem[] {
+  return items.map((item) => {
+    if (item.kind === "group") {
+      return {
+        kind: "group",
+        join: item.join,
+        disabled: item.enabled === false,
+        negated: item.negated === true,
+        items: toFilterRequest(item.items),
+      };
+    }
+    const condition = {
+      kind: "condition" as const,
+      join: item.join,
+      disabled: !item.enabled,
+      column: item.column,
+      operator: item.operator,
+    };
+    return item.value === undefined ? { ...condition, unset: true } : { ...condition, value: item.value };
+  });
 }
 
-function toListValues(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value.filter(hasValue);
-  if (typeof value === "string") {
-    return value
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean);
-  }
-  return hasValue(value) ? [value] : [];
+/** 发给驱动的一个排序项,与后端 dbdriver.SortItem 对齐。 */
+export interface TableSortRequestItem {
+  column: string;
+  dir: TableSortDir;
 }
 
-function conditionSql(condition: TableFilterCondition, driver?: string): string {
-  if (!condition.enabled) return "";
-  const column = quoteIdent(condition.column, driver);
-  const operator = condition.operator ?? "=";
-
-  if (operator === "is_null") return `${column} IS NULL`;
-  if (operator === "is_not_null") return `${column} IS NOT NULL`;
-  if (operator === "is_empty") return `(${column} IS NULL OR ${column} = '')`;
-  if (operator === "is_not_empty") return `(${column} IS NOT NULL AND ${column} <> '')`;
-
-  if (!hasValue(condition.value)) return "";
-  if (condition.value == null) {
-    if (operator === "!=") return `${column} IS NOT NULL`;
-    if (operator === "=") return `${column} IS NULL`;
-    return "";
-  }
-
-  if (operator === "contains" || operator === "like") {
-    return `${column} LIKE ${sqlQuote(`%${String(condition.value)}%`)}`;
-  }
-  if (operator === "not_contains" || operator === "not_like") {
-    return `${column} NOT LIKE ${sqlQuote(`%${String(condition.value)}%`)}`;
-  }
-  if (operator === "begins_with") return `${column} LIKE ${sqlQuote(`${String(condition.value)}%`)}`;
-  if (operator === "not_begins_with") return `${column} NOT LIKE ${sqlQuote(`${String(condition.value)}%`)}`;
-  if (operator === "ends_with") return `${column} LIKE ${sqlQuote(`%${String(condition.value)}`)}`;
-  if (operator === "not_ends_with") return `${column} NOT LIKE ${sqlQuote(`%${String(condition.value)}`)}`;
-  if (operator === "between" || operator === "not_between") {
-    const rangeValues = toRangeValues(condition.value);
-    if (!rangeValues) return "";
-    return `${column} ${operator === "not_between" ? "NOT " : ""}BETWEEN ${sqlQuote(rangeValues[0])} AND ${sqlQuote(rangeValues[1])}`;
-  }
-  if (operator === "in_list" || operator === "not_in_list") {
-    const listValues = toListValues(condition.value);
-    if (listValues.length === 0) return "";
-    return `${column} ${operator === "not_in_list" ? "NOT " : ""}IN (${listValues.map(sqlQuote).join(", ")})`;
-  }
-
-  const sqlOperator = operator === "!=" ? "<>" : operator;
-  return `${column} ${sqlOperator} ${sqlQuote(condition.value)}`;
-}
-
-function buildItemsWhere(items: TableFilterItem[], driver?: string): string {
-  const parts: { sql: string; join: TableFilterJoin }[] = [];
-  for (const item of items) {
-    const sql =
-      item.kind === "condition"
-        ? conditionSql(item, driver)
-        : item.enabled === false
-          ? ""
-          : buildItemsWhere(item.items, driver);
-    if (!sql) continue;
-    const groupedSql = item.kind === "group" ? `${item.negated ? "NOT " : ""}(${sql})` : sql;
-    parts.push({ sql: groupedSql, join: item.join });
-  }
-
-  return parts.reduce((acc, part, index) => {
-    if (index === 0) return part.sql;
-    return `${acc} ${parts[index - 1].join.toUpperCase()} ${part.sql}`;
-  }, "");
-}
-
-export function buildFilterWhereClause(items: TableFilterItem[], driver?: string): string {
-  return buildItemsWhere(items, driver);
+export function toSortRequest(items: TableSortItem[]): TableSortRequestItem[] {
+  return items.map((item) => ({ column: item.column, dir: item.dir }));
 }
 
 export function updateFilterItem(
@@ -390,8 +352,4 @@ export function updateSortCriterion(
   patch: Partial<TableSortItem>
 ): TableSortItem[] {
   return items.map((item) => (item.id === id ? { ...item, ...patch } : item));
-}
-
-export function buildSortOrderByClause(items: TableSortItem[], driver?: string): string {
-  return items.map((item) => `${quoteIdent(item.column, driver)} ${item.dir.toUpperCase()}`).join(", ");
 }

@@ -19,6 +19,7 @@ import { SCANCODE, chordSequence, clampRemoteSize, planKeyDown, remotePoint, sca
 import { decodeFrameBytes } from "./rdpFrame";
 import { pointerCursorStyle } from "./rdpCursor";
 import { RDPSessionOverlay, RDPStatusBar, RDPToolbar, type RDPStatus, type RDPViewMode } from "./RDPChrome";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface RDPConfig {
   host?: string;
@@ -71,7 +72,7 @@ function parseConfig(asset: asset_entity.Asset): { config: RDPConfig; error: str
   try {
     return { config: JSON.parse(asset.Config || "{}"), error: "" };
   } catch (e) {
-    return { config: {}, error: String(e) };
+    return { config: {}, error: errorMessage(e) };
   }
 }
 
@@ -126,7 +127,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
 
   const handleInputFailure = useCallback(
     (operationError: unknown) => {
-      const message = `${t("asset.rdpInputFailed")}: ${String(operationError)}`;
+      const message = `${t("asset.rdpInputFailed")}: ${errorMessage(operationError)}`;
       setStatus("error");
       setError(message);
       useRDPStore.getState().setAssetConnected(asset.ID, false);
@@ -136,7 +137,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
   );
 
   const reportDisconnectFailure = useCallback(
-    (operationError: unknown) => toast.error(`${t("asset.rdpDisconnectFailed")}: ${String(operationError)}`),
+    (operationError: unknown) => toast.error(`${t("asset.rdpDisconnectFailed")}: ${errorMessage(operationError)}`),
     [t]
   );
 
@@ -168,7 +169,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
       .then(() => {
         requestedSizeRef.current = desired;
       })
-      .catch((e) => toast.error(`${t("asset.rdpResizeFailed")}: ${String(e)}`));
+      .catch((e) => toast.error(`${t("asset.rdpResizeFailed")}: ${errorMessage(e)}`));
   }, [t]);
 
   // Frame events carry only the dirty sub-region of the framebuffer, so each
@@ -251,7 +252,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
               if (!written) throw new Error(t("asset.rdpClipboardWriteFailed"));
               notifySuccess(t("asset.rdpClipboardReceived"));
             })
-            .catch((e) => toast.error(`${t("asset.rdpClipboardWriteFailed")}: ${String(e)}`));
+            .catch((e) => toast.error(`${t("asset.rdpClipboardWriteFailed")}: ${errorMessage(e)}`));
           return;
         }
         if (event.type === "clipboard-files") {
@@ -297,7 +298,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
       } catch (e) {
         if (!cancelled) {
           setStatus("error");
-          setError(String(e));
+          setError(errorMessage(e));
           useRDPStore.getState().setAssetConnected(asset.ID, false);
         }
       }
@@ -383,7 +384,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
       setClipboardEnabled(enabled);
       notifySuccess(t(enabled ? "asset.rdpClipboardEnabled" : "asset.rdpClipboardDisabled"));
     } catch (e) {
-      toast.error(`${t("asset.rdpClipboardToggleFailed")}: ${String(e)}`);
+      toast.error(`${t("asset.rdpClipboardToggleFailed")}: ${errorMessage(e)}`);
     }
   }
 
@@ -479,7 +480,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
         void sendChord([SCANCODE.ctrl, SCANCODE.v]);
         notifySuccess(t("asset.rdpClipboardSent"));
       })
-      .catch((e) => toast.error(`${t("asset.rdpClipboardSendFailed")}: ${String(e)}`));
+      .catch((e) => toast.error(`${t("asset.rdpClipboardSendFailed")}: ${errorMessage(e)}`));
   }
 
   async function syncLocalClipboard(
@@ -505,7 +506,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
           : t("asset.rdpClipboardSent")
       );
     } catch (e) {
-      toast.error(`${t("asset.rdpClipboardSendFailed")}: ${String(e)}`);
+      toast.error(`${t("asset.rdpClipboardSendFailed")}: ${errorMessage(e)}`);
     }
   }
 
@@ -513,7 +514,9 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
     e.preventDefault();
     const sessionId = sessionIdRef.current;
     if (!sessionId || !clipboardEnabled) return;
-    void syncLocalClipboard(sessionId).catch((e) => toast.error(`${t("asset.rdpClipboardSendFailed")}: ${String(e)}`));
+    void syncLocalClipboard(sessionId).catch((e) =>
+      toast.error(`${t("asset.rdpClipboardSendFailed")}: ${errorMessage(e)}`)
+    );
   }
 
   // Enqueue a keyboard event behind the previous one so the remote always

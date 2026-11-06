@@ -36,8 +36,8 @@ import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { BrowserOpenURL, EventsOn } from "../../../wailsjs/runtime/runtime";
 import { DOWNLOAD_MIRROR_SETTING_ID } from "./downloadMirror";
+import { errorMessage } from "@/lib/errorMessage";
 
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const REPOSITORY_URL = "https://github.com/opskat/opskat";
 
 export function UpdateSection() {
@@ -93,7 +93,7 @@ export function UpdateSection() {
       notifySuccess(enabled ? t("appUpdate.debugModeOn") : t("appUpdate.debugModeOff"));
     } catch (e: unknown) {
       setDebugModeState(!enabled);
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -101,7 +101,7 @@ export function UpdateSection() {
     try {
       await OpenLogsDir();
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -124,7 +124,7 @@ export function UpdateSection() {
     try {
       await SetUpdateChannel(value);
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -137,7 +137,7 @@ export function UpdateSection() {
     try {
       await SetDownloadMirror(value);
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -146,7 +146,7 @@ export function UpdateSection() {
     try {
       await SetDownloadMirror(trimmed);
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -173,7 +173,7 @@ export function UpdateSection() {
         notifySuccess(t("appUpdate.latestVersion"));
       }
     } catch (e: unknown) {
-      toast.error(`${t("appUpdate.checkFailed")}: ${errMsg(e)}`);
+      toast.error(`${t("appUpdate.checkFailed")}: ${errorMessage(e)}`);
     } finally {
       setChecking(false);
     }
@@ -187,7 +187,7 @@ export function UpdateSection() {
       setUpdateDone(true);
       notifySuccess(t("appUpdate.updateSuccess"));
     } catch (e: unknown) {
-      const msg = errMsg(e);
+      const msg = errorMessage(e);
       if (msg.startsWith("CHECKSUM_FETCH_FAILED:")) {
         setShowChecksumDialog(true);
       } else {
@@ -204,7 +204,7 @@ export function UpdateSection() {
       await RestartApp();
     } catch (e: unknown) {
       setRestarting(false);
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     }
   };
 

@@ -1,3 +1,4 @@
+import { driverUsesField, type DriverDescriptor } from "@/lib/dbDrivers/descriptors";
 import type { CredentialFragment } from "./credentialConfig";
 import {
   CONNECTION_DEFAULTS,
@@ -8,8 +9,22 @@ import {
   type ConnectionFormFields,
   type ProxyConfigJSON,
 } from "./proxyConfig";
+import {
+  TLS_CERT_DEFAULTS,
+  tlsCertsFromJSON,
+  tlsCertsToJSON,
+  type TLSCertFormFields,
+  type TLSCertJSON,
+} from "./tlsCertConfig";
+import {
+  KERBEROS_DEFAULTS,
+  kerberosFromJSON,
+  kerberosToJSON,
+  type KerberosFormFields,
+  type KerberosJSON,
+} from "./kerberosConfig";
 
-export interface DatabaseFormState extends ConnectionFormFields {
+export interface DatabaseFormState extends ConnectionFormFields, TLSCertFormFields, KerberosFormFields {
   driver: string;
   sqliteSource: "local" | "remote_ssh_vfs";
   host: string;
@@ -18,29 +33,43 @@ export interface DatabaseFormState extends ConnectionFormFields {
   database: string;
   sslMode: string;
   tls: boolean;
+  /** 以下两项与证书材料(TLSCertFormFields)只对声明了证书字段组(tls_cert)的驱动有意义。 */
+  tlsInsecure: boolean;
+  tlsServerName: string;
   readOnly: boolean;
   params: string;
   path: string;
   queryTimeoutSeconds: number;
+  /** 用户在表单上改过的驱动专属字段取值(口令类为明文);切换驱动时清空。 */
+  driverOptions: Record<string, unknown>;
+  /** 资产已存的 driver_options 及其所属驱动(口令类为密文):回填与沿用未改的口令。 */
+  storedDriverOptions: { driver: string; values: Record<string, unknown> };
 }
 
+/** 驱动尚未选定的空白表单;新建时由 applyDriverChange 套上驱动描述里的默认值。 */
 export const DATABASE_DEFAULTS: DatabaseFormState = {
-  driver: "mysql",
+  driver: "",
   sqliteSource: "local",
   host: "",
-  port: 3306,
+  port: 0,
   username: "",
   database: "",
   sslMode: "disable",
   tls: false,
+  tlsInsecure: false,
+  tlsServerName: "",
   readOnly: false,
   params: "",
   path: "",
   queryTimeoutSeconds: 30,
+  driverOptions: {},
+  storedDriverOptions: { driver: "", values: {} },
   ...CONNECTION_DEFAULTS,
+  ...TLS_CERT_DEFAULTS,
+  ...KERBEROS_DEFAULTS,
 };
 
-interface DatabaseConfig {
+interface DatabaseConfig extends TLSCertJSON, KerberosJSON {
   driver: string;
   host?: string;
   port?: number;
@@ -50,6 +79,8 @@ interface DatabaseConfig {
   database?: string;
   ssl_mode?: string;
   tls?: boolean;
+  tls_insecure?: boolean;
+  tls_server_name?: string;
   params?: string;
   read_only?: boolean;
   query_timeout_seconds?: number;
@@ -58,54 +89,58 @@ interface DatabaseConfig {
   path?: string;
   proxy?: ProxyConfigJSON;
   proxy_chain?: ProxyChainJSON;
-}
-
-/** driver→默认端口(镜像旧 DEFAULT_PORTS;sqlite 无端口)。 */
-const DRIVER_PORTS: Record<string, number> = {
-  mysql: 3306,
-  postgresql: 5432,
-  mssql: 1433,
-};
-
-/** driver→壳 icon。 */
-export function driverIcon(driver: string): string {
-  if (driver === "sqlite") return "sqlite";
-  if (driver === "mysql") return "mysql";
-  if (driver === "postgresql") return "postgresql";
-  if (driver === "mssql") return "sqlserver";
-  return "database";
+  driver_options?: Record<string, unknown>;
 }
 
 /**
- * 保存/测试共用序列化(键序锁旧 save 分支:driver 首键;sqlite→path;
- * 非 sqlite→host/port/username/[credential|password]/[ssh_asset_id]/[ssl_mode]/[tls]/[proxy];
- * 末尾共有 database/read_only/params)。cred 由 resolveSave/TestCredential 预解析;
- * proxyPassword 由 resolveSaveProxyPassword(save=密文)或 state.proxyPassword(test=明文)预解析;
- * sqlite local 分支忽略 cred / host / port / ssh / proxy;remote_ssh_vfs 写 sqlite_source + ssh_asset_id。
- * 隧道与代理互斥,按 connectionType 二选一。
+ * 保存/测试共用序列化(键序锁旧 save 分支:driver 首键;文件型驱动→[sqlite_source/ssh_asset_id/]path;
+ * 主机型驱动→host/port/username/[credential|password]/[ssh_asset_id]/[ssl_mode]/[tls]/[proxy];
+ * 末尾共有 database/read_only/params)。写哪些键由驱动描述声明的字段决定,不认驱动名。
+ * driverOptions 由 buildDriverOptions 预解析(口令类已加密),放在末尾。
+ * cred 由 resolveSave/TestCredential 预解析;proxyPassword 由 resolveSaveProxyPassword(save=密文)
+ * 或 state.proxyPassword(test=明文)预解析。隧道与代理互斥,按 connectionType 二选一;
+ * 自带 SSH 资产字段的驱动(远端文件)用那个字段,不吃通用隧道 / 代理配置。
  */
 export function buildDatabaseConfig(
   state: DatabaseFormState,
+  driver: DriverDescriptor,
   cred: CredentialFragment,
   proxyPassword = "",
-  proxyChainSecrets?: Record<string, { password?: string; token?: string }>
+  proxyChainSecrets?: Record<string, { password?: string; token?: string }>,
+  driverOptions?: Record<string, unknown>,
+  tlsKey = "",
+  krbPassword = ""
 ): string {
+  const uses = (field: string) => driverUsesField(driver, field);
+  const kerberos = kerberosActive(state, driver);
   const cfg: DatabaseConfig = { driver: state.driver };
-  if (state.driver === "sqlite") {
-    if (state.sqliteSource === "remote_ssh_vfs") {
-      cfg.sqlite_source = "remote_ssh_vfs";
-      if (state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
-    }
-    cfg.path = state.path;
-  } else {
-    cfg.host = state.host;
-    cfg.port = state.port;
-    cfg.username = state.username;
+  if (uses("sqlite_source") && state.sqliteSource === "remote_ssh_vfs") {
+    cfg.sqlite_source = "remote_ssh_vfs";
+    if (uses("ssh_asset_id") && state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
+  }
+  if (uses("path")) cfg.path = state.path;
+  if (uses("host")) cfg.host = state.host;
+  if (uses("port")) cfg.port = state.port;
+  if (uses("username")) cfg.username = state.username;
+  // Kerberos 认证隐藏资产口令:口令字段里的旧值不随配置写出。
+  if (kerberos) Object.assign(cfg, kerberosToJSON(state, krbPassword));
+  else if (uses("password")) {
     if (cred.credential_id) cfg.credential_id = cred.credential_id;
     else if (cred.password) cfg.password = cred.password;
-    if (state.connectionType === "jumphost" && state.sshTunnelId > 0) cfg.ssh_asset_id = state.sshTunnelId;
-    if (state.driver === "postgresql" && state.sslMode !== "disable") cfg.ssl_mode = state.sslMode;
-    if ((state.driver === "mysql" || state.driver === "mssql") && state.tls) cfg.tls = true;
+  }
+  const sharedTunnel = uses("tunnel") && !uses("ssh_asset_id");
+  if (sharedTunnel && state.connectionType === "jumphost" && state.sshTunnelId > 0) {
+    cfg.ssh_asset_id = state.sshTunnelId;
+  }
+  if (uses("ssl_mode") && state.sslMode !== "disable") cfg.ssl_mode = state.sslMode;
+  if (uses("tls") && state.tls) cfg.tls = true;
+  if (uses("tls_cert") && state.tls) {
+    cfg.tls = true;
+    if (state.tlsInsecure) cfg.tls_insecure = true;
+    if (state.tlsServerName) cfg.tls_server_name = state.tlsServerName;
+    Object.assign(cfg, tlsCertsToJSON(state, tlsKey));
+  }
+  if (sharedTunnel) {
     const proxy = buildProxyJSON(state, proxyPassword);
     if (proxy) cfg.proxy = proxy;
     const proxyChain = buildProxyChainJSON(state.proxyChainLayers, proxyChainSecrets);
@@ -115,7 +150,18 @@ export function buildDatabaseConfig(
   if (state.readOnly) cfg.read_only = true;
   if (state.params) cfg.params = state.params;
   if (state.queryTimeoutSeconds > 0) cfg.query_timeout_seconds = state.queryTimeoutSeconds;
+  if (driverOptions) cfg.driver_options = driverOptions;
   return JSON.stringify(cfg);
+}
+
+/** 这份表单是否按 Kerberos 认证提交:驱动声明了 Kerberos 字段组且用户选了 Kerberos。 */
+export function kerberosActive(state: KerberosFormFields, driver: DriverDescriptor): boolean {
+  return state.authMethod === "kerberos" && driverUsesField(driver, "kerberos");
+}
+
+/** 认证方式只对声明了 Kerberos 字段组的驱动有意义:不声明的驱动一律回到口令认证。 */
+export function withDriverAuthMethod(state: DatabaseFormState, driver: DriverDescriptor): DatabaseFormState {
+  return driverUsesField(driver, "kerberos") ? state : { ...state, authMethod: "" };
 }
 
 /** 编辑态回填(镜像旧 loadDatabaseConfig 非凭据字段;connectionType 派生需要 asset 顶层
@@ -124,18 +170,24 @@ export function parseDatabaseConfig(configJSON: string, assetTunnelId = 0): Data
   try {
     const cfg: DatabaseConfig = JSON.parse(configJSON || "{}");
     return {
-      driver: cfg.driver || "mysql",
+      driver: cfg.driver ?? "",
       sqliteSource: cfg.sqlite_source || "local",
       host: cfg.host || "",
-      port: cfg.port || 3306,
+      port: cfg.port ?? 0,
       username: cfg.username || "",
       database: cfg.database || "",
       sslMode: cfg.ssl_mode || "disable",
       tls: cfg.tls || false,
+      tlsInsecure: cfg.tls_insecure || false,
+      tlsServerName: cfg.tls_server_name || "",
       readOnly: cfg.read_only || false,
       params: cfg.params || "",
       path: cfg.path || "",
       queryTimeoutSeconds: cfg.query_timeout_seconds || 30,
+      driverOptions: {},
+      storedDriverOptions: { driver: cfg.driver ?? "", values: cfg.driver_options ?? {} },
+      ...tlsCertsFromJSON(cfg),
+      ...kerberosFromJSON(cfg),
       ...parseConnectionFields(cfg.proxy, assetTunnelId || cfg.ssh_asset_id || 0, cfg.proxy_chain),
     };
   } catch {
@@ -144,15 +196,21 @@ export function parseDatabaseConfig(configJSON: string, assetTunnelId = 0): Data
 }
 
 /**
- * driver 切换的 section 自有字段复位(镜像旧 handleDriverChange,壳 icon 副作用留在组件)。
- * sqlite → 清 host/username,port=0,path 保留,本地源清连接方式;
- * 非 sqlite → port=DEFAULT_PORTS[driver]||3306,清 path,非 postgresql 复位 sslMode。
+ * driver 切换的 section 自有字段复位(壳 icon 副作用留在组件),按新驱动的描述:
+ * 不用主机的驱动(文件型)→ 清 host/username,port=0,path 保留,连接方式复位;
+ * 用主机的驱动 → port=描述的默认端口,清 path,驱动不用 ssl_mode 时复位 sslMode。
+ * 专属字段是各驱动自己的:改过的取值清空,新驱动的字段从已存值或默认值起步。
  */
-export function applyDriverChange(state: DatabaseFormState, newDriver: string): DatabaseFormState {
-  if (newDriver === "sqlite") {
+export function applyDriverChange(state: DatabaseFormState, driver: DriverDescriptor): DatabaseFormState {
+  return withDriverAuthMethod(applyDriverFields(state, driver), driver);
+}
+
+function applyDriverFields(state: DatabaseFormState, driver: DriverDescriptor): DatabaseFormState {
+  if (!driverUsesField(driver, "host")) {
     return {
       ...state,
-      driver: newDriver,
+      driver: driver.id,
+      driverOptions: {},
       sqliteSource: "local",
       host: "",
       port: 0,
@@ -162,10 +220,11 @@ export function applyDriverChange(state: DatabaseFormState, newDriver: string): 
   }
   return {
     ...state,
-    driver: newDriver,
+    driver: driver.id,
+    driverOptions: {},
     sqliteSource: "local",
-    port: DRIVER_PORTS[newDriver] || 3306,
+    port: driver.defaultPort,
     path: "",
-    sslMode: newDriver === "postgresql" ? state.sslMode : "disable",
+    sslMode: driverUsesField(driver, "ssl_mode") ? state.sslMode : "disable",
   };
 }

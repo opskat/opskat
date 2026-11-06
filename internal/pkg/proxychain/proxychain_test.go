@@ -116,6 +116,18 @@ func layerAt(t *testing.T, layerType, addr string) Layer {
 	return Layer{Type: layerType, Host: host, Port: port}
 }
 
+// plainHandshake is an SSH layer handshake with no deadline of its own, like
+// ssh.NewClientConn: only the layer's EstablishTimeout bounds it.
+func plainHandshake(cfg *ssh.ClientConfig) func(context.Context, net.Conn, string) (*ssh.Client, error) {
+	return func(_ context.Context, conn net.Conn, addr string) (*ssh.Client, error) {
+		c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+		if err != nil {
+			return nil, err
+		}
+		return ssh.NewClient(c, chans, reqs), nil
+	}
+}
+
 // dialResult 在后台拨号，超过 limit 仍未返回即判定为卡死。
 func dialResult(t *testing.T, chain Chain, target string, limit time.Duration) error {
 	t.Helper()
@@ -167,7 +179,7 @@ func requireClosed(t *testing.T, ch <-chan struct{}, what string) {
 func TestSSHLayerHandshakeStallIsBounded(t *testing.T) {
 	addr, peerClosed := silentListener(t)
 	layer := layerAt(t, LayerSSH, addr)
-	layer.SSHConfig = &ssh.ClientConfig{User: "root", HostKeyCallback: ssh.InsecureIgnoreHostKey()}
+	layer.Handshake = plainHandshake(&ssh.ClientConfig{User: "root", HostKeyCallback: ssh.InsecureIgnoreHostKey()})
 	layer.EstablishTimeout = 150 * time.Millisecond
 
 	err := dialResult(t, Chain{Layers: []Layer{layer}}, "10.0.0.1:9200", 3*time.Second)
@@ -211,7 +223,7 @@ func TestSSHLayerChannelOpenStallIsBounded(t *testing.T) {
 	}()
 
 	layer := layerAt(t, LayerSSH, ln.Addr().String())
-	layer.SSHConfig = &ssh.ClientConfig{User: "root", HostKeyCallback: ssh.InsecureIgnoreHostKey()}
+	layer.Handshake = plainHandshake(&ssh.ClientConfig{User: "root", HostKeyCallback: ssh.InsecureIgnoreHostKey()})
 	// 同一个时限也管握手这一步，而这里握手要真的走完，留足余量免得负载高时先在握手上超时。
 	layer.EstablishTimeout = time.Second
 

@@ -10,20 +10,20 @@ import (
 
 // credentialHandleKey is the key of the opaque handle object the host serves in
 // place of a password field's plaintext when the extension does not declare
-// capabilities.credentials="read" (produced by the desktop's asset config reader,
+// permissions.credentials="read" (produced by the desktop's asset config reader,
 // internal/app/extension/host.go).
 const credentialHandleKey = "__credential_handle" //nolint:gosec // G101: a JSON key name, not a credential
 
 // ErrCredentialWithheld is what Credential.Plaintext reports when the host
 // served the field as an opaque handle: the extension does not declare
-// capabilities.credentials="read".
-var ErrCredentialWithheld = errors.New("credential withheld: the extension does not declare capabilities.credentials \"read\"")
+// permissions.credentials="read".
+var ErrCredentialWithheld = errors.New("credential withheld: the extension does not declare permissions.credentials \"read\"")
 
 // Credential is the type of a secret field in an asset config struct. AssetType
 // reports it as format:"password" — a secret the host encrypts — with no tag
 // needed, and it decodes whichever form the host serves the secret in:
 //
-//   - with capabilities.credentials="read", the plaintext, returned by Plaintext;
+//   - with permissions.credentials="read", the plaintext, returned by Plaintext;
 //   - without it, an opaque handle that carries no plaintext: IsSet reports
 //     whether the asset has a value, Plaintext returns ErrCredentialWithheld, and
 //     the host still injects the secret into requests to the asset's endpoint

@@ -17,6 +17,7 @@ import { SFTPApplyPermissions, SFTPProperties } from "../../../../wailsjs/go/ssh
 import { sftp_svc } from "../../../../wailsjs/go/models";
 import { formatBytes } from "./utils";
 import { type PermissionTarget } from "./types";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface PermissionDialogProps {
   sessionId: string;
@@ -95,7 +96,7 @@ export function PermissionDialog({ sessionId, target, onClose, onSaved }: Permis
         setOwner(next.uid ? String(next.uid) : "");
         setGroup(next.gid ? String(next.gid) : "");
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(errorMessage(e)));
   }, [sessionId, target]);
 
   const rows = useMemo(
@@ -136,7 +137,7 @@ export function PermissionDialog({ sessionId, target, onClose, onSaved }: Permis
       onSaved();
       onClose();
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setSaving(false);
     }

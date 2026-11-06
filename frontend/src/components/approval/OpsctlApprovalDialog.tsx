@@ -34,6 +34,8 @@ import {
 } from "lucide-react";
 import { hasApprovalCommandEdits } from "@/lib/approval";
 import { approvalTypePresentation, hasPinnedDetail } from "./approvalTypePresentation";
+import type { ReviewInfo } from "@/lib/commandReview";
+import { ReviewNotice } from "./ReviewNotice";
 
 interface ApprovalItemData {
   type: string;
@@ -49,11 +51,13 @@ interface ApprovalItemData {
   resource?: string;
   resources?: string[];
   remember_pattern?: string;
+  // 模型审核结果：辅助审批下审核未通过或审核失败时才有，说明为什么要人确认。
+  review?: ReviewInfo;
 }
 
 interface SingleApprovalEvent {
   confirm_id: string;
-  kind: "single" | "once" | "delete" | "extension";
+  kind: "single" | "once" | "delete";
   type: string;
   asset_id: number;
   asset_name: string;
@@ -63,6 +67,7 @@ interface SingleApprovalEvent {
   resource?: string;
   resources?: string[];
   remember_pattern?: string;
+  review?: ReviewInfo;
   session_id: string;
 }
 
@@ -82,7 +87,7 @@ interface QueueItem {
   id: string;
   // "delete" 与 "single" 共用同一套渲染骨架（同一个 opsctl:approval 事件），
   // 只在按钮区按 kind 收窄——与 ApprovalBlock.tsx 的 kind 取值保持一致，不新造第三套判断。
-  kind: "single" | "once" | "batch" | "grant" | "delete" | "extension";
+  kind: "single" | "once" | "batch" | "grant" | "delete";
   items: ApprovalItemData[];
   description?: string;
   sessionID?: string;
@@ -189,6 +194,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
               resource: data.resource,
               resources: data.resources,
               remember_pattern: data.remember_pattern,
+              review: data.review,
             },
           ],
           sessionID: data.session_id,
@@ -213,6 +219,12 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
           // 都带了它（batch verb 的混合批只给带 scope / 通用资产目标的条目逐条填），折叠摘要
           // 因此报得出两端基点，不止是条数。
           detail: i.detail,
+          // opsctl batch 里扩展资产的条目才有：扩展分类出的动作与这次调用触及的资源，
+          // 与单条审批一样展示在命令上方（batch 没有「记住」，不带 remember_pattern）。
+          action: i.action,
+          resource: i.resource,
+          resources: i.resources,
+          review: i.review,
         }));
         enqueue({
           id: data.confirm_id,
@@ -302,6 +314,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
         className="text-xs"
         labelClassName="text-foreground"
       />
+      {item.review && <ReviewNotice review={item.review} />}
       {cur.editable ? (
         <Textarea
           value={editState[cur.id]?.[i] ?? item.command}

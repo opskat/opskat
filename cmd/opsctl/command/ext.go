@@ -3,31 +3,228 @@ package command
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"sync"
 
 	"github.com/opskat/opskat/internal/approval"
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/extreg"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/repository/extension_data_repo"
+	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
 	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/internal/service/command_review_svc/reviewerreg"
+	"github.com/opskat/opskat/internal/service/extension_svc"
+	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extwire"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 )
 
-var delegateExtExecFn = delegateExtExec
-
-// devInstallFn 变量化同 delegateExtExecFn：让 cmdExtDev 的判断可测，不必真起一个桌面端。
+// devInstallFn 变量化：让 cmdExtDev 的判断可测，不必真起一个桌面端。
 var devInstallFn = requestExtDevInstall
 
-// extregRegisterFn 是"仅描述注册"的接缝，同上一套路。
-var extregRegisterFn = extreg.RegisterDescribeOnly
+// extensionContributions 是本进程的贡献点注册表：与桌面端（main.go）同一组贡献点
+// （extreg.Points，加上扩展管理拥有的设置贡献点与命令审核拥有的审核器贡献点）。启动时的
+// 仅描述接入、读缓存的扫描、激活扩展的完整接入都经它，一个扩展在本进程里只有一次接入。
+// 仅描述接入的审核器扩展也是候选（设置页与选用规则看得到它），但没有运行中的插件，
+// 审核时按审核器不可用失败。
+var extensionContributions = extension.NewContributionRegistry(append(extreg.Points(), extension_svc.SettingsPoint(), reviewerreg.Default().Point())...)
 
 // extensionsDirFn 定位扩展目录。变量化是为了可测，与本包 execApprovalFn 等同一套路。
 var extensionsDirFn = func() string { return filepath.Join(bootstrap.ResolvedDataDir(), "extensions") }
+
+// activateExtensionFn 在本进程里完整激活一个扩展：加载它的 WASM，并把启动时的仅描述
+// 注册换成完整注册——策略检查、执行器、命令规范化、配置校验都接上，之后它的资产与
+// 内置类型走同一条 requireApproval → callHandler 路径。变量化同上一套路。
+var activateExtensionFn = activateExtension
+
+// extensionHost 是本进程的扩展宿主：第一次激活时才建，只装被激活的扩展
+// （spec 决策 3：opsctl 只加载目标资产所属的扩展），由 releaseExtensions 在命令结束时释放。
+var extensionHost struct {
+	mu  sync.Mutex
+	svc *extension_svc.Service
+}
+
+func activateExtension(ctx context.Context, extName string) error {
+	return extensionService().Activate(ctx, extName)
+}
+
+// extensionService 是本进程的扩展宿主，第一次用到时才建。建它不加载任何扩展。
+func extensionService() *extension_svc.Service {
+	extensionHost.mu.Lock()
+	defer extensionHost.mu.Unlock()
+	if extensionHost.svc == nil {
+		extensionHost.svc = newExtensionHost()
+	}
+	return extensionHost.svc
+}
+
+// reviewerProvenanceFn 给出审核器扩展的安装事实（来源、现算的包摘要与是否一致，不运行
+// 扩展代码），由审核器注册表判断能不能用。变量化同上一套路。
+var reviewerProvenanceFn = func(ctx context.Context, extName string) (extension_svc.Provenance, error) {
+	return extensionService().Provenance(ctx, extName)
+}
+
+// reviewerSettingsFn 给出审核器扩展已保存设置的读取视图（不运行扩展代码），审核器注册表
+// 据此判断它的必填设置填没填完。变量化同上一套路。
+var reviewerSettingsFn = func(ctx context.Context, extName string) (*extwire.SettingsView, error) {
+	return extensionService().SettingsView(ctx, extName)
+}
+
+// 命令审核器：opsctl 启动时只仅描述接入审核器扩展，审核器注册表在某条命令真要送审时
+// 才做资格检查与设置是否填完的检查，通过后经与 opsctl exec 执行扩展工具同一条激活路径
+// （activateExtensionFn）激活那一个扩展，命令结束由 releaseExtensions 释放；不需要审核的
+// 命令不会走到这里。
+func init() {
+	reviewerreg.Default().SetProvenance(func(ctx context.Context, extName string) (extension_svc.Provenance, error) {
+		return reviewerProvenanceFn(ctx, extName)
+	})
+	reviewerreg.Default().SetSettingsReader(func(ctx context.Context, extName string) (*extwire.SettingsView, error) {
+		return reviewerSettingsFn(ctx, extName)
+	})
+	reviewerreg.Default().SetActivator(func(ctx context.Context, extName string) error {
+		return activateExtensionFn(ctx, extName)
+	})
+}
+
+// newExtensionHost 用与桌面端同一套无界面宿主能力（extension_svc.Service.HostConfig：
+// 资产配置与凭据、KV、资产连接路径）建扩展运行时；桌面窗口才有的两项里，文件对话框
+// 换成 noFileDialog，工具事件不接（只有页面调用的事件有人听）。
+//
+// 日志走 logger.Default()：opsctl 不初始化日志，它是 no-op，扩展的日志与 guest 的
+// 标准输出 / 标准错误（pkg/extension guestLogWriter 也写它）因此永远不进 opsctl 的
+// 标准输出——管道与脚本拿到的只有结果。
+func newExtensionHost() *extension_svc.Service {
+	var svc *extension_svc.Service // 工厂只在扩展加载时调用，那时已赋值
+	mgr := extension.NewManager(extensionsDirFn(), func(extName string) extension.HostProvider {
+		cfg := svc.HostConfig(extName)
+		cfg.FileDialogs = noFileDialog{}
+		return extension.NewDefaultHostProvider(cfg)
+	}, extensionContributions, logger.Default())
+	svc = extension_svc.New(mgr,
+		extension_state_repo.ExtensionState(),
+		extension_data_repo.ExtensionData(),
+		extension_settings_repo.ExtensionSettings(),
+		asset_repo.Asset(),
+		logger.Default(), nil, nil)
+	// 完整注册遇到声明了测试连接的类型就要 registrar，激活前接好。
+	extreg.SetConnTestRegistrar(svc.ConnTestRegistrar())
+	// 激活的审核器扩展审核时要读它的设置哈希（审核缓存键）。
+	reviewerreg.Default().SetSettingsHasher(svc.SettingsHash)
+	return svc
+}
+
+// releaseExtensions 撤掉本进程激活过的扩展并关闭它们的 WASM 运行时。root.go 在命令
+// 结束时调用；没有激活过任何扩展时什么也不做。
+func releaseExtensions(ctx context.Context) {
+	extensionHost.mu.Lock()
+	defer extensionHost.mu.Unlock()
+	if extensionHost.svc == nil {
+		return
+	}
+	for _, name := range extensionHost.svc.Bridge().ListNames() {
+		extensionContributions.Revoke(name)
+	}
+	extensionHost.svc.Close(ctx)
+	extensionHost.svc = nil
+}
+
+// errNoFileDialog 是 opsctl 对"工具要弹文件对话框"的回答（spec 决策 6）：opsctl 没有
+// 图形界面，工具要读的文件经它声明的 --<flag>-file 参数从命令行传入（opsctl help
+// <asset> 的参数表列出了哪些参数可以这样传）。
+var errNoFileDialog = errors.New("opsctl has no file dialog: pass the file through the tool's --<flag>-file parameter instead (see 'opsctl help <asset>')")
+
+type noFileDialog struct{}
+
+func (noFileDialog) FileDialog(string, extension.DialogOptions) (string, error) {
+	return "", errNoFileDialog
+}
+
+// extensionOwnerOf 回答 assetType 由哪个已安装的扩展提供。已启用的扩展由启动时的
+// registerExtensionAssetTypes 接进了资产类型注册表，直接问它；注册表不认识的类型再到
+// 已安装的扩展里找——停用的扩展不注册，它的资产却仍在库里，必须认得出来，激活才能点名
+// 说它已停用，而不是让 exec 报"类型不支持"。内置类型从不走到扫描。
+func extensionOwnerOf(assetType string) (string, bool, error) {
+	if name, ok := assettype.ExtensionOwnerOf(assetType); ok {
+		return name, true, nil
+	}
+	if _, registered := assettype.Get(assetType); registered {
+		return "", false, nil
+	}
+	scanned, err := scanExtensionDirs()
+	if err != nil {
+		return "", false, err
+	}
+	for _, ext := range scanned {
+		view, err := extreg.ManifestOf(ext.info.Manifest)
+		if err != nil {
+			return "", false, err
+		}
+		if view.AssetType(assetType) != nil {
+			return ext.info.Name, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// driverExtensionOf 回答数据库资产的驱动由哪个已安装的扩展提供。内置驱动与非数据库资产
+// 报 false。已启用的扩展由启动时的 registerExtensionAssetTypes 把驱动接进了驱动注册表，
+// 直接问它；注册表不认识的驱动 id 再到已安装的扩展声明里找——停用的扩展不注册，它的资产
+// 却仍在库里，必须认得出来，激活才能点名说它已停用。内置驱动先查：扩展不能占用内置 id，
+// 磁盘上声明了同名驱动的 manifest 不会让 opsctl 改道。
+func driverExtensionOf(asset *asset_entity.Asset) (extName string, driverID dbdriver.DriverID, ok bool, err error) {
+	if !asset.IsDatabase() {
+		return "", "", false, nil
+	}
+	cfg, err := asset.GetDatabaseConfig()
+	if err != nil {
+		return "", "", false, err
+	}
+	id := dbdriver.DriverID(cfg.Driver)
+	if name, ok := extreg.DriverOwnerOf(id); ok {
+		return name, id, true, nil
+	}
+	if _, lookupErr := dbregistry.Lookup(id); lookupErr == nil {
+		return "", id, false, nil
+	}
+	scanned, err := scanExtensionDirs()
+	if err != nil {
+		return "", id, false, err
+	}
+	for _, ext := range scanned {
+		if slices.Contains(ext.info.Manifest.Contributes.DatabaseDrivers, string(id)) {
+			return ext.info.Name, id, true, nil
+		}
+	}
+	return "", id, false, nil
+}
+
+// activateDriverExtension 在 exec 前为扩展提供驱动的数据库资产激活该扩展：之后
+// connpool.OpenDatabase 从驱动注册表拿到的是能执行的驱动，审批、审计与内置驱动同一条
+// 路径。激活失败（扩展在桌面端被停用、加载失败）说成「驱动不可用」，点名驱动与扩展，
+// 与查询面板、AI 对同一情形的说法一致。其他资产什么也不做。activate 是激活入口，
+// batch 经它让同一扩展每批只激活一次。
+func activateDriverExtension(ctx context.Context, asset *asset_entity.Asset, activate func(context.Context, string) error) error {
+	extName, id, ok, err := driverExtensionOf(asset)
+	if err != nil || !ok {
+		return err
+	}
+	if err := activate(ctx, extName); err != nil {
+		return fmt.Errorf("%w: %q, provided by extension %q: %w", dbregistry.ErrDriverUnavailable, id, extName, err)
+	}
+	return nil
+}
 
 func cmdExt(ctx context.Context, args []string) int {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
@@ -79,7 +276,10 @@ func scanInstalledExtensions() ([]installedExtension, error) {
 	}
 	results := make([]installedExtension, 0, len(scanned))
 	for _, ext := range scanned {
-		m := ext.info.Manifest
+		m, err := extreg.ManifestOf(ext.info.Manifest)
+		if err != nil {
+			return nil, err
+		}
 		item := installedExtension{
 			Name:        m.Name,
 			Version:     m.Version,
@@ -91,6 +291,10 @@ func scanInstalledExtensions() ([]installedExtension, error) {
 			item.AssetTypes = append(item.AssetTypes, at.Type)
 		}
 		for _, t := range m.Tools {
+			// A host-only tool is for host subsystems; exec / opsctl cannot call it.
+			if t.HostOnly {
+				continue
+			}
 			item.Tools = append(item.Tools, t.Name)
 		}
 		results = append(results, item)
@@ -109,50 +313,71 @@ type scannedExtension struct {
 // sorted by name. It is the single scan behind both `ext list` and the startup
 // registration below, so the two cannot disagree about what is installed.
 func scanExtensionDirs() ([]scannedExtension, error) {
-	extDir := extensionsDirFn()
-	entries, err := os.ReadDir(extDir)
+	scanned, _, err := scanExtensionDirsWithFailures()
+	return scanned, err
+}
+
+// scanExtensionDirsWithFailures is scanExtensionDirs plus the extensions the host
+// refuses (a manifest or cached describe() it does not accept): listed with the
+// refusal, in the order of the directories, not among the scanned ones. A directory
+// without a manifest.json is not an extension and is in neither.
+func scanExtensionDirsWithFailures() ([]scannedExtension, []extension.LoadFailure, error) {
+	infos, failures, err := extension.ScanInstalledDir(extensionsDirFn(), extensionContributions, zap.NewNop())
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read extensions directory: %w", err)
+		return nil, nil, err
 	}
-
 	disabled := disabledExtensionNames()
-
-	results := make([]scannedExtension, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		info, err := extension.LoadManifestInfo(filepath.Join(extDir, entry.Name()))
-		if err != nil {
-			// A directory without a readable/valid manifest is not an extension; the
-			// desktop app skips it the same way.
-			continue
-		}
+	results := make([]scannedExtension, 0, len(infos))
+	for _, info := range infos {
 		results = append(results, scannedExtension{info: info, enabled: !disabled[info.Name]})
 	}
 	sort.Slice(results, func(i, j int) bool { return results[i].info.Name < results[j].info.Name })
-	return results, nil
+	return results, failures, nil
+}
+
+// refusedExtensionError is the error for an asset whose owning extension is
+// installed but refused by the host: it names the extension and why, so exec stops
+// before loading anything. The owner comes from the asset row, which is there even
+// when the extension's describe() is not. nil when the asset is not an extension's
+// or its extension is accepted.
+func refusedExtensionError(ctx context.Context, asset *asset_entity.Asset) error {
+	if asset.ExtensionName == "" {
+		return nil
+	}
+	_, failures, err := scanExtensionDirsWithFailures()
+	if err != nil {
+		return err
+	}
+	for _, f := range failures {
+		if f.Name == asset.ExtensionName {
+			return fmt.Errorf("asset %q is provided by extension %q, which is not loaded: %s",
+				asset.Name, f.Name, extension_svc.NewLoadError(ctx, f.Err).Message)
+		}
+	}
+	return nil
 }
 
 // registerExtensionAssetTypes wires every enabled extension's non-executing face into
-// this process's registries, from the descriptor the desktop app cached the last time
-// it loaded that extension (extension_describe). No WASM is compiled or run.
+// this process's registries, from the descriptor cached the last time any process
+// loaded that extension (extension_describe). The cheap path compiles no WASM.
 //
 // Without it opsctl is blind to extension asset types while the app on the same
 // machine is not: `create asset --type notebook` reports an unsupported type, `help
 // notebook` lists only the built-ins and `policy show` on an extension asset refuses
-// with "no permanent rule support". `exec` was the exception only because it delegates
-// to the desktop app instead of resolving anything locally.
+// with "no permanent rule support". `exec` starts from this registration too: it then
+// activates just the asset's own extension in full (activateExtensionFn), replacing
+// that extension's describe-only entry with one that can execute.
+//
+// An enabled extension with no cached answer (the desktop app never loaded it on this
+// machine) is described here first (describeExtensionFn), which also writes the cache
+// for the next command; a disabled one is never loaded. Without the answer opsctl
+// cannot tell which extension owns an asset type.
 //
 // Failures are reported and skipped rather than fatal: a single unregisterable
 // extension (a name collision with a built-in type, a describe() answer this binary is
-// too old to accept) must not take down every unrelated opsctl command. A cache miss
-// is reported the same way — it is a real, fixable degradation ("load it once in the
-// desktop app"), not something to swallow into a later "unknown asset type".
+// too old to accept) must not take down every unrelated opsctl command.
 func registerExtensionAssetTypes() {
+	extensionDescribeFailures = nil
 	scanned, err := scanExtensionDirs()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
@@ -163,10 +388,57 @@ func registerExtensionAssetTypes() {
 			// A disabled extension is not registered in the running app either.
 			continue
 		}
-		if err := extregRegisterFn(ext.info); err != nil {
+		info := ext.info
+		if !info.Described {
+			if info, err = describeExtensionFn(context.Background(), ext.info.Dir); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: describe extension %q: %v\n", ext.info.Name, err)
+				extensionDescribeFailures = append(extensionDescribeFailures, extensionDescribeFailure{name: ext.info.Name, err: err})
+				continue
+			}
+		}
+		if err := extensionContributions.Attach(info.View()); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 		}
 	}
+}
+
+// extensionDescribeFailure is one enabled extension whose describe() could not be
+// obtained in this run, so none of its asset types got registered.
+type extensionDescribeFailure struct {
+	name string
+	err  error
+}
+
+// extensionDescribeFailures is what the last registerExtensionAssetTypes could not
+// describe. Recorded once there, at the producer; exec and batch read it to say why an
+// asset type nobody claimed has no exec support (opsctl cannot tell which of these
+// extensions owns the type — the description that would say is what failed).
+var extensionDescribeFailures []extensionDescribeFailure
+
+// describeExtensionFn 变量化同上一套路。
+var describeExtensionFn = describeExtension
+
+// describeExtension 补缓存缺失的扩展：加载它的 WASM 取 describe() 的答案（Manager 在
+// 缓存缺失时顺手写入 extension_describe，供下一条命令用），随即释放。返回的清单带的是
+// 这次加载拿到的答案，而不是从缓存重读——缓存写入失败只让下一条命令再描述一次，
+// 不让这一条命令丢掉刚拿到的描述。它只取描述，不接入贡献点——真正执行由
+// activateExtensionFn 在 exec 时完整激活。
+func describeExtension(ctx context.Context, dir string) (*extension.ManifestInfo, error) {
+	mgr := extension.NewManager(filepath.Dir(dir), func(string) extension.HostProvider {
+		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
+	}, extensionContributions, logger.Default())
+	defer mgr.Close(ctx)
+	described, err := mgr.LoadExtension(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	info, err := extension.LoadManifestInfo(dir, extensionContributions)
+	if err != nil {
+		return nil, err
+	}
+	info.Manifest = described
+	info.Described = true
+	return info, nil
 }
 
 // disabledExtensionNames reads the persisted enabled/disabled state. An unreadable DB
@@ -208,38 +480,6 @@ func cmdExtList() int {
 	}
 	fmt.Println(string(out))
 	return 0
-}
-
-// delegateExtExec hands one exec on an extension asset to the running desktop app.
-//
-// The reason is execution location, not semantics: the WASM runtime, the extension's
-// host capabilities and its decrypted asset config only exist inside the desktop
-// process. The command string is exactly the one the user typed after `--`, and the app
-// runs it through the same unified exec handler an AI session would, so policy, the
-// approval dialog, grants and audit are identical.
-func delegateExtExec(assetID int64, assetName, command, session string) (string, error) {
-	dataDir := bootstrap.ResolvedDataDir()
-	sockPath := approval.SocketPath(dataDir)
-
-	token, err := bootstrap.ReadAuthToken(dataDir)
-	if err != nil {
-		logger.Default().Warn("read auth token", zap.Error(err))
-	}
-
-	resp, err := approval.RequestApprovalWithToken(sockPath, token, approval.ApprovalRequest{
-		Type:      "ext_tool",
-		AssetID:   assetID,
-		AssetName: assetName,
-		Command:   command,
-		SessionID: session,
-	})
-	if err != nil {
-		return "", err
-	}
-	if resp.ToolError != "" {
-		return "", fmt.Errorf("%s", resp.ToolError)
-	}
-	return resp.ToolResult, nil
 }
 
 // cmdExtDev 把一个未打包的扩展目录装进运行中的桌面应用。
@@ -287,8 +527,8 @@ func cmdExtDev(args []string) int {
 
 // requestExtDevInstall 让运行中的桌面进程装这个目录。
 //
-// 与 delegateExtExec 同一条理由：注册表、WASM 运行时、能力面都只存在于桌面进程，
-// opsctl 自己装一份就等于第二套加载路径。
+// 安装改的是桌面端正在运行的那一份（注册表、已加载的 WASM 模块、前端页面），
+// opsctl 自己装一份就等于第二套安装路径。
 func requestExtDevInstall(sourceDir string) (string, string, error) {
 	resp, err := requestDesktop(approval.ApprovalRequest{
 		Type: "ext_dev_install",
@@ -357,7 +597,9 @@ To run an extension tool, use exec against one of the extension's assets:
   opsctl exec <asset> -- <tool> --flag=value
 
 That is the same command built-in asset types use; the asset's type selects the
-extension. Run 'opsctl help <asset>' to see the tool and flag reference.
+extension, which opsctl loads and runs itself, whether or not the desktop app is
+running. A disabled extension is refused. Run 'opsctl help <asset>' to see the
+tool and flag reference.
 
 Examples:
   opsctl ext list

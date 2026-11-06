@@ -14,6 +14,7 @@ import {
 } from "../../../wailsjs/go/system/System";
 import { loadExtensionLocales } from "@/extension/i18n";
 import { policy_group_entity } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface PolicyGroupManagerProps {
   open: boolean;
@@ -211,7 +212,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
       notifyChanged();
       await fetchGroups();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -223,7 +224,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
       notifyChanged();
       await fetchGroups();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -297,7 +298,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
       notifyChanged();
       await fetchGroups();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 

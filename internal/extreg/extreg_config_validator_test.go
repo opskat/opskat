@@ -41,7 +41,7 @@ func TestGuestValidatorFailureRefusesTheSave(t *testing.T) {
 
 func TestUnregisterRemovesTheConfigValidator(t *testing.T) {
 	registerFake(t, &fakePlugin{validationErrors: []extension.ValidationError{{Message: "always"}}})
-	Unregister("acme")
+	detach("acme")
 	assert.NoError(t, asset_entity.ValidateRegisteredConfig(context.Background(),
 		&asset_entity.Asset{Name: "a", Type: "acme-store", Config: `{}`}))
 }
@@ -50,8 +50,8 @@ func TestUnregisterRemovesTheConfigValidator(t *testing.T) {
 // 校验（assettype.PrepareCreate）照常生效，guest 规则要到桌面端保存时才跑。
 func TestDescribeOnlyRegistersNoGuestValidator(t *testing.T) {
 	m := testManifest()
-	require.NoError(t, RegisterDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: m}))
-	t.Cleanup(func() { Unregister(m.Name) })
+	require.NoError(t, attachDescribeOnly(&extension.ManifestInfo{Name: m.Name, Manifest: runtimeManifest(m)}))
+	t.Cleanup(func() { detach(m.Name) })
 	assert.NoError(t, asset_entity.ValidateRegisteredConfig(context.Background(),
 		&asset_entity.Asset{Name: "a", Type: "acme-store", Config: `{}`}))
 }

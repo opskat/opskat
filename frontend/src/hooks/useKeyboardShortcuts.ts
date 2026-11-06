@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useTabStore } from "@/stores/tabStore";
-import { useShortcutStore, eventMatchesBinding, matchShortcut } from "@/stores/shortcutStore";
+import { useQueryStore } from "@/stores/queryStore";
+import { useShortcutStore, eventMatchesBinding, matchShortcut, FIND_SCOPE_ATTR } from "@/stores/shortcutStore";
 import { useLayoutStore } from "@/stores/layoutStore";
 import { copySelectedAssetMarkdownRef, shouldCopyAssetRef } from "@/lib/assetRef";
 
@@ -29,6 +30,8 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
       }
       if (!action || action === "asset.copyRef") return;
       if (action.startsWith("terminal.")) return;
+      // 表设计器的保存由设计器自己监听;这里不能 preventDefault,否则别的视图(如远程文件编辑器的 ⌘S)收不到。
+      if (action === "designer.save") return;
 
       // command.quickopen 早期处理：在输入框内也应该能触发
       if (action === "command.quickopen") {
@@ -56,10 +59,11 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
         return;
       }
 
-      // panel.filter 特殊处理：xterm 聚焦时透传，否则通过 store 触发 filter 面板
+      // panel.filter 特殊处理：xterm / Monaco 编辑器 / 数据库结果表格聚焦时透传（各自打开查找），否则通过 store 触发 filter 面板。
+      // Monaco 的焦点元素是 EditContext 的 div，上面的输入框判断拦不到，按 .monaco-editor 祖先识别。
       if (action === "panel.filter") {
         const el = document.activeElement as HTMLElement | null;
-        if (el?.closest(".xterm")) return;
+        if (el?.closest(`.xterm, .monaco-editor, [${FIND_SCOPE_ATTR}]`)) return;
         e.preventDefault();
         e.stopPropagation();
         useLayoutStore.getState().requestOpenFilter();
@@ -94,7 +98,11 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
                 termStore.closePane(activeTabId, data.activePaneId);
               }
             } else {
-              tabStore.closeTab(activeTabId);
+              // 关系型数据库标签(有 dbStates)先关当前内层标签,内层全关完才关外层;关闭都受未提交修改拦截。
+              const query = useQueryStore.getState();
+              const innerId = query.dbStates[activeTabId]?.activeInnerTabId;
+              if (innerId) query.closeInnerTab(activeTabId, innerId);
+              else tabStore.closeTab(activeTabId);
             }
           }
           break;

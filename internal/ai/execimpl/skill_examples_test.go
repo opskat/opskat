@@ -1,8 +1,12 @@
 package execimpl
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -234,7 +238,7 @@ func TestSkillDocs_DocumentedExamplesAreCanonicalizable(t *testing.T) {
 
 		for _, ex := range examples {
 			asset := skillExampleAsset(t, assetType, ex.section)
-			if _, err := canonicalize(asset, ex.command); err != nil {
+			if _, err := canonicalize(context.Background(), asset, localizeFileFlag(ex.command)); err != nil {
 				t.Errorf("%s/SKILL.md (body line %d) documents %q, but the registered canonicalizer rejects it: %v",
 					assetType, ex.line, ex.command, err)
 			}
@@ -365,4 +369,14 @@ func skillExampleAsset(t *testing.T, assetType, section string) *asset_entity.As
 		}
 	}
 	return asset
+}
+
+// localizeFileFlag 把示例里的 --file=/<path> 写成本机的绝对路径。文档按 POSIX 写（/tmp/...），
+// 而 --file 指的是运行 opsctl 的这台机器上的文件，必须是本机绝对路径；Windows 上 /tmp/... 不是，
+// 补上当前盘符后才是同一个示例在这台机器上的写法。
+func localizeFileFlag(command string) string {
+	if runtime.GOOS != "windows" {
+		return command
+	}
+	return strings.ReplaceAll(command, "--file=/", "--file="+filepath.VolumeName(os.TempDir())+"/")
 }

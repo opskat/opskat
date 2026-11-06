@@ -5,6 +5,7 @@ import { useExtensionStore } from "./store";
 import { loadExtension } from "./loader";
 import { loadExtensionLocales } from "./i18n";
 import type { LoadedExtension } from "./types";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface ExtensionPageProps {
   extensionName: string;
@@ -93,7 +94,7 @@ export function ExtensionPage({ extensionName, pageId, assetId }: ExtensionPageP
           setLoadedLocal({ extensionName, loaded: result });
         }
       } catch (err) {
-        if (!cancelled) setError({ extensionName, pageId, kind: "load", message: String(err) });
+        if (!cancelled) setError({ extensionName, pageId, kind: "load", message: errorMessage(err) });
       }
     })();
     return () => {

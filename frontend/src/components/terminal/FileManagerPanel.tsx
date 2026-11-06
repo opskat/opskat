@@ -32,6 +32,7 @@ import {
   resolveExternalEditorTarget,
   useExternalEditStore,
 } from "@/stores/externalEditStore";
+import { useShallow } from "zustand/shallow";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { findEditorTabId, openRemoteFileEditorTab, openSettingsTab, useTabStore } from "@/stores/tabStore";
 import { ExternalEditCompareWorkbench } from "./external-edit/CompareWorkbench";
@@ -57,6 +58,7 @@ import {
   HANDLE_PX,
   joinRemotePath,
 } from "./file-manager/utils";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface FileManagerPanelProps {
   assetId?: number;
@@ -173,7 +175,7 @@ export function FileManagerPanel({
   const startUploadFile = useSFTPStore((s) => s.startUploadFile);
   const startDownload = useSFTPStore((s) => s.startDownload);
   const startDownloadDir = useSFTPStore((s) => s.startDownloadDir);
-  const allTransfers = useSFTPStore((s) => s.transfers);
+  const tabTransfers = useSFTPStore(useShallow((s) => s.getTabTransfers(tabId)));
   const allExternalSessions = useExternalEditStore((s) => s.sessions);
   const pendingConflict = useExternalEditStore((s) => s.pendingConflict);
   const dismissCompare = useExternalEditStore((s) => s.dismissCompare);
@@ -198,10 +200,6 @@ export function FileManagerPanel({
   const safeSelectedError = isExternalEditClipboardResidueSession(selectedError) ? null : selectedError;
 
   const transferTarget = useMemo(() => ({ tabId, sessionId }), [tabId, sessionId]);
-  const tabTransfers = useMemo(
-    () => Object.values(allTransfers).filter((transfer) => transfer.tabId === tabId),
-    [allTransfers, tabId]
-  );
   const attentionItems = useMemo(
     () => buildExternalEditAttentionItems(allExternalSessions).filter((entry) => entry.session.assetId === assetId),
     [allExternalSessions, assetId]
@@ -366,7 +364,7 @@ export function FileManagerPanel({
       void navigator.clipboard
         .writeText(paths.join("\n"))
         .then(() => notifyCopied(t("sftp.filePathCopied")))
-        .catch((e) => toast.error(String(e)));
+        .catch((e) => toast.error(errorMessage(e)));
     },
     [t]
   );
@@ -385,7 +383,7 @@ export function FileManagerPanel({
       if (clipboard.mode === "cut") setGlobalClipboard(null);
       await refreshTree();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   }, [clipboard, currentPathRef, refreshTree, sessionId]);
 
@@ -421,7 +419,7 @@ export function FileManagerPanel({
       for (const item of deleteTarget.paths) await SFTPDelete(sessionId, item.path, item.isDir);
       await refreshTree();
     } catch (e) {
-      setError(String(e));
+      setError(errorMessage(e));
     } finally {
       setDeleteTarget(null);
     }
@@ -444,7 +442,7 @@ export function FileManagerPanel({
           editorId,
         });
       } catch (error) {
-        setError(isExternalEditOversizeError(error) ? EXTERNAL_EDIT_OVERSIZE_ERROR_KEY : String(error));
+        setError(isExternalEditOversizeError(error) ? EXTERNAL_EDIT_OVERSIZE_ERROR_KEY : errorMessage(error));
       }
     },
     [assetId, sessionId, setError]
@@ -626,7 +624,7 @@ export function FileManagerPanel({
         setRenamePath(null);
         await refreshTree();
       } catch (e) {
-        toast.error(String(e));
+        toast.error(errorMessage(e));
       }
     },
     [entryByPath, refreshTree, sessionId]
@@ -656,7 +654,7 @@ export function FileManagerPanel({
         setSelected([]);
         await refreshTree();
       } catch (e) {
-        toast.error(String(e));
+        toast.error(errorMessage(e));
       }
     },
     [entryByPath, refreshTree, sessionId, setSelected]
@@ -734,7 +732,7 @@ export function FileManagerPanel({
           void navigator.clipboard
             .writeText(currentPathRef.current)
             .then(() => notifyCopied(t("sftp.currentPathCopied")))
-            .catch((e) => toast.error(String(e)));
+            .catch((e) => toast.error(errorMessage(e)));
           break;
         case "rename":
           if (targetPath) startRename(targetPath);
@@ -808,7 +806,7 @@ export function FileManagerPanel({
       setNameDialog(null);
       await refreshTree();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   };
 

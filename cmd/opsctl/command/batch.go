@@ -21,6 +21,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"go.uber.org/zap"
 
@@ -78,6 +79,9 @@ type resolvedBatchCmd struct {
 	// batchItemApprovalDetail.
 	detail   string
 	decision *aictx.CheckResult // 策略预检结果，用于审计
+	// extension marks an item on an extension asset: its tool dials through the
+	// asset's connection path, whose SSH hop answers MFA the way `opsctl exec` does.
+	extension bool
 }
 
 func isValidBatchType(name string) bool {
@@ -141,6 +145,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 	results := make([]batchResult, len(commands))
 	auditCtx := aictx.WithSessionID(ctx, session)
 	auditCtx = aictx.WithAuditSource(auditCtx, "opsctl")
+	extensions := batchExtensions{}
 
 	for i, cmd := range commands {
 		cmdType := cmd.Type
@@ -175,6 +180,24 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 			continue
 		}
 
+		// 扩展资产：先在本进程里激活它的扩展（每个扩展每批只试一次，见 batchExtensions），
+		// 之后与内置类型走下面同一条规范化 → 策略 → 整批审批 → 统一 exec handler 的路径。
+		// 扩展停用或加载失败只让这一项失败，与上面的早退分支同一种结果与审计。
+		command := cmd.Command
+		extName, isExtensionAsset, ownerErr := extensionOwnerOf(asset.Type)
+		if ownerErr == nil && isExtensionAsset {
+			command, ownerErr = extensions.prepare(ctx, asset, extName, command)
+		}
+		if ownerErr == nil && !isExtensionAsset {
+			// 数据库资产的驱动由扩展提供：同样每批只激活一次。
+			ownerErr = activateDriverExtension(ctx, asset, extensions.activate)
+		}
+		if ownerErr != nil {
+			results[i].Error = ownerErr.Error()
+			writeOpsctlAudit(auditCtx, batchAuditTool, batchArgsJSON(asset.ID, cmd.Command, cmd.Scope), "", ownerErr, nil)
+			continue
+		}
+
 		// Executor lookup / canonicalize / precheck — the same no-side-effect gate
 		// cmdExec runs (prepareExecCommand), hoisted above Step 3/4 so an asset type with
 		// no executor at all, a malformed command, or an unmet precondition (serial: no
@@ -184,7 +207,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		// "sql","redis","mongo" case below): every prefix now carries the same DSL command
 		// string the bare/unprefixed form does, so mongo goes through prepareExecCommand
 		// like everything else.
-		checkCommand, prepErr := prepareExecCommand(ctx, asset, cmd.Command)
+		checkCommand, prepErr := prepareExecCommand(ctx, asset, command)
 		if prepErr != nil {
 			results[i].Error = prepErr.Error()
 			writeOpsctlAudit(auditCtx, batchAuditTool, batchArgsJSON(asset.ID, cmd.Command, cmd.Scope), "", prepErr, nil)
@@ -201,10 +224,11 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		resolved[i] = resolvedBatchCmd{
 			asset:        asset,
 			cmdType:      cmdType,
-			command:      cmd.Command,
+			command:      command,
 			scope:        cmd.Scope,
 			checkCommand: checkCommand,
 			detail:       detail,
+			extension:    isExtensionAsset,
 		}
 	}
 
@@ -217,15 +241,22 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 	}
 	var autoAllow, autoDeny, needConfirm []permBucket
 
+	// checkCommand, not command: policy matching must see whatever canonicalize
+	// produced (kafka's deny rules are keyed on its two-token canonical shape), same
+	// as cmdExec — see prepareExecCommand's doc comment. All commands are checked in
+	// one CheckPermissions call so model reviews run in parallel.
+	var permReqs []permission.PermissionRequest
+	var permIndices []int
 	for i, cmd := range resolved {
 		if cmd.asset == nil {
 			continue
 		}
-		permCtx := aictx.WithSessionID(ctx, session)
-		// checkCommand, not command: policy matching must see whatever canonicalize
-		// produced (kafka's deny rules are keyed on its two-token canonical shape), same
-		// as cmdExec — see prepareExecCommand's doc comment.
-		pr := permission.CheckPermission(permCtx, cmd.asset.Type, cmd.asset.ID, cmd.checkCommand)
+		permIndices = append(permIndices, i)
+		permReqs = append(permReqs, permission.PermissionRequest{AssetType: cmd.asset.Type, AssetID: cmd.asset.ID, Command: cmd.checkCommand})
+	}
+	permResults := permission.CheckPermissions(aictx.WithSessionID(ctx, session), permReqs)
+	for k, i := range permIndices {
+		pr := permResults[k]
 		prCopy := pr
 		resolved[i].decision = &prCopy
 		bucket := permBucket{idx: i, result: pr}
@@ -260,15 +291,25 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 		batchItems := make([]approval.BatchItem, 0, len(needConfirm))
 		for _, b := range needConfirm {
 			cmd := resolved[b.idx]
+			// 与单条 exec 同一个审批项构造：扩展资产上分类成功的调用带上动作、资源与
+			// 规则主体，终端提示、桌面端弹窗与 NEEDS AUTHORIZATION 都按它展示。
+			item := permission.ApprovalItemFor(ctx, cmd.asset.ID, cmd.asset.Name, cmd.asset.Type, cmd.checkCommand)
 			batchItems = append(batchItems, approval.BatchItem{
-				Type:      permission.ApprovalTypeFor(cmd.asset.Type),
-				AssetID:   cmd.asset.ID,
-				AssetName: cmd.asset.Name,
-				Command:   cmd.checkCommand,
-				// Detail 单独带 scope 与类型的审批展示补充，不掺进 Command：Command 驱动
-				// 策略匹配与 grant pattern 落库，掺入节点地址会让同一条命令因 scope 不同
-				// 匹配不上同一条规则——同 exec.go 的 execApprovalDetail。
-				Detail: cmd.detail,
+				Type:      item.Type,
+				AssetID:   item.AssetID,
+				AssetName: item.AssetName,
+				Command:   item.Command,
+				// Detail 单独带 scope 与类型的审批展示补充（batchItemApprovalDetail），不掺进
+				// Command：Command 驱动策略匹配与 grant pattern 落库，掺入节点地址会让同一条
+				// 命令因 scope 不同匹配不上同一条规则——同 exec.go 的 execApprovalDetail。扩展
+				// 条目不取审批项的工具调用详情：它与命令同义，且会让带 detail 的批在弹窗里被
+				// 当成 cp 批折叠。
+				Detail:          cmd.detail,
+				Action:          item.Action,
+				Resource:        item.Resource,
+				Resources:       item.Resources,
+				RememberPattern: item.RememberPattern,
+				Review:          b.result.Review,
 			})
 		}
 
@@ -286,7 +327,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 				cmd := resolved[b.idx]
 				results[b.idx].Error = fmt.Sprintf("approval failed: %v", approvalErr)
 				argsJSON := batchArgsJSON(cmd.asset.ID, cmd.command, cmd.scope)
-				decision := &aictx.CheckResult{Decision: aictx.Deny, DecisionSource: approvalResult.DecisionSource}
+				decision := &aictx.CheckResult{Decision: aictx.Deny, DecisionSource: approvalResult.DecisionSource, Review: b.result.Review}
 				deniedCtx := withBatchAuditCommand(auditCtx, cmd.checkCommand)
 				writeOpsctlAudit(deniedCtx, batchAuditTool, argsJSON, "", approvalErr, decision)
 			}
@@ -298,6 +339,7 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 				resolved[b.idx].decision = &aictx.CheckResult{
 					Decision:       aictx.Allow,
 					DecisionSource: aictx.SourceUserAllow,
+					Review:         b.result.Review,
 				}
 				execSet[b.idx] = true
 			}
@@ -392,7 +434,16 @@ func executeBatchItem(ctx context.Context, handlers map[string]tool.ToolHandlerF
 	case streaming:
 		result = executeBatchStream(itemCtx, cmd, stream)
 	default:
-		result = executeBatchHandler(itemCtx, handlers, batchAuditTool, cmd, map[string]any{
+		handlerCtx := itemCtx
+		if cmd.extension {
+			// Same as cmdExec on an extension asset: ResolveProxyChain gives every SSH hop
+			// on the asset's connection path the responder, so a hop asking for MFA is
+			// answered the way an SSH item's target is, and with no answer source the item
+			// ends the batch with NEEDS MFA. Database and other built-in items get no
+			// responder (TestBatchDataItem_TunnelDialGetsNoMFAResponder).
+			handlerCtx = withConnectionPathMFA(itemCtx)
+		}
+		result = executeBatchHandler(handlerCtx, handlers, batchAuditTool, cmd, map[string]any{
 			"asset":   strconv.FormatInt(cmd.asset.ID, 10),
 			"command": cmd.command,
 			"scope":   cmd.scope,
@@ -504,8 +555,12 @@ func executeBatchHandler(ctx context.Context, handlers map[string]tool.ToolHandl
 
 	output, err := handler(ctx, params)
 	if err != nil {
+		err = mfaRefusalOf(ctx, err)
 		result.Error = err.Error()
 		result.ExitCode = 1
+		if needsMFA(err) {
+			result.mfaErr = err
+		}
 		return result
 	}
 
@@ -535,7 +590,7 @@ func requireBatchApproval(items []approval.BatchItem, session string) (ApprovalR
 		session = id
 	}
 
-	dataDir := bootstrap.ResolvedDataDir()
+	dataDir := approvalDataDir()
 	sockPath := approval.SocketPath(dataDir)
 
 	switch chooseApprover(isInteractive(stdinIsTerminal(), stderrIsTerminal()), func() error {
@@ -590,6 +645,38 @@ func requireBatchApproval(items []approval.BatchItem, session string) (ApprovalR
 	default:
 		return refuseBatchApproval(items, session)
 	}
+}
+
+// batchExtensions 记下一次 batch 里每个扩展的激活结果：同一扩展的多项只激活一次
+// （spec batch：同一批里同一扩展的多项只加载一次扩展），停用或加载失败的结果同样记住，
+// 后面同一扩展的项直接拿同一个错误，不再重试加载。
+type batchExtensions map[string]error
+
+// prepare 是 batch 版的 prepareExtensionExec（exec.go）：激活经 batchExtensions 去重，
+// 错误措辞与之相同；`--<flag>-file` 照样展开成行内形式，但 batch 的标准输入不属于
+// 任何一项（JSON 输入模式已读完它），`-` 读到的是拒绝读取的 batchStdin。
+func (b batchExtensions) prepare(ctx context.Context, asset *asset_entity.Asset, extName, command string) (string, error) {
+	if err := b.activate(ctx, extName); err != nil {
+		return "", fmt.Errorf("asset %q is type=%s, provided by extension %q: %w", asset.Name, asset.Type, extName, err)
+	}
+	return extreg.ExpandFileFlags(extName, command, batchStdin{})
+}
+
+// activate 激活 extName，每批只试一次，结果（含失败）记住。
+func (b batchExtensions) activate(ctx context.Context, extName string) error {
+	err, tried := b[extName]
+	if !tried {
+		err = activateExtensionFn(ctx, extName)
+		b[extName] = err
+	}
+	return err
+}
+
+// batchStdin 是 batch 条目的 `--<flag>-file -` 读到的标准输入：拒绝，而不是静默读出空内容。
+type batchStdin struct{}
+
+func (batchStdin) Read([]byte) (int, error) {
+	return 0, errors.New("batch items cannot read a file from stdin; pass its path instead")
 }
 
 // parseBatchInput parses input from either stdin JSON or positional args.
@@ -732,6 +819,10 @@ asset types (ssh, database, redis, mongodb, etcd, kafka, k8s, serial) and the
 compatibility aliases exec/sql/mongo. It is an assertion, not a dispatch selector:
 it fails that one item fast if the asset isn't actually that type. A bare 'asset:command' entry
 (no prefix) makes no assertion and runs against any asset type.
+
+An extension asset's item ('asset:<tool> --flag=value') runs in opsctl itself,
+like 'opsctl exec': its extension is loaded once per batch, and an extension
+that is disabled or fails to load fails only its own items.
 
 SSH items on the same asset share one connection, so an asset that requires
 MFA is verified once per batch run (see 'opsctl --help', SSH MFA).

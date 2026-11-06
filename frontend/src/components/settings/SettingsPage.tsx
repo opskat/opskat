@@ -22,10 +22,12 @@ import {
   Puzzle,
   PencilLine,
   Blocks,
+  Globe,
 } from "lucide-react";
 import { ShortcutSettings } from "@/components/settings/ShortcutSettings";
 import { CustomTypeSection } from "@/components/settings/CustomTypeSection";
 import { AISettingsSection } from "@/components/settings/AISettingsSection";
+import { CommandReviewSection } from "@/components/settings/CommandReviewSection";
 import { ImportSection } from "@/components/settings/ImportSection";
 import { BackupSection } from "@/components/settings/BackupSection";
 import { AppearanceSection, TerminalSection } from "@/components/settings/AppearanceSection";
@@ -33,6 +35,7 @@ import { ConnectionSection } from "@/components/settings/ConnectionSection";
 import { UpdateSection } from "@/components/settings/UpdateSection";
 import { SystemStatusSection } from "@/components/settings/SystemStatusSection";
 import { ExtensionSection } from "@/components/settings/ExtensionSection";
+import { NetworkSection } from "@/components/settings/NetworkSection";
 import { ExternalEditSection } from "@/components/settings/ExternalEditSection";
 import { useExtensionUpdates, useExtensionUpdateSync } from "@/components/settings/extensionUpdates";
 import { useSettingsUiStore, type SettingsTab } from "@/stores/settingsUiStore";
@@ -76,6 +79,10 @@ export function SettingsPage() {
               <MonitorDot className="h-3.5 w-3.5" />
               {t("terminal.title")}
             </TabsTrigger>
+            <TabsTrigger value="network" className="gap-1">
+              <Globe className="h-3.5 w-3.5" />
+              {t("network.title")}
+            </TabsTrigger>
             <TabsTrigger value="external-edit" className="gap-1">
               <PencilLine className="h-3.5 w-3.5" />
               {t("externalEdit.settings.tab")}
@@ -111,6 +118,7 @@ export function SettingsPage() {
           {/* AI Provider */}
           <TabsContent value="ai" className="space-y-4">
             <AISettingsSection />
+            <CommandReviewSection />
           </TabsContent>
 
           {/* Import */}
@@ -140,6 +148,10 @@ export function SettingsPage() {
           <TabsContent value="terminal" className="space-y-4">
             <TerminalSection />
             <ConnectionSection />
+          </TabsContent>
+
+          <TabsContent value="network" className="space-y-4">
+            <NetworkSection />
           </TabsContent>
 
           <TabsContent value="external-edit" className="space-y-4">

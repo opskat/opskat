@@ -2,50 +2,68 @@ package query
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/connpool"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
 	"github.com/opskat/opskat/internal/service/query_svc"
 	"github.com/opskat/opskat/internal/service/redis_svc"
 	"github.com/opskat/opskat/internal/service/testreg"
+	"github.com/opskat/opskat/pkg/dbdriver"
 
 	"github.com/cago-frame/cago/pkg/logger"
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
 // --- panel 连接缓存助手 ---
 
-// getOrDialPanelDB 从面板缓存取 *sql.DB,所有数据库类型(含远端 SQLite VFS)统一缓存。
-// 远端 SQLite 在会话内只抢一次 .opskat.lock,由缓存的空闲驱逐/关闭统一释放;其 *sql.DB
-// 的 MaxOpenConns=1 让并发面板操作排队复用同一条连接,而非各自重连抢锁、并发时硬失败。
-func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (*sql.DB, func() error, error) {
-	key := panelDBCacheKey(asset.ID, cfg)
-	db, _, err := q.dbPanelCache.GetOrDial(asset.ID, key, func() (*sql.DB, io.Closer, error) {
+// getOrDialPanelDB 从面板缓存取数据库会话,所有驱动(含远端 SQLite VFS)统一缓存。会话由资产
+// 配置的驱动打开并持有,这里拿不到也不需要它底下的连接。
+// 远端 SQLite 在会话内只抢一次 .opskat.lock,由缓存的空闲驱逐/关闭统一释放;其会话底下的
+// 连接数上限为 1,让并发面板操作排队复用同一条连接,而非各自重连抢锁、并发时硬失败。
+//
+// 返回的 cleanup 结束这次占用,操作用完会话后必须调用:在那之前缓存不会把会话当空闲的收走
+// (一次操作可以比空闲时限长,见 connpool.AssetConnCache.Hold)。
+func (q *Query) getOrDialPanelDB(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, password string) (dbdriver.Session, func() error, error) {
+	key, err := panelDBCacheKey(asset.ID, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 会话自己释放它占用的一切,没有单独的隧道 closer 要交给缓存。
+	session, _, err := q.dbPanelCache.GetOrDial(asset.ID, key, func() (dbdriver.Session, io.Closer, error) {
 		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
-		return connpool.DialDatabase(ctx, asset, cfg, password, q.pool)
+		session, err := connpool.OpenDatabase(ctx, asset, cfg, password, q.pool)
+		return session, nil, err
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	return db, func() error { return nil }, nil
+	release := q.dbPanelCache.Hold(key)
+	return session, func() error { release(); return nil }, nil
 }
 
-func panelDBCacheKey(assetID int64, cfg *asset_entity.DatabaseConfig) string {
-	if cfg.Driver == asset_entity.DriverSQLite {
-		return fmt.Sprintf("%d", assetID)
+// panelDBCacheKey 返回面板缓存里这条会话的键。粒度由驱动声明：一条会话只连一个库的驱动
+// 按「资产 + 库」缓存，一条会话覆盖整个资产的驱动（SQLite）按资产缓存。驱动未注册时返回
+// 点名该驱动的 dbregistry.ErrDriverUnavailable。
+func panelDBCacheKey(assetID int64, cfg *asset_entity.DatabaseConfig) (string, error) {
+	driver, err := dbregistry.Lookup(cfg.Driver)
+	if err != nil {
+		return "", err
 	}
-	return fmt.Sprintf("%d:%s", assetID, cfg.Database)
+	if !driver.SessionPerDatabase() {
+		return fmt.Sprintf("%d", assetID), nil
+	}
+	return fmt.Sprintf("%d:%s", assetID, cfg.Database), nil
 }
 
 func finishPanelDBOperation(opErr error, cleanup func() error) error {
@@ -56,24 +74,6 @@ func finishPanelDBOperation(opErr error, cleanup func() error) error {
 		return errors.Join(opErr, fmt.Errorf("释放数据库连接失败: %w", cleanupErr))
 	}
 	return opErr
-}
-
-// getOrDialPanelRedis 从面板缓存取 Redis 客户端。
-func (q *Query) getOrDialPanelRedis(ctx context.Context, asset *asset_entity.Asset, cfg *asset_entity.RedisConfig, password string) (redis.UniversalClient, error) {
-	key := fmt.Sprintf("%d:%d", asset.ID, cfg.Database)
-	client, _, err := q.redisPanelCache.GetOrDial(asset.ID, key, func() (redis.UniversalClient, io.Closer, error) {
-		cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
-		var err error
-		cfg.SentinelPassword, err = credential_resolver.Default().ResolveRedisSentinelPassword(cfg)
-		if err != nil {
-			return nil, nil, fmt.Errorf("解析凭据失败: %w", err)
-		}
-		return connpool.DialRedis(ctx, asset, cfg, password, q.pool)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return client, nil
 }
 
 // getOrDialPanelMongo 从面板缓存取 mongo 客户端。
@@ -108,20 +108,13 @@ func (q *Query) testDatabaseConnection(ctx context.Context, configJSON string, p
 
 	testAsset := &asset_entity.Asset{}
 	cfg.Proxy = credential_resolver.Default().DecryptProxyPassword(cfg.Proxy)
-	db, tunnel, err := connpool.DialDatabase(ctx, testAsset, &cfg, password, q.pool)
+	session, err := connpool.OpenDatabase(ctx, testAsset, &cfg, password, q.pool)
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			logger.Default().Warn("close db failed", zap.Error(err))
-		}
-		if tunnel != nil {
-			if err := tunnel.Close(); err != nil {
-				logger.Default().Warn("close tunnel failed", zap.Error(err))
-			}
-		}
-	}()
+	if err := session.Close(); err != nil {
+		logger.Ctx(ctx).Warn("close database session failed", zap.Error(err))
+	}
 	return nil
 }
 
@@ -163,7 +156,7 @@ func (q *Query) RedisProbe(testID, configJSON, plainPassword, plainSentinelPassw
 	if err != nil {
 		return redis_svc.RedisProbeResult{}, err
 	}
-	return redis_svc.New(q.pool).Probe(ctx, cfg, password)
+	return q.redis.Probe(ctx, cfg, password)
 }
 
 // redisTestConfig 解析表单提交的未保存 Redis 配置，返回代理密码与哨兵密码已为明文的配置
@@ -219,112 +212,167 @@ func (q *Query) ExecuteSQL(assetID int64, sqlText string, database string) (stri
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), queryTimeout(cfg))
 	defer cancel()
 
-	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+	session, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
 	if err != nil {
 		return "", fmt.Errorf("连接数据库失败: %w", err)
 	}
-	result, err := helper.ExecuteSQL(ctx, db, sqlText)
+	result, err := helper.ExecuteSQL(ctx, session, sqlText)
 	if err := finishPanelDBOperation(err, cleanup); err != nil {
 		return "", err
 	}
 	return result, nil
 }
 
-// ExecuteTableImport executes a prepared table import batch on one database session.
-func (q *Query) ExecuteTableImport(
-	assetID int64,
-	database string,
-	request query_svc.TableImportBatchRequest,
-) (*query_svc.TableImportBatchResult, error) {
-	asset, err := asset_svc.Asset().Get(i18n.Ctx(q.ctx, q.lang.Lang()), assetID)
-	if err != nil {
-		return nil, fmt.Errorf("资产不存在: %w", err)
-	}
-	if !asset.IsDatabase() {
-		return nil, fmt.Errorf("资产不是数据库类型")
-	}
-	cfg, err := asset.GetDatabaseConfig()
-	if err != nil {
-		return nil, fmt.Errorf("获取数据库配置失败: %w", err)
-	}
-	if database != "" {
-		cfg.Database = database
-	}
-	password, err := credential_resolver.Default().ResolveDatabasePassword(i18n.Ctx(q.ctx, q.lang.Lang()), cfg)
-	if err != nil {
-		return nil, fmt.Errorf("解析凭据失败: %w", err)
-	}
+// tableImportTimeout 是导入整批执行的时限：整批在一次调用里执行完，不受资产的查询超时限制。
+const tableImportTimeout = 30 * time.Minute
 
-	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Minute)
-	defer cancel()
-
-	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+// ExecuteTableImport 由资产的驱动在会话的一条连接上执行导入的整批语句（复制模式、出错不继续、
+// 忽略外键时由前端调用），返回新增 / 更新 / 删除 / 错误计数。语句里有用户的数据，不进日志。
+func (q *Query) ExecuteTableImport(assetID int64, database string, request query_svc.TableImportBatchRequest) (*query_svc.TableImportBatchResult, error) {
+	log := logger.Ctx(i18n.Ctx(q.ctx, q.lang.Lang())).With(
+		zap.Int64("assetID", assetID), zap.String("database", database), zap.String("table", request.Table),
+		zap.String("mode", request.Mode), zap.Int("statements", len(request.Statements)),
+		zap.Bool("continueOnError", request.ContinueOnError), zap.Bool("disableForeignKeyChecks", request.DisableForeignKeyChecks))
+	log.Info("table import batch start")
+	start := time.Now()
+	var result *query_svc.TableImportBatchResult
+	err := q.withPanelSession(assetID, database, func(*asset_entity.DatabaseConfig) time.Duration { return tableImportTimeout },
+		func(ctx context.Context, session dbdriver.Session, database string) error {
+			var err error
+			result, err = query_svc.RunTableImportBatch(ctx, session, database, request)
+			return err
+		})
 	if err != nil {
-		return nil, fmt.Errorf("连接数据库失败: %w", err)
-	}
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		if cleanupErr := finishPanelDBOperation(nil, cleanup); cleanupErr != nil {
-			return nil, errors.Join(fmt.Errorf("打开数据库会话失败: %w", err), cleanupErr)
-		}
-		return nil, fmt.Errorf("打开数据库会话失败: %w", err)
-	}
-
-	result, err := query_svc.RunTableImportBatch(ctx, query_svc.NewSQLSession(conn), cfg.Driver, request)
-	if closeErr := conn.Close(); closeErr != nil && !isExpectedPanelCloseErr(closeErr) {
-		logger.Default().Warn("close db session failed", zap.Error(closeErr))
-		err = errors.Join(err, fmt.Errorf("关闭数据库会话失败: %w", closeErr))
-	}
-	if err := finishPanelDBOperation(err, cleanup); err != nil {
+		log.Error("table import batch failed", zap.Duration("elapsed", time.Since(start)), zap.Error(err))
 		return nil, err
 	}
+	log.Info("table import batch done", zap.Duration("elapsed", time.Since(start)),
+		zap.Int("processed", result.Processed), zap.Int("errors", result.Error), zap.Bool("rolledBack", result.RolledBack))
 	return result, nil
 }
 
-// OpenTable 一次性返回打开数据表所需的首屏数据。
-func (q *Query) OpenTable(assetID int64, database, table string, pageSize int) (string, error) {
-	asset, err := asset_svc.Asset().Get(i18n.Ctx(q.ctx, q.lang.Lang()), assetID)
-	if err != nil {
-		return "", fmt.Errorf("资产不存在: %w", err)
-	}
-	if !asset.IsDatabase() {
-		return "", fmt.Errorf("资产不是数据库类型")
-	}
-	cfg, err := asset.GetDatabaseConfig()
-	if err != nil {
-		return "", fmt.Errorf("获取数据库配置失败: %w", err)
-	}
-	if database != "" {
-		cfg.Database = database
-	}
-	password, err := credential_resolver.Default().ResolveDatabasePassword(i18n.Ctx(q.ctx, q.lang.Lang()), cfg)
-	if err != nil {
-		return "", fmt.Errorf("解析凭据失败: %w", err)
-	}
+// schemaBatchTimeout 是表结构整批执行的时限：建索引、改列类型在大表上可能很久，整批在一次调用里
+// 执行完，不受资产的查询超时限制（同导入）。
+const schemaBatchTimeout = 30 * time.Minute
 
-	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), queryTimeout(cfg))
-	defer cancel()
-
-	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+// ExecuteSchemaStatements 由资产的驱动在会话的一条连接上执行表设计器保存的整批表结构语句（驱动
+// 生成、确认框里列出的那些）：驱动声明了表结构语句可回滚（Descriptor.TransactionalDDL）时整批原子执行，
+// 否则逐条执行、停在第一条失败；返回逐条的结果与是否回滚。只读连接由驱动在会话上拒绝写入，结果里
+// 是第一条语句失败。语句里可能有用户的数据（默认值、注释），不进日志。
+func (q *Query) ExecuteSchemaStatements(assetID int64, database string, statements []string) (*query_svc.SchemaBatchResult, error) {
+	log := logger.Ctx(i18n.Ctx(q.ctx, q.lang.Lang())).With(
+		zap.Int64("assetID", assetID), zap.String("database", database), zap.Int("statements", len(statements)))
+	log.Info("schema batch start")
+	start := time.Now()
+	panel, err := q.acquirePanelSession(assetID, database, func(*asset_entity.DatabaseConfig) time.Duration {
+		return schemaBatchTimeout
+	})
 	if err != nil {
-		return "", fmt.Errorf("连接数据库失败: %w", err)
+		log.Error("schema batch failed", zap.Duration("elapsed", time.Since(start)), zap.Error(err))
+		return nil, err
 	}
-	result, opErr := query_svc.OpenTable(ctx, db, cfg.Driver, cfg.Database, table, pageSize)
-	var payload []byte
-	if opErr == nil {
-		payload, err = json.Marshal(result)
+	// 描述取自打开会话的那个驱动：声明与执行语句的会话必然属于同一个驱动。
+	var result *query_svc.SchemaBatchResult
+	err = panel.finish(func() error {
+		driver, err := dbregistry.Lookup(panel.driver)
 		if err != nil {
-			opErr = fmt.Errorf("序列化结果失败: %w", err)
+			return err
 		}
+		result, err = query_svc.RunSchemaBatch(panel.ctx, panel.session, driver.Descriptor(), panel.database, statements)
+		return err
+	}())
+	if err != nil {
+		log.Error("schema batch failed", zap.Duration("elapsed", time.Since(start)), zap.Error(err))
+		return nil, err
 	}
-	if err := finishPanelDBOperation(opErr, cleanup); err != nil {
+	failed := slices.IndexFunc(result.Statements, func(s query_svc.SchemaStatementResult) bool {
+		return s.Status == query_svc.SchemaStatementFailed
+	})
+	fields := []zap.Field{zap.Duration("elapsed", time.Since(start)), zap.String("driver", string(panel.driver)),
+		zap.Bool("atomic", result.Atomic), zap.Bool("rolledBack", result.RolledBack)}
+	if failed >= 0 {
+		// 数据库的错误可能引用数据（如唯一索引的重复值），只记失败的是第几条；批本身的错误（回滚失败）照记。
+		log.Warn("schema batch stopped at a failed statement", append(fields,
+			zap.Int("failedIndex", failed), zap.String("batchError", result.Error))...)
+		return result, nil
+	}
+	log.Info("schema batch done", fields...)
+	return result, nil
+}
+
+// defaultTablePageSize 是打开表时没有给出每页行数（<= 0）时用的行数。
+const defaultTablePageSize = 1000
+
+// withTableSession 在资产的驱动会话上运行一次表浏览（打开表 / 取一页 / 计数），并记录它的
+// 开始、结束与失败。筛选条件里有用户的数据，不进日志。
+func (q *Query) withTableSession(op string, assetID int64, database, table string, fn func(ctx context.Context, session dbdriver.Session, database string) error) error {
+	log := logger.Ctx(i18n.Ctx(q.ctx, q.lang.Lang())).With(
+		zap.String("op", op), zap.Int64("assetID", assetID), zap.String("database", database), zap.String("table", table))
+	log.Debug("table browse start")
+	start := time.Now()
+	if err := q.withObjectSession(assetID, database, fn); err != nil {
+		log.Error("table browse failed", zap.Duration("elapsed", time.Since(start)), zap.Error(err))
+		return err
+	}
+	log.Debug("table browse done", zap.Duration("elapsed", time.Since(start)))
+	return nil
+}
+
+// OpenTable 一次性返回打开数据表所需的首屏数据：列、类型、列约束、主键、总行数与第一页。
+// 由资产的驱动在自己的会话上完成。
+func (q *Query) OpenTable(assetID int64, database, table string, pageSize int) (string, error) {
+	if pageSize <= 0 {
+		pageSize = defaultTablePageSize
+	}
+	var payload []byte
+	err := q.withTableSession("open", assetID, database, table, func(ctx context.Context, session dbdriver.Session, database string) error {
+		opened, err := session.OpenTable(ctx, database, table, pageSize)
+		if err != nil {
+			return err
+		}
+		payload, err = json.Marshal(query_svc.NewOpenTableResult(opened, pageSize))
+		if err != nil {
+			return fmt.Errorf("序列化结果失败: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
 		return "", err
 	}
 	return string(payload), nil
 }
 
-// ExecuteSQLPaged 在指定数据库资产上执行分页 SQL 查询（SELECT/WITH 子查询包装）
-func (q *Query) ExecuteSQLPaged(assetID int64, sqlText string, database string, page int, pageSize int) (string, error) {
+// QueryTableRows 按结构化的筛选条件与排序项取表里的一页。请求里没有 SQL：怎么把条件变成
+// 查询由资产的驱动决定。
+func (q *Query) QueryTableRows(assetID int64, database, table string, request query_svc.TableRowsRequest) (*query_svc.TableRows, error) {
+	var result *query_svc.TableRows
+	err := q.withTableSession("rows", assetID, database, table, func(ctx context.Context, session dbdriver.Session, database string) error {
+		rowSet, err := session.TableRows(ctx, database, table,
+			dbdriver.TableQuery{Filters: request.Filters, Sorts: request.Sorts},
+			dbdriver.Page{Index: request.Page, Size: request.PageSize})
+		if err != nil {
+			return err
+		}
+		result = query_svc.NewTableRows(rowSet)
+		return nil
+	})
+	return result, err
+}
+
+// CountTableRows 返回表里符合筛选条件的行数；没有条件时是表的总行数。
+func (q *Query) CountTableRows(assetID int64, database, table string, filters []dbdriver.FilterItem) (int64, error) {
+	var total int64
+	err := q.withTableSession("count", assetID, database, table, func(ctx context.Context, session dbdriver.Session, database string) error {
+		count, err := session.CountTableRows(ctx, database, table, filters)
+		total = count
+		return err
+	})
+	return total, err
+}
+
+// ExecuteSQLPaged 在指定数据库资产上执行分页 SQL 查询；怎么分页与计数由资产的驱动决定。
+// skipTotal：调用方已有这条语句的总数（翻页、改页大小），不再计数，结果不带 total_count。
+func (q *Query) ExecuteSQLPaged(assetID int64, sqlText string, database string, page int, pageSize int, skipTotal bool) (string, error) {
 	asset, err := asset_svc.Asset().Get(i18n.Ctx(q.ctx, q.lang.Lang()), assetID)
 	if err != nil {
 		return "", fmt.Errorf("资产不存在: %w", err)
@@ -347,11 +395,11 @@ func (q *Query) ExecuteSQLPaged(assetID int64, sqlText string, database string, 
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), queryTimeout(cfg))
 	defer cancel()
 
-	db, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
+	session, cleanup, err := q.getOrDialPanelDB(ctx, asset, cfg, password)
 	if err != nil {
 		return "", fmt.Errorf("连接数据库失败: %w", err)
 	}
-	result, err := helper.ExecuteSQLPaged(ctx, db, sqlText, page, pageSize, cfg.Driver)
+	result, err := helper.ExecuteSQLPaged(ctx, session, sqlText, dbdriver.Page{Index: page, Size: pageSize, SkipTotal: skipTotal})
 	if err := finishPanelDBOperation(err, cleanup); err != nil {
 		return "", err
 	}
@@ -375,18 +423,14 @@ func (q *Query) ExecuteRedis(assetID int64, command string, scope string) (strin
 	if err := helper.ApplyRedisScope(cfg, scope); err != nil {
 		return "", err
 	}
-	password, err := credential_resolver.Default().ResolveRedisPassword(i18n.Ctx(q.ctx, q.lang.Lang()), cfg)
-	if err != nil {
-		return "", fmt.Errorf("解析凭据失败: %w", err)
-	}
-
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Second)
 	defer cancel()
 
-	client, err := q.getOrDialPanelRedis(ctx, asset, cfg, password)
+	client, release, err := q.redis.Client(ctx, asset, cfg)
 	if err != nil {
 		return "", fmt.Errorf("连接 Redis 失败: %w", err)
 	}
+	defer release()
 
 	return helper.ExecuteRedis(ctx, client, command, scope)
 }
@@ -546,18 +590,14 @@ func (q *Query) ExecuteRedisArgs(assetID int64, args []string, scope string) (st
 	if err := helper.ApplyRedisScope(cfg, scope); err != nil {
 		return "", err
 	}
-	password, err := credential_resolver.Default().ResolveRedisPassword(i18n.Ctx(q.ctx, q.lang.Lang()), cfg)
-	if err != nil {
-		return "", fmt.Errorf("解析凭据失败: %w", err)
-	}
-
 	ctx, cancel := context.WithTimeout(i18n.Ctx(q.ctx, q.lang.Lang()), 30*time.Second)
 	defer cancel()
 
-	client, err := q.getOrDialPanelRedis(ctx, asset, cfg, password)
+	client, release, err := q.redis.Client(ctx, asset, cfg)
 	if err != nil {
 		return "", fmt.Errorf("连接 Redis 失败: %w", err)
 	}
+	defer release()
 
 	return helper.ExecuteRedisRaw(ctx, client, args, scope)
 }

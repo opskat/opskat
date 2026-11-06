@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -59,6 +60,13 @@ func cpWithLocalWriteGate(ctx context.Context, decision string) (context.Context
 		return permission.ApprovalResponse{Decision: decision}
 	})
 	return helper.WithLocalWriteGate(ctx, gate), reqs
+}
+
+func TestCpDestinationScopeKeepsRemoteSlashOnWindows(t *testing.T) {
+	got := cpDestinationScope(&cpEndpoint{asset: &asset_entity.Asset{Type: "ssh"}, path: "/var/log/app.log"})
+	if got != "/var/log" {
+		t.Fatalf("remote scope = %q, want /var/log", got)
+	}
 }
 
 // TestCpAutoAllowedTransferGatesTheLocalWrite 锁住 §6.2「本地端点不产生审批项」那条规则的
@@ -145,7 +153,7 @@ func TestCpAutoAllowedRecursiveGatesEveryLandingPathAtOnce(t *testing.T) {
 		So(err, ShouldNotBeNil)
 		So(*seen, ShouldHaveLength, 0)
 		So(*reqs, ShouldHaveLength, 1)
-		So((*reqs)[0].SubCommands, ShouldResemble, []string{dir + "/"})
+		So((*reqs)[0].SubCommands, ShouldResemble, []string{dir + string(filepath.Separator)})
 		So(cpFake.written, ShouldBeEmpty)
 		_, statErr := os.Stat(filepath.Join(dir, "a.log"))
 		So(os.IsNotExist(statErr), ShouldBeTrue)
@@ -442,9 +450,16 @@ func TestCpReportsEachCompletedEntryToAnInteractiveCaller(t *testing.T) {
 		})
 
 		So(err, ShouldBeNil)
+		// 条目并发传输，进度按完成顺序到达：Completed 逐条递增，每条恰好报一次。
+		So(progress, ShouldHaveLength, 2)
+		for i := range progress {
+			So(progress[i].Completed, ShouldEqual, i+1)
+			progress[i].Completed = 0
+		}
+		sort.Slice(progress, func(i, j int) bool { return progress[i].Src < progress[j].Src })
 		So(progress, ShouldResemble, []CpProgress{
-			{Completed: 1, Total: 2, Src: "/src/a.log", Dst: "/backup/a.log", Bytes: 5},
-			{Completed: 2, Total: 2, Src: "/src/bb.log", Dst: "/backup/bb.log", Bytes: 6},
+			{Total: 2, Src: "/src/a.log", Dst: "/backup/a.log", Bytes: 5},
+			{Total: 2, Src: "/src/bb.log", Dst: "/backup/bb.log", Bytes: 6},
 		})
 	})
 }
@@ -474,6 +489,8 @@ func TestCpGlobFormRequiresTrailingSlash(t *testing.T) {
 // TestCpMultiSourceFastFailsAndReportsProgress 锁 D19 的快速失败：任一条出错立即中止，
 // 报出已传输 N/M 并点名失败的那条。不是 POSIX cp 的"继续并最终非零"——每个已传输的字节
 // 都是一次已批准的副作用，出意外后继续会留下一个看起来完整、实际残缺的目的地。
+// 条目并发传输，失败之前哪几条已经落地不确定；确定的是报出的 N 就是实际落地的条数。
+// "其余条目被取消、窗口外的不再开始"由 TestCpMultiSourceFirstErrorCancelsTheRest 确定性地锁住。
 func TestCpMultiSourceFastFailsAndReportsProgress(t *testing.T) {
 	Convey("首个传输失败即中止，报出 N/M 与失败条目", t, func() {
 		ctx, _ := setupCpDialogs(t, "allow", "allow")
@@ -486,15 +503,18 @@ func TestCpMultiSourceFastFailsAndReportsProgress(t *testing.T) {
 		})
 
 		So(err, ShouldNotBeNil)
-		So(err.Error(), ShouldContainSubstring, "1/3")
 		So(err.Error(), ShouldContainSubstring, "/src/b.log")
 
-		// 第一条已经落地——那是一次已批准的副作用，报出来而不是假装没发生；
-		// 第三条则根本没被尝试。
-		first, readErr := os.ReadFile(filepath.Join(dir, "a.log")) //nolint:gosec // 测试自己造的临时路径
-		So(readErr, ShouldBeNil)
-		So(string(first), ShouldEqual, "a.log")
-		_, statErr := os.Stat(filepath.Join(dir, "c.log"))
+		// 已经落地的条目是已批准的副作用，报出来而不是假装没发生：N 与磁盘上的一致。
+		landed := 0
+		for _, name := range []string{"a.log", "c.log"} {
+			if content, readErr := os.ReadFile(filepath.Join(dir, name)); readErr == nil { //nolint:gosec // 测试自己造的临时路径
+				So(string(content), ShouldEqual, name)
+				landed++
+			}
+		}
+		So(err.Error(), ShouldContainSubstring, fmt.Sprintf("transferred %d/3 entries", landed))
+		_, statErr := os.Stat(filepath.Join(dir, "b.log"))
 		So(os.IsNotExist(statErr), ShouldBeTrue)
 	})
 }

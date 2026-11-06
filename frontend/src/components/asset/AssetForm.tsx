@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from "react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { useTranslation } from "react-i18next";
@@ -23,6 +23,7 @@ import { EncryptPassword } from "../../../wailsjs/go/system/System";
 import { CancelTest, TestAssetConnection } from "../../../wailsjs/go/system/System";
 import { useCustomTypeStore } from "@/stores/customTypeStore";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
+import { AssetTypeSectionSuspense } from "@/components/asset/AssetTypeSectionSuspense";
 import { useAssetTypeOptions, getAssetTypeLabel } from "@/lib/assetTypes/options";
 import { getAssetType } from "@/lib/assetTypes";
 import type {
@@ -32,6 +33,7 @@ import type {
   AssetTestResult,
   SectionValidity,
 } from "@/lib/assetTypes/formContract";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface AssetFormProps {
   open: boolean;
@@ -62,8 +64,11 @@ type AssetType =
   | "rdp"
   | (string & {});
 
+const NO_SECTION_VALIDITY: SectionValidity = { canTest: false, canSave: false };
+
 const DEFAULT_ICONS: Record<string, string> = {
   ssh: "server",
+  database: "database",
   mysql: "mysql",
   postgresql: "postgresql",
   mssql: "sqlserver",
@@ -107,7 +112,19 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   // 注册化类型走通用 ConfigSection 路径:section 自持 state,经 ref 暴露 build*。
   const sectionRef = useRef<AssetFormHandle>(null);
-  const [validity, setValidity] = useState<SectionValidity>({ canTest: false, canSave: false });
+  // 区块按 类型+子类型 重挂载（通用资产换自定义类型也要换区块）。
+  const sectionKey = `${assetType}:${typeVariant ?? ""}`;
+  // validity 记着是哪个区块报的：区块按需加载，换类型/子类型后新区块挂上之前，
+  // 上一个区块的 canSave/canTest 不能沿用。
+  const [sectionValidity, setSectionValidity] = useState<{ key: string; value: SectionValidity }>({
+    key: sectionKey,
+    value: NO_SECTION_VALIDITY,
+  });
+  const validity = sectionValidity.key === sectionKey ? sectionValidity.value : NO_SECTION_VALIDITY;
+  const reportValidity = useCallback(
+    (value: SectionValidity) => setSectionValidity({ key: sectionKey, value }),
+    [sectionKey]
+  );
   const ctx: AssetFormContext = useMemo(() => ({ isEdit: !!editAsset, encryptPassword: EncryptPassword }), [editAsset]);
 
   // 复位测试状态：open 切换时一律清掉上一次表单的 testing 残留（渲染期对比），
@@ -170,7 +187,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     if (newType === assetType && variant === typeVariant) return;
     setAssetType(newType);
     setTypeVariant(variant);
-    setIcon(defaultIcon ?? (newType === "database" ? "mysql" : formIconFor(newType)));
+    setIcon(defaultIcon ?? formIconFor(newType));
   };
 
   // 静默取消正在进行的测试（用于保存/关闭对话框等退出动作）。无 in-flight 测试时是 no-op。
@@ -197,7 +214,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     let cancelAttempt = () => {
       cancelled = true;
     };
-    let errorMessage: AssetTestAttempt["errorMessage"];
+    let attemptErrorMessage: AssetTestAttempt["errorMessage"];
     const active = {
       token,
       cancel: () => {
@@ -230,7 +247,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         };
       }
       cancelAttempt = attempt.cancel;
-      errorMessage = attempt.errorMessage;
+      attemptErrorMessage = attempt.errorMessage;
       if (cancelled) attempt.cancel();
       const result = await attempt.result;
       if (activeTestRef.current?.token === token) {
@@ -244,7 +261,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       }
     } catch (e) {
       if (activeTestRef.current?.token === token) {
-        toast.error(errorMessage?.(e) ?? `${t("asset.testConnectionFailed")}: ${String(e)}`);
+        toast.error(attemptErrorMessage?.(e) ?? `${t("asset.testConnectionFailed")}: ${errorMessage(e)}`);
       }
     } finally {
       if (activeTestRef.current?.token === token) {
@@ -265,7 +282,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       }
       onOpenChange(false);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -282,7 +299,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     try {
       built = await sectionRef.current.buildConfig(ctx);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(errorMessage(e));
       return;
     }
     const asset = new asset_entity.Asset({
@@ -408,15 +425,17 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
             {/* 每种类型的配置区块都来自注册表（内置手写、扩展由 configSchema 生成） */}
             {sectionDef?.ConfigSection && (
-              <sectionDef.ConfigSection
-                key={`${assetType}:${typeVariant ?? ""}`}
-                ref={sectionRef}
-                editAsset={editAsset ?? undefined}
-                ctx={ctx}
-                onValidityChange={setValidity}
-                onIconChange={setIcon}
-                variant={typeVariant}
-              />
+              <AssetTypeSectionSuspense>
+                <sectionDef.ConfigSection
+                  key={sectionKey}
+                  ref={sectionRef}
+                  editAsset={editAsset ?? undefined}
+                  ctx={ctx}
+                  onValidityChange={reportValidity}
+                  onIconChange={setIcon}
+                  variant={typeVariant}
+                />
+              </AssetTypeSectionSuspense>
             )}
 
             {/* Description(折叠成一行,贴近 footer) */}

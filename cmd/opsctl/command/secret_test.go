@@ -3,8 +3,6 @@ package command
 import (
 	"context"
 	"errors"
-	"io"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,29 +42,6 @@ func createOpsctlGrafanaAsset(ctx context.Context, name, host, tokenPlain string
 // docs/specs/2026-09-28-generic-asset.md「取值」: `opsctl secret get <asset> <field>`
 // shares its execution with the get_asset_secret AI tool via tool.AllToolDefs(); these
 // tests drive cmdSecret directly, the same entry point Execute()'s "secret" case reaches.
-
-// captureStdout mirrors captureStderr (exec_test.go) for the one command whose success
-// output this task's spec pins down exactly ("prints the raw value followed by a
-// newline") — stderr alone can't tell a pretty-printed JSON reformat from the raw value.
-func captureStdout(t *testing.T, f func()) string {
-	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	orig := os.Stdout
-	os.Stdout = w
-	f()
-	if err := w.Close(); err != nil {
-		t.Fatalf("close pipe writer: %v", err)
-	}
-	os.Stdout = orig
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read pipe: %v", err)
-	}
-	return string(data)
-}
 
 func setupOpsctlSecretHandlers(t *testing.T) map[string]tool.ToolHandlerFunc {
 	t.Helper()

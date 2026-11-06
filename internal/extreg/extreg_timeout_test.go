@@ -19,8 +19,8 @@ import (
 // not the host's 30s default, is what stops it.
 func TestExecHonoursToolDeclaredTimeout(t *testing.T) {
 	ext := extensiontest.LoadFixture(t)
-	require.NoError(t, Register(ext))
-	t.Cleanup(func() { Unregister(ext.Name) })
+	require.NoError(t, attachExtension(ext))
+	t.Cleanup(func() { detach(ext.Name) })
 
 	execFn, ok := permission.ExecutorFor("fixture")
 	require.True(t, ok)

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { EventsOn } from "../../../wailsjs/runtime/runtime";
 import type { extstore_svc } from "../../../wailsjs/go/models";
 import type { CardInstall, StoreCard, StoreProgress } from "./ExtensionStore";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface StoreInstallsState {
   /** Store installs in flight or failed, by extension name. */
@@ -61,7 +62,7 @@ export function useStoreInstalls(
       result = await onInstall(card);
     } catch (e) {
       setInstall(card.name, null);
-      toast.error(`${t("extension.installError")}: ${String(e)}`);
+      toast.error(`${t("extension.installError")}: ${errorMessage(e)}`);
       return;
     }
     if (result.error) {
@@ -71,7 +72,7 @@ export function useStoreInstalls(
     setInstall(card.name, null);
     if (result.canceled) return;
     // The install landed; failing to re-read the store afterwards is not an install error.
-    await onLanded().catch((e) => toast.error(String(e)));
+    await onLanded().catch((e) => toast.error(errorMessage(e)));
   };
 
   return { installs, install };

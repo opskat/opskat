@@ -16,7 +16,7 @@ func newHostSession(host HostProvider) *hostSession {
 }
 
 func (s *hostSession) Open(params IOOpenParams) (uint32, IOMeta, error) {
-	res, err := s.host.OpenIO(context.Background(), nil, params)
+	res, err := s.host.OpenIO(withInvocation(context.Background(), s.inv), nil, params)
 	if err != nil {
 		return 0, IOMeta{}, err
 	}

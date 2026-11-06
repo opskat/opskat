@@ -292,7 +292,7 @@ opsctl ext search                          # official store, via the running app
 opsctl ext install es                      # store install: the app's install confirm asks;
                                            # declined / failed / incompatible → exit 1 + reason
 opsctl exec my-bucket -- list_objects --bucket=logs   # extension tool: same exec verb,
-                                           # executed by the running desktop app
+                                           # run inside opsctl (no desktop app needed)
 ```
 
 Global flags worth knowing for testing:

@@ -1,10 +1,17 @@
 import { create } from "zustand";
-import { ExecuteSQL, GetTableMetadata, ListDatabaseObjects } from "../../wailsjs/go/query/Query";
+import { GetTableMetadata, ListDatabaseObjects, ListDatabases, ListTables } from "../../wailsjs/go/query/Query";
 import { RedisGetKeyDetail, RedisListDatabases, RedisScanKeys } from "../../wailsjs/go/redis/Redis";
 import { ListMongoDatabases, ListMongoCollections } from "../../wailsjs/go/query/Query";
 import { asset_entity, query_svc } from "../../wailsjs/go/models";
 import { useTabStore, registerTabCloseHook, registerTabRestoreHook, type QueryTabMeta } from "./tabStore";
 import { useAssetStore } from "./assetStore";
+import {
+  OBJECT_BROWSER_CAPABILITIES,
+  driverHasCapability,
+  findDatabaseDriver,
+  loadDatabaseDrivers,
+} from "../lib/dbDrivers";
+import { errorMessage } from "@/lib/errorMessage";
 
 // --- Types ---
 
@@ -22,8 +29,18 @@ export interface QueryTab {
   redisMode?: "standalone" | "cluster" | "sentinel";
 }
 
+/**
+ * 表设计器标签。view:只读查看结构;design:设计已有的表;create:在 database(有 schema 的驱动还有 schema,
+ * 空表示驱动的默认 schema)里新建表(还没有表名)。每张已有的表只开一个(id 按库与表),草稿不持久化:
+ * 恢复后重新读取表结构,新建表回到预置的样子。
+ */
+export type DesignerInnerTab =
+  | { id: string; type: "designer"; mode: "view" | "design"; database: string; table: string }
+  | { id: string; type: "designer"; mode: "create"; database: string; schema?: string };
+
 export type InnerTab =
   | { id: string; type: "table"; database: string; table: string; pendingLoad?: boolean }
+  | DesignerInnerTab
   | {
       id: string;
       type: "sql";
@@ -46,6 +63,24 @@ export interface DatabaseTabState {
   error: string | null;
   tableMeta?: Record<string, query_svc.TableMetadata>; // "db.table" -> metadata
   objects?: Record<string, query_svc.DatabaseObjects>; // db -> objects
+  /** 「在左侧树中定位」请求;nonce 递增让同一张表的重复请求也能再次触发树的响应。不持久化。 */
+  revealRequest?: { nonce: number; db: string; table: string };
+  /** 已分配过的最大 SQL 标签序号;只增不减,关闭标签后序号不复用。 */
+  sqlTabSeq?: number;
+  /** 有未提交修改的内层标签(由各 TableDataTab 上报)。不持久化。 */
+  dirtyInnerTabIds?: string[];
+  /**
+   * 涉及有未提交修改的标签、等待用户决定的关闭请求。不持久化。
+   * 只有一个脏标签时由该 TableDataTab 弹三选项对话框(可提交后再关),多个时由 DatabasePanel 弹批量对话框;
+   * 决定前一个都不关,确认后 forceCloseInnerTabs 关掉 ids 全部(closeOuter 时连外层数据库标签一起关)。
+   */
+  closeRequest?: InnerTabCloseRequest;
+}
+
+export interface InnerTabCloseRequest {
+  ids: string[];
+  dirtyIds: string[];
+  closeOuter: boolean;
 }
 
 const REDIS_PAGE_SIZE = 100;
@@ -141,9 +176,35 @@ interface QueryState {
   refreshTables: (tabId: string, database: string) => Promise<void>;
   toggleDbExpand: (tabId: string, database: string) => void;
   toggleSchemaExpand: (tabId: string, database: string, schema: string) => void;
+  revealTable: (tabId: string, database: string, table: string) => void;
   openTableTab: (tabId: string, database: string, table: string) => void;
+  /** 打开某张表的设计器标签;这张表已有设计器标签时切过去(不改它的模式)。 */
+  openDesignerTab: (tabId: string, database: string, table: string, mode: "view" | "design") => void;
+  /**
+   * 设计器保存时改了表名:标签跟随新名字(id、表名;当前标签、脏标记与挂起的关闭请求里的 id 一并换掉)。
+   * 新名字已有设计器标签时去掉那个旧的。
+   */
+  renameDesignerTab: (tabId: string, innerTabId: string, table: string) => void;
+  /**
+   * 打开在 database(与 schema)里新建表的设计器标签。同一目标已有还没动过的新建表标签时切过去,否则另开一个。
+   */
+  openCreateTableTab: (tabId: string, database: string, schema?: string) => void;
+  /** 新建表的目标库(与 schema)改了。 */
+  retargetCreateTab: (tabId: string, innerTabId: string, database: string, schema?: string) => void;
+  /**
+   * 新建表成功:标签换成这张表的设计标签(id、当前标签、脏标记与挂起的关闭请求里的 id 一并换掉)。这张表
+   * 已有设计器标签时去掉那个旧的。
+   */
+  completeCreateTab: (tabId: string, innerTabId: string, table: string) => void;
   openSqlTab: (tabId: string, database?: string, sql?: string) => void;
   closeInnerTab: (tabId: string, innerTabId: string) => void;
+  closeOtherInnerTabs: (tabId: string, innerTabId: string) => void;
+  closeRightInnerTabs: (tabId: string, innerTabId: string) => void;
+  setInnerTabDirty: (tabId: string, innerTabId: string, dirty: boolean) => void;
+  /** 关闭内层标签的唯一入口:都没有未提交修改时直接关,否则挂起 closeRequest 等用户决定。 */
+  requestCloseInnerTabs: (tabId: string, ids: string[], opts?: { closeOuter?: boolean }) => void;
+  forceCloseInnerTabs: (tabId: string, ids: string[], closeOuter?: boolean) => void;
+  cancelCloseRequest: (tabId: string) => void;
   setActiveInnerTab: (tabId: string, innerTabId: string) => void;
   updateInnerTab: (tabId: string, innerTabId: string, patch: Record<string, unknown>) => void;
   markTableTabLoaded: (tabId: string, innerTabId: string) => void;
@@ -183,6 +244,34 @@ function makeTabId(assetId: number) {
   return `query-${assetId}`;
 }
 
+/** 新建表标签 id 的序号(与时间一起保证不与恢复出来的标签重复)。 */
+let createTabSeq = 0;
+
+/**
+ * 把一个内层标签换成 next(id 可以不同):当前标签、脏标记与挂起的关闭请求里的 id 一并换掉;已有与 next 同 id
+ * 的其他标签时去掉它。
+ */
+function replaceInnerTab(state: DatabaseTabState, innerTabId: string, next: InnerTab): DatabaseTabState {
+  const swap = (id: string) => (id === innerTabId ? next.id : id);
+  const others = (id: string) => id === innerTabId || id !== next.id;
+  return {
+    ...state,
+    innerTabs: state.innerTabs.filter((t) => others(t.id)).map((t) => (t.id === innerTabId ? next : t)),
+    activeInnerTabId: state.activeInnerTabId && swap(state.activeInnerTabId),
+    dirtyInnerTabIds: state.dirtyInnerTabIds?.filter(others).map(swap),
+    closeRequest: state.closeRequest && {
+      ...state.closeRequest,
+      ids: state.closeRequest.ids.filter(others).map(swap),
+      dirtyIds: state.closeRequest.dirtyIds.filter(others).map(swap),
+    },
+  };
+}
+
+/** 已有表的设计器标签 id:每张表一个。 */
+export function designerTabId(database: string, table: string) {
+  return `designer:${database}.${table}`;
+}
+
 function defaultDbState(): DatabaseTabState {
   return {
     databases: [],
@@ -196,6 +285,7 @@ function defaultDbState(): DatabaseTabState {
     error: null,
     tableMeta: {},
     objects: {},
+    sqlTabSeq: 0,
   };
 }
 
@@ -250,13 +340,6 @@ function hasRedisMatchWildcard(pattern: string): boolean {
 export interface RedisStreamEntry {
   id: string;
   fields: Record<string, string>;
-}
-
-interface SQLResult {
-  columns?: string[];
-  rows?: Record<string, unknown>[];
-  count?: number;
-  affected_rows?: number;
 }
 
 interface RedisKeyDetailResult {
@@ -346,59 +429,10 @@ function getQueryTabFromTabStore(tabId: string): QueryTab | undefined {
   };
 }
 
-function buildLoadDatabasesSQL(driver?: string): string {
-  if (driver === "postgresql") {
-    return "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname";
-  }
-  if (driver === "sqlite") {
-    return "SELECT name FROM pragma_database_list ORDER BY seq";
-  }
-  if (driver === "mssql") {
-    // MSSQL 无 SHOW DATABASES；database_id > 4 跳过 master/tempdb/model/msdb 系统库。
-    return "SELECT name FROM sys.databases WHERE database_id > 4 ORDER BY name";
-  }
-  return "SHOW DATABASES";
-}
-
-function parseDatabases(driver: string | undefined, rows: Record<string, unknown>[] | undefined): string[] {
-  const databases = (rows || [])
-    .map((r) => {
-      if (driver === "sqlite" && r.name != null) return String(r.name);
-      const vals = Object.values(r);
-      return String(vals[0] || "");
-    })
-    .filter(Boolean);
-  return driver === "sqlite" && databases.length === 0 ? ["main"] : databases;
-}
-
-function buildLoadTablesSQL(driver: string | undefined, database: string): string {
-  if (driver === "postgresql") {
-    return (
-      "SELECT table_schema || '.' || table_name AS name FROM information_schema.tables " +
-      "WHERE table_schema NOT IN ('pg_catalog', 'information_schema') " +
-      "AND table_type IN ('BASE TABLE', 'VIEW') ORDER BY table_schema, table_name"
-    );
-  }
-  if (driver === "sqlite") {
-    const schema = database ? quoteSQLiteIdent(database) : "main";
-    return `SELECT name FROM ${schema}.sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name`;
-  }
-  if (driver === "mssql") {
-    // MSSQL 无 SHOW TABLES；列成 schema.table，与后端 OpenTable 的 schema 拆分对齐。
-    return (
-      "SELECT TABLE_SCHEMA + '.' + TABLE_NAME AS name FROM INFORMATION_SCHEMA.TABLES " +
-      "WHERE TABLE_TYPE IN ('BASE TABLE', 'VIEW') ORDER BY TABLE_SCHEMA, TABLE_NAME"
-    );
-  }
-  return `SHOW TABLES FROM \`${database}\``;
-}
-
-function quoteSQLiteIdent(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
-}
-
-function isSchemaAwareDriver(driver: string | undefined): boolean {
-  return driver === "postgresql" || driver === "mssql";
+/** 资产所用驱动的描述;驱动没有注册时为 undefined。描述加载失败则抛出,由调用方当作该次加载的失败。 */
+async function describeTabDriver(tab: QueryTab) {
+  const drivers = await loadDatabaseDrivers();
+  return tab.driver ? findDatabaseDriver(drivers, tab.driver) : undefined;
 }
 
 function schemaNamesFromTables(tables: string[]): string[] {
@@ -529,10 +563,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     }));
 
     try {
-      const sql = buildLoadDatabasesSQL(tab.driver);
-      const result = await ExecuteSQL(tab.assetId, sql, "");
-      const parsed: SQLResult = JSON.parse(result);
-      const databases = parseDatabases(tab.driver, parsed.rows);
+      const databases = await ListDatabases(tab.assetId);
 
       set((s) => ({
         dbStates: {
@@ -549,7 +580,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       set((s) => ({
         dbStates: {
           ...s.dbStates,
-          [tabId]: { ...s.dbStates[tabId], loadingDbs: false, error: String(err) },
+          [tabId]: { ...s.dbStates[tabId], loadingDbs: false, error: errorMessage(err) },
         },
       }));
     }
@@ -570,15 +601,8 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     }));
 
     try {
-      const sql = buildLoadTablesSQL(tab.driver, database);
-      const result = await ExecuteSQL(tab.assetId, sql, database);
-      const parsed: SQLResult = JSON.parse(result);
-      const tables = (parsed.rows || [])
-        .map((r) => {
-          const vals = Object.values(r);
-          return String(vals[0] || "");
-        })
-        .filter(Boolean);
+      const descriptor = await describeTabDriver(tab);
+      const tables = await ListTables(tab.assetId, database);
 
       set((s) => ({
         dbStates: {
@@ -589,7 +613,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
             const nextExpanded = reconcileExpandedSchemas(
               state.expandedSchemas[database],
               schemas,
-              isSchemaAwareDriver(tab.driver)
+              driverHasCapability(descriptor, "schemas")
             );
             return {
               ...state,
@@ -613,7 +637,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
             ...s.dbStates[tabId],
             tables: { ...s.dbStates[tabId].tables, [database]: [] },
             loadingTables: { ...s.dbStates[tabId].loadingTables, [database]: false },
-            error: s.dbStates[tabId]?.error || String(err),
+            error: s.dbStates[tabId]?.error || errorMessage(err),
           },
         },
       }));
@@ -661,6 +685,27 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     }));
   },
 
+  revealTable: (tabId, database, table) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    if (!state.tables[database] && !state.loadingTables[database]) {
+      get().loadTables(tabId, database);
+    }
+    set((s) => {
+      const cur = s.dbStates[tabId];
+      return {
+        dbStates: {
+          ...s.dbStates,
+          [tabId]: {
+            ...cur,
+            expandedDbs: cur.expandedDbs.includes(database) ? cur.expandedDbs : [...cur.expandedDbs, database],
+            revealRequest: { nonce: (cur.revealRequest?.nonce ?? 0) + 1, db: database, table },
+          },
+        },
+      };
+    });
+  },
+
   openTableTab: (tabId, database, table) => {
     const state = get().dbStates[tabId];
     if (!state) return;
@@ -683,16 +728,95 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     }));
   },
 
+  openDesignerTab: (tabId, database, table, mode) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const innerId = designerTabId(database, table);
+    const existing = state.innerTabs.find((t) => t.id === innerId);
+    const tab: InnerTab = { id: innerId, type: "designer", mode, database, table };
+    let innerTabs: InnerTab[];
+    if (!existing) innerTabs = [...state.innerTabs, tab];
+    // 查看与设计同用一个标签:开着只读查看时(之后关了只读连接或更新了驱动)从「设计表」打开就换成设计;
+    // 反过来不降级,能不能改由设计器按现状决定。
+    else if (mode === "design" && existing.type === "designer" && existing.mode === "view") {
+      innerTabs = state.innerTabs.map((t) => (t.id === innerId ? tab : t));
+    } else innerTabs = state.innerTabs;
+    set((s) => ({
+      dbStates: { ...s.dbStates, [tabId]: { ...state, innerTabs, activeInnerTabId: innerId } },
+    }));
+  },
+
+  renameDesignerTab: (tabId, innerTabId, table) => {
+    const state = get().dbStates[tabId];
+    const tab = state?.innerTabs.find((t) => t.id === innerTabId);
+    if (!state || tab?.type !== "designer" || tab.mode === "create") return;
+    const next = { ...tab, id: designerTabId(tab.database, table), table };
+    set((s) => ({ dbStates: { ...s.dbStates, [tabId]: replaceInnerTab(state, innerTabId, next) } }));
+  },
+
+  openCreateTableTab: (tabId, database, schema) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const untouched = state.innerTabs.find(
+      (t) =>
+        t.type === "designer" &&
+        t.mode === "create" &&
+        t.database === database &&
+        (t.schema ?? "") === (schema ?? "") &&
+        !state.dirtyInnerTabIds?.includes(t.id)
+    );
+    const tab: InnerTab = untouched ?? {
+      id: `create:${Date.now().toString(36)}.${++createTabSeq}`,
+      type: "designer",
+      mode: "create",
+      database,
+      ...(schema ? { schema } : {}),
+    };
+    set((s) => ({
+      dbStates: {
+        ...s.dbStates,
+        [tabId]: {
+          ...state,
+          innerTabs: untouched ? state.innerTabs : [...state.innerTabs, tab],
+          activeInnerTabId: tab.id,
+        },
+      },
+    }));
+  },
+
+  retargetCreateTab: (tabId, innerTabId, database, schema) => {
+    const state = get().dbStates[tabId];
+    const tab = state?.innerTabs.find((t) => t.id === innerTabId);
+    if (!state || tab?.type !== "designer" || tab.mode !== "create") return;
+    const next: InnerTab = { id: tab.id, type: "designer", mode: "create", database, ...(schema ? { schema } : {}) };
+    set((s) => ({ dbStates: { ...s.dbStates, [tabId]: replaceInnerTab(state, innerTabId, next) } }));
+  },
+
+  completeCreateTab: (tabId, innerTabId, table) => {
+    const state = get().dbStates[tabId];
+    const tab = state?.innerTabs.find((t) => t.id === innerTabId);
+    if (!state || tab?.type !== "designer" || tab.mode !== "create") return;
+    const next: InnerTab = {
+      id: designerTabId(tab.database, table),
+      type: "designer",
+      mode: "design",
+      database: tab.database,
+      table,
+    };
+    set((s) => ({ dbStates: { ...s.dbStates, [tabId]: replaceInnerTab(state, innerTabId, next) } }));
+  },
+
   openSqlTab: (tabId, database?, sql?) => {
     const state = get().dbStates[tabId];
     if (!state) return;
-    const count = state.innerTabs.filter((t) => t.type === "sql").length + 1;
+    const count = (state.sqlTabSeq ?? 0) + 1;
     const innerId = `sql:${Date.now()}`;
     set((s) => ({
       dbStates: {
         ...s.dbStates,
         [tabId]: {
           ...state,
+          sqlTabSeq: count,
           innerTabs: [
             ...state.innerTabs,
             { id: innerId, type: "sql", title: `SQL ${count}`, sql, selectedDb: database },
@@ -704,21 +828,92 @@ export const useQueryStore = create<QueryState>((set, get) => ({
   },
 
   closeInnerTab: (tabId, innerTabId) => {
+    get().requestCloseInnerTabs(tabId, [innerTabId]);
+  },
+
+  closeOtherInnerTabs: (tabId, innerTabId) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const ids = state.innerTabs.filter((t) => t.id !== innerTabId).map((t) => t.id);
+    get().requestCloseInnerTabs(tabId, ids);
+  },
+
+  closeRightInnerTabs: (tabId, innerTabId) => {
     const state = get().dbStates[tabId];
     if (!state) return;
     const idx = state.innerTabs.findIndex((t) => t.id === innerTabId);
-    const newTabs = state.innerTabs.filter((t) => t.id !== innerTabId);
-    let newActive = state.activeInnerTabId;
-    if (newActive === innerTabId) {
-      const neighbor = state.innerTabs[idx + 1] || state.innerTabs[idx - 1];
-      newActive = neighbor?.id || null;
+    if (idx < 0) return;
+    const ids = state.innerTabs.slice(idx + 1).map((t) => t.id);
+    get().requestCloseInnerTabs(tabId, ids);
+  },
+
+  setInnerTabDirty: (tabId, innerTabId, dirty) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const current = state.dirtyInnerTabIds ?? [];
+    if (current.includes(innerTabId) === dirty) return;
+    const next = dirty ? [...current, innerTabId] : current.filter((id) => id !== innerTabId);
+    set((s) => ({ dbStates: { ...s.dbStates, [tabId]: { ...state, dirtyInnerTabIds: next } } }));
+    // 外层数据库标签借 tabStore 的未保存守卫:有脏内层标签时关外层会挂起 pendingCloseTabId,由 DatabasePanel 接管。
+    useTabStore.getState().setTabUnsaved(tabId, next.length > 0);
+  },
+
+  requestCloseInnerTabs: (tabId, ids, opts) => {
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const closeOuter = opts?.closeOuter ?? false;
+    const dirtyIds = ids.filter((id) => state.dirtyInnerTabIds?.includes(id));
+    if (dirtyIds.length === 0) {
+      get().forceCloseInnerTabs(tabId, ids, closeOuter);
+      return;
     }
     set((s) => ({
       dbStates: {
         ...s.dbStates,
-        [tabId]: { ...state, innerTabs: newTabs, activeInnerTabId: newActive },
+        [tabId]: {
+          ...state,
+          closeRequest: { ids, dirtyIds, closeOuter },
+          // 单个脏标签就地决定:切到它,让用户看着那页修改做选择。
+          activeInnerTabId: dirtyIds.length === 1 ? dirtyIds[0] : state.activeInnerTabId,
+        },
       },
     }));
+  },
+
+  forceCloseInnerTabs: (tabId, ids, closeOuter = false) => {
+    if (closeOuter) {
+      useTabStore.getState().forceCloseTab(tabId);
+      return;
+    }
+    const state = get().dbStates[tabId];
+    if (!state) return;
+    const closing = new Set(ids);
+    const innerTabs = state.innerTabs.filter((t) => !closing.has(t.id));
+    let activeInnerTabId = state.activeInnerTabId;
+    if (activeInnerTabId && closing.has(activeInnerTabId)) {
+      // 当前标签被关:优先落到它右侧最近的幸存标签,没有再找左侧。
+      const idx = state.innerTabs.findIndex((t) => t.id === activeInnerTabId);
+      const right = state.innerTabs.slice(idx + 1).find((t) => !closing.has(t.id));
+      const left = state.innerTabs
+        .slice(0, idx)
+        .reverse()
+        .find((t) => !closing.has(t.id));
+      activeInnerTabId = (right ?? left)?.id ?? null;
+    }
+    const dirtyInnerTabIds = (state.dirtyInnerTabIds ?? []).filter((id) => !closing.has(id));
+    set((s) => ({
+      dbStates: {
+        ...s.dbStates,
+        [tabId]: { ...state, innerTabs, activeInnerTabId, dirtyInnerTabIds, closeRequest: undefined },
+      },
+    }));
+    useTabStore.getState().setTabUnsaved(tabId, dirtyInnerTabIds.length > 0);
+  },
+
+  cancelCloseRequest: (tabId) => {
+    const state = get().dbStates[tabId];
+    if (!state?.closeRequest) return;
+    set((s) => ({ dbStates: { ...s.dbStates, [tabId]: { ...state, closeRequest: undefined } } }));
   },
 
   setActiveInnerTab: (tabId, innerTabId) => {
@@ -801,7 +996,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       set((s) => ({
         dbStates: {
           ...s.dbStates,
-          [tabId]: { ...s.dbStates[tabId], error: String(err) },
+          [tabId]: { ...s.dbStates[tabId], error: errorMessage(err) },
         },
       }));
     }
@@ -811,7 +1006,13 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     const tab = getQueryTabFromTabStore(tabId);
     if (!tab) return;
     try {
-      const objects = await ListDatabaseObjects(tab.assetId, database);
+      const descriptor = await describeTabDriver(tab);
+      const listed = await ListDatabaseObjects(tab.assetId, database);
+      // 驱动没有声明的那类对象不显示。
+      const objects = new query_svc.DatabaseObjects(listed);
+      for (const group of OBJECT_BROWSER_CAPABILITIES) {
+        if (!driverHasCapability(descriptor, group)) objects[group] = [];
+      }
       set((s) => ({
         dbStates: {
           ...s.dbStates,
@@ -825,7 +1026,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       set((s) => ({
         dbStates: {
           ...s.dbStates,
-          [tabId]: { ...s.dbStates[tabId], error: String(err) },
+          [tabId]: { ...s.dbStates[tabId], error: errorMessage(err) },
         },
       }));
     }
@@ -888,7 +1089,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
           ...s.redisStates,
           [tabId]:
             s.redisStates[tabId]?.scanRequestId === requestId
-              ? { ...s.redisStates[tabId], loadingKeys: false, error: String(err) }
+              ? { ...s.redisStates[tabId], loadingKeys: false, error: errorMessage(err) }
               : s.redisStates[tabId],
         },
       }));
@@ -1121,7 +1322,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       set((s) => ({
         redisStates: {
           ...s.redisStates,
-          [tabId]: { ...s.redisStates[tabId], error: s.redisStates[tabId]?.error || String(err) },
+          [tabId]: { ...s.redisStates[tabId], error: s.redisStates[tabId]?.error || errorMessage(err) },
         },
       }));
     }
@@ -1275,7 +1476,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       set((s) => ({
         mongoStates: {
           ...s.mongoStates,
-          [tabId]: { ...s.mongoStates[tabId], error: s.mongoStates[tabId]?.error || String(err) },
+          [tabId]: { ...s.mongoStates[tabId], error: s.mongoStates[tabId]?.error || errorMessage(err) },
         },
       }));
     }
@@ -1301,7 +1502,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       set((s) => ({
         mongoStates: {
           ...s.mongoStates,
-          [tabId]: { ...s.mongoStates[tabId], error: s.mongoStates[tabId]?.error || String(err) },
+          [tabId]: { ...s.mongoStates[tabId], error: s.mongoStates[tabId]?.error || errorMessage(err) },
         },
       }));
     }
@@ -1460,6 +1661,7 @@ interface PersistedDbState {
   expandedSchemas?: Record<string, string[]>;
   innerTabs: InnerTab[];
   activeInnerTabId: string | null;
+  sqlTabSeq?: number;
 }
 
 interface PersistedMongoState {
@@ -1483,6 +1685,7 @@ function stripDbState(s: DatabaseTabState): PersistedDbState {
     expandedSchemas: s.expandedSchemas,
     innerTabs: s.innerTabs,
     activeInnerTabId: s.activeInnerTabId,
+    sqlTabSeq: s.sqlTabSeq,
   };
 }
 
@@ -1560,6 +1763,16 @@ registerTabCloseHook((tab) => {
 
 // === Restore Hook: initialize query tab states ===
 
+/** 持久化状态缺少序号计数时,按现存「SQL N」标签的最大 N 初始化,避免与它们重号。 */
+function maxSqlTitleNumber(innerTabs: InnerTab[]): number {
+  let max = 0;
+  for (const t of innerTabs) {
+    const m = t.type === "sql" ? /^SQL (\d+)$/.exec(t.title) : null;
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return max;
+}
+
 registerTabRestoreHook("query", (tabs) => {
   const persisted = loadPersistedQueryStore();
   // Drop persisted entries whose tab is no longer open
@@ -1582,6 +1795,7 @@ registerTabRestoreHook("query", (tabs) => {
           expandedSchemas: saved.expandedSchemas || {},
           innerTabs: (saved.innerTabs || []).map((it) => (it.type === "table" ? { ...it, pendingLoad: true } : it)),
           activeInnerTabId: saved.activeInnerTabId ?? null,
+          sqlTabSeq: saved.sqlTabSeq ?? maxSqlTitleNumber(saved.innerTabs || []),
         };
       } else {
         dbStates[tab.id] = defaultDbState();

@@ -3,9 +3,12 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"path"
 	"path/filepath"
+	"sync"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -15,6 +18,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/pkg/transfer"
 )
 
 // cpEndpoint 是解析后的 cp 的一端：资产（本地端为 nil）、该端点上的路径，以及它的适配器。
@@ -117,7 +121,7 @@ func handleCp(ctx context.Context, args map[string]any) (string, error) {
 		return "", err
 	}
 
-	plan, err := helper.PlanTransfer([]string{src.path}, dst.path, recursive)
+	plan, err := helper.PlanTransfer([]string{src.path}, dst.path, !dst.isRemote(), recursive)
 	if err != nil {
 		return "", err
 	}
@@ -182,7 +186,8 @@ func cpSingleSource(
 	if err != nil {
 		return "", err
 	}
-	transferredBytes, err := transferOne(ctx, src, dst, res.Entries[0], dst.path, filepath.Dir(dst.path))
+	writeCtx := helper.WithTransferWriteScope(ctx, cpDestinationScope(dst))
+	transferredBytes, err := transferOne(writeCtx, src, dst, res.Entries[0], dst.path)
 	if err != nil {
 		return "", err
 	}
@@ -190,6 +195,16 @@ func cpSingleSource(
 		Completed: 1, Total: 1, Src: res.Entries[0].Path, Dst: dst.path, Bytes: transferredBytes,
 	})
 	return cpSummary(1, transferredBytes, res.SkippedSymlinks)
+}
+
+// cpDestinationScope 是单文件写入不得逃出的父目录。远端路径以 / 分隔，必须用 path.Dir：
+// Windows 上 filepath.Dir("/var/log/app.log") 得到 \var\log，SFTP 按 / 校验，合法落点会被
+// 判成 escapes approved scope，一个字节都不写。本地路径仍用本机分隔符。
+func cpDestinationScope(dst *cpEndpoint) string {
+	if dst.asset == nil {
+		return filepath.Dir(dst.path)
+	}
+	return path.Dir(dst.path)
 }
 
 // cpMultiSource 处理多源形态：recursive 为真，或源路径含 glob 元字符（spec §6.5）。
@@ -237,22 +252,77 @@ func cpMultiSource(
 		return "", err
 	}
 
-	// 快速失败：任一条出错立即中止（D19）。不采用 POSIX cp 的"继续并最终非零"——每个已
-	// 传输的字节都是一次已批准的副作用，出意外后继续会留下一个看起来完整、实际残缺的
-	// 目的地。已经落地的那 N 条要在错误里报出来，而不是假装这次传输什么都没做。
-	var totalBytes int64
-	for i, entry := range res.Entries {
-		transferredBytes, err := transferOne(ctx, src, dst, entry, dstPaths[i], dst.path)
-		if err != nil {
-			return "", fmt.Errorf("transferred %d/%d entries, then %q → %q failed: %w",
-				i, len(res.Entries), entry.Path, dstPaths[i], err)
-		}
-		totalBytes += transferredBytes
-		ReportCpProgress(ctx, CpProgress{
-			Completed: i + 1, Total: len(res.Entries), Src: entry.Path, Dst: dstPaths[i], Bytes: transferredBytes,
-		})
+	// 目的目录按展开顺序一次建好（端点有这项能力时），之后的写入不再逐文件建目录。它是
+	// 一次有副作用的操作，因此排在全部审批与门禁之后。
+	writeCtx := helper.WithTransferWriteScope(ctx, dst.path)
+	writeCtx, err = helper.PrepareTransferDirs(writeCtx, dst.adapter, dst.asset, dstPaths)
+	if err != nil {
+		return "", fmt.Errorf("transferred 0/%d entries: preparing destination directories under %q failed: %w",
+			len(res.Entries), dst.raw, err)
+	}
+	totalBytes, err := cpTransferEntries(writeCtx, src, dst, res.Entries, dstPaths)
+	if err != nil {
+		return "", err
 	}
 	return cpSummary(len(res.Entries), totalBytes, res.SkippedSymlinks)
+}
+
+// cpEntryError 记下失败的是哪一条，让汇总错误能点名它。
+type cpEntryError struct {
+	src, dst string
+	err      error
+}
+
+func (e *cpEntryError) Error() string { return e.err.Error() }
+func (e *cpEntryError) Unwrap() error { return e.err }
+
+// cpJob 是一条待传条目和它的目的路径。
+type cpJob struct {
+	entry helper.Entry
+	dst   string
+}
+
+// cpTransferEntries 以有界并发（transfer.Dispatch）传输全部条目。快速失败（D19）：首个失败的
+// 条目取消其余正在传的条目，尚未开始的不再开始，返回的错误点名那一条。不采用 POSIX cp 的
+// "继续并最终非零"——每个已传输的字节都是一次已批准的副作用，出意外后继续会留下一个看起来
+// 完整、实际残缺的目的地。已经落地的那 N 条要在错误里报出来，而不是假装这次传输什么都没做。
+//
+// 进度按完成顺序上报，Completed 从 1 递增到 N；上报在锁内串行进行，观察者不会被并发调用。
+func cpTransferEntries(
+	ctx context.Context, src, dst *cpEndpoint, entries []helper.Entry, dstPaths []string,
+) (int64, error) {
+	jobs := make([]cpJob, len(entries))
+	for i, entry := range entries {
+		jobs[i] = cpJob{entry: entry, dst: dstPaths[i]}
+	}
+	var (
+		mu         sync.Mutex
+		completed  int
+		totalBytes int64
+	)
+	err := transfer.Dispatch(ctx, jobs, nil, nil, func(workerCtx context.Context, job cpJob) error {
+		n, err := transferOne(workerCtx, src, dst, job.entry, job.dst)
+		if err != nil {
+			return &cpEntryError{src: job.entry.Path, dst: job.dst, err: err}
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		completed++
+		totalBytes += n
+		ReportCpProgress(ctx, CpProgress{
+			Completed: completed, Total: len(entries), Src: job.entry.Path, Dst: job.dst, Bytes: n,
+		})
+		return nil
+	})
+	if err == nil {
+		return totalBytes, nil
+	}
+	var entryErr *cpEntryError
+	if errors.As(err, &entryErr) {
+		return 0, fmt.Errorf("transferred %d/%d entries, then %q → %q failed: %w",
+			completed, len(entries), entryErr.src, entryErr.dst, entryErr.err)
+	}
+	return 0, fmt.Errorf("transferred %d/%d entries, then the transfer was canceled: %w", completed, len(entries), err)
 }
 
 // relPathStaysUnderBase 报告一条展开出来的 RelPath 拼到目的基点上之后，还落不落在这个
@@ -295,38 +365,52 @@ func checkAccessBatch(
 		typ, assetName, command, detail string
 		assetID                         int64
 	}
-	items := make([]permission.ApprovalItem, 0, len(accesses))
-	seen := make(map[seenKey]bool, len(accesses))
+	// 全部主体一次查完：辅助审批 / Autopilot 下要送模型审核，一次送审才能并行。
+	type subject struct {
+		access cpAccess
+		target helper.ApprovalTarget
+	}
+	var subjects []subject
+	var reqs []permission.PermissionRequest
 	for _, access := range accesses {
 		if !access.ep.isRemote() {
 			continue
 		}
 		for _, target := range helper.ApprovalSubjectsFor(access.ep.adapter, access.path, access.dir) {
-			result := permission.CheckPermission(ctx, target.ApprovalType, access.ep.asset.ID, target.Subject)
-			aictx.RecordDecision(ctx, result)
-			switch result.Decision {
-			case aictx.Deny:
-				return false, fmt.Errorf("%s", result.Message)
-			case aictx.Allow:
-				continue
-			}
-
-			item := permission.ApprovalItem{
-				Type:      permission.ApprovalTypeFor(target.ApprovalType),
-				AssetID:   access.ep.asset.ID,
-				AssetName: access.ep.asset.Name,
-				Command:   target.Subject,
-				Detail:    detail,
-			}
-			// 同一条主体只查一次、只出现一次：源与目的落在同一个前缀上时读写主体逐字相同。
-			key := seenKey{typ: item.Type, assetName: item.AssetName, command: item.Command, detail: item.Detail, assetID: item.AssetID}
-			if seen[key] {
-				continue
-			}
-			seen[key] = true
-
-			items = append(items, item)
+			subjects = append(subjects, subject{access: access, target: target})
+			reqs = append(reqs, permission.PermissionRequest{AssetType: target.ApprovalType, AssetID: access.ep.asset.ID, Command: target.Subject})
 		}
+	}
+	results := permission.CheckPermissions(ctx, reqs)
+
+	items := make([]permission.ApprovalItem, 0, len(subjects))
+	seen := make(map[seenKey]bool, len(subjects))
+	for i, sub := range subjects {
+		result := results[i]
+		aictx.RecordDecision(ctx, result)
+		switch result.Decision {
+		case aictx.Deny:
+			return false, fmt.Errorf("%s", result.Message)
+		case aictx.Allow:
+			continue
+		}
+
+		item := permission.ApprovalItem{
+			Type:      permission.ApprovalTypeFor(sub.target.ApprovalType),
+			AssetID:   sub.access.ep.asset.ID,
+			AssetName: sub.access.ep.asset.Name,
+			Command:   sub.target.Subject,
+			Detail:    detail,
+		}
+		// 同一条主体只出现一次：源与目的落在同一个前缀上时读写主体逐字相同。
+		key := seenKey{typ: item.Type, assetName: item.AssetName, command: item.Command, detail: item.Detail, assetID: item.AssetID}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		item.Review = result.Review
+
+		items = append(items, item)
 	}
 	if len(items) == 0 {
 		return false, nil
@@ -338,6 +422,12 @@ func checkAccessBatch(
 	}
 	resp := confirm(ctx, permission.ApprovalKindBatch, items)
 	parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindBatch, resp, items)
+	// 这次确认只落一行审计：带上说明为什么问人的那个审核结果。
+	reviews := make([]*aictx.ReviewInfo, len(items))
+	for i, item := range items {
+		reviews[i] = item.Review
+	}
+	review := aictx.BatchReview(reviews)
 	if parseErr != nil || parsed.Decision != permission.ApprovalAllow {
 		// 响应解析失败与用户点拒绝合成同一条出路，与 HandleConfirm 同一裁定：两者都不是
 		// 授权，而模型该做的事（立刻停下）也是同一件。
@@ -345,11 +435,11 @@ func checkAccessBatch(
 			"USER DENIED: The user has denied this transfer (%d paths). Stop the current task immediately.",
 			len(items))
 		aictx.RecordDecision(ctx, aictx.CheckResult{
-			Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny, Message: msg,
+			Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny, Message: msg, Review: review,
 		})
 		return false, fmt.Errorf("%s", msg)
 	}
-	aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow})
+	aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow, Review: review})
 	return true, nil
 }
 
@@ -439,9 +529,10 @@ func checkEndpoint(
 	return result.DecisionSource == aictx.SourceUserAllow, nil
 }
 
-// transferOne 执行一条已获批准的传输：源端开读、目的端流式写入。
+// transferOne 执行一条已获批准的传输：源端开读、目的端流式写入。ctx 带着目的端的写入
+// 范围（helper.WithTransferWriteScope），多源时还带着预建目录的核验结果。
 func transferOne(
-	ctx context.Context, src, dst *cpEndpoint, entry helper.Entry, dstPath, dstScope string,
+	ctx context.Context, src, dst *cpEndpoint, entry helper.Entry, dstPath string,
 ) (int64, error) {
 	logger.Ctx(ctx).Info("cp transfer start",
 		zap.String("src", entry.Path), zap.String("dst", dstPath), zap.Int64("size", entry.Size))
@@ -458,8 +549,7 @@ func transferOne(
 	}()
 
 	counter := &countingReader{r: rc}
-	writeCtx := helper.WithTransferWriteScope(ctx, dstScope)
-	if err := dst.adapter.Write(writeCtx, dst.asset, dstPath, counter, size); err != nil {
+	if err := dst.adapter.Write(ctx, dst.asset, dstPath, counter, size); err != nil {
 		logger.Ctx(ctx).Error("cp write destination", zap.String("dst", dstPath), zap.Error(err))
 		return counter.n, err
 	}

@@ -3,8 +3,6 @@ package command
 import (
 	"context"
 	"errors"
-	"io"
-	"os"
 	"strings"
 	"testing"
 
@@ -46,17 +44,12 @@ func stubStoreDesktop(t *testing.T, d *storeDesktop) *storeDesktop {
 // runCaptured runs f and returns its exit code, stdout and stderr.
 func runCaptured(t *testing.T, f func() int) (int, string, string) {
 	t.Helper()
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	orig := os.Stdout
-	os.Stdout = w
 	var code int
-	stderr := captureStderr(t, func() { code = f() })
-	os.Stdout = orig
-	require.NoError(t, w.Close())
-	out, err := io.ReadAll(r)
-	require.NoError(t, err)
-	return code, string(out), stderr
+	var stderr string
+	stdout := captureStdout(t, func() {
+		stderr = captureStderr(t, func() { code = f() })
+	})
+	return code, stdout, stderr
 }
 
 func sampleStore() []approval.ExtStoreEntry {

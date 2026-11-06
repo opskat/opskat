@@ -7,6 +7,7 @@ import { notifySuccess } from "@/lib/notify";
 import { useCustomTypeStore } from "@/stores/customTypeStore";
 import { issueText } from "./customTypeIssue";
 import { custom_type_entity, customtype } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface ImportCustomTypeDialogProps {
   preview: customtype.ImportPreview | null;
@@ -60,7 +61,7 @@ export function ImportCustomTypeDialog({ preview, onOpenChange }: ImportCustomTy
       for (const w of res.warnings ?? []) toast.warning(issueText(t, w));
       onOpenChange(false);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }

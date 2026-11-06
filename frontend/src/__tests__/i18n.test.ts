@@ -69,6 +69,46 @@ function collectBuiltinPolicyGroupIds(): string[] {
   return [...source.matchAll(/Builtin[A-Za-z0-9_]+\s+=\s+"builtin:([^"]+)"/g)].map((match) => match[1]).sort();
 }
 
+// JSON.parse 对同一对象里的重复键静默取最后一个：后加的同名键会覆盖已有译文，各处调用都会显示错的文案。
+function findDuplicateKeys(source: string): string[] {
+  const duplicates: string[] = [];
+  const stack: { keys: Set<string>; path: string; expectKey: boolean; lastKey: string; array: boolean }[] = [];
+  let i = 0;
+  const readString = () => {
+    let out = "";
+    for (i++; source[i] !== '"'; i++) {
+      if (source[i] === "\\") i++;
+      out += source[i];
+    }
+    i++;
+    return out;
+  };
+  while (i < source.length) {
+    const c = source[i];
+    const top = stack.at(-1);
+    if (c === '"') {
+      const text = readString();
+      if (top?.expectKey) {
+        if (top.keys.has(text)) duplicates.push(top.path ? `${top.path}.${text}` : text);
+        top.keys.add(text);
+        top.lastKey = text;
+        top.expectKey = false;
+      }
+      continue;
+    }
+    if (c === "{" || c === "[") {
+      const path = top ? (top.path ? `${top.path}.${top.lastKey}` : top.lastKey) : "";
+      stack.push({ keys: new Set(), path, expectKey: c === "{", lastKey: "", array: c === "[" });
+    } else if (c === "}" || c === "]") {
+      stack.pop();
+    } else if (c === "," && top && !top.array) {
+      top.expectKey = true;
+    }
+    i++;
+  }
+  return duplicates;
+}
+
 describe("i18n resources", () => {
   it("keeps zh-CN and en common keys aligned", () => {
     const zhKeys = flattenKeys(zhCommon).sort();
@@ -76,6 +116,16 @@ describe("i18n resources", () => {
 
     expect(zhKeys.filter((key) => !enKeys.includes(key))).toEqual([]);
     expect(enKeys.filter((key) => !zhKeys.includes(key))).toEqual([]);
+  });
+
+  it("has no duplicate keys that silently override an existing translation", () => {
+    for (const locale of ["zh-CN", "en"]) {
+      const file = path.resolve(process.cwd(), `src/i18n/locales/${locale}/common.json`);
+      expect({ locale, duplicates: findDuplicateKeys(fs.readFileSync(file, "utf8")) }).toEqual({
+        locale,
+        duplicates: [],
+      });
+    }
   });
 
   it("covers static common translation calls", () => {

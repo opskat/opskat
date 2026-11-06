@@ -1,15 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { OSSCreateFolder, OSSListBuckets, OSSListObjects, OSSUploadObject } from "../../../../wailsjs/go/oss/OSS";
+import {
+  OSSCreateFolder,
+  OSSDownloadFolder,
+  OSSListBuckets,
+  OSSListObjects,
+  OSSUploadObject,
+} from "../../../../wailsjs/go/oss/OSS";
 import { OSSBrowserPanel } from "../OSSBrowserPanel";
 import { useTabStore } from "@/stores/tabStore";
 import { useOssBrowserStore } from "@/stores/ossBrowserStore";
+import { useAssetStore } from "@/stores/assetStore";
 
 const TAB = "query-7";
 
 beforeEach(() => {
   vi.mocked(OSSListBuckets).mockReset();
+  vi.mocked(OSSListObjects).mockReset();
+  vi.mocked(OSSDownloadFolder).mockReset();
   useOssBrowserStore.setState({ tabs: {} });
+  useAssetStore.setState({ assets: [] });
   useTabStore.setState({
     tabs: [
       {
@@ -44,6 +54,24 @@ describe("OSSBrowserPanel", () => {
     expect(screen.getByTestId("oss-browser-panel")).toBeInTheDocument();
   });
 
+  it("opens straight into the asset's default bucket", async () => {
+    useAssetStore.setState({
+      assets: [{ ID: 7, Type: "oss", Config: '{"endpoint":"e","access_key_id":"a","bucket":"ootd"}' }] as never,
+    });
+    vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "ootd", creationDate: 0 }] as never);
+    vi.mocked(OSSListObjects).mockResolvedValue({
+      prefixes: [],
+      objects: [],
+      nextContinuationToken: "",
+      isTruncated: false,
+    } as never);
+    render(<OSSBrowserPanel tabId={TAB} />);
+    await waitFor(() =>
+      expect(OSSListObjects).toHaveBeenCalledWith(expect.objectContaining({ assetId: 7, bucket: "ootd", prefix: "" }))
+    );
+    expect(screen.queryByTestId("oss-no-bucket")).not.toBeInTheDocument();
+  });
+
   it("guards against a missing asset id", () => {
     useTabStore.setState({ tabs: [], activeTabId: null });
     render(<OSSBrowserPanel tabId="nope" />);
@@ -72,6 +100,31 @@ describe("OSSBrowserPanel", () => {
     );
     fireEvent.click(await screen.findByTestId("oss-upload"));
     await waitFor(() => expect(OSSUploadObject).toHaveBeenCalledWith(7, "b1", "docs/"));
+  });
+
+  it.each(["list", "grid"] as const)("downloads a folder of the current bucket from the %s view", async (viewMode) => {
+    vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "b1", creationDate: 0 }] as never);
+    vi.mocked(OSSDownloadFolder).mockResolvedValue("" as never);
+    render(<OSSBrowserPanel tabId={TAB} />);
+    await screen.findByTestId("oss-bucket-b1");
+    useOssBrowserStore.setState(
+      (s) =>
+        ({
+          tabs: {
+            ...s.tabs,
+            [TAB]: {
+              ...s.tabs[TAB],
+              viewMode,
+              currentBucket: "b1",
+              currentPrefix: "docs/",
+              listing: { objects: [], prefixes: ["docs/sub/"], truncated: false, cursor: "" },
+            },
+          },
+        }) as never
+    );
+    const testId = viewMode === "grid" ? "oss-grid-download-docs/sub/" : "oss-download-docs/sub/";
+    fireEvent.click(await screen.findByTestId(testId));
+    await waitFor(() => expect(OSSDownloadFolder).toHaveBeenCalledWith(7, "b1", "docs/sub/"));
   });
 
   it("opens an in-app dialog and creates a folder", async () => {

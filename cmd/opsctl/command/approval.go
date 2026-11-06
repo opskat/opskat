@@ -28,10 +28,11 @@ const (
 
 // ApprovalResult 审批结果，包含决策来源信息（用于审计）
 type ApprovalResult struct {
-	Decision       aictx.Decision // Allow | Deny
-	DecisionSource string         // ai.Source* 常量
-	MatchedPattern string         // 匹配的规则或模式
-	SessionID      string         // 会话 ID
+	Decision       aictx.Decision    // Allow | Deny
+	DecisionSource string            // ai.Source* 常量
+	MatchedPattern string            // 匹配的规则或模式
+	SessionID      string            // 会话 ID
+	Review         *aictx.ReviewInfo // 模型审核结果；没有审核时为 nil
 }
 
 // ToCheckResult 转换为 CheckResult（供 AuditWriter 使用）
@@ -40,6 +41,7 @@ func (ar ApprovalResult) ToCheckResult() *aictx.CheckResult {
 		Decision:       ar.Decision,
 		DecisionSource: ar.DecisionSource,
 		MatchedPattern: ar.MatchedPattern,
+		Review:         ar.Review,
 	}
 }
 
@@ -81,10 +83,16 @@ func originCommandFromCtx(ctx context.Context) string {
 	return cmd
 }
 
+// approvalDataDir 是桌面端审批 socket 与认证 token 所在的数据目录。变量化是为了让
+// requireApproval 级测试把桌面端审批指向自己起的 socket，而不是真实数据目录下的。
+var approvalDataDir = bootstrap.ResolvedDataDir
+
 // requireApproval 检查命令策略 → DB Grant 匹配 → 选择审批人（spec Approver selection）：
 // 可交互（stdin 与 stderr 双 TTY）走终端提示、不联系桌面端；不可交互且 approval.sock
 // 可达走桌面弹窗（保持现状，含 stale socket 判定）；否则结构化拒绝（退出码 3 + 固定标记）。
-func requireApproval(ctx context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
+func requireApproval(ctx context.Context, req approval.ApprovalRequest) (result ApprovalResult, err error) {
+	// 模型审核结果随每一种结局返回（自动放行、拒绝、人工确认），审计据此记录。
+	defer func() { result.Review = req.Review }()
 	// Stage 1: Auto-create session if none exists
 	if req.SessionID == "" {
 		id := uuid.New().String()
@@ -104,7 +112,10 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 		if checkType == "" {
 			checkType = req.Type
 		}
-		permResult := permission.CheckPermission(permCtx, checkType, req.AssetID, req.Command)
+		permResult := permission.CheckPermissions(permCtx, []permission.PermissionRequest{{
+			AssetType: checkType, AssetID: req.AssetID, Command: req.Command, PipedInput: req.PipedInput,
+		}})[0]
+		req.Review = permResult.Review
 
 		switch permResult.Decision {
 		case aictx.Allow:
@@ -124,11 +135,12 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 		default: // NeedConfirm → fall through to approver selection
 			policyHints = permResult.HintRules
 			policyReason = permResult.Message
+			req = withApprovalItem(ctx, req)
 		}
 	}
 
 	// Stage 3: 选择审批人。可交互时不发生拨号。
-	dataDir := bootstrap.ResolvedDataDir()
+	dataDir := approvalDataDir()
 	sockPath := approval.SocketPath(dataDir)
 
 	switch chooseApprover(isInteractive(stdinIsTerminal(), stderrIsTerminal()), func() error {
@@ -179,8 +191,23 @@ func requireApproval(ctx context.Context, req approval.ApprovalRequest) (Approva
 	}
 }
 
+// withApprovalItem 把共用审批项构造（permission.ApprovalItemFor，与桌面端 AI 审批同一个）
+// 的结果写回请求：内置类型的审批项与请求原样相同；扩展资产上分类成功的调用带上扩展的
+// 动作、资源、“记住”的 <action>:<resource-glob> 与工具调用详情——终端提示、桌面端弹窗与
+// NEEDS AUTHORIZATION 都按它展示，“永久允许”按它落扩展规则 / 授权（spec 策略与审批）。
+func withApprovalItem(ctx context.Context, req approval.ApprovalRequest) approval.ApprovalRequest {
+	item := permission.ApprovalItemFor(ctx, req.AssetID, req.AssetName, ttyApprovalFace(req), req.Command, req.Detail)
+	req.Detail = item.Detail
+	req.Action = item.Action
+	req.Resource = item.Resource
+	req.Resources = item.Resources
+	req.RememberPattern = item.RememberPattern
+	return req
+}
+
 // refusalSubject 是结构化拒绝里的一条可授权主体：某个资产上、某个审批类型下，
-// 经 NormalizeGrantPatterns 归一化之后的 pattern 集合。
+// 可照抄进 opsctl policy allow 的 pattern 集合（内置类型是归一化后的命令，扩展是
+// <action>[:<resource-glob>] 规则，见 approvalSubjects）。
 type refusalSubject struct {
 	assetName    string
 	assetID      int64
@@ -198,8 +225,8 @@ func assetIdentity(name string, id int64, typ string) string {
 }
 
 // refuseApproval 构造结构化拒绝：分支依据是这次操作有没有一个规则能匹配的主体
-// （决策 17）——命令归一化后有 pattern 给 NEEDS AUTHORIZATION；带着命令却归一化不出
-// pattern（拆不出子命令的 shell 命令）给 NEEDS TTY，写明 reason 并引导修正命令——照抄一条
+// （决策 17）——有可授权主体（approvalSubjects）给 NEEDS AUTHORIZATION；带着命令却给不出
+// 主体（拆不出子命令的 shell 命令、分类失败的扩展调用）给 NEEDS TTY，写明 reason 并引导修正命令——照抄一条
 // 永远匹配不上的 policy allow 只会让调用方反复撞同一个拒绝；create/update/delete 一类
 // 没有命令，同样给 NEEDS TTY。它是真实的拒绝决策，照常以 Deny + SourcePolicyDeny 落审计，
 // 不是参数错误。reason 是策略层 NeedConfirm 附带的原因（aictx.CheckResult.Message）。
@@ -212,7 +239,7 @@ func refuseApproval(ctx context.Context, req approval.ApprovalRequest, hints []s
 	hasCommand := req.AssetID > 0 && req.Command != ""
 	var patterns []string
 	if hasCommand {
-		patterns = normalizedApprovalSubjects(face, req.Command)
+		patterns = approvalSubjects(req)
 	}
 	switch {
 	case len(patterns) > 0:
@@ -248,8 +275,9 @@ func refuseApproval(ctx context.Context, req approval.ApprovalRequest, hints []s
 	}, refusal
 }
 
-// refuseBatchApproval 是批量审批（opsctl batch / 多源 cp）的结构化拒绝：条条有主体，
-// 恒为 NEEDS AUTHORIZATION，逐条给出可照抄的 policy allow 命令。
+// refuseBatchApproval 是批量审批（opsctl batch / 多源 cp）的结构化拒绝：恒为 NEEDS
+// AUTHORIZATION，逐条给出可照抄的 policy allow 命令——主体与终端批量提示同源
+// （batchItemSubjects），扩展条目给的是 '<action>:<resource>' 规则。
 func refuseBatchApproval(items []approval.BatchItem, session string) (ApprovalResult, error) {
 	ctx := envPolicyLangCtx()
 	entries := make([]refusalSubject, 0, len(items))
@@ -258,7 +286,7 @@ func refuseBatchApproval(items []approval.BatchItem, session string) (ApprovalRe
 			assetName:    item.AssetName,
 			assetID:      item.AssetID,
 			approvalType: item.Type,
-			patterns:     normalizedApprovalSubjects(item.Type, item.Command),
+			patterns:     batchItemSubjects(item),
 		})
 	}
 	err := &structuredRefusal{

@@ -85,11 +85,8 @@ func RegisterExtensionType(spec ExtensionTypeSpec) error {
 	if len(spec.ConfigFields) == 0 {
 		return fmt.Errorf("extension asset type %q declares no configSchema properties", spec.Type)
 	}
-	hostFields, _ := extensionConnectionFields(spec.Connection)
-	for _, field := range spec.ConfigFields {
-		if slices.Contains(hostFields, field) {
-			return fmt.Errorf("extension asset type %q declares configSchema property %q, which is the host's own connection field for a connection item the type opts into", spec.Type, field)
-		}
+	if err := CheckExtensionConfigFields(spec.ConfigFields, spec.Connection); err != nil {
+		return fmt.Errorf("extension asset type %q %w", spec.Type, err)
 	}
 	customTypeSlugMu.RLock()
 	lookup := customTypeSlugLookup
@@ -105,6 +102,19 @@ func RegisterExtensionType(spec ExtensionTypeSpec) error {
 		}
 	}
 	return RegisterDynamic(newExtensionHandler(spec))
+}
+
+// CheckExtensionConfigFields refuses a configSchema property that is the host's own
+// connection field for a connection item conn opts into: both would be stored under
+// the same asset config key. The error reads after the asset type's name.
+func CheckExtensionConfigFields(fields []string, conn ExtensionConnectionSpec) error {
+	hostFields, _ := extensionConnectionFields(conn)
+	for _, field := range fields {
+		if slices.Contains(hostFields, field) {
+			return fmt.Errorf("declares configSchema property %q, which is the host's own connection field for a connection item the type opts into", field)
+		}
+	}
+	return nil
 }
 
 // extensionConnectionFields 返回该类型声明的连接项换来的宿主连接字段：全部字段，以及其中
@@ -204,8 +214,8 @@ func (h *extensionHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	return out
 }
 
-// ResolvePassword 扩展资产的密文字段由 WASM 宿主接口按 capabilities.credentials 逐个
-// 发放（见 internal/app/extension/host.go），不存在"这个资产的密码"这样一个单值。
+// ResolvePassword 扩展资产的密文字段由 WASM 宿主接口按 permissions.credentials 逐个
+// 发放（见 internal/service/extension_svc/host_providers.go），不存在"这个资产的密码"这样一个单值。
 func (h *extensionHandler) ResolvePassword(_ context.Context, _ *asset_entity.Asset) (string, error) {
 	return "", fmt.Errorf("asset type %q is provided by extension %q; credentials are resolved through the extension host API",
 		h.spec.Type, h.spec.ExtensionName)
@@ -310,18 +320,12 @@ func applyExtensionTLSArgs(args map[string]any, conn *asset_entity.ExtensionConn
 	if conn.TLS != nil {
 		tls = *conn.TLS
 	}
-	if _, ok := args[argTLS]; ok {
-		tls.Enabled = ArgBool(args, argTLS)
-	}
-	if _, ok := args[argTLSInsec]; ok {
-		tls.Insecure = ArgBool(args, argTLSInsec)
-	}
-	if _, ok := args[argTLSServer]; ok {
-		tls.ServerName = ArgString(args, argTLSServer)
-	}
-	if err := applyTLSCertArgs(args, tlsCertStore{
-		caFile: &tls.CAFile, certFile: &tls.CertFile, keyFile: &tls.KeyFile,
-		caPEM: &tls.CACert, certPEM: &tls.ClientCert, keyPEM: &tls.ClientKey,
+	if err := applyTLSArgs(args, tlsStore{
+		enabled: &tls.Enabled, insecure: &tls.Insecure, serverName: &tls.ServerName,
+		certs: tlsCertStore{
+			caFile: &tls.CAFile, certFile: &tls.CertFile, keyFile: &tls.KeyFile,
+			caPEM: &tls.CACert, certPEM: &tls.ClientCert, keyPEM: &tls.ClientKey,
+		},
 	}); err != nil {
 		return err
 	}

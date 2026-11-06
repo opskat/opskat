@@ -91,9 +91,9 @@ Two helper classes ride on top of the global scrollbar:
 | `.scroll-stable` | `scrollbar-gutter: stable` — reserves the scrollbar gutter so toggling scrollability (e.g. switching settings tabs of differing height) doesn't shift centered content horizontally (#167) | Settings page |
 | `.query-table-scroll` | A faintly-tinted scrollbar track (`oklch(0.5 0.01 250 / 6%)`) so the always-present query-grid scrollbar reads during frequent scrolling | Query result grid |
 
-## 8. Domain CSS (query grid & external-edit diff/merge)
+## 8. Domain CSS (query grid, SQL editor & external-edit diff/merge)
 
-Two feature areas need cell/line decorations that go beyond utility classes, so they own named classes in `globals.css` `@layer components`. These are **not general-purpose** — use them only in their feature; don't repurpose them as a generic highlight.
+Three feature areas need cell/line decorations that go beyond utility classes, so they own named classes in `globals.css` `@layer components`. These are **not general-purpose** — use them only in their feature; don't repurpose them as a generic highlight.
 
 **Query result grid — frozen cell states** (composed over `--muted` / `--primary` / `--background` with `color-mix`):
 
@@ -105,6 +105,13 @@ Two feature areas need cell/line decorations that go beyond utility classes, so 
 | `.query-table-frozen-cell-edited` | Frozen cell with an unsaved edit (amber wash; dark-tuned) |
 
 > Non-frozen cells use plain utilities for the same states — `bg-primary/15` (selected), `bg-primary/5` (focus). The frozen variants exist only because a sticky/frozen cell needs an opaque base under the tint.
+
+**SQL editor — current statement** — whole-line Monaco decoration marking the statement "Run current" will execute, applied from [`SqlEditorTab.tsx`](../../frontend/src/components/query/SqlEditorTab.tsx) while the editor is focused without a selection. Named classes rather than utilities because Monaco rewrites every character outside `[A-Za-z0-9_-]` in a decoration class to a space — `bg-primary/5` would degrade to an opaque `bg-primary`.
+
+| Class | Meaning |
+| --- | --- |
+| `.sql-current-statement` | Line wash, `--primary` mixed at 8% (14% under `.dark`) |
+| `.sql-current-statement-bar` | Gutter bar, `2px` left border in `--primary` |
 
 **External-edit diff / merge** — line + gutter decorations for the Monaco-based file compare/merge workbench (DESIGN.md §8). Three families: `.external-edit-diff-*` and `.external-edit-compare-*` (insert = green, delete = red, modify/current = amber) and `.external-edit-merge-*` (local = green, remote = blue, combined = split gradient, current = dark). Applied as Monaco decoration classes from [`CodeDiffViewer.tsx`](../../frontend/src/components/CodeDiffViewer.tsx); driven by [`externalEditStore`](../../frontend/src/stores/externalEditStore.ts). These carry their own raw oklch values (a deliberate exception — Monaco decorations sit outside the token system); keep new diff/merge tints here, next to their siblings, not scattered in components.
 

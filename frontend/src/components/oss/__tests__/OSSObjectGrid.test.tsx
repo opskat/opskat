@@ -62,6 +62,26 @@ describe("OSSObjectGrid", () => {
     expect(onNavigatePrefix).toHaveBeenCalledWith("docs/sub/");
   });
 
+  it("a folder tile's download button downloads the folder without entering it", () => {
+    const onDownloadFolder = vi.fn();
+    const onNavigatePrefix = vi.fn();
+    render(
+      <OSSObjectGrid
+        {...base}
+        prefixes={["docs/sub/"]}
+        objects={[]}
+        onDownloadFolder={onDownloadFolder}
+        onNavigatePrefix={onNavigatePrefix}
+      />
+    );
+    const button = screen.getByTestId("oss-grid-download-docs/sub/");
+    fireEvent.click(button);
+    fireEvent.doubleClick(button);
+    fireEvent.keyDown(button, { key: "Enter" });
+    expect(onDownloadFolder).toHaveBeenCalledWith("docs/sub/");
+    expect(onNavigatePrefix).not.toHaveBeenCalled();
+  });
+
   it("shows loading and empty states", () => {
     const { rerender } = render(<OSSObjectGrid {...base} prefixes={[]} objects={[]} loading />);
     expect(screen.getByTestId("oss-grid-loading")).toBeInTheDocument();

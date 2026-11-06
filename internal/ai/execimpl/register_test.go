@@ -1,6 +1,7 @@
 package execimpl
 
 import (
+	"context"
 	"testing"
 
 	"github.com/opskat/opskat/internal/ai/permission"
@@ -24,7 +25,7 @@ func TestCanonicalizeK8sCommand_EmptyKubeconfigFailsBeforeApproval(t *testing.T)
 		t.Fatalf("set k8s config: %v", err)
 	}
 
-	if _, err := canonicalize(asset, "get pods"); err == nil {
+	if _, err := canonicalize(context.Background(), asset, "get pods"); err == nil {
 		t.Fatal("expected an error for a k8s asset with no kubeconfig configured")
 	}
 }
@@ -44,7 +45,7 @@ func TestCanonicalizeK8sCommand_NonEmptyKubeconfigSucceeds(t *testing.T) {
 		t.Fatalf("set k8s config: %v", err)
 	}
 
-	got, err := canonicalize(asset, "get pods")
+	got, err := canonicalize(context.Background(), asset, "get pods")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

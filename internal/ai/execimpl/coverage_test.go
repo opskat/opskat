@@ -1,6 +1,7 @@
 package execimpl
 
 import (
+	"context"
 	"maps"
 	"slices"
 	"testing"
@@ -105,11 +106,11 @@ func TestOSSCanonicalizerKeepsNonDSLInputOutOfTheMatcher(t *testing.T) {
 	}
 
 	asset := &asset_entity.Asset{ID: 1, Name: "s3-prod", Type: asset_entity.AssetTypeOSS}
-	if _, err := canonicalize(asset, "object.read mybucket/*"); err == nil {
+	if _, err := canonicalize(context.Background(), asset, "object.read mybucket/*"); err == nil {
 		t.Error("the registered oss canonicalizer accepted a policy-string-shaped command; " +
 			"it must reject anything that is not the exec DSL")
 	}
-	if got, err := canonicalize(asset, "object list mybucket"); err != nil || got != "object list mybucket/" {
+	if got, err := canonicalize(context.Background(), asset, "object list mybucket"); err != nil || got != "object list mybucket/" {
 		t.Errorf("canonicalize(%q) = (%q, %v), want (%q, nil) — the registered function must be "+
 			"the OSS DSL canonicalizer", "object list mybucket", got, err, "object list mybucket/")
 	}

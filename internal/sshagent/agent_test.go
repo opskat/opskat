@@ -58,6 +58,9 @@ func TestValidateEndpoint(t *testing.T) {
 }
 
 func TestUnixPathCleaning(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("expandAndCleanUnixPath only runs where unix sockets are served; Open refuses them on Windows first")
+	}
 	convey.Convey("expandAndCleanUnixPath", t, func() {
 		convey.Convey("lexically cleans and keeps absolute", func() {
 			p, err := expandAndCleanUnixPath("/tmp/../tmp/agent.sock")

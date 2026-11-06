@@ -93,8 +93,12 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
   const tabData = useTerminalStore((s) => s.tabData);
   const connectingAssetIds = useTerminalStore((s) => s.connectingAssetIds);
 
-  const { assets, groups, initialized } = useAssetStore();
-  const { fileManagerOpenTabs, fileManagerWidth, setFileManagerWidth } = useSFTPStore();
+  const assets = useAssetStore((s) => s.assets);
+  const groups = useAssetStore((s) => s.groups);
+  const initialized = useAssetStore((s) => s.initialized);
+  const fileManagerOpenTabs = useSFTPStore((s) => s.fileManagerOpenTabs);
+  const fileManagerWidth = useSFTPStore((s) => s.fileManagerWidth);
+  const setFileManagerWidth = useSFTPStore((s) => s.setFileManagerWidth);
 
   const tabBarLayout = useLayoutStore((s) => s.tabBarLayout);
   const shortcuts = useShortcutStore((s) => s.shortcuts);

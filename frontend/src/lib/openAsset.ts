@@ -4,6 +4,7 @@ import { useTabStore } from "@/stores/tabStore";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { getAssetType, pageTabPrefix } from "@/lib/assetTypes";
+import { errorMessage } from "@/lib/errorMessage";
 
 /**
  * 按资产类型打开/聚焦连接 tab。派发只有一处来源——注册表里的 connectAction。
@@ -48,6 +49,6 @@ export async function openAssetConnection(asset: asset_entity.Asset): Promise<vo
   try {
     await useTerminalStore.getState().connect(asset);
   } catch (e) {
-    toast.error(`${asset.Name}: ${String(e)}`);
+    toast.error(`${asset.Name}: ${errorMessage(e)}`);
   }
 }

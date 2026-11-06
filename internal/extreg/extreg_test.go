@@ -3,6 +3,7 @@ package extreg
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,7 +23,10 @@ import (
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo/mock_group_repo"
 	"github.com/opskat/opskat/internal/service/conntest"
+	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // fakeConnTestRegistrar stands in for internal/app/extension's real
@@ -32,7 +36,7 @@ import (
 // extension's timeout tests) need — main.go, not this package, owns the merge.
 type fakeConnTestRegistrar struct{}
 
-func (fakeConnTestRegistrar) Build(_ string, _ *extension.Manifest, assetType string, plugin TestConnectionCaller) conntest.TestFunc {
+func (fakeConnTestRegistrar) Build(_ string, _ *Manifest, assetType string, plugin TestConnectionCaller) conntest.TestFunc {
 	return func(ctx context.Context, configJSON, _ string) error {
 		return plugin.TestConnection(ctx, assetType, &extension.AdHocAssetConfig{Config: json.RawMessage(configJSON)})
 	}
@@ -66,6 +70,25 @@ type fakePlugin struct {
 	testConnErr        error
 	lastTestConnType   string
 	lastTestConnConfig *extension.AdHocAssetConfig
+
+	// openDriver answers OpenDriverSession; nil means the extension provides no driver.
+	openDriver func(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error)
+	// classify answers ClassifyStatements; nil means no driver of the extension splits SQL.
+	classify func(ctx context.Context, id, sql string) ([]dbdriver.Statement, error)
+}
+
+func (p *fakePlugin) OpenDriverSession(ctx context.Context, id string, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+	if p.openDriver == nil {
+		return nil, fmt.Errorf("fake plugin provides no database driver %q", id)
+	}
+	return p.openDriver(ctx, id, req)
+}
+
+func (p *fakePlugin) ClassifyStatements(ctx context.Context, id, sql string) ([]dbdriver.Statement, error) {
+	if p.classify == nil {
+		return nil, fmt.Errorf("fake plugin provides no database driver %q that splits SQL", id)
+	}
+	return p.classify(ctx, id, sql)
 }
 
 func (p *fakePlugin) TestConnection(_ context.Context, assetType string, adhoc *extension.AdHocAssetConfig) error {
@@ -79,10 +102,10 @@ func (p *fakePlugin) ValidateConfig(_ context.Context, config json.RawMessage) (
 	return p.validationErrors, p.validateErr
 }
 
-func (p *fakePlugin) CallTool(_ context.Context, toolName string, args json.RawMessage, asset *extension.AssetRef) (json.RawMessage, error) {
-	p.lastTool = toolName
-	p.lastArgs = append(json.RawMessage(nil), args...)
-	p.lastAsset = asset
+func (p *fakePlugin) CallTool(_ context.Context, call extension.ToolCall) (json.RawMessage, error) {
+	p.lastTool = call.Name
+	p.lastArgs = append(json.RawMessage(nil), call.Args...)
+	p.lastAsset = call.Asset
 	if p.callErr != nil {
 		return nil, p.callErr
 	}
@@ -100,14 +123,15 @@ func (p *fakePlugin) CheckPolicy(_ context.Context, _ string, _ json.RawMessage)
 	return p.action, []string{p.resource}, p.policyErr
 }
 
-func testManifest() *extension.Manifest {
-	return &extension.Manifest{
-		Name:    "acme",
-		Version: "1.0.0",
-		I18n:    extension.ManifestI18n{Description: "Acme object store"},
-		AssetTypes: []extension.AssetTypeDef{{
+func testManifest() *Manifest {
+	return &Manifest{
+		Manifest: &extension.Manifest{
+			Manifest: extmanifest.Manifest{Name: "acme", Version: "1.0.0"},
+			I18n:     extension.ManifestI18n{Description: "Acme object store"},
+		},
+		AssetTypes: []AssetTypeDef{{
 			Type: "acme-store",
-			I18n: extension.I18nName{Name: "Acme"},
+			I18n: extwire.I18nName{Name: "Acme"},
 			ConfigSchema: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -117,9 +141,9 @@ func testManifest() *extension.Manifest {
 				"required": []any{"endpoint"},
 			},
 		}},
-		Tools: []extension.ToolDef{{
+		Tools: []extwire.Tool{{
 			Name: "list_objects",
-			I18n: extension.I18nDesc{Description: "List objects in a bucket"},
+			I18n: extwire.I18nDesc{Description: "List objects in a bucket"},
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -132,7 +156,7 @@ func testManifest() *extension.Manifest {
 			PolicyActions: []string{"object.list", "object.write", "object.delete"},
 		}, {
 			Name: "delete_bucket",
-			I18n: extension.I18nDesc{Description: "Delete a bucket"},
+			I18n: extwire.I18nDesc{Description: "Delete a bucket"},
 			Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{"bucket": map[string]any{"type": "string"}},
@@ -140,12 +164,12 @@ func testManifest() *extension.Manifest {
 			},
 			PolicyAction: "object.delete",
 		}},
-		Policies: extension.PoliciesDef{
+		Policies: PoliciesDef{
 			Type:    "acme",
 			Actions: []string{"object.list", "object.write", "object.delete"},
-			Groups: []extension.PolicyGroupDef{{
+			Groups: []extwire.PolicyGroup{{
 				ID:   "ext:acme:readonly",
-				I18n: extension.I18nNameDesc{Name: "read only", Description: "list and read"},
+				I18n: extwire.I18nNameDesc{Name: "read only", Description: "list and read"},
 				Policy: map[string]any{
 					"allow_list": []any{"object.list"},
 					"deny_list":  []any{"object.delete"},
@@ -156,13 +180,12 @@ func testManifest() *extension.Manifest {
 	}
 }
 
-func registerFake(t *testing.T, plugin pluginCaller) *extension.Manifest {
+func registerFake(t *testing.T, plugin pluginCaller) *Manifest {
 	t.Helper()
 	m := testManifest()
 	l := loaded{name: m.Name, manifest: m, plugin: plugin}
-	localized := m.Localized(func(k string) string { return k })
-	require.NoError(t, register(l, helpDocument("# Acme\nProse about acme.", m.Name, localized), "acme skill"))
-	t.Cleanup(func() { Unregister(m.Name) })
+	require.NoError(t, attachLoaded(l, "# Acme\nProse about acme.", "acme skill"))
+	t.Cleanup(func() { detach(m.Name) })
 	return m
 }
 
@@ -190,7 +213,7 @@ func TestRegisterMakesTypeReachableThroughTheSharedRegistries(t *testing.T) {
 
 func TestUnregisterRemovesEveryRegistration(t *testing.T) {
 	registerFake(t, &fakePlugin{})
-	Unregister("acme")
+	detach("acme")
 
 	_, ok := assettype.Get("acme-store")
 	assert.False(t, ok)
@@ -211,7 +234,7 @@ func TestRegisterRefusesAssetTypeCollisionLoudly(t *testing.T) {
 	other.Name = "acme-clone"
 	other.Policies.Type = "acme-clone"
 	other.Policies.Groups[0].ID = "ext:acme-clone:readonly"
-	err := register(loaded{name: other.Name, manifest: other, plugin: &fakePlugin{}},
+	err := attachLoaded(loaded{name: other.Name, manifest: other, plugin: &fakePlugin{}},
 		"help", "desc")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "acme-store")
@@ -232,8 +255,8 @@ func TestConnTestRegistration(t *testing.T) {
 		m.AssetTypes[0].TestConnection = true
 		plugin := &fakePlugin{}
 		l := loaded{name: m.Name, manifest: m, plugin: plugin}
-		require.NoError(t, register(l, "help", "desc"))
-		t.Cleanup(func() { Unregister(m.Name) })
+		require.NoError(t, attachLoaded(l, "help", "desc"))
+		t.Cleanup(func() { detach(m.Name) })
 
 		fn, ok := conntest.LookupDetailed("acme-store")
 		require.True(t, ok)
@@ -243,7 +266,7 @@ func TestConnTestRegistration(t *testing.T) {
 		assert.Equal(t, "acme-store", plugin.lastTestConnType)
 		assert.JSONEq(t, `{"endpoint":"http://x"}`, string(plugin.lastTestConnConfig.Config))
 
-		Unregister(m.Name)
+		detach(m.Name)
 		_, ok = conntest.LookupDetailed("acme-store")
 		assert.False(t, ok, "unregister must drop the conntest tester too")
 	})
@@ -255,7 +278,7 @@ func TestConnTestRegistration(t *testing.T) {
 		m := testManifest()
 		m.AssetTypes[0].TestConnection = true
 		l := loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}}
-		err := register(l, "help", "desc")
+		err := attachLoaded(l, "help", "desc")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no registrar is wired")
 
@@ -318,15 +341,15 @@ func TestCanonicalizeIsStableAndRejectsBadCommandsBeforeApproval(t *testing.T) {
 	require.True(t, ok)
 
 	asset := &asset_entity.Asset{ID: 1, Type: "acme-store"}
-	a, err := canon(asset, "list_objects --maxKeys=10 --bucket=prod")
+	a, err := canon(context.Background(), asset, "list_objects --maxKeys=10 --bucket=prod")
 	require.NoError(t, err)
-	b, err := canon(asset, "list_objects --bucket=prod --maxKeys=10")
+	b, err := canon(context.Background(), asset, "list_objects --bucket=prod --maxKeys=10")
 	require.NoError(t, err)
 	assert.Equal(t, a, b, "flag order must not change the policy/grant subject")
 
-	_, err = canon(asset, "list_objects --nope=1")
+	_, err = canon(context.Background(), asset, "list_objects --nope=1")
 	require.Error(t, err, "an undeclared flag must fail before the approval dialog")
-	_, err = canon(asset, "no_such_tool")
+	_, err = canon(context.Background(), asset, "no_such_tool")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "list_objects")
 }
@@ -547,6 +570,13 @@ func withGrantFixturePolicyInGroup(t *testing.T, assetID int64, assetType string
 	t.Helper()
 	asset := &asset_entity.Asset{ID: assetID, Name: "acme-1", Type: assetType}
 	require.NoError(t, asset.SetCommandPolicy(cp))
+	return withGrantFixtureAsset(t, asset, group)
+}
+
+// withGrantFixtureAsset registers asset (and its group, if any) behind the repo mocks.
+func withGrantFixtureAsset(t *testing.T, asset *asset_entity.Asset, group *group_entity.Group) context.Context {
+	t.Helper()
+	assetID := asset.ID
 	if group != nil {
 		asset.GroupID = group.ID
 		ctrl := gomock.NewController(t)
@@ -631,18 +661,21 @@ func TestExtensionGrantRequestRefusesCommandShapedPatterns(t *testing.T) {
 
 // --- connection fields ---------------------------------------------------------
 
-func registerWithConnection(t *testing.T, conn *extension.ConnectionDef) {
+func registerWithConnection(t *testing.T, conn *extwire.Connection) {
 	t.Helper()
 	m := testManifest()
 	m.AssetTypes[0].Connection = conn
+	// Connection settings apply to the asset's endpoint: the type marks it and the
+	// manifest grants reaching it.
+	m.AssetTypes[0].ConfigSchema["properties"].(map[string]any)["endpoint"] = map[string]any{"type": "string", "format": "endpoint"}
+	m.Permissions.Network.AssetEndpoint = true
 	l := loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}}
-	localized := m.Localized(func(k string) string { return k })
-	require.NoError(t, register(l, helpDocument("# Acme\nProse about acme.", m.Name, localized), "acme skill"))
-	t.Cleanup(func() { Unregister(m.Name) })
+	require.NoError(t, attachLoaded(l, "# Acme\nProse about acme.", "acme skill"))
+	t.Cleanup(func() { detach(m.Name) })
 }
 
 func TestDeclaredConnectionItemsBecomeAutomationFields(t *testing.T) {
-	registerWithConnection(t, &extension.ConnectionDef{SSHTunnel: true, ProxyChain: true, TLS: true})
+	registerWithConnection(t, &extwire.Connection{SSHTunnel: true, ProxyChain: true, TLS: true})
 
 	prepared, err := assettype.PrepareCreate(context.Background(), &asset_entity.Asset{Type: "acme-store"}, map[string]any{
 		"endpoint": "https://acme.test", "ssh_asset_id": float64(3), "tls": true, "tls_ca_pem": "CA-PEM",
@@ -659,7 +692,7 @@ func TestDeclaredConnectionItemsBecomeAutomationFields(t *testing.T) {
 }
 
 func TestHelpListsTheConfigFieldsAnAssetAccepts(t *testing.T) {
-	registerWithConnection(t, &extension.ConnectionDef{SSHTunnel: true, TLS: true})
+	registerWithConnection(t, &extwire.Connection{SSHTunnel: true, TLS: true})
 
 	help, ok := permission.HelpFor("acme-store")
 	require.True(t, ok)
@@ -677,8 +710,8 @@ func TestRegisterRefusesATypeThatShadowsACustomType(t *testing.T) {
 
 	m := testManifest()
 	l := loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}}
-	localized := m.Localized(func(k string) string { return k })
-	err := register(l, helpDocument("# Acme\nProse about acme.", m.Name, localized), "acme skill")
+	err := attachLoaded(l, "# Acme\nProse about acme.", "acme skill")
+	t.Cleanup(func() { detach(m.Name) })
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `"acme"`)
@@ -687,4 +720,48 @@ func TestRegisterRefusesATypeThatShadowsACustomType(t *testing.T) {
 	assert.False(t, ok)
 	_, ok = permission.ExecutorFor("acme-store")
 	assert.False(t, ok)
+}
+
+// countingDrivers records the lifetimes of the database drivers an attach creates.
+type countingDrivers struct {
+	fakePlugin
+	closed int
+}
+
+func (d *countingDrivers) CloseDrivers() { d.closed++ }
+
+// viewOfRunningPlugin is an extension whose guest is running, so the contribution
+// points build the real runningPlugin (and its drivers) instead of a fake.
+type viewOfRunningPlugin struct{ *testView }
+
+func (viewOfRunningPlugin) Plugin() *extension.Plugin { return &extension.Plugin{} }
+
+// An attach refused by a later contribution point leaves no driver lifetime of its
+// own behind: every database drivers' lifetime it created is ended, once.
+func TestFailedAttachEndsTheDriversItCreated(t *testing.T) {
+	var created []*countingDrivers
+	orig := driversOf
+	driversOf = func(*extension.Plugin) driverOpener {
+		d := &countingDrivers{}
+		created = append(created, d)
+		return d
+	}
+	t.Cleanup(func() { driversOf = orig })
+
+	registerFake(t, &fakePlugin{}) // owns the "acme" policy face
+	m := testManifest()
+	m.Name, m.Policies.Type = "clash", "acme"
+	m.AssetTypes[0].Type = "clash-store"
+	m.Policies.Groups[0].ID, m.Policies.Default = "ext:acme:other", []string{"ext:acme:other"}
+	m.DatabaseDrivers = []dbdriver.Descriptor{driverDescriptor("clashdb")}
+	m.Contributes.DatabaseDrivers = []string{"clashdb"}
+
+	view := viewOfRunningPlugin{&testView{l: loaded{name: m.Name, manifest: m}, rt: runtimeManifest(m)}}
+	err := testContributions.Attach(view)
+	require.ErrorContains(t, err, `already owned by extension "acme"`)
+
+	require.NotEmpty(t, created, "the attach built its drivers")
+	for i, d := range created {
+		assert.Equal(t, 1, d.closed, "drivers #%d created by the failed attach are ended exactly once", i)
+	}
 }

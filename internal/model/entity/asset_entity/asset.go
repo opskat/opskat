@@ -4,13 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/opskat/opskat/internal/model/entity/policy"
 	"github.com/opskat/opskat/internal/pkg/jsonfield"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
 // 资产类型常量
@@ -32,8 +31,8 @@ const (
 	AssetTypeGeneric = "generic"
 )
 
-// DatabaseDriver 数据库驱动类型
-type DatabaseDriver string
+// DatabaseDriver 数据库驱动类型：就是驱动契约里的驱动 id。
+type DatabaseDriver = dbdriver.DriverID
 
 const (
 	DriverMySQL      DatabaseDriver = "mysql"
@@ -48,22 +47,6 @@ const (
 	SQLiteSourceLocal        SQLiteSource = "local"
 	SQLiteSourceRemoteSSHVFS SQLiteSource = "remote_ssh_vfs"
 )
-
-// DefaultPort 返回驱动默认端口
-func (d DatabaseDriver) DefaultPort() int {
-	switch d {
-	case DriverMySQL:
-		return 3306
-	case DriverPostgreSQL:
-		return 5432
-	case DriverMSSQL:
-		return 1433
-	case DriverSQLite:
-		return 0
-	default:
-		return 0
-	}
-}
 
 // 认证方式常量
 const (
@@ -98,9 +81,11 @@ type Asset struct {
 	SortOrder     int    `gorm:"column:sort_order;default:0"`
 	SSHTunnelID   int64  `gorm:"column:ssh_tunnel_id;default:0" json:"sshTunnelId"`
 	ExtensionName string `gorm:"column:extension_name;type:varchar(64);index" json:"extensionName,omitempty"`
-	Status        int    `gorm:"column:status;default:1"`
-	Createtime    int64  `gorm:"column:createtime"`
-	Updatetime    int64  `gorm:"column:updatetime"`
+	// PermissionMode 见 policy.PermissionMode*；空表示沿用分组设置。
+	PermissionMode string `gorm:"column:permission_mode;type:varchar(20);default:''" json:"permissionMode,omitempty"`
+	Status         int    `gorm:"column:status;default:1"`
+	Createtime     int64  `gorm:"column:createtime"`
+	Updatetime     int64  `gorm:"column:updatetime"`
 }
 
 // TableName GORM表名
@@ -202,9 +187,25 @@ type DatabaseConfig struct {
 	CredentialID int64          `json:"credential_id,omitempty"` // 统一凭证 ID（密码）
 	Database     string         `json:"database,omitempty"`      // 默认数据库
 	SSLMode      string         `json:"ssl_mode,omitempty"`      // postgresql: disable/require/verify-full
-	TLS          bool           `json:"tls,omitempty"`           // mysql: 启用 TLS 加密连接
-	Params       string         `json:"params,omitempty"`        // 额外连接参数
-	ReadOnly     bool           `json:"read_only,omitempty"`     // 连接级只读
+	TLS          bool           `json:"tls,omitempty"`           // mysql: 启用 TLS 加密连接；声明了证书字段组的驱动：启用证书 TLS
+	// 证书字段组（dbdriver.FieldTLSCert），与 RedisConfig 同名同义；只有声明了它的驱动使用。
+	TLSInsecure   bool   `json:"tls_insecure,omitempty"`    // 跳过 TLS 证书校验
+	TLSServerName string `json:"tls_server_name,omitempty"` // TLS SNI / ServerName
+	TLSCAFile     string `json:"tls_ca_file,omitempty"`     // CA 证书路径
+	TLSCertFile   string `json:"tls_cert_file,omitempty"`   // 客户端证书路径
+	TLSKeyFile    string `json:"tls_key_file,omitempty"`    // 客户端私钥路径
+	TLSCAPEM      string `json:"tls_ca_pem,omitempty"`      // CA 证书内容（PEM），与路径二选一
+	TLSCertPEM    string `json:"tls_cert_pem,omitempty"`    // 客户端证书内容（PEM），与路径二选一
+	TLSKeyPEM     string `json:"tls_key_pem,omitempty"`     // 客户端私钥内容（PEM），credential_svc 加密，与路径二选一
+	// Kerberos 字段组（dbdriver.FieldKerberos）：只有声明了它的驱动使用，空认证方式即口令。
+	AuthMethod    string `json:"auth_method,omitempty"`     // 认证方式：空 = 口令，"kerberos"
+	KrbPrincipal  string `json:"krb_principal,omitempty"`   // 主体 user@REALM
+	KrbPassword   string `json:"krb_password,omitempty"`    // 主体口令，credential_svc 加密
+	KrbKeytabFile string `json:"krb_keytab_file,omitempty"` // keytab 文件路径（只存路径），填了就用 keytab
+	KrbKDC        string `json:"krb_kdc,omitempty"`         // KDC 地址，逗号分隔的 host[:port]，默认端口 88
+	KrbSPN        string `json:"krb_spn,omitempty"`         // 固定的服务主体 service/host[@REALM]，空表示按驱动要的取
+	Params        string `json:"params,omitempty"`          // 额外连接参数
+	ReadOnly      bool   `json:"read_only,omitempty"`       // 连接级只读
 	// QueryTimeoutSeconds 查询超时（秒），0 使用默认值 30s；元数据浏览与 SQL 查询共用。
 	QueryTimeoutSeconds int               `json:"query_timeout_seconds,omitempty"`
 	SSHAssetID          int64             `json:"ssh_asset_id,omitempty"`  // Deprecated: use Asset.SSHTunnelID
@@ -212,6 +213,9 @@ type DatabaseConfig struct {
 	Path                string            `json:"path,omitempty"`          // SQLite 文件路径;local 为本地绝对路径,remote_ssh_vfs 为远端绝对路径
 	Proxy               *ProxyConfig      `json:"proxy,omitempty"`         // SOCKS5 代理（与 SSH 隧道互斥，隧道优先）
 	ProxyChain          *ProxyChainConfig `json:"proxy_chain,omitempty"`
+	// DriverOptions 是驱动专属字段的取值（Descriptor.DriverFields）；口令类的值 credential_svc 加密。
+	// 驱动不可用时也原样保留。
+	DriverOptions map[string]any `json:"driver_options,omitempty"`
 }
 
 // RedisConfig Redis类型的特定配置
@@ -935,6 +939,9 @@ func (a *Asset) Validate() error {
 	if a.Type == "" {
 		return errors.New("资产类型不能为空")
 	}
+	if err := policy.ValidatePermissionMode(a.PermissionMode); err != nil {
+		return err
+	}
 
 	// 校验类型是否合法
 	switch a.Type {
@@ -1008,51 +1015,15 @@ func (a *Asset) validateDatabase() error {
 	if cfg.Driver == "" {
 		return errors.New("数据库驱动不能为空")
 	}
-	switch cfg.Driver {
-	case DriverMySQL, DriverPostgreSQL, DriverMSSQL:
-		if cfg.Host == "" {
-			return errors.New("数据库主机地址不能为空")
-		}
-		if cfg.Port <= 0 {
-			return errors.New("数据库端口无效")
-		}
-		if cfg.Username == "" {
-			return errors.New("数据库用户名不能为空")
-		}
-	case DriverSQLite:
-		if cfg.Path == "" {
-			return errors.New("SQLite 必须指定 path")
-		}
-		source := cfg.SQLiteSource
-		if source == "" {
-			source = SQLiteSourceLocal
-		}
-		switch source {
-		case SQLiteSourceLocal:
-			if !filepath.IsAbs(cfg.Path) && !path.IsAbs(cfg.Path) {
-				return errors.New("SQLite path 必须为绝对路径")
-			}
-			if a.SSHTunnelID > 0 || cfg.SSHAssetID > 0 {
-				return errors.New("SQLite 本地文件不支持 SSH 隧道")
-			}
-		case SQLiteSourceRemoteSSHVFS:
-			if !path.IsAbs(cfg.Path) {
-				return errors.New("SQLite path 必须为绝对路径")
-			}
-			if a.SSHTunnelID == 0 && cfg.SSHAssetID == 0 {
-				return errors.New("远端 SQLite 必须指定 SSH 资产")
-			}
-		default:
-			return fmt.Errorf("不支持的 SQLite source: %s", source)
-		}
-		if cfg.Proxy != nil {
-			return errors.New("SQLite 不支持代理")
-		}
-		if cfg.ProxyChain != nil && len(cfg.ProxyChain.Layers) > 0 {
-			return errors.New("SQLite 本地文件不支持代理链")
-		}
-	default:
-		return fmt.Errorf("不支持的数据库驱动: %s", cfg.Driver)
+	if databaseDriverConfigValidator == nil {
+		// 没有链接驱动注册表（internal/dbdriver）的二进制里没有任何驱动可用。
+		return fmt.Errorf("数据库驱动 %s 不可用：未链接驱动注册表", cfg.Driver)
+	}
+	if err := databaseDriverConfigValidator(cfg.DriverConfig(), a.databaseRoute(cfg)); err != nil {
+		return err
+	}
+	if err := cfg.ValidateKerberos(); err != nil {
+		return err
 	}
 	// 0 表示使用默认值（30s）；显式配置时限定 5~600s。
 	if cfg.QueryTimeoutSeconds != 0 && (cfg.QueryTimeoutSeconds < 5 || cfg.QueryTimeoutSeconds > 600) {

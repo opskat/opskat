@@ -7,6 +7,7 @@ import { useCustomTypeStore } from "@/stores/customTypeStore";
 import { asset_entity, custom_type_entity, customtype } from "../../../../wailsjs/go/models";
 import { GetCustomType, GetGenericAssetView, ListCustomTypes } from "../../../../wailsjs/go/customtype/CustomType";
 import { GetDefaultPolicy, UpdateAsset } from "../../../../wailsjs/go/system/System";
+import { GetCommandReviewState } from "../../../../wailsjs/go/extension/Extension";
 
 const asset = new asset_entity.Asset({
   ID: 42,
@@ -35,6 +36,13 @@ beforeEach(() => {
     new customtype.Summary({ id: 7, slug: "grafana", name: "Grafana", icon: "", execMode: "http", assetCount: 1 }),
   ]);
   vi.mocked(GetCustomType).mockResolvedValue(grafana);
+  // 详情页的权限模式卡片（有策略的类型都显示）读审核端状态。
+  vi.mocked(GetCommandReviewState).mockResolvedValue({
+    reviewers: [],
+    selected: "",
+    active: "",
+    problem: "no_reviewer",
+  } as never);
   vi.mocked(GetGenericAssetView).mockResolvedValue(
     new customtype.GenericAssetView({
       typeName: "Grafana",

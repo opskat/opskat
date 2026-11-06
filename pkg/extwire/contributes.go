@@ -1,0 +1,205 @@
+package extwire
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+)
+
+// I18nName is an i18n key naming one item.
+type I18nName struct {
+	Name string `json:"name"`
+}
+
+// I18nNameDesc is the i18n keys naming and describing one item.
+type I18nNameDesc struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// I18nDesc is the i18n key describing one item.
+type I18nDesc struct {
+	Description string `json:"description"`
+}
+
+// AssetType is one asset type the extension contributes (KeyAssetTypes).
+type AssetType struct {
+	Type         string         `json:"type"`
+	I18n         I18nName       `json:"i18n"`
+	ConfigSchema map[string]any `json:"configSchema"`
+	Connection   *Connection    `json:"connection,omitempty"`
+	Auth         *Auth          `json:"auth,omitempty"`
+	// TestConnection reports whether the type registered a test-connection
+	// handler. The asset form shows its "Test connection" button only when this
+	// is true; the host dispatches the call itself, never through policy —
+	// testing a connection is not an operation on the asset.
+	TestConnection bool `json:"testConnection,omitempty"`
+}
+
+// Connection is the subset of the host-owned connection settings an asset type
+// supports. The host renders a declared item in the asset form and detail card
+// and applies it when dialing the asset's endpoint; an undeclared item is
+// neither shown nor applied. The extension never reads these settings.
+type Connection struct {
+	// SSHTunnel routes connections to the endpoint through an SSH asset the user
+	// picks on the asset.
+	SSHTunnel bool `json:"sshTunnel,omitempty"`
+	// ProxyChain routes connections through the asset's proxy chain.
+	ProxyChain bool `json:"proxyChain,omitempty"`
+	// TLS applies the asset's TLS settings (verification, server name, CA,
+	// client certificate) to connections.
+	TLS bool `json:"tls,omitempty"`
+}
+
+// UnmarshalJSON refuses an item the host does not own: silently dropping it
+// would load an extension whose author believes a setting is applied when it is
+// not.
+func (c *Connection) UnmarshalJSON(data []byte) error {
+	type plain Connection
+	var v plain
+	if err := decodeStrict(data, &v); err != nil {
+		return fmt.Errorf("connection (supported items: sshTunnel, proxyChain, tls): %w", err)
+	}
+	*c = Connection(v)
+	return nil
+}
+
+// Settings is the extension's own settings (KeySettings): one form the user
+// fills in under Settings › Extensions, declared the way an asset type declares
+// its config. ConfigSchema's format:"password" fields are stored encrypted, and
+// format:"endpoint" fields name addresses the extension may reach when its
+// manifest declares permissions.network.settingsEndpoint; Auth binds the
+// settings' fields into requests to those addresses, as an asset type's Auth
+// does for its asset's endpoint.
+type Settings struct {
+	ConfigSchema map[string]any `json:"configSchema"`
+	Auth         *Auth          `json:"auth,omitempty"`
+}
+
+// SettingsView is the read view of an extension's stored Settings — what
+// config.get answers a call without an asset, and what the settings form shows:
+// every non-secret value the user saved, and for each format:"password" field
+// only whether it is set. The secret itself never reaches the extension; the
+// host injects it, per the settings' Auth, into requests to the addresses in
+// their format:"endpoint" fields.
+type SettingsView struct {
+	Values  map[string]any  `json:"values"`
+	Secrets map[string]bool `json:"secrets"`
+}
+
+// Auth is the credential injection an asset type declares: the host renders its
+// bindings from the asset's config — password fields decrypted host-side — and
+// injects them into every HTTP request the extension sends to that asset's
+// endpoint. The plaintext never crosses into the guest.
+//
+// Selector names the config field whose value picks the active group (e.g.
+// authType); a value no group names means "no credentials". Without a selector
+// there is exactly one group, always active.
+type Auth struct {
+	Selector string      `json:"selector,omitempty"`
+	Groups   []AuthGroup `json:"groups"`
+}
+
+// UnmarshalJSON refuses a key the host does not read: a mistyped "name" left
+// unread would load an extension that injects nothing where its author expects
+// a credential.
+func (a *Auth) UnmarshalJSON(data []byte) error {
+	type plain Auth
+	var v plain
+	if err := decodeStrict(data, &v); err != nil {
+		return fmt.Errorf("auth (keys: selector, groups[].when, groups[].bindings[].in/name/value): %w", err)
+	}
+	*a = Auth(v)
+	return nil
+}
+
+// AuthGroup is the set of bindings injected when the selector field equals When.
+type AuthGroup struct {
+	When     string        `json:"when,omitempty"`
+	Bindings []AuthBinding `json:"bindings"`
+}
+
+// AuthBinding injects one value. In is "header" (Name = header name), "query"
+// (Name = parameter name) or "basic" (no Name; Value renders "user:password"
+// and is sent as Authorization: Basic). Value is a template: literal text with
+// {{expression}} placeholders — e.g. `ApiKey {{base64(apiKeyId, ":", apiKey)}}`.
+//
+// An expression is written in the template language custom asset types use:
+//   - a config field by name (letters, digits, "_" and "-", starting with a
+//     letter or "_"), or a double-quoted literal (escapes as in a Go string
+//     literal: \n, \", \\, \t, \xNN, \uNNNN, ...);
+//   - a + b, concatenation;
+//   - a function: base64(x, ...) (several arguments are joined, then encoded),
+//     hex(x), urlencode(x), sha256(x), hmac_sha256(key, msg), uuid(). sha256 and
+//     hmac_sha256 return raw bytes — wrap them in base64 or hex;
+//   - now.unix / now.unix_ms, read once per request: every binding of the group
+//     sees the same instant.
+type AuthBinding struct {
+	In    string `json:"in"`
+	Name  string `json:"name,omitempty"`
+	Value string `json:"value"`
+}
+
+// Policy is the extension's policy face (KeyPolicy): the type its asset types
+// are checked under, its permission groups and the ones a new asset starts
+// with. The action set is not on the wire: it is exactly the set of actions the
+// tools request, and the host derives it from them.
+type Policy struct {
+	Type    string        `json:"type"`
+	Groups  []PolicyGroup `json:"groups,omitempty"`
+	Default []string      `json:"default,omitempty"`
+}
+
+// PolicyGroup is one permission group, ID namespaced ext:<policy type>:<name>.
+type PolicyGroup struct {
+	ID     string         `json:"id"`
+	I18n   I18nNameDesc   `json:"i18n"`
+	Policy map[string]any `json:"policy"`
+}
+
+// Snippets is the snippet categories and seed snippets the extension
+// contributes (KeySnippets).
+type Snippets struct {
+	Categories []SnippetCategory `json:"categories"`
+	Seed       []SeedSnippet     `json:"seed"`
+}
+
+// SnippetCategory is a snippet category id the extension owns, shown for one of
+// its asset types.
+type SnippetCategory struct {
+	ID        string   `json:"id"`
+	AssetType string   `json:"assetType"`
+	I18n      I18nName `json:"i18n"`
+}
+
+// SeedSnippet is a read-only snippet shipped with the extension, in a builtin
+// category or one the extension declares.
+type SeedSnippet struct {
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Category    string `json:"category"`
+	Content     string `json:"content"`
+	Description string `json:"description"`
+}
+
+// Pages is the extension's UI bundle and the pages it contributes (KeyPages).
+type Pages struct {
+	Entry  string `json:"entry"`
+	Styles string `json:"styles"`
+	Pages  []Page `json:"pages"`
+}
+
+// Page is one frontend page. Slot "asset.connect" makes the page what opening
+// the asset shows; Component is the exported symbol in the entry module.
+type Page struct {
+	ID        string   `json:"id"`
+	Slot      string   `json:"slot,omitempty"`
+	I18n      I18nName `json:"i18n"`
+	Component string   `json:"component"`
+}
+
+func decodeStrict(data []byte, v any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	return dec.Decode(v)
+}

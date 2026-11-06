@@ -179,6 +179,12 @@ func (w *wasmHostCaller) AssetGetConfig(_ int64) (json.RawMessage, error) {
 	return call("asset.get_config", map[string]any{})
 }
 
+// ConfigGet sends nothing: the host answers with the config of the scope it gave
+// this call, and refuses a call whose scope has none.
+func (w *wasmHostCaller) ConfigGet() (json.RawMessage, error) {
+	return call("config.get", nil)
+}
+
 func (w *wasmHostCaller) FileDialog(params []byte) (string, error) {
 	payload, err := call("file_dialog", json.RawMessage(params))
 	if err != nil {
@@ -196,17 +202,21 @@ func (w *wasmHostCaller) KVSet(key string, value []byte) error {
 	return err
 }
 
-func (w *wasmHostCaller) ActionEvent(eventType string, data []byte) {
+func (w *wasmHostCaller) ToolEvent(eventType string, data []byte) {
 	// Events are fire-and-forget; a delivery failure is the host's to log.
-	_, _ = call("action.event", map[string]any{"type": eventType, "data": json.RawMessage(data)})
+	_, _ = call("tool.event", map[string]any{"type": eventType, "data": json.RawMessage(data)})
 }
 
-func (w *wasmHostCaller) ActionShouldStop() bool {
-	payload, err := call("action.should_stop", nil)
+func (w *wasmHostCaller) KerberosTicket(spn string) ([]byte, error) {
+	return call("auth.kerberos_ticket", map[string]string{"spn": spn})
+}
+
+func (w *wasmHostCaller) ToolShouldStop() bool {
+	payload, err := call("tool.should_stop", nil)
 	if err != nil {
 		// The signature has no error to return, so surface it where an operator
-		// can see it rather than silently pretending the action may continue.
-		w.Log("warn", "action.should_stop failed: "+err.Error())
+		// can see it rather than silently pretending the call may continue.
+		w.Log("warn", "tool.should_stop failed: "+err.Error())
 		return false
 	}
 	return len(payload) == 1 && payload[0] == 1

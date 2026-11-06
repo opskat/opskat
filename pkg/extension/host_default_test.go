@@ -2,14 +2,19 @@
 package extension
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/opskat/opskat/internal/pkg/proxychain"
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/zap"
 )
@@ -115,5 +120,70 @@ func TestDefaultHostProvider_IOReadEOF(t *testing.T) {
 		So(string(body), ShouldContainSubstring, "AccessDenied")
 
 		So(hs.Close(id), ShouldBeNil)
+	})
+}
+
+// TestOpenTCP_AnswerWaitIsNotCountedAgainstTheDialTimeout: an asset's connection path
+// can stop on an SSH hop's MFA prompt; the time a person takes to answer it is not
+// counted against the TCP dial timeout, while canceling the call still ends it.
+func TestOpenTCP_AnswerWaitIsNotCountedAgainstTheDialTimeout(t *testing.T) {
+	Convey("Given a connection path that waits for a person's answer longer than the dial timeout", t, func() {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		So(err, ShouldBeNil)
+		defer func() { _ = ln.Close() }()
+		params := IOOpenParams{Type: "tcp", Addr: ln.Addr().String(), Timeout: 100}
+
+		// waitingDial stands in for a path whose hop prompts: it waits inside
+		// AwaitAnswer, as the hop's MFA responder does, then connects. waiting is
+		// closed once the wait has begun.
+		waitingDial := func(wait time.Duration, waiting chan<- struct{}) DialContextFunc {
+			return func(ctx context.Context, network, addr string) (net.Conn, error) {
+				resume := proxychain.AwaitAnswer(ctx)
+				if waiting != nil {
+					close(waiting)
+				}
+				select {
+				case <-time.After(wait):
+				case <-ctx.Done():
+					resume()
+					return nil, ctx.Err()
+				}
+				resume()
+				return (&net.Dialer{}).DialContext(ctx, network, addr)
+			}
+		}
+
+		Convey("an answer arriving after the timeout still connects", func() {
+			res, err := openTCP(context.Background(), waitingDial(400*time.Millisecond, nil), nil, params, nil)
+			So(err, ShouldBeNil)
+			So(res.Closer.Close(), ShouldBeNil)
+		})
+
+		Convey("canceling the call during the wait ends it", func() {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			waiting := make(chan struct{})
+			go func() {
+				<-waiting
+				time.Sleep(300 * time.Millisecond) // past the dial timeout
+				cancel()
+			}()
+			start := time.Now()
+			_, err := openTCP(ctx, waitingDial(time.Minute, waiting), nil, params, nil)
+			So(errors.Is(err, context.Canceled), ShouldBeTrue)
+			So(time.Since(start), ShouldBeLessThan, 5*time.Second)
+		})
+
+		// A dial reports what its ctx reports once it ends (net.Dialer maps ctx.Err():
+		// DeadlineExceeded → "i/o timeout", Canceled → "operation was canceled"), so an
+		// open that runs out of time must read as a timeout, not as a canceled call.
+		Convey("a dial that outlasts the timeout reports a timeout", func() {
+			blocked := func(ctx context.Context, network, addr string) (net.Conn, error) {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+			_, err := openTCP(context.Background(), blocked, nil, params, nil)
+			So(errors.Is(err, context.DeadlineExceeded), ShouldBeTrue)
+		})
 	})
 }

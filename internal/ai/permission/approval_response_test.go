@@ -24,7 +24,7 @@ func TestParseApprovalResponseKindCapabilities(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ApprovalAllowAll, parsed.Decision)
 
-	for _, kind := range []string{ApprovalKindOnce, ApprovalKindBatch, ApprovalKindGrant, ApprovalKindDelete, ApprovalKindExtension} {
+	for _, kind := range []string{ApprovalKindOnce, ApprovalKindBatch, ApprovalKindGrant, ApprovalKindDelete} {
 		t.Run(kind+" rejects allowAll", func(t *testing.T) {
 			parsed, err := ParseApprovalResponse(kind, ApprovalResponse{Decision: "allowAll"}, expected)
 			require.Error(t, err)
@@ -64,7 +64,6 @@ func TestApprovalKindFor(t *testing.T) {
 		want         string
 	}{
 		{name: "delete", approvalType: ApprovalTypeDelete, want: ApprovalKindDelete},
-		{name: "ext_tool", approvalType: "ext_tool", want: ApprovalKindExtension},
 		{name: "exec with a matchable command", approvalType: "exec", command: "uptime", want: ApprovalKindSingle},
 		{name: "exec without sub-commands", approvalType: "exec", command: `echo "`, want: ApprovalKindOnce},
 		{name: "unregistered type", approvalType: "create", want: ApprovalKindOnce},

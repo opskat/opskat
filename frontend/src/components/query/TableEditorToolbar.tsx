@@ -47,6 +47,12 @@ interface TableEditorToolbarProps {
   submitting: boolean;
   canExport: boolean;
   canImport?: boolean;
+  /** 驱动声明了表格编辑:提交 / 放弃 / 预览 SQL 才出现。 */
+  gridEdit: boolean;
+  /** 驱动声明了导入。 */
+  importAvailable: boolean;
+  /** 驱动声明了导出为 SQL 语句:导出格式里才有 SQL。 */
+  sqlExportAvailable: boolean;
   columns?: string[];
   visibleColumns?: string[];
   rowDensity?: RowDensity;
@@ -69,6 +75,9 @@ export function TableEditorToolbar({
   submitting,
   canExport,
   canImport = false,
+  gridEdit,
+  importAvailable,
+  sqlExportAvailable,
   columns = [],
   visibleColumns = columns,
   rowDensity = "default",
@@ -101,37 +110,43 @@ export function TableEditorToolbar({
         <ListFilter className="h-3.5 w-3.5" />
       </Button>
       <div className="mx-0.5 h-5 w-px bg-border" />
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        title={t("query.submitEdits")}
-        onClick={onSubmit}
-        disabled={editActionDisabled}
-      >
-        {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        title={t("query.discardEdits")}
-        onClick={onDiscard}
-        disabled={editActionDisabled}
-      >
-        <Undo2 className="h-3.5 w-3.5" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        title={t("query.previewSql")}
-        onClick={onPreviewSql}
-        disabled={editActionDisabled}
-      >
-        <Eye className="h-3.5 w-3.5" />
-      </Button>
-      <div className="mx-0.5 h-5 w-px bg-border" />
-      <Button variant="ghost" size="icon-xs" title={t("query.importData")} onClick={onImport} disabled={!canImport}>
-        <Upload className="h-3.5 w-3.5" />
-      </Button>
+      {gridEdit && (
+        <>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title={t("query.submitEdits")}
+            onClick={onSubmit}
+            disabled={editActionDisabled}
+          >
+            {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title={t("query.discardEdits")}
+            onClick={onDiscard}
+            disabled={editActionDisabled}
+          >
+            <Undo2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            title={t("query.previewSql")}
+            onClick={onPreviewSql}
+            disabled={editActionDisabled}
+          >
+            <Eye className="h-3.5 w-3.5" />
+          </Button>
+          <div className="mx-0.5 h-5 w-px bg-border" />
+        </>
+      )}
+      {importAvailable && (
+        <Button variant="ghost" size="icon-xs" title={t("query.importData")} onClick={onImport} disabled={!canImport}>
+          <Upload className="h-3.5 w-3.5" />
+        </Button>
+      )}
       <Select value={exportFormat} onValueChange={(value) => onExportFormatChange?.(value as TableExportFormat)}>
         <SelectTrigger size="sm" className="h-6 w-[74px] text-xs" title={t("query.exportFormat")} disabled={!canExport}>
           <SelectValue />
@@ -143,9 +158,11 @@ export function TableEditorToolbar({
           <SelectItem value="tsv" className="text-xs">
             TSV
           </SelectItem>
-          <SelectItem value="sql" className="text-xs">
-            SQL
-          </SelectItem>
+          {sqlExportAvailable && (
+            <SelectItem value="sql" className="text-xs">
+              SQL
+            </SelectItem>
+          )}
           <SelectItem value="xlsx" className="text-xs">
             Excel
           </SelectItem>
@@ -196,7 +213,11 @@ export function TableEditorToolbar({
   );
 }
 
+const DEFAULT_PAGE_SIZE_RANGE = { min: 1, max: 100000 };
+
 interface TableDataStatusBarProps {
+  /** 驱动声明了表格编辑:新增 / 删除 / 应用 / 放弃修改才出现。 */
+  gridEdit: boolean;
   pendingEditCount: number;
   sqlSummary: string;
   totalRows: number | null;
@@ -209,6 +230,16 @@ interface TableDataStatusBarProps {
   selectedRowCount: number;
   submitting: boolean;
   loading: boolean;
+  /** 正在取的页(从 0 起,与 page 相同);有值时中部显示「正在加载第 N 页…」。 */
+  loadingPage?: number | null;
+  /** 最近一次取数失败:中部显示「加载失败」,错误详情在结果区的卡片里。 */
+  failed?: boolean;
+  /** 最近一次取数耗时(毫秒),跟在行数与页码之后。 */
+  elapsedMs?: number | null;
+  /** 当前页行数:有值时中部显示「N 行」,取代页码 / 记录数文案(无总数的 SQL 结果用)。 */
+  rowCount?: number | null;
+  /** 页大小可输入的范围,缺省 1–100000。 */
+  pageSizeRange?: { min: number; max: number };
   refreshTitle: string;
   onRefresh: () => void;
   onStopLoading: () => void;
@@ -226,6 +257,7 @@ interface TableDataStatusBarProps {
 }
 
 export function TableDataStatusBar({
+  gridEdit,
   pendingEditCount,
   sqlSummary,
   totalRows,
@@ -238,6 +270,11 @@ export function TableDataStatusBar({
   selectedRowCount,
   submitting,
   loading,
+  loadingPage,
+  failed,
+  elapsedMs,
+  rowCount,
+  pageSizeRange = DEFAULT_PAGE_SIZE_RANGE,
   refreshTitle,
   onRefresh,
   onStopLoading,
@@ -265,13 +302,14 @@ export function TableDataStatusBar({
   }
 
   const commitPageSize = () => {
-    const next = Math.max(1, Math.min(100000, Math.floor(Number(pageSizeDraft))));
+    const next = Math.max(pageSizeRange.min, Math.min(pageSizeRange.max, Math.floor(Number(pageSizeDraft))));
     if (!Number.isFinite(next)) {
       setPageSizeDraft(String(pageSize));
       return;
     }
-    setPageSizeDraft(String(next));
     if (next !== pageSize) onPageSizeChange(next);
+    // 草稿回到实际页大小:被拦截(留在本页)时不残留被拒绝的值;真正生效时由上面的同步接管新值。
+    setPageSizeDraft(String(pageSize));
   };
 
   const actionTone = "text-foreground disabled:text-muted-foreground disabled:opacity-35";
@@ -279,46 +317,55 @@ export function TableDataStatusBar({
   return (
     <div className="flex h-9 items-center gap-2 border-t border-border bg-muted/30 px-2 shrink-0">
       <div className="flex items-center gap-0.5 shrink-0">
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className={actionTone}
-          onClick={onAddRow}
-          disabled={loading || submitting}
-          title={t("query.addRow")}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className={actionTone}
-          onClick={onDeleteRows}
-          disabled={selectedRowCount === 0 || loading || submitting}
-          title={selectedRowCount > 1 ? t("query.deleteRecords", { count: selectedRowCount }) : t("query.deleteRecord")}
-        >
-          <Minus className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className={actionTone}
-          onClick={onApplyChanges}
-          disabled={!hasPendingEdits || loading || submitting}
-          title={t("query.applyChanges")}
-        >
-          <Check className="h-3.5 w-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className={actionTone}
-          onClick={onDiscardChanges}
-          disabled={!hasPendingEdits || loading || submitting}
-          title={t("query.discardChanges")}
-        >
-          <X className="h-3.5 w-3.5" />
-        </Button>
+        {gridEdit && (
+          <>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className={actionTone}
+              onClick={onAddRow}
+              disabled={loading || submitting}
+              title={t("query.addRow")}
+              data-testid="table-add-row"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className={actionTone}
+              onClick={onDeleteRows}
+              disabled={selectedRowCount === 0 || loading || submitting}
+              data-testid="table-delete-rows"
+              title={
+                selectedRowCount > 1 ? t("query.deleteRecords", { count: selectedRowCount }) : t("query.deleteRecord")
+              }
+            >
+              <Minus className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className={actionTone}
+              onClick={onApplyChanges}
+              disabled={!hasPendingEdits || loading || submitting}
+              title={t("query.applyChanges")}
+              data-testid="table-apply-changes"
+            >
+              <Check className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className={actionTone}
+              onClick={onDiscardChanges}
+              disabled={!hasPendingEdits || loading || submitting}
+              title={t("query.discardChanges")}
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </>
+        )}
         <Button
           variant="ghost"
           size="icon-xs"
@@ -342,16 +389,23 @@ export function TableDataStatusBar({
       </div>
 
       <div className="min-w-0 flex-1 text-center">
-        {sqlSummary ? (
+        {loadingPage != null ? (
+          <span className="text-xs text-muted-foreground">{t("query.loadingPage", { page: loadingPage + 1 })}</span>
+        ) : failed ? (
+          <span className="text-xs text-destructive">{t("query.loadFailed")}</span>
+        ) : sqlSummary ? (
           <span className="block truncate font-mono text-[11px] text-foreground" title={sqlSummary}>
             {sqlSummary}
           </span>
-        ) : totalRows != null ? (
-          <span className="text-xs text-muted-foreground">
-            {t("query.recordsInPage", { count: totalRows, page: page + 1 })}
-          </span>
         ) : (
-          <span className="text-xs text-muted-foreground">{t("query.pageNumber", { page: page + 1 })}</span>
+          <span className="text-xs text-muted-foreground">
+            {rowCount != null
+              ? t("query.rows", { count: rowCount })
+              : totalRows != null
+                ? t("query.recordsInPage", { count: totalRows, page: page + 1 })
+                : t("query.page", { page: page + 1 })}
+            {elapsedMs != null && ` · ${t("query.elapsedMs", { ms: elapsedMs })}`}
+          </span>
         )}
       </div>
 

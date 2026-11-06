@@ -530,7 +530,7 @@ func TestCmdCpRecursiveRemoteSourceApprovesReadScope(t *testing.T) {
 		handlers := stubCpHandler(&calls)
 
 		exitCode := cmdCp(context.Background(), handlers,
-			[]string{"-r", "3:/var/log", filepath.ToSlash(t.TempDir()) + "/"}, "")
+			[]string{"-r", "3:/var/log", t.TempDir() + string(filepath.Separator)}, "")
 
 		So(exitCode, ShouldEqual, 0)
 		So(batches, ShouldHaveLength, 1)
@@ -571,7 +571,7 @@ func TestCmdCpMultiSourceBatchItemsCarryDetail(t *testing.T) {
 
 		var calls []map[string]any
 		handlers := stubCpHandler(&calls)
-		dst := filepath.ToSlash(t.TempDir()) + "/"
+		dst := t.TempDir() + string(filepath.Separator)
 
 		exitCode := cmdCp(context.Background(), handlers, []string{"-r", "3:/var/log", dst}, "")
 
@@ -607,7 +607,7 @@ func TestCmdCpRecursiveHandlerArgsStayCompact(t *testing.T) {
 		stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow, SessionID: "s"}, nil)
 		var calls []map[string]any
 		handlers := stubCpHandler(&calls)
-		dst := filepath.ToSlash(t.TempDir()) + "/"
+		dst := t.TempDir() + string(filepath.Separator)
 
 		exitCode := cmdCp(context.Background(), handlers, []string{"-r", "3:/var/log", dst}, "")
 
@@ -681,7 +681,7 @@ func TestCmdCpExpansionRequiresListApproval(t *testing.T) {
 		var calls []map[string]any
 		handlers := stubCpHandler(&calls)
 
-		exitCode := cmdCp(context.Background(), handlers, []string{"-r", "1:/var/log", filepath.ToSlash(t.TempDir()) + "/"}, "")
+		exitCode := cmdCp(context.Background(), handlers, []string{"-r", "1:/var/log", t.TempDir() + string(filepath.Separator)}, "")
 
 		So(exitCode, ShouldEqual, 1)
 		So(seen, ShouldBeEmpty)
@@ -738,7 +738,7 @@ func TestCmdCpListApprovalOnlyWhenSomethingIsEnumerated(t *testing.T) {
 		stubCpBatchApproval(t, &batches, ApprovalResult{Decision: aictx.Allow, SessionID: "s"}, nil)
 		var calls []map[string]any
 		handlers := stubCpHandler(&calls)
-		dstDir := filepath.ToSlash(t.TempDir()) + "/"
+		dstDir := t.TempDir() + string(filepath.Separator)
 
 		Convey("N 个显式源、无 -r 无通配：不索取展开授权", func() {
 			exitCode := cmdCp(context.Background(), handlers,
@@ -848,7 +848,7 @@ func TestCmdCpDeniedAuditIsComplete(t *testing.T) {
 	require.Equal(t, "cp", entry.ToolName)
 	require.Equal(t, int64(1), entry.AssetID)
 	require.Equal(t, "web-01", entry.AssetName)
-	require.Equal(t, "cp /tmp/payload.bin → 1:/srv/payload.bin", entry.Command)
+	require.Equal(t, "cp "+absLocal(t, "/tmp/payload.bin")+" → 1:/srv/payload.bin", entry.Command)
 	require.Equal(t, "deny", entry.Decision)
 	require.Equal(t, aictx.SourceUserDeny, entry.DecisionSource)
 	require.Zero(t, entry.Success)
@@ -904,7 +904,7 @@ func TestCmdCpDirectAuditIsSingleAndConsistent(t *testing.T) {
 			require.Equal(t, "cp", entry.ToolName)
 			require.Equal(t, int64(1), entry.AssetID)
 			require.Equal(t, "web-01", entry.AssetName)
-			require.Equal(t, "cp /tmp/payload.bin → 1:/srv/payload.bin", entry.Command)
+			require.Equal(t, "cp "+absLocal(t, "/tmp/payload.bin")+" → 1:/srv/payload.bin", entry.Command)
 			require.Equal(t, "allow", entry.Decision)
 			require.Equal(t, aictx.SourceUserAllow, entry.DecisionSource)
 			require.Equal(t, tc.wantSuccess, entry.Success)
@@ -981,4 +981,12 @@ func TestCpToolParamsIncludesBothRemoteAssets(t *testing.T) {
 	require.Equal(t, float64(1), args["source_asset_id"])
 	require.Equal(t, float64(2), args["destination_asset_id"])
 	require.Equal(t, "cp 1:/srv/source.bin → 2:/srv/destination.bin", audit.ExtractCommandForAudit("cp", args))
+}
+
+// absLocal 是 opsctl 把本地路径 p 展开成的绝对路径（Windows 上 /tmp/x 会展开到当前盘符下）。
+func absLocal(t *testing.T, p string) string {
+	t.Helper()
+	abs, err := filepath.Abs(p)
+	require.NoError(t, err)
+	return abs
 }

@@ -1,10 +1,19 @@
+import { lazy } from "react";
 import { Boxes } from "lucide-react";
 import { registerAssetType } from "./_register";
-import { GenericConfigSection } from "@/components/asset/GenericConfigSection";
 import { parseGenericConfig } from "@/components/asset/GenericConfigSection.config";
-import { GenericDetailInfoCard, GenericDetailSubtitle } from "@/components/asset/detail/GenericDetailInfoCard";
 import { useCustomTypeStore } from "@/stores/customTypeStore";
 import type { asset_entity } from "../../../wailsjs/go/models";
+
+const GenericDetailInfoCard = lazy(() =>
+  import("@/components/asset/detail/GenericDetailInfoCard").then((m) => ({ default: m.GenericDetailInfoCard }))
+);
+const GenericDetailSubtitle = lazy(() =>
+  import("@/components/asset/detail/GenericDetailInfoCard").then((m) => ({ default: m.GenericDetailSubtitle }))
+);
+const GenericConfigSection = lazy(() =>
+  import("@/components/asset/GenericConfigSection").then((m) => ({ default: m.GenericConfigSection }))
+);
 
 /** 通用资产引用的自定义类型标识。 */
 function customTypeSlugOf(asset: asset_entity.Asset): string | undefined {

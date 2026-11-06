@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
-import { OSSUploadObject, OSSDownloadObject, OSSStartTransfer, OSSCancelTransfer } from "../../wailsjs/go/oss/OSS";
+import {
+  OSSUploadObject,
+  OSSDownloadObject,
+  OSSDownloadFolder,
+  OSSStartTransfer,
+  OSSCancelTransfer,
+} from "../../wailsjs/go/oss/OSS";
 import { useOssTransferStore } from "./ossTransferStore";
 import { useOssBrowserStore } from "./ossBrowserStore";
 
@@ -19,6 +25,7 @@ beforeEach(() => {
   vi.mocked(EventsOff).mockClear();
   vi.mocked(OSSUploadObject).mockReset();
   vi.mocked(OSSDownloadObject).mockReset();
+  vi.mocked(OSSDownloadFolder).mockReset();
   vi.mocked(OSSStartTransfer).mockReset().mockResolvedValue(undefined);
   vi.mocked(OSSCancelTransfer).mockReset().mockResolvedValue(undefined);
   useOssTransferStore.setState({ tabs: {} });
@@ -172,6 +179,55 @@ describe("ossTransferStore", () => {
     const row = useOssTransferStore.getState().tabs[TAB].transfers["oss-d1"];
     expect(row.direction).toBe("download");
     expect(row.name).toBe("a.txt");
+  });
+
+  it("startDownloadFolder with an empty id (dialog cancel) adds no rows", async () => {
+    vi.mocked(OSSDownloadFolder).mockResolvedValue("" as never);
+    await useOssTransferStore.getState().startDownloadFolder(TAB, 9, "b", "data/logs/");
+    expect(useOssTransferStore.getState().tabs[TAB]?.transfers ?? {}).toEqual({});
+  });
+
+  it("a folder download is one row that keeps the folder name and counts files as they finish", async () => {
+    vi.mocked(OSSDownloadFolder).mockResolvedValue("oss-f1" as never);
+    await useOssTransferStore.getState().startDownloadFolder(TAB, 9, "b", "data/logs/");
+    expect(OSSDownloadFolder).toHaveBeenCalledWith(9, "b", "data/logs/");
+    expect(EventsOn).toHaveBeenCalledBefore(vi.mocked(OSSStartTransfer));
+    expect(OSSStartTransfer).toHaveBeenCalledWith("oss-f1");
+
+    handlerFor("oss-f1")({
+      transferId: "oss-f1",
+      status: "progress",
+      currentFile: "logs/sub/deep.bin",
+      bytesDone: 40,
+      bytesTotal: 100,
+      speed: 20,
+      filesCompleted: 2,
+      filesTotal: 5,
+    });
+    const row = useOssTransferStore.getState().tabs[TAB].transfers["oss-f1"];
+    expect(row.direction).toBe("download");
+    expect(row.name).toBe("logs");
+    expect(row.files).toEqual({ done: 2, total: 5 });
+    expect(row.bytesDone).toBe(40);
+  });
+
+  it("a finished folder download counts every file as done", async () => {
+    vi.mocked(OSSDownloadFolder).mockResolvedValue("oss-f1" as never);
+    await useOssTransferStore.getState().startDownloadFolder(TAB, 9, "b", "data/logs/");
+    const progress = {
+      transferId: "oss-f1",
+      currentFile: "logs/a.txt",
+      bytesDone: 90,
+      bytesTotal: 100,
+      speed: 20,
+      filesCompleted: 4,
+      filesTotal: 5,
+    };
+    handlerFor("oss-f1")({ ...progress, status: "progress" });
+    handlerFor("oss-f1")({ transferId: "oss-f1", status: "done" });
+    const row = useOssTransferStore.getState().tabs[TAB].transfers["oss-f1"];
+    expect(row.status).toBe("done");
+    expect(row.files).toEqual({ done: 5, total: 5 });
   });
 
   it("cancel calls OSSCancelTransfer", () => {

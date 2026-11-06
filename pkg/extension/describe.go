@@ -52,7 +52,8 @@ func WasmHash(wasmBytes []byte) string {
 }
 
 // cachedDescriptor returns the stored descriptor for name when it was produced by
-// exactly this wasm binary, or nil.
+// exactly this wasm binary, or nil. It is decoded, not judged: the caller merges it
+// and runs the contribution points' Check on it like a fresh answer.
 func cachedDescriptor(name, wasmHash string) *Descriptor {
 	cache := currentDescribeCache()
 	if cache == nil {
@@ -69,8 +70,8 @@ func cachedDescriptor(name, wasmHash string) *Descriptor {
 	}
 	desc, err := ParseDescriptor(payload)
 	if err != nil {
-		// A cache entry that no longer parses is stale, not fatal: describing the
-		// guest again produces the truth and overwrites it.
+		// A cache entry that no longer decodes (another wire shape) is stale, not
+		// fatal: describing the guest again produces the truth and overwrites it.
 		logger.Default().Warn("discard unusable cached extension descriptor",
 			zap.String("extension", name), zap.Error(err))
 		return nil

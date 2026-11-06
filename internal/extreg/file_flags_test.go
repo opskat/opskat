@@ -1,6 +1,7 @@
 package extreg
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,15 +11,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 // registerBulkExtension registers acme with one extra tool whose `body` parameter
 // is file-readable.
-func registerBulkExtension(t *testing.T) *extension.Manifest {
+func registerBulkExtension(t *testing.T) *Manifest {
 	t.Helper()
 	m := testManifest()
-	m.Tools = append(m.Tools, extension.ToolDef{
+	m.Tools = append(m.Tools, extwire.Tool{
 		Name: "bulk",
 		Parameters: map[string]any{
 			"type": "object",
@@ -28,8 +29,8 @@ func registerBulkExtension(t *testing.T) *extension.Manifest {
 			},
 		},
 		PolicyAction: "object.write",
-		FileParams:   []string{"body"},
-	}, extension.ToolDef{
+		Large:        []string{"body"},
+	}, extwire.Tool{
 		Name: "pair",
 		Parameters: map[string]any{
 			"type": "object",
@@ -39,12 +40,12 @@ func registerBulkExtension(t *testing.T) *extension.Manifest {
 			},
 		},
 		PolicyAction: "object.write",
-		FileParams:   []string{"a", "b"},
+		Large:        []string{"a", "b"},
 	})
 	localized := m.Localized(func(k string) string { return k })
-	require.NoError(t, register(loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}},
+	require.NoError(t, attachLoaded(loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}},
 		helpDocument("", m.Name, localized), "acme skill"))
-	t.Cleanup(func() { Unregister(m.Name) })
+	t.Cleanup(func() { detach(m.Name) })
 	return m
 }
 
@@ -57,9 +58,9 @@ func writeTemp(t *testing.T, content []byte) string {
 
 // argsOf parses the command the way the desktop does, so "equivalent to inline" is
 // judged on what the tool would receive.
-func argsOf(t *testing.T, m *extension.Manifest, command string) map[string]any {
+func argsOf(t *testing.T, m *Manifest, command string) map[string]any {
 	t.Helper()
-	_, raw, err := parseCommand(m, command)
+	_, raw, err := parseCommand(context.Background(), m, command)
 	require.NoError(t, err)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(raw, &got))
@@ -134,12 +135,12 @@ func TestExpandFileFlagsRefusals(t *testing.T) {
 // treating `-file` as an unknown flag even for a file-readable parameter.
 func TestParseCommandRejectsFileFlag(t *testing.T) {
 	m := registerBulkExtension(t)
-	_, _, err := parseCommand(m, "bulk --body-file=/etc/passwd")
+	_, _, err := parseCommand(context.Background(), m, "bulk --body-file=/etc/passwd")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `no parameter "body-file"`)
 }
 
-func TestExpandFileFlagsOnlyForFileParamsOfTheTool(t *testing.T) {
+func TestExpandFileFlagsOnlyForLargeOfTheTool(t *testing.T) {
 	registerBulkExtension(t)
 	// index is not file-readable: its -file form is not expanded (the desktop then
 	// rejects it as an unknown flag).

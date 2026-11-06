@@ -6,10 +6,12 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/credential_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/service/credential_query_svc"
+	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
@@ -243,4 +245,102 @@ func mustJSON(t *testing.T, v any) []byte {
 	data, err := json.Marshal(v)
 	require.NoError(t, err)
 	return data
+}
+
+// 驱动专属字段：非口令类的取值与口令类的键（只表示已设置）随安全视图给出；口令的值
+// 与加密串都不出现。没有 driver_options 的资产视图不多出任何键。
+func TestToSafeViewDriverOptions(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.DriverFields = []dbdriver.DriverField{
+		{Key: "service_name", Type: dbdriver.FieldTypeText, Tab: dbdriver.TabConnection},
+		{Key: "wallet_secret", Type: dbdriver.FieldTypePassword, Tab: dbdriver.TabConnection},
+	}
+	dbdrivertest.Register(t, fake)
+	asset := &asset_entity.Asset{ID: 7, Name: "opts", Type: asset_entity.AssetTypeDatabase}
+	require.NoError(t, asset.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+		Driver: fake.Desc.ID, Host: "h", Port: 1, Username: "u",
+		DriverOptions: map[string]any{"service_name": "orcl", "wallet_secret": "ENCRYPTED-BLOB"},
+	}))
+
+	data, err := json.Marshal(toSafeView(asset))
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, map[string]any{"service_name": "orcl"}, got["driver_options"])
+	assert.Equal(t, []any{"wallet_secret"}, got["driver_options_secrets_set"])
+	assert.NotContains(t, string(data), "ENCRYPTED-BLOB")
+
+	plain := &asset_entity.Asset{ID: 8, Name: "plain", Type: asset_entity.AssetTypeDatabase}
+	require.NoError(t, plain.SetDatabaseConfig(&asset_entity.DatabaseConfig{Driver: fake.Desc.ID, Host: "h", Port: 1, Username: "u"}))
+	data, err = json.Marshal(toSafeView(plain))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "driver_options")
+}
+
+// 声明了证书字段组的驱动：opsctl get asset 与 AI get_asset 都经 toSafeView 展示资产，
+// 证书设置照常可见，私钥内容只显示为已设置，密文与证书内容不出库。
+func TestToSafeViewCertificateFields(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Form = append(fake.Desc.Form, dbdriver.FormTabFields{Tab: dbdriver.TabTLS, Fields: []dbdriver.FormField{dbdriver.FieldTLSCert}})
+	dbdrivertest.Register(t, fake)
+	asset := &asset_entity.Asset{ID: 9, Name: "tls", Type: asset_entity.AssetTypeDatabase}
+	require.NoError(t, asset.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+		Driver: fake.Desc.ID, Host: "h", Port: 1, Username: "u",
+		TLS: true, TLSInsecure: true, TLSServerName: "db.internal",
+		TLSCAPEM: "CA-CONTENT", TLSCertPEM: "CERT-CONTENT", TLSKeyPEM: "ENCRYPTED-KEY",
+	}))
+
+	data, err := json.Marshal(toSafeView(asset))
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, true, got["tls"])
+	assert.Equal(t, true, got["tls_insecure"])
+	assert.Equal(t, "db.internal", got["tls_server_name"])
+	assert.Equal(t, true, got["tls_key_pem_set"])
+	assert.NotContains(t, string(data), "ENCRYPTED-KEY")
+	assert.NotContains(t, string(data), "CA-CONTENT")
+	assert.NotContains(t, string(data), "CERT-CONTENT")
+
+	paths := &asset_entity.Asset{ID: 10, Name: "tls-paths", Type: asset_entity.AssetTypeDatabase}
+	require.NoError(t, paths.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+		Driver: fake.Desc.ID, Host: "h", Port: 1, Username: "u",
+		TLS: true, TLSCAFile: "/etc/ca.pem", TLSCertFile: "/etc/c.pem", TLSKeyFile: "/etc/k.pem",
+	}))
+	data, err = json.Marshal(toSafeView(paths))
+	require.NoError(t, err)
+	got = map[string]any{}
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, "/etc/ca.pem", got["tls_ca_file"])
+	assert.Equal(t, "/etc/c.pem", got["tls_cert_file"])
+	assert.Equal(t, "/etc/k.pem", got["tls_key_file"])
+	assert.NotContains(t, got, "tls_key_pem_set")
+}
+
+// 声明了 Kerberos 字段组的驱动：get_asset 展示认证方式、主体、KDC，口令只显示为已设置。
+func TestToSafeViewKerberosFields(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Form = append(fake.Desc.Form, dbdriver.FormTabFields{Tab: dbdriver.TabConnection, Fields: []dbdriver.FormField{dbdriver.FieldKerberos}})
+	dbdrivertest.Register(t, fake)
+	asset := &asset_entity.Asset{ID: 9, Name: "krb", Type: asset_entity.AssetTypeDatabase}
+	require.NoError(t, asset.SetDatabaseConfig(&asset_entity.DatabaseConfig{
+		Driver: fake.Desc.ID, Host: "h", Port: 1,
+		AuthMethod: asset_entity.AuthMethodKerberos, KrbPrincipal: "svc@EXAMPLE.COM", KrbPassword: "ENCRYPTED-KRB",
+		KrbKeytabFile: "/etc/svc.keytab", KrbKDC: "kdc.example.com", KrbSPN: "oracle/db",
+	}))
+
+	data, err := json.Marshal(toSafeView(asset))
+	require.NoError(t, err)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(data, &got))
+	assert.Equal(t, "kerberos", got["auth_method"])
+	assert.Equal(t, "svc@EXAMPLE.COM", got["krb_principal"])
+	assert.Equal(t, "/etc/svc.keytab", got["krb_keytab_file"])
+	assert.Equal(t, "kdc.example.com", got["krb_kdc"])
+	assert.Equal(t, "oracle/db", got["krb_spn"])
+	assert.Equal(t, true, got["krb_password_set"])
+	assert.NotContains(t, string(data), "ENCRYPTED-KRB")
 }

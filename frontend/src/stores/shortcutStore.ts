@@ -2,6 +2,9 @@ import { create } from "zustand";
 
 export const isMac = /Macintosh|Mac OS/.test(navigator.userAgent);
 
+/** 区域标记：焦点在其内时全局 ⌘F（panel.filter）让路，由区域自己打开查找（如数据库结果表格的查找条；Monaco 编辑器由 .monaco-editor 识别，无需此标记）。 */
+export const FIND_SCOPE_ATTR = "data-find-scope";
+
 export interface ShortcutBinding {
   code: string; // KeyboardEvent.code, e.g. "Digit1", "KeyW", "BracketLeft"
   mod: boolean; // primary modifier: Cmd (Mac) / Ctrl (Win)
@@ -34,6 +37,7 @@ export type ShortcutAction =
   | "terminal.selectAll"
   | "terminal.find"
   | "asset.copyRef"
+  | "designer.save"
   | "page.home"
   | "page.settings"
   | "page.sshkeys"
@@ -63,6 +67,7 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   "terminal.selectAll",
   "terminal.find",
   "asset.copyRef",
+  "designer.save",
   "page.home",
   "page.settings",
   "page.sshkeys",
@@ -95,6 +100,8 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutAction, ShortcutBinding> = {
   // Standard copy key (Ctrl+C / Cmd+C). On macOS this overlaps terminal.copy;
   // the keyboard handler yields to the terminal / native copy when those own focus.
   "asset.copyRef": { code: "KeyC", mod: true, ctrl: false, shift: false, alt: false },
+  // 表设计器的保存:只在设计表标签在前台时由设计器自己处理,全局快捷键不接管。
+  "designer.save": { code: "KeyS", mod: true, ctrl: false, shift: false, alt: false },
   "page.home": { code: "KeyH", mod: true, ctrl: false, shift: true, alt: false },
   "page.settings": { code: "Comma", mod: true, ctrl: false, shift: false, alt: false },
   "page.sshkeys": { code: "KeyK", mod: true, ctrl: false, shift: true, alt: false },

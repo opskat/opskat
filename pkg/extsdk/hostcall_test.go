@@ -71,6 +71,10 @@ func (m *mockHostCaller) AssetGetConfig(assetID int64) (json.RawMessage, error) 
 	return nil, fmt.Errorf("not implemented")
 }
 
+func (m *mockHostCaller) ConfigGet() (json.RawMessage, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
 func (m *mockHostCaller) FileDialog(params []byte) (string, error) {
 	return "", fmt.Errorf("not implemented")
 }
@@ -83,13 +87,17 @@ func (m *mockHostCaller) KVSet(key string, value []byte) error {
 	return fmt.Errorf("not implemented")
 }
 
-func (m *mockHostCaller) ActionEvent(eventType string, data []byte) {
+func (m *mockHostCaller) ToolEvent(eventType string, data []byte) {
 }
 
 func (m *mockHostCaller) IOSetDeadline(handleID uint32, kind string, unixNanos int64) error {
 	return fmt.Errorf("not implemented")
 }
 
-func (m *mockHostCaller) ActionShouldStop() bool {
+func (m *mockHostCaller) ToolShouldStop() bool {
 	return false
+}
+
+func (m *mockHostCaller) KerberosTicket(string) ([]byte, error) {
+	return nil, fmt.Errorf("not implemented")
 }

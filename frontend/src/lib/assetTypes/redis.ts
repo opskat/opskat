@@ -1,7 +1,13 @@
+import { lazy } from "react";
 import { RedisIcon } from "@/components/asset/brand-icons";
 import { registerAssetType } from "./_register";
-import { RedisDetailInfoCard } from "@/components/asset/detail/RedisDetailInfoCard";
-import { RedisConfigSection } from "@/components/asset/RedisConfigSection";
+
+const RedisDetailInfoCard = lazy(() =>
+  import("@/components/asset/detail/RedisDetailInfoCard").then((m) => ({ default: m.RedisDetailInfoCard }))
+);
+const RedisConfigSection = lazy(() =>
+  import("@/components/asset/RedisConfigSection").then((m) => ({ default: m.RedisConfigSection }))
+);
 
 registerAssetType({
   type: "redis",

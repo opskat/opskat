@@ -57,9 +57,16 @@ func newCountingServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
 // openAndDrain performs one HTTP open through h, fully reads the response body
 // (required for the underlying connection to become eligible for keep-alive
 // reuse) and closes the handle.
-func openAndDrain(t *testing.T, h *DefaultHostProvider, asset *AssetRef, url string) {
+//
+// opts set what the capability layer would from the call's scope: the asset's
+// route, TLS settings and their fingerprint.
+func openAndDrain(t *testing.T, h *DefaultHostProvider, asset *AssetRef, url string, opts ...func(*IOOpenParams)) {
 	t.Helper()
-	res, err := h.OpenIO(context.Background(), asset, IOOpenParams{Type: "http", Method: "GET", URL: url, AllowPrivate: true})
+	params := IOOpenParams{Type: "http", Method: "GET", URL: url, AllowPrivate: true}
+	for _, opt := range opts {
+		opt(&params)
+	}
+	res, err := h.OpenIO(context.Background(), asset, params)
 	if err != nil {
 		t.Fatalf("OpenIO: %v", err)
 	}
@@ -120,13 +127,11 @@ func TestDefaultHostProviderHTTPClientReuse(t *testing.T) {
 	})
 }
 
-// fingerprintDialer returns a fixed fingerprint (and no dial override) so a
+// withFingerprint sets the fingerprint of the scope's connection settings, so a
 // test can flip it between calls to simulate the asset's connection settings
 // changing without a config write reaching the invalidation path.
-type fingerprintDialer struct{ fingerprint string }
-
-func (d *fingerprintDialer) DialContextFor(context.Context, int64) (DialContextFunc, *tls.Config, string, error) {
-	return nil, nil, d.fingerprint, nil
+func withFingerprint(fingerprint string) func(*IOOpenParams) {
+	return func(p *IOOpenParams) { p.Fingerprint = fingerprint }
 }
 
 func TestDefaultHostProviderHTTPClientFingerprint(t *testing.T) {
@@ -135,19 +140,16 @@ func TestDefaultHostProviderHTTPClientFingerprint(t *testing.T) {
 		asset := &AssetRef{ID: 42, Type: "fixture"}
 
 		Convey("same fingerprint across calls reuses the client", func() {
-			dialer := &fingerprintDialer{fingerprint: "tunnel-a"}
-			h := NewDefaultHostProvider(DefaultHostConfig{AssetDialer: dialer})
-			openAndDrain(t, h, asset, srv.URL)
-			openAndDrain(t, h, asset, srv.URL)
+			h := NewDefaultHostProvider(DefaultHostConfig{})
+			openAndDrain(t, h, asset, srv.URL, withFingerprint("tunnel-a"))
+			openAndDrain(t, h, asset, srv.URL, withFingerprint("tunnel-a"))
 			So(accepts.Load(), ShouldEqual, int32(1))
 		})
 
 		Convey("a changed fingerprint rebuilds the client even without an explicit invalidation", func() {
-			dialer := &fingerprintDialer{fingerprint: "tunnel-a"}
-			h := NewDefaultHostProvider(DefaultHostConfig{AssetDialer: dialer})
-			openAndDrain(t, h, asset, srv.URL)
-			dialer.fingerprint = "tunnel-b"
-			openAndDrain(t, h, asset, srv.URL)
+			h := NewDefaultHostProvider(DefaultHostConfig{})
+			openAndDrain(t, h, asset, srv.URL, withFingerprint("tunnel-a"))
+			openAndDrain(t, h, asset, srv.URL, withFingerprint("tunnel-b"))
 			So(accepts.Load(), ShouldEqual, int32(2))
 		})
 	})
@@ -288,22 +290,15 @@ func TestDefaultHostProviderCachedClientUsesEachCallsRedirectGuard(t *testing.T)
 	})
 }
 
-// tlsDialer resolves an asset whose connection settings enable TLS.
-type tlsDialer struct{}
-
-func (tlsDialer) DialContextFor(context.Context, int64) (DialContextFunc, *tls.Config, string, error) {
-	return nil, &tls.Config{InsecureSkipVerify: true}, "tls", nil
-}
-
 // The asset's TLS settings are the user's decision about how its endpoint is
 // reached: a guest asking for plain http to that endpoint must not get a
 // connection that silently skips them.
 func TestAssetEndpointWithTLSRefusesPlainHTTP(t *testing.T) {
 	Convey("Given an asset whose connection settings enable TLS", t, func() {
 		srv, accepts := newCountingServer(t)
-		h := NewDefaultHostProvider(DefaultHostConfig{AssetDialer: tlsDialer{}})
+		h := NewDefaultHostProvider(DefaultHostConfig{})
 		res, err := h.OpenIO(context.Background(), &AssetRef{ID: 42, Type: "fixture"},
-			IOOpenParams{Type: "http", Method: "GET", URL: srv.URL, AllowPrivate: true})
+			IOOpenParams{Type: "http", Method: "GET", URL: srv.URL, AllowPrivate: true, TLS: &tls.Config{InsecureSkipVerify: true}, Fingerprint: "tls"})
 		So(err, ShouldBeNil)
 		defer func() { _ = res.Closer.Close() }()
 
@@ -335,13 +330,11 @@ type recordingDialer struct {
 	addrs  []string
 }
 
-func (d *recordingDialer) DialContextFor(context.Context, int64) (DialContextFunc, *tls.Config, string, error) {
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		d.mu.Lock()
-		d.addrs = append(d.addrs, addr)
-		d.mu.Unlock()
-		return (&net.Dialer{}).DialContext(ctx, network, d.target)
-	}, nil, "recording", nil
+func (d *recordingDialer) dial(ctx context.Context, network, addr string) (net.Conn, error) {
+	d.mu.Lock()
+	d.addrs = append(d.addrs, addr)
+	d.mu.Unlock()
+	return (&net.Dialer{}).DialContext(ctx, network, d.target)
 }
 
 // The host owns the path to an asset's endpoint (direct, SSH tunnel, proxy
@@ -364,8 +357,9 @@ func TestAssetEndpointClientIgnoresProxyEnvironment(t *testing.T) {
 	}
 	srv, _ := newCountingServer(t)
 	dialer := &recordingDialer{target: srv.Listener.Addr().String()}
-	h := NewDefaultHostProvider(DefaultHostConfig{AssetDialer: dialer})
-	openAndDrain(t, h, &AssetRef{ID: 42, Type: "fixture"}, "http://es.test:9200/ok")
+	h := NewDefaultHostProvider(DefaultHostConfig{})
+	openAndDrain(t, h, &AssetRef{ID: 42, Type: "fixture"}, "http://es.test:9200/ok",
+		func(p *IOOpenParams) { p.Dial, p.Fingerprint = dialer.dial, "recording" })
 
 	dialer.mu.Lock()
 	defer dialer.mu.Unlock()

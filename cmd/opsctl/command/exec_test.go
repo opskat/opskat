@@ -2,10 +2,14 @@ package command
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,23 +17,47 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/cago-frame/cago/database/db"
+	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
+	"go.uber.org/zap"
+	"golang.org/x/crypto/ssh"
+	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/helper"
+	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
+	"github.com/opskat/opskat/internal/connpool"
+	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/audit_entity"
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
+	"github.com/opskat/opskat/internal/model/entity/extension_describe_entity"
+	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
+	"github.com/opskat/opskat/internal/repository/audit_repo"
+	"github.com/opskat/opskat/internal/repository/extension_data_repo"
+	"github.com/opskat/opskat/internal/repository/extension_describe_repo"
+	"github.com/opskat/opskat/internal/repository/extension_state_repo"
+	"github.com/opskat/opskat/internal/repository/grant_repo"
+	"github.com/opskat/opskat/internal/repository/group_repo"
+	"github.com/opskat/opskat/internal/repository/host_key_repo"
+	"github.com/opskat/opskat/internal/repository/policy_group_repo"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/custom_type_svc"
 	"github.com/opskat/opskat/internal/service/serial_svc"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"go.uber.org/mock/gomock"
+	"github.com/opskat/opskat/internal/sshagent"
+	"github.com/opskat/opskat/migrations"
+	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extension/extensiontest"
 )
 
 // effectiveAuditCommand replicates DefaultAuditWriter.WriteToolCall's own resolution of
@@ -56,22 +84,46 @@ func effectiveAuditCommand(t *testing.T, info audit.ToolCallInfo) string {
 // different failure causes (see TestCmdExec_KafkaDenyRuleEnforcedViaCanonicalCommand).
 func captureStderr(t *testing.T, f func()) string {
 	t.Helper()
+	return captureFile(t, &os.Stderr, f)
+}
+
+// captureStdout is captureStderr for os.Stdout.
+func captureStdout(t *testing.T, f func()) string {
+	t.Helper()
+	return captureFile(t, &os.Stdout, f)
+}
+
+// captureFile points *target at a pipe while f runs and returns what f wrote to it.
+// The pipe is drained while f runs, not after: a pipe buffer is only a few KB (4 KB on
+// Windows), so an f that writes more — the top-level usage text does — would block on
+// its own write forever if nothing read until it returned.
+func captureFile(t *testing.T, target **os.File, f func()) string {
+	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
-	orig := os.Stderr
-	os.Stderr = w
+	type result struct {
+		data []byte
+		err  error
+	}
+	read := make(chan result, 1)
+	go func() {
+		data, err := io.ReadAll(r)
+		read <- result{data, err}
+	}()
+	orig := *target
+	*target = w
+	defer func() { *target = orig }()
 	f()
 	if err := w.Close(); err != nil {
 		t.Fatalf("close pipe writer: %v", err)
 	}
-	os.Stderr = orig
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read pipe: %v", err)
+	got := <-read
+	if got.err != nil {
+		t.Fatalf("read pipe: %v", got.err)
 	}
-	return string(data)
+	return string(got.data)
 }
 
 // noSessionSerialManager is the minimal serial_svc.CommandManager fake that always
@@ -163,7 +215,7 @@ func setupOpsctlExecAssets(t *testing.T) *opsctlExecTestEnv {
 	}
 
 	origStream := execSSHStreamFn
-	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, _ *asset_entity.Asset, _ string, _ ApprovalResult) int {
+	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, _ *asset_entity.Asset, _ string, _ io.Reader, _ ApprovalResult) int {
 		env.sshStreamCalls++
 		env.sshAuditSources = append(env.sshAuditSources, aictx.GetAuditSource(auditCtx))
 		return 0
@@ -254,7 +306,7 @@ func TestCmdExec_DeniedApprovalAuditSourceIsOpsctl(t *testing.T) {
 func TestCmdExec_SSHRemoteFailureAuditSourceIsOpsctl(t *testing.T) {
 	env := setupOpsctlExec(t)
 	env.approvalDecision = "allow"
-	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, result ApprovalResult) int {
+	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, _ io.Reader, result ApprovalResult) int {
 		writeOpsctlAudit(auditCtx, "exec", `{"asset_id":2,"command":"review"}`, "", errors.New("remote failure"), result.ToCheckResult())
 		return 1
 	}
@@ -526,7 +578,7 @@ func TestCmdExec_OSSDeniedAuditCommandIsCanonical(t *testing.T) {
 func TestCmdExec_SSHAuditCommandStaysRaw(t *testing.T) {
 	env := setupOpsctlExec(t)
 	env.approvalDecision = "allow"
-	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, result ApprovalResult) int {
+	execSSHStreamFn = func(_ context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, _ io.Reader, result ApprovalResult) int {
 		argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, asset.ID, command)
 		writeOpsctlAudit(auditCtx, "exec", argsJSON, `{"exit_code":0}`, nil, result.ToCheckResult())
 		return 0
@@ -900,4 +952,456 @@ func TestCmdExec_GenericCommandKeepsArgvBoundariesStreamsAndMapsExitCodes(t *tes
 	assert.Equal(t, 1, code)
 	assert.Empty(t, stdout)
 	assert.Contains(t, stderr, "Error:")
+}
+
+// --- extension assets, executed in this process -------------------------------
+
+// repoDescribeCache is the describe() cache over the data dir's own
+// extension_describe table — the one the desktop app writes when it loads an
+// extension and opsctl's boot registration reads.
+type repoDescribeCache struct{}
+
+func (repoDescribeCache) LoadDescriptor(name string) (string, []byte, error) {
+	row, err := extension_describe_repo.ExtensionDescribe().Find(context.Background(), name)
+	if err != nil || row == nil {
+		return "", nil, err
+	}
+	return row.WasmHash, []byte(row.Descriptor), nil
+}
+
+func (repoDescribeCache) StoreDescriptor(name, wasmHash string, payload []byte) error {
+	return extension_describe_repo.ExtensionDescribe().Save(context.Background(),
+		&extension_describe_entity.ExtensionDescribe{Name: name, WasmHash: wasmHash, Descriptor: string(payload)})
+}
+
+func (repoDescribeCache) DeleteDescriptor(name string) error {
+	return extension_describe_repo.ExtensionDescribe().Delete(context.Background(), name)
+}
+
+// swapGlobal installs v through set for the test and puts the original back after.
+func swapGlobal[T any](t *testing.T, get func() T, set func(T), v T) {
+	t.Helper()
+	orig := get()
+	set(v)
+	t.Cleanup(func() { set(orig) })
+}
+
+// localExtEnv is a data dir with the fixture extension installed and no desktop app
+// running on it: a real SQLite database through the migrations, the extension's
+// files on disk, and opsctl's own boot-time registration done.
+type localExtEnv struct {
+	gdb    *gorm.DB
+	extDir string
+	asset  *asset_entity.Asset
+}
+
+func setupLocalExtExec(t *testing.T, states ...*extension_state_entity.ExtensionState) *localExtEnv {
+	t.Helper()
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	gdb, err := gorm.Open(sqlite.Open(filepath.Join(dataDir, "opskat.db")), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, migrations.RunMigrations(gdb, dataDir))
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	db.SetDefault(gdb)
+
+	swapGlobal(t, asset_repo.Asset, asset_repo.RegisterAsset, asset_repo.NewAsset())
+	swapGlobal(t, audit_repo.Audit, audit_repo.RegisterAudit, audit_repo.NewAudit())
+	swapGlobal(t, group_repo.Group, group_repo.RegisterGroup, group_repo.NewGroup())
+	swapGlobal(t, grant_repo.Grant, grant_repo.RegisterGrant, grant_repo.NewGrant())
+	swapGlobal(t, policy_group_repo.PolicyGroup, policy_group_repo.RegisterPolicyGroup, policy_group_repo.NewPolicyGroup())
+	swapGlobal(t, extension_data_repo.ExtensionData, extension_data_repo.RegisterExtensionData, extension_data_repo.NewExtensionData())
+	swapGlobal(t, extension_state_repo.ExtensionState, extension_state_repo.RegisterExtensionState, extension_state_repo.NewExtensionState())
+	swapGlobal(t, extension_describe_repo.ExtensionDescribe, extension_describe_repo.RegisterExtensionDescribe, extension_describe_repo.NewExtensionDescribe())
+	extension.SetDescribeCache(repoDescribeCache{})
+	t.Cleanup(func() { extension.SetDescribeCache(nil) })
+	credential_svc.SetDefault(credential_svc.New("opsctl-ext-test-key", []byte("0123456789abcdef")))
+	for _, s := range states {
+		enabled := s.Enabled
+		require.NoError(t, extension_state_repo.ExtensionState().Create(ctx, s))
+		// The column defaults to enabled, so a false on insert is dropped; the desktop
+		// app records a disable as an update of the existing row.
+		s.Enabled = enabled
+		require.NoError(t, extension_state_repo.ExtensionState().Update(ctx, s))
+	}
+
+	// Nothing here may reach a desktop app or a terminal: the point is that none runs.
+	swapGlobal(t, func() func(string) error { return dialApprovalSocket }, func(f func(string) error) { dialApprovalSocket = f },
+		func(string) error { return errors.New("desktop unreachable in tests") })
+	swapGlobal(t, func() func() bool { return stdinIsTerminal }, func(f func() bool) { stdinIsTerminal = f }, func() bool { return false })
+	swapGlobal(t, func() func() bool { return stderrIsTerminal }, func(f func() bool) { stderrIsTerminal = f }, func() bool { return false })
+	swapGlobal(t, func() func() string { return sessionDataDir }, func(f func() string) { sessionDataDir = f }, func() string { return dataDir })
+
+	root := filepath.Join(dataDir, "extensions")
+	swapGlobal(t, func() func() string { return extensionsDirFn }, func(f func() string) { extensionsDirFn = f }, func() string { return root })
+	extDir := extensiontest.InstallFixture(t, root)
+	// The desktop app has loaded it once on this machine: that is what leaves the
+	// describe() answer in the cache opsctl's boot registration reads.
+	mgr := extension.NewManager(root, func(string) extension.HostProvider {
+		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
+	}, extensionContributions, zap.NewNop())
+	_, err = mgr.LoadExtension(ctx, extDir)
+	require.NoError(t, err)
+	mgr.Close(ctx)
+
+	t.Cleanup(func() {
+		releaseExtensions(ctx)
+		extensionContributions.Revoke(extensiontest.FixtureName)
+		extreg.SetConnTestRegistrar(nil)
+	})
+	registerExtensionAssetTypes()
+
+	asset := &asset_entity.Asset{
+		Name: "fx-1", Type: "fixture", Status: asset_entity.StatusActive, Createtime: 1,
+		Config: `{"endpoint":"http://127.0.0.1:1"}`,
+	}
+	require.NoError(t, asset_repo.Asset().Create(ctx, asset))
+	return &localExtEnv{gdb: gdb, extDir: extDir, asset: asset}
+}
+
+// exec runs `opsctl exec <args>` the way root.go dispatches it and returns its exit
+// code, stdout and stderr.
+func (e *localExtEnv) exec(t *testing.T, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	return e.execWithMFACode(t, "", args...)
+}
+
+// execWithMFACode is exec with a global --mfa-code ("" = none).
+func (e *localExtEnv) execWithMFACode(t *testing.T, mfaCode string, args ...string) (code int, stdout, stderr string) {
+	t.Helper()
+	ctx := withMFACode(context.Background(), mfaCode)
+	stderr = captureStderr(t, func() {
+		stdout = captureStdout(t, func() {
+			code = cmdExec(ctx, buildHandlerMap(), args, "sess-ext")
+		})
+	})
+	return code, stdout, stderr
+}
+
+func (e *localExtEnv) auditRows(t *testing.T) []audit_entity.AuditLog {
+	t.Helper()
+	var rows []audit_entity.AuditLog
+	require.NoError(t, e.gdb.Order("id").Find(&rows).Error)
+	return rows
+}
+
+// With no desktop app on the data dir, `opsctl exec` on an extension asset loads that
+// extension in its own process and runs the tool there: the result is the only thing
+// on stdout, the exit code is 0, and the call is audited once as an opsctl exec.
+func TestCmdExec_ExtensionAssetRunsInOpsctlWithoutDesktop(t *testing.T) {
+	env := setupLocalExtExec(t)
+
+	code, stdout, stderr := env.exec(t, "fx-1", "--", "echo", "--msg", "hi")
+
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	// The tool's result exactly as it returned it (the guest marshals a Go map, so its
+	// keys come sorted) — not re-indented, no newline added.
+	assert.Equal(t, `{"args":{"msg":"hi"},"tool":"echo"}`, stdout)
+
+	rows := env.auditRows(t)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "opsctl", rows[0].Source)
+	assert.Equal(t, "exec", rows[0].ToolName)
+	assert.Equal(t, env.asset.ID, rows[0].AssetID)
+	assert.Equal(t, "echo --msg=hi", rows[0].Command, "the audit row carries the normalized command")
+	assert.Equal(t, "allow", rows[0].Decision)
+	assert.Equal(t, aictx.SourcePolicyAllow, rows[0].DecisionSource)
+	assert.Equal(t, 1, rows[0].Success)
+}
+
+// A call the extension's policy refuses is reported the way a denied built-in exec is
+// — exit 1, the reason on stderr, nothing on stdout — so a script piping the output
+// cannot mistake the refusal for a result.
+func TestCmdExec_ExtensionPolicyRefusalStaysOffStdout(t *testing.T) {
+	env := setupLocalExtExec(t)
+
+	code, stdout, stderr := env.exec(t, "fx-1", "--", "reject_host", "--resource=http://evil/x")
+
+	assert.Equal(t, 1, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "must not name a host")
+	rows := env.auditRows(t)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "deny", rows[0].Decision)
+}
+
+// A tool's logs never reach stdout: a pipe or a script gets the result alone.
+func TestCmdExec_ExtensionLogsStayOffStdout(t *testing.T) {
+	env := setupLocalExtExec(t)
+
+	code, stdout, stderr := env.exec(t, "fx-1", "--", "log", "--level=warn", "--msg=guest-log-line")
+
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.JSONEq(t, `{"ok":true}`, stdout)
+	assert.NotContains(t, stderr, "guest-log-line")
+}
+
+// An extension the user disabled in the desktop app is refused by name, exit 1, and
+// is not loaded into this process.
+func TestCmdExec_DisabledExtensionIsRefusedWithoutLoading(t *testing.T) {
+	env := setupLocalExtExec(t, &extension_state_entity.ExtensionState{Name: extensiontest.FixtureName, Enabled: false})
+
+	code, stdout, stderr := env.exec(t, "fx-1", "--", "echo", "--msg=hi")
+
+	assert.Equal(t, 1, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, `"fixture-ext"`)
+	assert.Contains(t, stderr, "disabled")
+	_, executable := permission.ExecutorFor("fixture")
+	assert.False(t, executable, "a disabled extension must not be loaded")
+}
+
+// An extension whose files cannot be loaded fails the exec, exit 1, with the reason.
+func TestCmdExec_ExtensionLoadFailureReportsTheReason(t *testing.T) {
+	env := setupLocalExtExec(t)
+	require.NoError(t, os.Remove(filepath.Join(env.extDir, "main.wasm")))
+
+	code, stdout, stderr := env.exec(t, "fx-1", "--", "echo", "--msg=hi")
+
+	assert.Equal(t, 1, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, `"fixture-ext"`)
+	assert.Contains(t, stderr, "main.wasm")
+}
+
+// opsctl has no window to show a file dialog in: a tool that asks for one fails and
+// is pointed at the --<flag>-file way of passing a file.
+func TestCmdExec_ExtensionFileDialogPointsToFileFlags(t *testing.T) {
+	env := setupLocalExtExec(t)
+
+	code, stdout, stderr := env.exec(t, "fx-1", "--", "pick_file")
+
+	assert.Equal(t, 1, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "no file dialog")
+	assert.Contains(t, stderr, "--<flag>-file")
+}
+
+// A tool's declared timeout still applies: past it the tool fails, exit 1.
+func TestCmdExec_ExtensionToolTimeoutFails(t *testing.T) {
+	env := setupLocalExtExec(t)
+
+	code, stdout, _ := env.exec(t, "fx-1", "--", "spin_short", "--ms=5000")
+
+	assert.Equal(t, 1, code)
+	assert.Empty(t, stdout)
+}
+
+// mfaHopEnv is the fixture asset with its endpoint — a TCP echo server — behind an SSH
+// tunnel whose hop asks for an OTP after the public key, the way V8 found it: the
+// extension reaches its endpoint only through that hop's layer of the connection path.
+type mfaHopEnv struct {
+	*localExtEnv
+	hop      *otpExecServer
+	echoAddr string
+}
+
+func setupExtBehindMFAHop(t *testing.T, otp string) *mfaHopEnv {
+	t.Helper()
+	return putBehindMFAHop(t, setupLocalExtExec(t), otp)
+}
+
+// putBehindMFAHop moves env's fixture asset behind a new OTP-requiring hop.
+func putBehindMFAHop(t *testing.T, env *localExtEnv, otp string) *mfaHopEnv {
+	t.Helper()
+	swapGlobal(t, host_key_repo.HostKey, host_key_repo.RegisterHostKey, host_key_repo.NewHostKey())
+	hop := newOTPExecServer(t, otp)
+	echoAddr := newTCPEchoServer(t)
+	env.asset.SSHTunnelID = createOTPSSHAsset(t, hop).ID
+	env.asset.Config = fmt.Sprintf(`{"endpoint":%q}`, echoAddr)
+	require.NoError(t, env.gdb.Save(env.asset).Error)
+	return &mfaHopEnv{localExtEnv: env, hop: hop, echoAddr: echoAddr}
+}
+
+// tcpEchoCommand is the fixture tool call that reaches the asset's endpoint.
+func (e *mfaHopEnv) tcpEchoCommand() string {
+	return "tcp_echo --addr=" + e.echoAddr
+}
+
+// tcpEcho runs `opsctl exec fx-1 -- tcp_echo` with the given --mfa-code ("" = none).
+func (e *mfaHopEnv) tcpEcho(t *testing.T, mfaCode string) (code int, stdout, stderr string) {
+	t.Helper()
+	return e.execWithMFACode(t, mfaCode, "fx-1", "--", "tcp_echo", "--addr="+e.echoAddr)
+}
+
+// newTCPEchoServer answers each connection's first read with the same bytes.
+func newTCPEchoServer(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				buf := make([]byte, 16)
+				n, err := conn.Read(buf)
+				if err != nil {
+					return
+				}
+				_, _ = conn.Write(buf[:n])
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// An extension asset whose tunnel hop asks for MFA connects in opsctl with the code
+// from --mfa-code: the hop's challenge is answered once and the tool's result is the
+// only thing on stdout.
+func TestCmdExec_ExtensionThroughMFAHopAnswersWithMFACode(t *testing.T) {
+	env := setupExtBehindMFAHop(t, "123456")
+
+	code, stdout, stderr := env.tcpEcho(t, "123456")
+
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.JSONEq(t, `{"echo":"ping"}`, stdout)
+	assert.Equal(t, int32(1), env.hop.challenges.Load())
+}
+
+// In an interactive terminal the hop's challenge is shown on stderr and answered from
+// stdin, as the target's own challenge would be.
+func TestCmdExec_ExtensionThroughMFAHopAnswersOnTerminal(t *testing.T) {
+	env := setupExtBehindMFAHop(t, "123456")
+	swapGlobal(t, func() func() bool { return stdinIsTerminal }, func(f func() bool) { stdinIsTerminal = f }, func() bool { return true })
+	swapGlobal(t, func() func() bool { return stderrIsTerminal }, func(f func() bool) { stderrIsTerminal = f }, func() bool { return true })
+	in, w, err := os.Pipe()
+	require.NoError(t, err)
+	_, err = w.WriteString("123456\n")
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	swapGlobal(t, func() *os.File { return os.Stdin }, func(f *os.File) { os.Stdin = f }, in)
+
+	code, stdout, stderr := env.tcpEcho(t, "")
+
+	require.Equal(t, 0, code, "stderr: %s", stderr)
+	assert.JSONEq(t, `{"echo":"ping"}`, stdout)
+	assert.Contains(t, stderr, "SSH MFA challenge:")
+	assert.Contains(t, stderr, "OTP: ")
+	assert.Equal(t, int32(1), env.hop.challenges.Load())
+}
+
+// No code, no terminal, no desktop app: the hop's challenge has no answer source, so
+// opsctl refuses structurally — NEEDS MFA on stderr's first line, exit code 3.
+func TestCmdExec_ExtensionThroughMFAHopWithoutSourceNeedsMFA(t *testing.T) {
+	env := setupExtBehindMFAHop(t, "123456")
+
+	code, stdout, stderr := env.tcpEcho(t, "")
+
+	assert.Equal(t, refusalExitCode, code, "stderr: %s", stderr)
+	assert.Empty(t, stdout)
+	firstLine, _, _ := strings.Cut(stderr, "\n")
+	assert.Equal(t, needsMFAMarker, firstLine)
+}
+
+// A hop that rejects the code fails as an MFA verification failure, and the same code
+// is not offered to it again.
+func TestCmdExec_ExtensionThroughMFAHopRejectingTheCodeIsMFAFailed(t *testing.T) {
+	env := setupExtBehindMFAHop(t, "123456")
+
+	code, stdout, stderr := env.tcpEcho(t, "000000")
+
+	assert.Equal(t, 1, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, sshagent.CodeMFAFailed)
+	assert.Equal(t, int32(1), env.hop.challenges.Load())
+}
+
+// `opsctl exec` on an SSH asset behind a hop that asks for MFA, where the target asks
+// too: both are answered from --mfa-code, the hop first, and the command runs.
+func TestExecSSHStreaming_ThroughMFAHopAnswersEachHostInDialOrder(t *testing.T) {
+	setupLocalExtExec(t)
+	swapGlobal(t, host_key_repo.HostKey, host_key_repo.RegisterHostKey, host_key_repo.NewHostKey())
+	hop := newOTPExecServer(t, "123456")
+	hopAsset := createOTPSSHAsset(t, hop)
+	target := newOTPExecServer(t, "123456")
+	targetAsset := createOTPSSHAsset(t, target)
+	targetAsset.SSHTunnelID = hopAsset.ID
+	require.NoError(t, asset_repo.Asset().Update(context.Background(), targetAsset))
+
+	ctx := withMFACode(context.Background(), "123456")
+	var code int
+	stdout := captureStdout(t, func() {
+		code = execSSHStreaming(ctx, ctx, targetAsset, "uptime", nil, ApprovalResult{})
+	})
+
+	require.Equal(t, 0, code)
+	assert.Equal(t, "ok:uptime", stdout)
+	assert.Equal(t, int32(1), hop.challenges.Load())
+	assert.Equal(t, int32(1), target.challenges.Load())
+}
+
+// `opsctl cp` answers MFA (withMFA) for the whole transfer, but hop MFA covers SSH and
+// extension assets only: an object-storage endpoint reached through a hop that asks for
+// MFA dials its connection path (connpool.ProxyChainDialContext) without a responder,
+// as before — the hop's challenge is not answered with the code.
+func TestCpMFA_NonSSHConnectionPathGetsNoHopResponder(t *testing.T) {
+	setupLocalExtExec(t)
+	swapGlobal(t, host_key_repo.HostKey, host_key_repo.RegisterHostKey, host_key_repo.NewHostKey())
+	hop := newOTPExecServer(t, "123456")
+	hopAsset := createOTPSSHAsset(t, hop)
+	echoAddr := newTCPEchoServer(t)
+
+	cpCtx := withMFA(withMFACode(context.Background(), "123456"))
+	dial, err := connpool.ProxyChainDialContext(cpCtx, asset_entity.EffectiveProxyChain(nil, hopAsset.ID, nil))
+	require.NoError(t, err)
+	conn, err := dial(context.Background(), "tcp", echoAddr)
+	if err == nil {
+		_ = conn.Close()
+	}
+
+	code, _ := sshagent.CodeOf(err)
+	assert.Equal(t, sshagent.CodeMFARequired, code, "err: %v", err)
+}
+
+// createOTPSSHAsset stores a key-authenticated SSH asset pointing at srv.
+func createOTPSSHAsset(t *testing.T, srv *otpExecServer) *asset_entity.Asset {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	require.NoError(t, err)
+	keyPath := filepath.Join(t.TempDir(), "id_ed25519")
+	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(block), 0o600))
+	host, port, err := net.SplitHostPort(srv.addr)
+	require.NoError(t, err)
+	asset := &asset_entity.Asset{
+		Name: "bastion", Type: asset_entity.AssetTypeSSH, Status: asset_entity.StatusActive, Createtime: 1,
+		Config: fmt.Sprintf(`{"host":%q,"port":%s,"username":"alice","auth_type":"key","private_keys":[%q]}`, host, port, keyPath),
+	}
+	require.NoError(t, asset_repo.Asset().Create(context.Background(), asset))
+	return asset
+}
+
+// A generic asset's stream executor reads stdin (HTTP -d @-, command-mode stdin), so
+// piped content reaches the approval as PipedInput — the model review cannot see it,
+// the same rule as an ssh asset — and is what the request body is read from.
+func TestCmdExec_GenericStreamReportsPipedInputToApproval(t *testing.T) {
+	ctx, _ := setupGenericHTTPExec(t, "s3cret")
+	var requests []approval.ApprovalRequest
+	origApproval := execApprovalFn
+	execApprovalFn = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
+		requests = append(requests, req)
+		return ApprovalResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}, nil
+	}
+	t.Cleanup(func() { execApprovalFn = origApproval })
+	origStdin := execStdinFn
+	execStdinFn = func(time.Duration) (io.Reader, bool) { return strings.NewReader(`{"from":"pipe"}`), true }
+	t.Cleanup(func() { execStdinFn = origStdin })
+
+	var code int
+	stdout, stderr := captureExecStdio(t, "", func() {
+		code = cmdExec(ctx, buildHandlerMap(), []string{"echo-prod", "--", "POST", "/api/items", "-d", "@-"}, "")
+	})
+
+	require.Equal(t, 0, code, stderr)
+	require.Len(t, requests, 1)
+	assert.True(t, requests[0].PipedInput, "piped stdin must be reported to the approval")
+	assert.Contains(t, stdout, `body={"from":"pipe"}`, "the body is read from the inspected stdin")
 }

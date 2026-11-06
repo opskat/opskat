@@ -17,6 +17,7 @@ import {
 } from "../../../wailsjs/go/redis/Redis";
 import { RedisLoadMoreFooter, RedisValueCount } from "./RedisValueList";
 import { useRedisValueVirtualizer } from "./useRedisValueVirtualizer";
+import { errorMessage } from "@/lib/errorMessage";
 
 function getItemCount(info: RedisKeyInfo): number {
   switch (info.type) {
@@ -64,7 +65,7 @@ function EditableCell({
       await onSave(editVal);
       setEditing(false);
     } catch (err) {
-      toast.error(String(err));
+      toast.error(errorMessage(err));
     }
     setSaving(false);
   };
@@ -145,7 +146,7 @@ function AddRowForm({
         setValue("");
       }
     } catch (err) {
-      toast.error(String(err));
+      toast.error(errorMessage(err));
     }
     setAdding(false);
   };

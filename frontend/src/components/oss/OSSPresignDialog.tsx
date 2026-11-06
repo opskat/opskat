@@ -7,6 +7,7 @@ import { OSSPresignGet, OSSPresignPut } from "../../../wailsjs/go/oss/OSS";
 import { notifyCopied } from "@/lib/notify";
 import { prefixLeafName } from "@/lib/ossPrefixTree";
 import { typeIcon, typeIconColor } from "@/lib/objectContentType";
+import { errorMessage } from "@/lib/errorMessage";
 
 export interface OSSPresignDialogProps {
   open: boolean;
@@ -56,7 +57,7 @@ export function OSSPresignDialog({
       },
       (err) => {
         if (reqIdRef.current === myId) {
-          toast.error(`${t("oss.share.generateFailed")}: ${String(err)}`);
+          toast.error(`${t("oss.share.generateFailed")}: ${errorMessage(err)}`);
           setLoading(false);
         }
       }

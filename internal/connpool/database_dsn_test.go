@@ -3,148 +3,262 @@ package connpool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
-	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
-	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/cago-frame/cago/pkg/logger"
+	. "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
+
+	"github.com/opskat/opskat/internal/connpool/connpooltest"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
+	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
+	_ "github.com/opskat/opskat/internal/dbdriver/mysql"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/socksdial/socksdialtest"
-	. "github.com/smartystreets/goconvey/convey"
+	"github.com/opskat/opskat/internal/service/credential_svc"
+	"github.com/opskat/opskat/internal/sshpool"
+	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
-func TestOpenWithDialerMSSQLRouted(t *testing.T) {
-	Convey("openWithDialer 把 MSSQL 路由到专用分支", t, func() {
-		cfg := &asset_entity.DatabaseConfig{
-			Driver: asset_entity.DriverMSSQL, Host: "h", Port: 1433,
-			Username: "u", Database: "d",
-		}
-		_, err := openWithDialer(cfg, "pw", nil) // dial=nil 仅在连接时使用,open 阶段不应是"不支持"错误
-		if err != nil {
-			So(err.Error(), ShouldNotContainSubstring, "不支持的数据库驱动")
-		}
-	})
+// 连接串、拨号接入、连接级只读、分页方言的断言都随代码迁到了各驱动包
+// （internal/dbdriver/{mysql,postgresql,mssql,sqlite}）；这里只测共享的这一段：
+// 按配置的驱动打开会话，以及把隧道 / 代理 / 代理链 / .local 解析成交给驱动的传输层。
+
+// openWithFake 注册假驱动，经 OpenDatabase 打开一条会话并返回驱动实际收到的请求。
+func openWithFake(t *testing.T, asset *asset_entity.Asset, cfg *asset_entity.DatabaseConfig, pool *sshpool.Pool) *dbdrivertest.FakeSession {
+	t.Helper()
+	fake := dbdrivertest.NewFake()
+	dbdrivertest.Register(t, fake)
+	cfg.Driver = fake.Desc.ID
+
+	session, err := OpenDatabase(context.Background(), asset, cfg, "pw", pool)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = session.Close() })
+	fakeSession, ok := session.(*dbdrivertest.FakeSession)
+	require.True(t, ok, "the session handed back is the driver's own, not something the shared code built")
+	return fakeSession
 }
 
-func TestPgDialConnectorPassesAddr(t *testing.T) {
-	Convey("pgDialConnector 把目标网络与地址透传给 dial", t, func() {
-		cfg := &asset_entity.DatabaseConfig{
-			Driver: asset_entity.DriverPostgreSQL, Host: "pg.internal", Port: 5433,
-			Username: "u", Database: "d",
-		}
-		_, dsn := buildDSN(cfg, "pw")
-		var gotNetwork, gotAddr string
-		connector := newPgDialConnector(dsn, func(ctx context.Context, network, addr string) (net.Conn, error) {
-			gotNetwork, gotAddr = network, addr
-			return nil, errors.New("dial-sentinel")
+func TestOpenDatabaseRejectsUnregisteredDriver(t *testing.T) {
+	_, err := OpenDatabase(context.Background(), &asset_entity.Asset{ID: 3},
+		&asset_entity.DatabaseConfig{Driver: "oracle", Host: "127.0.0.1", Port: 1521, Username: "u"}, "pw", nil)
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
+	assert.Contains(t, err.Error(), "oracle")
+}
+
+func TestOpenDatabaseHandsTheDriverItsConfigAndPassword(t *testing.T) {
+	session := openWithFake(t, &asset_entity.Asset{ID: 3},
+		&asset_entity.DatabaseConfig{Host: "10.0.0.5", Port: 7777, Database: "app", ReadOnly: true}, nil)
+
+	assert.Equal(t, "app", session.Request.Config.Database)
+	assert.True(t, session.Request.Config.ReadOnly, "connection-level read-only is the driver's to apply")
+	assert.Equal(t, "pw", session.Request.Password)
+
+	res, err := session.Execute(context.Background(), "SELECT * FROM t")
+	require.NoError(t, err)
+	assert.Len(t, res.Rows.Rows, 3)
+}
+
+func TestOpenDatabaseReturnsTheDriversConnectionError(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.OpenErr = errors.New("fakedb: connection refused")
+	dbdrivertest.Register(t, fake)
+
+	_, err := OpenDatabase(context.Background(), &asset_entity.Asset{ID: 3},
+		&asset_entity.DatabaseConfig{Driver: "fakedb", Host: "10.0.0.5", Port: 7777}, "pw", nil)
+	assert.Equal(t, fake.OpenErr, err, "the driver's error reaches the caller as is")
+}
+
+func TestOpenDatabaseTransport(t *testing.T) {
+	t.Run("direct: the driver dials for itself", func(t *testing.T) {
+		session := openWithFake(t, &asset_entity.Asset{ID: 3}, &asset_entity.DatabaseConfig{Host: "10.0.0.5", Port: 7777}, nil)
+		assert.Nil(t, session.Request.Transport.Dial)
+		assert.Nil(t, session.Request.Transport.RemoteFS)
+		assert.True(t, session.Request.Transport.Direct, "names resolve on this machine")
+		assert.Equal(t, int64(3), session.Request.AssetID, "the session knows its asset, for the host's logs")
+	})
+
+	t.Run("direct: dialing by address reaches the address asked for", func(t *testing.T) {
+		echo := startEcho(t)
+		session := openWithFake(t, &asset_entity.Asset{ID: 3}, &asset_entity.DatabaseConfig{Host: "10.0.0.5", Port: 7777}, nil)
+		requireDialEchoes(t, session.Request.Transport.DialAddr, echo)
+	})
+
+	t.Run("direct to a .local host: dialing bypasses the system resolver", func(t *testing.T) {
+		session := openWithFake(t, &asset_entity.Asset{ID: 3}, &asset_entity.DatabaseConfig{Host: "db.local", Port: 7777}, nil)
+		assert.NotNil(t, session.Request.Transport.Dial)
+	})
+
+	t.Run("SOCKS5 proxy", func(t *testing.T) {
+		echo := startEcho(t)
+		proxyHost, proxyPort := splitHostPort(t, socksdialtest.Start(t, "", ""))
+		session := openWithFake(t, &asset_entity.Asset{ID: 3}, &asset_entity.DatabaseConfig{
+			Host: "10.0.0.5", Port: 7777,
+			Proxy: &asset_entity.ProxyConfig{Type: "socks5", Host: proxyHost, Port: proxyPort},
+		}, nil)
+		requireDialEchoes(t, session.Request.Transport.Dial, echo)
+		requireDialEchoes(t, session.Request.Transport.DialAddr, echo)
+		assert.False(t, session.Request.Transport.Direct, "names resolve at the proxy")
+	})
+
+	t.Run("proxy chain", func(t *testing.T) {
+		echo := startEcho(t)
+		proxyHost, proxyPort := splitHostPort(t, socksdialtest.Start(t, "", ""))
+		enabled := true
+		session := openWithFake(t, &asset_entity.Asset{ID: 3}, &asset_entity.DatabaseConfig{
+			Host: "10.0.0.5", Port: 7777,
+			ProxyChain: &asset_entity.ProxyChainConfig{Layers: []asset_entity.ProxyChainLayer{{
+				Type: asset_entity.ProxyChainLayerSOCKS5, Enabled: &enabled, Host: proxyHost, Port: proxyPort,
+			}}},
+		}, nil)
+		requireDialEchoes(t, session.Request.Transport.Dial, echo)
+		requireDialEchoes(t, session.Request.Transport.DialAddr, echo)
+		assert.False(t, session.Request.Transport.Direct, "names resolve along the chain")
+	})
+
+	t.Run("proxy chain with no layers is a direct connection", func(t *testing.T) {
+		session := openWithFake(t, &asset_entity.Asset{ID: 3}, &asset_entity.DatabaseConfig{
+			Host: "10.0.0.5", Port: 7777, ProxyChain: &asset_entity.ProxyChainConfig{},
+		}, nil)
+		assert.Nil(t, session.Request.Transport.Dial)
+		assert.True(t, session.Request.Transport.Direct)
+	})
+
+	t.Run("SSH tunnel: dials the configured host and port through the SSH asset", func(t *testing.T) {
+		var forwarded string
+		srv := startForwardPolicyServer(t, func(target string) bool {
+			forwarded = target
+			return true
 		})
-		_, err := connector.Connect(context.Background())
-		So(err, ShouldNotBeNil)
-		So(err.Error(), ShouldContainSubstring, "dial-sentinel")
-		So(gotNetwork, ShouldEqual, "tcp")
-		So(gotAddr, ShouldEqual, "pg.internal:5433")
+		session := openWithFake(t, &asset_entity.Asset{ID: 3, SSHTunnelID: 9},
+			&asset_entity.DatabaseConfig{Host: "db.internal", Port: 7777}, srv.pool(t))
+
+		// 隧道的目标在建隧道时就定了：驱动传什么地址都转发到配置的 host:port。
+		conn, err := session.Request.Transport.Dial(context.Background(), "tcp", "ignored:1")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		requireEcho(t, conn)
+		assert.Equal(t, "db.internal:7777", forwarded)
+		assert.NotNil(t, session.Request.Transport.RemoteFS, "an SSH asset also offers the host's file system")
 	})
 
-	Convey("pgDialConnector 对 unix socket 主机透传 unix 网络(直连本机 PG)", t, func() {
-		_, dsn := buildDSN(&asset_entity.DatabaseConfig{
-			Driver: asset_entity.DriverPostgreSQL, Host: "localhost", Port: 5432,
-			Username: "u", Database: "d", Params: "host=/tmp",
-		}, "pw")
-		var gotNetwork, gotAddr string
-		connector := newPgDialConnector(dsn, func(ctx context.Context, network, addr string) (net.Conn, error) {
-			gotNetwork, gotAddr = network, addr
-			return nil, errors.New("dial-sentinel")
+	t.Run("SSH tunnel: dialing by address reaches the address asked for, resolved on the SSH host", func(t *testing.T) {
+		var mu sync.Mutex
+		var forwarded []string
+		srv := startForwardPolicyServer(t, func(target string) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			forwarded = append(forwarded, target)
+			return true
 		})
-		_, err := connector.Connect(context.Background())
-		So(err, ShouldNotBeNil)
-		So(gotNetwork, ShouldEqual, "unix")
-		So(gotAddr, ShouldEqual, "/tmp/.s.PGSQL.5432")
+		session := openWithFake(t, &asset_entity.Asset{ID: 3, SSHTunnelID: 9},
+			&asset_entity.DatabaseConfig{Host: "db.internal", Port: 7777}, srv.pool(t))
+		assert.False(t, session.Request.Transport.Direct, "names resolve on the SSH host")
+
+		conn, err := session.Request.Transport.DialAddr(context.Background(), "tcp", "node2.internal:7778")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		requireEcho(t, conn)
+		// The asset's own dial still goes to the configured host:port: a built-in
+		// driver that dials a resolved ip:port keeps reaching the asset.
+		conn, err = session.Request.Transport.Dial(context.Background(), "tcp", "10.9.9.9:1")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		requireEcho(t, conn)
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Equal(t, []string{"node2.internal:7778", "db.internal:7777"}, forwarded)
+	})
+
+	t.Run("the tunnel wins over a proxy", func(t *testing.T) {
+		srv := startForwardPolicyServer(t, permitAll)
+		session := openWithFake(t, &asset_entity.Asset{ID: 3, SSHTunnelID: 9},
+			&asset_entity.DatabaseConfig{
+				Host: "db.internal", Port: 7777,
+				// 这个代理不存在：连接若走了代理就会失败。
+				Proxy: &asset_entity.ProxyConfig{Type: "socks5", Host: "127.0.0.1", Port: 1},
+			}, srv.pool(t))
+
+		conn, err := session.Request.Transport.Dial(context.Background(), "tcp", "db.internal:7777")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		requireEcho(t, conn)
+	})
+
+	t.Run("the deprecated per-config SSH asset still selects the tunnel", func(t *testing.T) {
+		srv := startForwardPolicyServer(t, permitAll)
+		session := openWithFake(t, &asset_entity.Asset{ID: 3},
+			&asset_entity.DatabaseConfig{Host: "db.internal", Port: 7777, SSHAssetID: 9}, srv.pool(t))
+
+		conn, err := session.Request.Transport.Dial(context.Background(), "tcp", "db.internal:7777")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = conn.Close() })
+		requireEcho(t, conn)
 	})
 }
 
-func TestRegisterMySQLDialerUnique(t *testing.T) {
-	Convey("registerMySQLDialer 每次返回唯一注册名", t, func() {
-		dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return nil, errors.New("unused")
+func startEcho(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer func() { _ = conn.Close() }()
+				buf := make([]byte, 64)
+				for {
+					n, err := conn.Read(buf)
+					if err != nil {
+						return
+					}
+					if _, err := conn.Write(buf[:n]); err != nil {
+						return
+					}
+				}
+			}()
 		}
-		n1 := registerMySQLDialer(dial)
-		n2 := registerMySQLDialer(dial)
-		So(n1, ShouldNotEqual, n2)
-	})
+	}()
+	return ln.Addr().String()
 }
 
-func TestBuildDSNMSSQL(t *testing.T) {
-	Convey("MSSQL DSN", t, func() {
-		cfg := &asset_entity.DatabaseConfig{
-			Driver:   asset_entity.DriverMSSQL,
-			Host:     "sql.example.com",
-			Port:     1433,
-			Username: "sa",
-			Database: "appdb",
-		}
-		driverName, dsn := buildDSN(cfg, "p@ss!w0rd")
-		So(driverName, ShouldEqual, "sqlserver")
-
-		u, err := url.Parse(dsn)
-		So(err, ShouldBeNil)
-		So(u.Scheme, ShouldEqual, "sqlserver")
-		So(u.Host, ShouldEqual, "sql.example.com:1433")
-		So(u.User.Username(), ShouldEqual, "sa")
-		pw, _ := u.User.Password()
-		So(pw, ShouldEqual, "p@ss!w0rd")
-		So(u.Query().Get("database"), ShouldEqual, "appdb")
-		So(u.Query().Get("encrypt"), ShouldEqual, "disable")
-	})
-
-	Convey("MSSQL DSN with TLS", t, func() {
-		cfg := &asset_entity.DatabaseConfig{
-			Driver: asset_entity.DriverMSSQL, Host: "h", Port: 1433,
-			Username: "u", Database: "d", TLS: true,
-		}
-		_, dsn := buildDSN(cfg, "pw")
-		So(strings.Contains(dsn, "encrypt=true"), ShouldBeTrue)
-		So(strings.Contains(dsn, "trustservercertificate=true"), ShouldBeTrue)
-	})
+func splitHostPort(t *testing.T, addr string) (string, int) {
+	t.Helper()
+	host, portStr, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portStr)
+	require.NoError(t, err)
+	return host, port
 }
 
-func TestSetReadOnlyMSSQLNoop(t *testing.T) {
-	Convey("MSSQL setReadOnly 是 no-op 不报错", t, func() {
-		db, mock, err := sqlmock.New()
-		So(err, ShouldBeNil)
-		defer func() { _ = db.Close() }()
-
-		err = setReadOnly(context.Background(), db, asset_entity.DriverMSSQL)
-		So(err, ShouldBeNil)
-		So(mock.ExpectationsWereMet(), ShouldBeNil) // 没有 ExpectExec，任何调用都会失败
-	})
+// requireDialEchoes 证明 dial 确实能把连接送到 target（经它背后的代理）。
+func requireDialEchoes(t *testing.T, dial dbdriver.DialFunc, target string) {
+	t.Helper()
+	require.NotNil(t, dial)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := dial(ctx, "tcp", target)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	requireEcho(t, conn)
 }
 
-func TestBuildDSNSQLite(t *testing.T) {
-	Convey("SQLite DSN", t, func() {
-		cfg := &asset_entity.DatabaseConfig{
-			Driver: asset_entity.DriverSQLite,
-			Path:   "/tmp/test.db",
-		}
-		driverName, dsn := buildDSN(cfg, "")
-		So(driverName, ShouldEqual, "sqlite")
-		So(dsn, ShouldEqual, "file:/tmp/test.db")
-	})
-
-	Convey("SQLite DSN with params", t, func() {
-		cfg := &asset_entity.DatabaseConfig{
-			Driver: asset_entity.DriverSQLite, Path: "/tmp/x.db",
-			Params: "_pragma=busy_timeout(5000)",
-		}
-		_, dsn := buildDSN(cfg, "")
-		So(dsn, ShouldEqual, "file:/tmp/x.db?_pragma=busy_timeout(5000)")
-	})
-}
-
-func TestDialDatabaseMySQLViaProxyRouted(t *testing.T) {
-	Convey("DialDatabase 的 mysql 代理分支把连接路由到 SOCKS5 代理", t, func() {
+func TestOpenDatabaseMySQLViaProxyRouted(t *testing.T) {
+	Convey("OpenDatabase 的 mysql 代理分支把连接路由到 SOCKS5 代理", t, func() {
 		// 假 MySQL 服务:接受连接后立即关闭(驱动会在握手阶段失败,但足以证明路由)。
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		So(err, ShouldBeNil)
@@ -174,7 +288,7 @@ func TestDialDatabaseMySQLViaProxyRouted(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, _, err = DialDatabase(ctx, &asset_entity.Asset{}, cfg, "pw", nil)
+		_, err = OpenDatabase(ctx, &asset_entity.Asset{}, cfg, "pw", nil)
 		So(err, ShouldNotBeNil) // 假服务无握手,连接必然失败
 
 		select {
@@ -183,5 +297,125 @@ func TestDialDatabaseMySQLViaProxyRouted(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("目标服务未收到任何连接:代理分支未生效")
 		}
+	})
+}
+
+// 交给驱动的专属字段按驱动当前的声明整理：没存的取声明的默认值（表单清空了有默认值的字段、
+// 驱动升级新增了字段），声明里已经没有的键不交出去（驱动升级删了一个口令类字段，它的密文不该
+// 以普通取值的身份交给驱动）。
+func TestOpenDatabaseHandsTheDriverItsDeclaredOptions(t *testing.T) {
+	fake := dbdrivertest.NewFake()
+	fake.Desc.DriverFields = []dbdriver.DriverField{
+		{Key: "fetch_size", Type: dbdriver.FieldTypeNumber, Tab: dbdriver.TabAdvanced, Default: 100},
+		{Key: "region", Type: dbdriver.FieldTypeText, Tab: dbdriver.TabConnection},
+	}
+	dbdrivertest.Register(t, fake)
+
+	session, err := OpenDatabase(context.Background(), &asset_entity.Asset{ID: 3}, &asset_entity.DatabaseConfig{
+		Driver: fake.Desc.ID, Host: "10.0.0.5", Port: 7777,
+		DriverOptions: map[string]any{"region": "eu", "retired_token": "ciphertext"},
+	}, "pw", nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = session.Close() })
+	req := session.(*dbdrivertest.FakeSession).Request
+	assert.Equal(t, map[string]any{"fetch_size": 100, "region": "eu"}, req.DriverOptions)
+}
+
+// 声明了证书字段组的驱动在资产启用 TLS 时，打开会话就收到 TLS 设置与证书内容：路径由打开会话的
+// 这个进程读取，私钥解密后交出；读不到、解不开就打不开，错误点名字段而不含内容；没启用 TLS、
+// 或驱动没声明证书字段组（内置驱动都不声明），什么都不交。
+func TestOpenDatabaseHandsACertDriverItsTLSMaterial(t *testing.T) {
+	credential_svc.SetDefault(credential_svc.New("db-tls-test-key", []byte("0123456789abcdef")))
+	core, logs := observer.New(zap.DebugLevel)
+	old := logger.Default()
+	logger.SetLogger(zap.New(core))
+	t.Cleanup(func() { logger.SetLogger(old) })
+
+	certPEM, keyPEM := connpooltest.SelfSignedPEM(t)
+	encryptedKey, err := credential_svc.Default().Encrypt(string(keyPEM))
+	require.NoError(t, err)
+	dir := t.TempDir()
+	caFile, certFile, keyFile := filepath.Join(dir, "ca.pem"), filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	require.NoError(t, os.WriteFile(caFile, []byte("ca from file"), 0o600))
+	require.NoError(t, os.WriteFile(certFile, certPEM, 0o600))
+	require.NoError(t, os.WriteFile(keyFile, keyPEM, 0o600))
+
+	register := func(t *testing.T, group bool) *dbdrivertest.Fake {
+		fake := dbdrivertest.NewFake()
+		if group {
+			fake.Desc.Form = append(fake.Desc.Form, dbdriver.FormTabFields{Tab: dbdriver.TabTLS, Fields: []dbdriver.FormField{dbdriver.FieldTLSCert}})
+		}
+		dbdrivertest.Register(t, fake)
+		return fake
+	}
+	open := func(cfg *asset_entity.DatabaseConfig) (dbdriver.OpenRequest, error) {
+		cfg.Driver, cfg.Host, cfg.Port = "fakedb", "10.0.0.5", 7777
+		session, err := OpenDatabase(context.Background(), &asset_entity.Asset{ID: 3}, cfg, "pw", nil)
+		if err != nil {
+			return dbdriver.OpenRequest{}, err
+		}
+		t.Cleanup(func() { _ = session.Close() })
+		return session.(*dbdrivertest.FakeSession).Request, nil
+	}
+
+	t.Run("TLS on with pasted contents: settings, certificates and the decrypted key", func(t *testing.T) {
+		register(t, true)
+		req, err := open(&asset_entity.DatabaseConfig{
+			TLS: true, TLSInsecure: true, TLSServerName: "db.example.com",
+			TLSCAPEM: string(certPEM), TLSCertPEM: string(certPEM), TLSKeyPEM: encryptedKey,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, req.TLS)
+		assert.Equal(t, dbdriver.TLSMaterial{
+			Insecure: true, ServerName: "db.example.com", CA: certPEM, Cert: certPEM, Key: keyPEM,
+		}, *req.TLS)
+	})
+
+	t.Run("TLS on with file paths: this process reads the files", func(t *testing.T) {
+		register(t, true)
+		req, err := open(&asset_entity.DatabaseConfig{TLS: true, TLSCAFile: caFile, TLSCertFile: certFile, TLSKeyFile: keyFile})
+		require.NoError(t, err)
+		require.NotNil(t, req.TLS)
+		assert.Equal(t, dbdriver.TLSMaterial{CA: []byte("ca from file"), Cert: certPEM, Key: keyPEM}, *req.TLS)
+	})
+
+	t.Run("TLS off: nothing is handed", func(t *testing.T) {
+		register(t, true)
+		req, err := open(&asset_entity.DatabaseConfig{TLSServerName: "db.example.com", TLSCAPEM: string(certPEM), TLSKeyPEM: encryptedKey})
+		require.NoError(t, err)
+		assert.Nil(t, req.TLS)
+	})
+
+	t.Run("a driver that does not declare the group is handed nothing, TLS on or not", func(t *testing.T) {
+		register(t, false)
+		req, err := open(&asset_entity.DatabaseConfig{TLS: true, TLSCAPEM: string(certPEM), TLSKeyPEM: encryptedKey})
+		require.NoError(t, err)
+		assert.Nil(t, req.TLS)
+		assert.True(t, req.Config.TLS, "its own tls switch means what it always did")
+	})
+
+	t.Run("an unreadable file fails the open, naming the field", func(t *testing.T) {
+		register(t, true)
+		_, err := open(&asset_entity.DatabaseConfig{TLS: true, TLSCAFile: filepath.Join(dir, "missing.pem")})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "CA 证书")
+	})
+
+	t.Run("a key that does not decrypt fails the open, naming the field without its content", func(t *testing.T) {
+		register(t, true)
+		_, err := open(&asset_entity.DatabaseConfig{TLS: true, TLSCertPEM: string(certPEM), TLSKeyPEM: string(keyPEM)})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "客户端私钥")
+		assert.NotContains(t, err.Error(), "PRIVATE KEY")
+	})
+
+	t.Run("no certificate content reaches the logs", func(t *testing.T) {
+		for _, entry := range logs.All() {
+			line := fmt.Sprint(entry.Message, entry.ContextMap())
+			assert.NotContains(t, line, "PRIVATE KEY")
+			assert.NotContains(t, line, "CERTIFICATE")
+			assert.NotContains(t, line, encryptedKey)
+		}
+		assert.NotEmpty(t, logs.All(), "the opens above were logged")
 	})
 }

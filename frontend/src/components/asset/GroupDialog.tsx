@@ -16,6 +16,7 @@ import { IconPicker } from "@/components/asset/IconPicker";
 import { GroupSelect } from "@/components/asset/GroupSelect";
 import { useAssetStore } from "@/stores/assetStore";
 import { group_entity } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface GroupDialogProps {
   open: boolean;
@@ -70,7 +71,7 @@ export function GroupDialog({ open, onOpenChange, editGroup }: GroupDialogProps)
       }
       onOpenChange(false);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }

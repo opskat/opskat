@@ -57,8 +57,7 @@ import { notifySuccess } from "@/lib/notify";
 import { BrowserOpenURL } from "../../../wailsjs/runtime/runtime";
 import { AIProviderForm, type AIProviderFormValues, type ReasoningEffort } from "@/components/ai/AIProviderForm";
 import { useAIStore } from "@/stores/aiStore";
-
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+import { errorMessage } from "@/lib/errorMessage";
 
 // 与后端 universalSkillKey 对应：通用目录（~/.agents/skills）作为一个安装目标参与安装/卸载
 const UNIVERSAL_KEY = "universal";
@@ -126,7 +125,7 @@ function IntegrationSection() {
       await detect();
       toast.info(`${t("integration.pathHint")}: ${installDir}`);
     } catch (e: unknown) {
-      toast.error(`${t("integration.installFailed")}: ${errMsg(e)}`);
+      toast.error(`${t("integration.installFailed")}: ${errorMessage(e)}`);
     } finally {
       setInstalling(false);
     }
@@ -139,7 +138,7 @@ function IntegrationSection() {
       notifySuccess(t("integration.skillInstallSuccess"));
       await detect();
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setSkillInstalling(false);
     }
@@ -152,7 +151,7 @@ function IntegrationSection() {
       notifySuccess(t("integration.skillInstallSuccess"));
       await detect();
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setInstallingKey("");
     }
@@ -167,7 +166,7 @@ function IntegrationSection() {
       setUninstallTarget(null);
       await detect();
     } catch (e: unknown) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setUninstallingKey("");
     }
@@ -535,7 +534,7 @@ export function AISettingsSection() {
       setProviders(list || []);
       await useAIStore.getState().checkConfigured();
     } catch (e) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     }
   }, []);
 
@@ -571,7 +570,7 @@ export function AISettingsSection() {
       setDialogOpen(false);
       await loadProviders();
     } catch (e) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -585,7 +584,7 @@ export function AISettingsSection() {
       setDeleteTarget(null);
       await loadProviders();
     } catch (e) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     }
   };
 
@@ -594,7 +593,7 @@ export function AISettingsSection() {
       await SetActiveAIProvider(id);
       await loadProviders();
     } catch (e) {
-      toast.error(errMsg(e));
+      toast.error(errorMessage(e));
     }
   };
 

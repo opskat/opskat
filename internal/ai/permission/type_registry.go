@@ -31,7 +31,10 @@ type permissionTypeHandler struct {
 	canonical     string
 	approvalType  string
 	grantPatterns GrantPatternsFunc
-	check         permissionCheckFunc
+	// reviewSyntax 是命令的写法，随命令交给审核端口（见 Syntax）。SyntaxText 按纯文本处理，
+	// 适合 SQL、路径和不经过 shell 执行的命令 DSL；扩展类型都按纯文本。
+	reviewSyntax Syntax
+	check        permissionCheckFunc
 	// classify is set only for types registered through RegisterPolicyCheck that
 	// opted in (extension types): it lets HandleConfirm show the check_policy
 	// classification on the approval item and persist grants by that classification
@@ -50,11 +53,12 @@ var permissionTypes = make(map[string]*permissionTypeHandler)
 // genericRuleLanding（组通用层）也读这一列。
 var commandShape *shapeLanding
 
-func registerPermissionType(canonical, approvalType string, grantPatterns GrantPatternsFunc, check permissionCheckFunc, aliases ...string) {
+func registerPermissionType(canonical, approvalType string, grantPatterns GrantPatternsFunc, reviewSyntax Syntax, check permissionCheckFunc, aliases ...string) {
 	handler := &permissionTypeHandler{
 		canonical:     canonical,
 		approvalType:  approvalType,
 		grantPatterns: grantPatterns,
+		reviewSyntax:  reviewSyntax,
 		check:         check,
 	}
 	if err := addPermissionType(handler, aliases...); err != nil {
@@ -134,6 +138,7 @@ func RegisterPolicyCheck(canonical string, check PolicyCheckFunc, classify Class
 	return addPermissionType(&permissionTypeHandler{
 		canonical:    canonical,
 		approvalType: canonical,
+		reviewSyntax: SyntaxText,
 		check:        permissionCheckFunc(check),
 		classify:     classify,
 	})
@@ -182,24 +187,25 @@ func SupportsGrantApproval(approvalType string) bool {
 }
 
 func init() {
-	registerPermissionType(asset_entity.AssetTypeSSH, "exec", shellGrantPatterns, checkCommandPolicyPermission, "exec")
-	registerPermissionType(asset_entity.AssetTypeSerial, "serial", nil, checkCommandPolicyPermission)
-	registerPermissionType(asset_entity.AssetTypeDatabase, "sql", nil, checkDatabasePermission, "sql", "db")
-	registerPermissionType(asset_entity.AssetTypeRedis, "redis", nil, checkRedisPermission)
-	registerPermissionType(asset_entity.AssetTypeEtcd, "etcd", nil, checkEtcdPermission)
-	registerPermissionType(asset_entity.AssetTypeMongoDB, "mongo", nil, checkMongoDBPermission, "mongo")
-	registerPermissionType(asset_entity.AssetTypeKafka, "kafka", nil, checkKafkaPermission)
-	registerPermissionType(asset_entity.AssetTypeK8s, "k8s", shellGrantPatterns, checkK8sPermission, "kubernetes", "kube")
-	registerPermissionType(asset_entity.AssetTypeOSS, "oss", ossGrantPatterns, checkOSSPermission)
+	registerPermissionType(asset_entity.AssetTypeSSH, "exec", shellGrantPatterns, SyntaxShell, checkCommandPolicyPermission, "exec")
+	registerPermissionType(asset_entity.AssetTypeSerial, "serial", nil, SyntaxShell, checkCommandPolicyPermission)
+	registerPermissionType(asset_entity.AssetTypeDatabase, "sql", nil, SyntaxText, checkDatabasePermission, "sql", "db")
+	registerPermissionType(asset_entity.AssetTypeRedis, "redis", nil, SyntaxRedis, checkRedisPermission)
+	registerPermissionType(asset_entity.AssetTypeEtcd, "etcd", nil, SyntaxText, checkEtcdPermission)
+	registerPermissionType(asset_entity.AssetTypeMongoDB, "mongo", nil, SyntaxText, checkMongoDBPermission, "mongo")
+	registerPermissionType(asset_entity.AssetTypeKafka, "kafka", nil, SyntaxText, checkKafkaPermission)
+	registerPermissionType(asset_entity.AssetTypeK8s, "k8s", shellGrantPatterns, SyntaxShell, checkK8sPermission, "kubernetes", "kube")
+	registerPermissionType(asset_entity.AssetTypeOSS, "oss", ossGrantPatterns, SyntaxText, checkOSSPermission)
 	// 通用资产：匹配对象按自定义类型的执行方式决定（HTTP 为 `<METHOD> <path>`），判定见
-	// generic_policy.go。
-	registerPermissionType(asset_entity.AssetTypeGeneric, "generic", genericGrantPatterns, checkGenericPermission)
+	// generic_policy.go。命令写法随自定义类型而变（HTTP 请求行 / 模板参数 / shell 命令），
+	// 注册时只能声明一种，按纯文本送审（与扩展类型一致）。
+	registerPermissionType(asset_entity.AssetTypeGeneric, "generic", genericGrantPatterns, SyntaxText, checkGenericPermission)
 	// cp 不是资产类型而是操作面：任何能开 SFTP 的资产上的文件传输都归它，主体是远端路径
 	// 而非命令，所以不按 shell 子命令拆；cpGrantPatterns 做的是另一件事——把系统给出的
 	// 主体转义成"只匹配它自己"的规则（决策 D21），因为路径里的 `* ? [` 可以是字面文件名。
-	registerPermissionType(GrantToolCp, "cp", cpGrantPatterns, checkFileTransferPermission)
-	registerPermissionType(GrantToolCpRead, "cp", cpGrantPatterns, checkFileTransferReadPermission)
-	registerPermissionType(GrantToolCpWrite, "cp", cpGrantPatterns, checkFileTransferWritePermission)
+	registerPermissionType(GrantToolCp, "cp", cpGrantPatterns, SyntaxText, checkFileTransferPermission)
+	registerPermissionType(GrantToolCpRead, "cp", cpGrantPatterns, SyntaxText, checkFileTransferReadPermission)
+	registerPermissionType(GrantToolCpWrite, "cp", cpGrantPatterns, SyntaxText, checkFileTransferWritePermission)
 
 	// 永久规则落点与上面的 grantPatterns 并列注册（spec 决策 11、15）：一个类型一次
 	// 注册、同时覆盖 allow 与 deny 两侧、按 holder 取 Get/SetXxxPolicy 对。
@@ -280,7 +286,7 @@ func init() {
 		shape: k8sShape, refPolicyType: policyKindCommand, land: identityLand,
 		match: policy.MatchCommandRule, generic: policy.MatchCommandRule})
 	registerRuleSink(asset_entity.AssetTypeDatabase, &ruleLanding{
-		shape: queryShape, refPolicyType: policyKindQuery, land: queryLand,
+		shape: queryShape, refPolicyType: policyKindQuery, landFor: queryLandForHolder,
 		match: queryTypeMatch, generic: policy.MatchCommandRule})
 	registerRuleSink(asset_entity.AssetTypeRedis, &ruleLanding{
 		shape: redisShape, refPolicyType: policyKindRedis, land: identityLand,
@@ -320,7 +326,15 @@ type ExecFunc func(ctx context.Context, asset *asset_entity.Asset, command, scop
 // CanonicalizeFunc 把模型给的原始命令规范化为"真正会被执行、也应被策略匹配"的形式。
 // 仅当某类型执行前会改写命令时才需要注册（k8s 注入 --context/--namespace；etcd 走
 // ParseCommand+FormatCommand 的 round trip，规范化大小写/复合命令拼写/flag 顺序）。
-type CanonicalizeFunc func(asset *asset_entity.Asset, command string) (string, error)
+// ctx 携带调用方语言（aictx.PolicyLang），规范化阶段的拒绝文案据此选中英文。
+type CanonicalizeFunc func(ctx context.Context, asset *asset_entity.Asset, command string) (string, error)
+
+// CanonicalizeWithoutContext 把不产生本地化文案的规范化函数适配成 CanonicalizeFunc。
+func CanonicalizeWithoutContext(f func(asset *asset_entity.Asset, command string) (string, error)) CanonicalizeFunc {
+	return func(_ context.Context, asset *asset_entity.Asset, command string) (string, error) {
+		return f(asset, command)
+	}
+}
 
 // PolicyStringsFunc 把一条命令展开为它实际请求的权限串（`<action> <resource>`）。
 //

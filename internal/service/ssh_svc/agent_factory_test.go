@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -188,6 +189,9 @@ func tempSocketPath(t *testing.T) string {
 // 在**第一条**连接被服务完毕（对端关闭）时触发。
 func serveKeyringAgent(t *testing.T, path string, keys ...agent.AddedKey) (*testAgentServer, chan struct{}) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("unix-socket SSH agents are not supported on Windows (OpenSSH there uses a named pipe)")
+	}
 	kr := agent.NewKeyring()
 	for _, k := range keys {
 		if err := kr.Add(k); err != nil {

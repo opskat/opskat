@@ -28,6 +28,33 @@ const paletteRestrictions = [
   { selector: `TemplateElement[value.raw=/${paletteClassPattern}/]`, message: paletteMessage },
 ];
 
+// 数据库驱动差异在后端驱动注册表里，前端从驱动描述读取（src/lib/dbDrivers/，docs/references/adding-a-database-driver.md）：
+// 共享代码不得拿驱动名做比较。驱动名取自内置驱动的 id 与别名。
+const driverNames = "mysql|postgresql|postgres|mssql|sqlserver|sqlite|sqlite3";
+const driverMessage =
+  "共享代码不得按驱动名分支：驱动属性从 src/lib/dbDrivers 的驱动描述读取（driverHasCapability 等），方言 SQL 放进后端驱动（docs/references/adding-a-database-driver.md）。";
+const driverRestrictions = [
+  { selector: `BinaryExpression[operator=/^[!=]==?$/] > Literal[value=/^(${driverNames})$/]`, message: driverMessage },
+  { selector: `SwitchCase[test.value=/^(${driverNames})$/]`, message: driverMessage },
+];
+
+// Wails 2.16 起后端错误以 Error 对象 reject，String(err) / `${err}` 会显示成 "Error: …"、
+// 也会让按原文匹配错误码的逻辑失配：捕获到的错误一律经 src/lib/errorMessage.ts 转文本。
+// esquery 无法按绑定判断，按常用的错误变量名（e / err / error / *Err / *Error）匹配。
+const caughtErrorName = "/^(e|err|error|\\w+Err|\\w+Error)$/";
+const caughtErrorMessage =
+  '捕获到的错误用 errorMessage(err)（src/lib/errorMessage.ts）转文本：Wails 2.16 以 Error 对象 reject，String(err) / `${err}` 会多出 "Error: " 前缀。';
+const caughtScopes = ["CatchClause", "CallExpression[callee.property.name='catch'] > :function"];
+const caughtErrorRestrictions = caughtScopes.flatMap((scope) => [
+  {
+    selector: `${scope} CallExpression[callee.name='String'] > Identifier.arguments[name=${caughtErrorName}]`,
+    message: caughtErrorMessage,
+  },
+  {
+    selector: `${scope} TemplateLiteral > Identifier.expressions[name=${caughtErrorName}]`,
+    message: caughtErrorMessage,
+  },
+]);
 export default tseslint.config(
   { ignores: ["dist", "wailsjs"] },
   js.configs.recommended,
@@ -63,6 +90,19 @@ export default tseslint.config(
   {
     // 设计系统作用域（主应用 src + @opskat/ui）：palette 类名禁令只在 globals.css token 体系内生效。
     files: ["src/**/*.{ts,tsx}", "packages/ui/src/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...react19Restrictions,
+        ...paletteRestrictions,
+        ...driverRestrictions,
+        ...caughtErrorRestrictions,
+      ],
+    },
+  },
+  {
+    // 驱动描述的实现处与测试夹具：可以按驱动名比较（其余禁令保留）。
+    files: ["src/lib/dbDrivers/**/*.{ts,tsx}", "src/**/__tests__/**/*.{ts,tsx}", "src/**/*.test.{ts,tsx}"],
     rules: {
       "no-restricted-syntax": ["error", ...react19Restrictions, ...paletteRestrictions],
     },

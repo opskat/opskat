@@ -599,6 +599,8 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 			a.finishRunner(convID, entry)
 		}()
 		translator := runner.NewStreamTranslatorWithContext(chatCtx)
+		// 通道关闭但没有 done / error / stopped 收尾时，冲刷合并窗口里剩下的 delta。
+		defer translator.Close()
 		for ev := range events {
 			translator.Translate(ev, onEvent)
 		}
@@ -664,20 +666,21 @@ func (a *AI) StopAIGeneration(convID int64) error {
 	return nil
 }
 
-// SaveConversationMessages 前端调用，保存显示消息到数据库。
-func (a *AI) SaveConversationMessages(convID int64, displayMsgs []ConversationDisplayMessage) error {
+// SaveConversationMessages 前端调用，从 from 位置起替换会话消息：tail 依次落到 from, from+1, ...，
+// 原来 sort_order >= from 的消息被删除。前端只发第一个变化位置之后的消息，from = 0 即全量覆盖。
+func (a *AI) SaveConversationMessages(convID int64, from int, tail []ConversationDisplayMessage) error {
 	if convID == 0 {
 		return nil
 	}
+	if from < 0 {
+		return fmt.Errorf("invalid save offset %d", from)
+	}
 	ctx := i18n.Ctx(a.ctx, a.lang.Lang())
-	var msgs []*conversation_entity.Message
-	for i, dm := range displayMsgs {
+	msgs := make([]*conversation_entity.Message, 0, len(tail))
+	for _, dm := range tail {
 		msg := &conversation_entity.Message{
-			ConversationID: convID,
-			Role:           dm.Role,
-			Content:        dm.Content,
-			SortOrder:      i,
-			Createtime:     time.Now().Unix(),
+			Role:    dm.Role,
+			Content: dm.Content,
 		}
 		if err := msg.SetBlocks(dm.Blocks); err != nil {
 			logger.Default().Error("set message blocks", zap.Error(err))
@@ -687,7 +690,7 @@ func (a *AI) SaveConversationMessages(convID int64, displayMsgs []ConversationDi
 		}
 		msgs = append(msgs, msg)
 	}
-	return conversation_svc.Conversation().SaveMessages(ctx, convID, msgs)
+	return conversation_svc.Conversation().SaveMessages(ctx, convID, from, msgs)
 }
 
 // GetCurrentConversationID 获取当前会话ID

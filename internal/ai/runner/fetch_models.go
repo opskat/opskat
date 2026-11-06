@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/opskat/opskat/internal/model/entity/ai_provider_entity"
+	"github.com/opskat/opskat/internal/pkg/netproxy"
 )
 
 // ModelInfo 从 API 返回的模型信息
@@ -47,6 +48,11 @@ func applyExtraHeaders(req *http.Request, headers map[string]string) {
 	}
 }
 
+// newModelsClient 拉模型列表用的 client：走进程级代理设置，15 秒超时。
+func newModelsClient() *http.Client {
+	return &http.Client{Transport: netproxy.Transport(), Timeout: 15 * time.Second}
+}
+
 func fetchOpenAIModels(apiBase, apiKey string, headers map[string]string) ([]ModelInfo, error) {
 	if apiBase == "" {
 		apiBase = "https://api.openai.com/v1"
@@ -60,7 +66,7 @@ func fetchOpenAIModels(apiBase, apiKey string, headers map[string]string) ([]Mod
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	applyExtraHeaders(req, headers)
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := newModelsClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -105,7 +111,7 @@ func fetchAnthropicModels(apiBase, apiKey string, headers map[string]string) ([]
 	req.Header.Set("anthropic-version", "2023-06-01")
 	applyExtraHeaders(req, headers)
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := newModelsClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

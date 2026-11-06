@@ -9,8 +9,10 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/opskat/opskat/internal/ai/helper"
+	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -46,9 +48,24 @@ func withMFACode(ctx context.Context, code string) context.Context {
 	return context.WithValue(ctx, mfaCodeKeyType{}, code)
 }
 
-// withMFA 为 ssh/exec/cp/batch 的拨号接上应答来源。可交互判据与审批一致
-// （stdin 与 stderr 双 TTY）。
+// withMFA 为 ssh/exec/cp/batch 对 SSH 资产的拨号接上应答来源：目标资产及其连接路径上
+// 的 SSH 跳板（credential_resolver.WithMFA，只经 DialAssetSSH 生效——cp 的对象存储端点等
+// 其它类型经隧道拨号不应答跳板）。可交互判据与审批一致（stdin 与 stderr 双 TTY）。
 func withMFA(ctx context.Context) context.Context {
+	ctx, src := withMFASources(ctx)
+	return credential_resolver.WithMFA(ctx, src.newCaller)
+}
+
+// withConnectionPathMFA 为扩展资产的执行接上同一套应答来源：扩展经资产连接路径拨号，
+// 路径上要 MFA 的 SSH 跳板由它应答（credential_resolver.WithConnectionPathMFA）。
+func withConnectionPathMFA(ctx context.Context) context.Context {
+	ctx, src := withMFASources(ctx)
+	return credential_resolver.WithConnectionPathMFA(ctx, src.newCaller)
+}
+
+// withMFASources 组出一次执行的应答来源，并把记录「没有应答来源」拒绝的 mfaRefusals
+// 挂到 ctx（mfaRefusalOf 据此认回拒绝）。
+func withMFASources(ctx context.Context) (context.Context, mfaSources) {
 	code, _ := ctx.Value(mfaCodeKeyType{}).(string)
 	dataDir := bootstrap.ResolvedDataDir()
 	token, err := bootstrap.ReadAuthToken(dataDir)
@@ -60,9 +77,57 @@ func withMFA(ctx context.Context) context.Context {
 		interactive: isInteractive(stdinIsTerminal(), stderrIsTerminal()),
 		terminal:    func() (*os.File, io.Writer) { return os.Stdin, os.Stderr },
 		desktop:     desktopMFASender(approval.SocketPath(dataDir), token),
+		refusals:    &mfaRefusals{},
 	}
-	return credential_resolver.WithMFA(ctx, src.newCaller)
+	return context.WithValue(ctx, mfaRefusalsKeyType{}, src.refusals), src
 }
+
+type mfaRefusalsKeyType struct{}
+
+// mfaRefusals 记下一次 withMFA / withConnectionPathMFA 的应答方因「没有应答来源」给出的拒绝。
+type mfaRefusals struct {
+	last atomic.Pointer[noMFASourceError]
+}
+
+// mfaRefusalOf 让 ctx 的应答方在本次调用里给出过的「没有应答来源」拒绝仍决定 err 的
+// 上报方式（NEEDS MFA）。扩展工具经 WASM 客体拨号：宿主的类型化错误交给客体后只剩
+// 文本，回到 opsctl 时 needsMFA 已认不出它。err 为 nil、已可识别，或应答方没有拒绝过
+// 时原样返回。
+func mfaRefusalOf(ctx context.Context, err error) error {
+	if err == nil || needsMFA(err) {
+		return err
+	}
+	refusals, _ := ctx.Value(mfaRefusalsKeyType{}).(*mfaRefusals)
+	if refusals == nil {
+		return err
+	}
+	if refusal := refusals.last.Load(); refusal != nil {
+		return &relayedMFARefusal{err: err, refusal: refusal}
+	}
+	return err
+}
+
+// relayMFARefusals 返回只含 toolName 的 handler 表，其失败经 mfaRefusalOf 上报。
+// handlers 里没有 toolName 时原样返回，由调用方照常报未知工具。
+func relayMFARefusals(handlers map[string]tool.ToolHandlerFunc, toolName string) map[string]tool.ToolHandlerFunc {
+	handler, found := handlers[toolName]
+	if !found {
+		return handlers
+	}
+	return map[string]tool.ToolHandlerFunc{toolName: func(ctx context.Context, params map[string]any) (string, error) {
+		result, err := handler(ctx, params)
+		return result, mfaRefusalOf(ctx, err)
+	}}
+}
+
+// relayedMFARefusal 是带上应答方拒绝的 handler 错误：文本仍是 handler 的原文。
+type relayedMFARefusal struct {
+	err     error
+	refusal *noMFASourceError
+}
+
+func (e *relayedMFARefusal) Error() string   { return e.err.Error() }
+func (e *relayedMFARefusal) Unwrap() []error { return []error{e.err, e.refusal} }
 
 // mfaSources 是一个 opsctl 进程的应答来源配置；newCaller 为每条新建连接产出一个
 // 持有「本连接内」状态的应答方。
@@ -71,6 +136,8 @@ type mfaSources struct {
 	interactive bool
 	terminal    func() (*os.File, io.Writer)
 	desktop     func(ctx context.Context, req approval.ApprovalRequest) (approval.ApprovalResponse, error)
+	// refusals 非 nil 时记下「没有应答来源」的拒绝（见 mfaRefusalOf）。
+	refusals *mfaRefusals
 }
 
 func (s mfaSources) newCaller(assetID int64) sshagent.InteractiveCaller {
@@ -147,7 +214,11 @@ func (c *mfaCaller) SubmitChallenge(ctx context.Context, ch sshagent.MFAChalleng
 			return nil, fmt.Errorf("desktop app refused the MFA request: %s", resp.Reason)
 		}
 	}
-	return nil, &noMFASourceError{typed: &sshagent.Error{Code: sshagent.CodeMFARequired, Message: "the server requires MFA but no answer source is available"}}
+	refusal := &noMFASourceError{typed: &sshagent.Error{Code: sshagent.CodeMFARequired, Message: "the server requires MFA but no answer source is available"}}
+	if c.src.refusals != nil {
+		c.src.refusals.last.Store(refusal)
+	}
+	return nil, refusal
 }
 
 // noMFASourceError 是 opsctl 应答方在「没有参数、不可交互、桌面端也未运行」时给出的

@@ -29,6 +29,18 @@ describe("OSSTransferDock", () => {
     expect(onClear).not.toHaveBeenCalled();
   });
 
+  it("shows how many files of a folder download are done", () => {
+    render(
+      <OSSTransferDock
+        transfers={[tx({ direction: "download", name: "logs", files: { done: 3, total: 120 } })]}
+        onCancel={vi.fn()}
+        onClear={vi.fn()}
+        onClearCompleted={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("oss-transfer-files-t1")).toHaveTextContent("3/120");
+  });
+
   it("the row button clears a finished row instead of cancelling", () => {
     const onCancel = vi.fn();
     const onClear = vi.fn();

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -88,7 +90,7 @@ func TestTrackerKeepsTransferTotalAcrossFiles(t *testing.T) {
 		tr.FileDone(100)
 	}
 
-	require.Len(t, got, 6)
+	require.Len(t, got, 7, "6 条常规 progress + 最后一个文件完成时补发的 1 条")
 	var prev int64
 	for _, p := range got {
 		assert.Equal(t, int64(300), p.BytesTotal, "BytesTotal 必须是整次传输总量")
@@ -99,7 +101,7 @@ func TestTrackerKeepsTransferTotalAcrossFiles(t *testing.T) {
 	}
 	assert.Equal(t, int64(300), got[len(got)-1].BytesDone)
 	assert.Equal(t, "f2.bin", got[len(got)-1].CurrentFile)
-	assert.Equal(t, 2, got[len(got)-1].FilesCompleted)
+	assert.Equal(t, 3, got[len(got)-1].FilesCompleted, "最后一条是完成时补发的精确总量")
 }
 
 func TestTrackerReaderSizeIsCurrentFileNotTransferTotal(t *testing.T) {
@@ -164,32 +166,93 @@ func TestTrackerWriterAbortsOnCancelledContext(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled)
 }
 
-func TestProgressReaderReportsCumulativeBytes(t *testing.T) {
-	var got []Progress
-	src := bytes.NewReader(bytes.Repeat([]byte("x"), 100))
-	pr := NewProgressReader(context.Background(), "oss-1", "hero.jpg", src, 100, func(p Progress) {
-		got = append(got, p)
-	})
+func TestTrackerConcurrentFilesKeepExactTotals(t *testing.T) {
+	// 目录传输由多个 worker 并发传文件：每个文件各自的 Reader/Writer 与 FileDone
+	// 来自不同 goroutine。累计的完成文件数与字节数必须精确，BytesDone 单调且不越过总量。
+	const workers, filesPerWorker, size = 8, 25, 1000
+	const filesTotal, bytesTotal = workers * filesPerWorker, int64(workers * filesPerWorker * size)
 
-	buf := make([]byte, 40)
-	n, err := pr.Read(buf) // 首条 progress 立即放行（lastEmit 零值）
+	var tick atomic.Int64
+	clock := func() time.Time { return time.Unix(0, 0).Add(time.Duration(tick.Add(1)) * time.Second) }
+	var got []Progress // Tracker 串行调用回调，无需加锁
+	tr := newTracker("sftp-c", filesTotal+1, bytesTotal+1, func(p Progress) { got = append(got, p) }, clock)
+
+	var wg sync.WaitGroup
+	for w := range workers {
+		wg.Go(func() {
+			for i := range filesPerWorker {
+				name := fmt.Sprintf("w%d/f%d", w, i)
+				src := struct{ io.Reader }{bytes.NewReader(make([]byte, size))} // 去掉 WriterTo，强制分片
+				f := tr.File(name, size)
+				var err error
+				if i%2 == 0 {
+					_, err = io.CopyBuffer(io.Discard, f.Reader(context.Background(), src), make([]byte, 100))
+				} else {
+					_, err = io.CopyBuffer(f.Writer(context.Background(), io.Discard), src, make([]byte, 100))
+				}
+				assert.NoError(t, err)
+				f.Done()
+			}
+		})
+	}
+	wg.Wait()
+
+	// 再传 1 字节，读出此刻的累计量。
+	_, err := tr.Writer(context.Background(), io.Discard, "probe").Write([]byte{1})
 	require.NoError(t, err)
-	require.Equal(t, 40, n)
+
 	require.NotEmpty(t, got)
+	var prev int64
+	for i, p := range got {
+		assert.GreaterOrEqual(t, p.BytesDone, prev, "第 %d 条：BytesDone 必须单调递增", i)
+		assert.LessOrEqual(t, p.BytesDone, p.BytesTotal, "第 %d 条：BytesDone 不得越过总量", i)
+		prev = p.BytesDone
+	}
 	last := got[len(got)-1]
-	assert.Equal(t, "oss-1", last.TransferID)
-	assert.Equal(t, StatusProgress, last.Status)
-	assert.Equal(t, "hero.jpg", last.CurrentFile)
-	assert.Equal(t, int64(40), last.BytesDone)
-	assert.Equal(t, int64(100), last.BytesTotal)
+	assert.Equal(t, filesTotal, last.FilesCompleted)
+	assert.Equal(t, bytesTotal+1, last.BytesDone)
+	assert.Equal(t, "probe", last.CurrentFile)
 }
 
-func TestProgressReaderAbortsOnCancelledContext(t *testing.T) {
+// ReaderAt 保留随机读并允许并发读各段;sink 重试某段时重读的字节不得把进度推过文件大小,
+// Done 后的最后一条 progress 是精确总量。
+func TestTrackedReaderAtCountsConcurrentReadsWithoutOvershooting(t *testing.T) {
+	// 时钟每次被读都前进 1s:每次读出字节都越过节流窗口发一条 progress,便于逐条检查。
+	var tick atomic.Int64
+	clock := func() time.Time { return time.Unix(tick.Add(1), 0) }
+	var got []Progress
+	tr := newTracker("t", 1, 100, func(p Progress) { got = append(got, p) }, clock)
+	f := tr.File("big.bin", 100)
+	ra := f.ReaderAt(context.Background(), bytes.NewReader(bytes.Repeat([]byte("z"), 100)))
+
+	var wg sync.WaitGroup
+	for off := int64(0); off < 100; off += 25 {
+		wg.Go(func() {
+			n, err := ra.ReadAt(make([]byte, 25), off)
+			assert.NoError(t, err)
+			assert.Equal(t, 25, n)
+		})
+	}
+	wg.Wait()
+	_, err := ra.ReadAt(make([]byte, 25), 50) // 重试重读同一段
+	require.NoError(t, err)
+	f.Done()
+
+	require.NotEmpty(t, got)
+	for i, p := range got {
+		assert.LessOrEqual(t, p.BytesDone, p.BytesTotal, "第 %d 条:重读不得把进度推过总量", i)
+	}
+	last := got[len(got)-1]
+	assert.Equal(t, 1, last.FilesCompleted)
+	assert.EqualValues(t, 100, last.BytesDone)
+}
+
+func TestTrackedReaderAtAbortsOnCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	pr := NewProgressReader(ctx, "oss-1", "hero.jpg", bytes.NewReader([]byte("data")), 4, func(Progress) {})
+	ra := NewTracker("t", 1, 4, func(Progress) {}).File("a", 4).ReaderAt(ctx, bytes.NewReader([]byte("data")))
 
-	_, err := pr.Read(make([]byte, 4))
+	_, err := ra.ReadAt(make([]byte, 4), 0)
 	assert.ErrorIs(t, err, context.Canceled)
 }
 

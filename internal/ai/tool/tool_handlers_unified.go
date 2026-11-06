@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
+	"github.com/opskat/opskat/internal/ai/helper"
+	"github.com/opskat/opskat/internal/ai/outputcap"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -88,7 +89,7 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 
 	checkCommand := command
 	if canonicalize, ok := permission.CanonicalizeFor(asset.Type); ok {
-		canonicalCommand, err := canonicalize(asset, command)
+		canonicalCommand, err := canonicalize(ctx, asset, command)
 		if err != nil {
 			// 与其他三条短路路径同样记一条 decision=deny 的审计行：规范化失败的命令
 			// 从不执行，但模型尝试过什么本身有审计价值——尤其是那些**永远**过不了
@@ -138,6 +139,20 @@ func handleExec(ctx context.Context, args map[string]any) (string, error) {
 
 	return exec(ctx, asset, command, scope)
 }
+
+// handleAIExec 是 AI 会话里 exec 工具的入口：在 handleExec 之上给结果加上限——这份结果
+// 会进入模型上下文、tool_result 事件和会话存储。SQL 结果先按行数截断（注明总行数），再统一
+// 按字节/行数截断头尾。opsctl 的 exec / batch 经 AllToolDefs 直接调 handleExec，输出保持完整。
+func handleAIExec(ctx context.Context, args map[string]any) (string, error) {
+	out, err := handleExec(helper.WithMaxRows(ctx, maxSQLRows), args)
+	if err != nil {
+		return out, err
+	}
+	return outputcap.Cap(out), nil
+}
+
+// maxSQLRows 是 AI exec 工具一次最多返回的 SQL 行数。
+const maxSQLRows = 200
 
 // recordShortCircuit 把"命令在权限检查之前就被挡下"写进审计决策槽。
 //
@@ -256,17 +271,4 @@ func helpForTypeName(ctx context.Context, ref string) (string, error) {
 		gate.MarkDocumented(aictx.GetConversationID(ctx), typeName)
 	}
 	return fmt.Sprintf("Type %q.\n\n%s", typeName, doc), nil
-}
-
-// ExecOnAsset 是统一 exec 的进程内入口，给桌面端代表 opsctl 执行命令用。
-//
-// 存在的理由是**执行位置**，不是第二条执行路径：扩展的 WASM 运行时只活在桌面进程里，
-// opsctl 进程既没有插件也没有宿主能力，因此扩展资产上的 exec 必须交回桌面端跑。交回来
-// 之后走的仍然是 handleExec 这一条——同样的顺序契约（执行器查找 → 规范化 → precheck →
-// 权限检查 → 执行），同样的审批与 grant。
-func ExecOnAsset(ctx context.Context, assetID int64, command string) (string, error) {
-	return handleExec(ctx, map[string]any{
-		"asset":   strconv.FormatInt(assetID, 10),
-		"command": command,
-	})
 }

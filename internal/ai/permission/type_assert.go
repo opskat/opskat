@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"sort"
 
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-// driverAliases 把一个**驱动**名映射到它断言的 DatabaseDriver。
+// 驱动名（mysql、postgres、sqlite3 …）来自驱动注册表：每个驱动在描述里声明自己的 id 与
+// 别名（dbdriver.Descriptor.Names），这里不维护第二份名单。
 //
 // 这些名字故意不注册进 permissionTypes：那张表是权限派发、审批标签（ApprovalTypeFor）
 // 与 grant 支持（SupportsGrantApproval）的唯一真相源，而 "mysql" 三者都不是——塞进去会让
@@ -19,45 +21,25 @@ import (
 // "方言写错"提前变成错误，一个会撒谎的断言比没有断言更糟。所以驱动名多带一个约束，
 // 由 AssertAssetType 落实。
 //
-// 只收驱动本身与它们的常见拼法。mariadb 没有收：它复用 mysql 驱动，但"MariaDB 资产"
-// 与"driver=mysql"是两件事，等真有人要再说。
-var driverAliases = map[string]asset_entity.DatabaseDriver{
-	"mysql":      asset_entity.DriverMySQL,
-	"postgresql": asset_entity.DriverPostgreSQL,
-	"postgres":   asset_entity.DriverPostgreSQL,
-	"mssql":      asset_entity.DriverMSSQL,
-	"sqlserver":  asset_entity.DriverMSSQL,
-	"sqlite":     asset_entity.DriverSQLite,
-	"sqlite3":    asset_entity.DriverSQLite,
-}
-
-func init() {
-	// 两张表必须无交集，否则一个驱动名会被 permissionTypes 悄悄遮蔽，连带丢掉驱动约束
-	// （resolveDeclaredType 先查 permissionTypes）。撞名是启动期编程错误，与
-	// registerPermissionType 的 panic-on-duplicate 同一原则。
-	for name := range driverAliases {
-		if _, exists := permissionTypeFor(name); exists {
-			panic(fmt.Sprintf("permission: driver alias %q collides with a registered permission type", name))
-		}
-	}
-}
+// 两套名字必须无交集：resolveDeclaredType 先查 permissionTypes，撞名的驱动名会被悄悄
+// 遮蔽、连带丢掉驱动约束。由 TestDriverNamesDoNotCollideWithPermissionTypes 把关。
 
 // BuiltinDeclaredTypeNames 返回调用方可以声明为类型的全部内置名字：权限类型与其别名
-// （exec / sql / db / mongo / kube …）以及驱动名（mysql / postgres …）。resolveDeclaredType
-// 先查这些名字、最后才查自定义类型标识，所以与它们同名的标识会在 --type 断言、batch 前缀里
-// 被内置类型遮蔽——自定义类型的保留类型名必须包含它们（组合根 main.go 注入）。
+// （exec / sql / db / mongo / kube …）以及已注册驱动的 id 与别名（mysql / postgres …，
+// 含扩展提供的驱动）。resolveDeclaredType 先查这些名字、最后才查自定义类型标识，所以与它们
+// 同名的标识会在 --type 断言、batch 前缀里被内置类型遮蔽——自定义类型的保留类型名必须包含它们（组合根 main.go 注入）。
 //
 // 调用发生在运行期（每次创建自定义类型），与扩展启用 / 停用时对 permissionTypes 的增删并发，
 // 所以在 registryMu 下读取。
 func BuiltinDeclaredTypeNames() []string {
 	registryMu.RLock()
-	names := make([]string, 0, len(permissionTypes)+len(driverAliases))
+	names := make([]string, 0, len(permissionTypes))
 	for name := range permissionTypes {
 		names = append(names, name)
 	}
 	registryMu.RUnlock()
-	for name := range driverAliases {
-		names = append(names, name)
+	for _, d := range dbregistry.List() {
+		names = append(names, d.Descriptor().Names()...)
 	}
 	sort.Strings(names)
 	return names
@@ -72,8 +54,8 @@ func resolveDeclaredType(name string) (canonical string, driver asset_entity.Dat
 	if handler, found := permissionTypeFor(name); found {
 		return handler.canonical, "", true
 	}
-	if d, found := driverAliases[name]; found {
-		return asset_entity.AssetTypeDatabase, d, true
+	if d, found := dbregistry.ByName(name); found {
+		return asset_entity.AssetTypeDatabase, d.Descriptor().ID, true
 	}
 	// 自定义类型标识（slug）是通用资产对外的类型名（--type、batch 前缀、exec 的 type 参数）；
 	// 它断言的资产类型是 generic，具体是哪个标识由 AssertAssetType 对着资产再核一次。
@@ -86,10 +68,10 @@ func resolveDeclaredType(name string) (canonical string, driver asset_entity.Dat
 // CanonicalTypeFor 把一个类型名、协议别名或驱动名规范成资产类型。
 //
 // 别名来自两处：本包既有的 permissionTypes 注册表（type_registry.go 的 init）——
-// ssh←exec、database←sql/db、mongodb←mongo、k8s←kubernetes/kube；以及 driverAliases
-// ——database←mysql/postgres/…。opsctl batch 的 `sql:2:SELECT 1` 前缀与 batch_exec 条目的
-// type 字段都落在这里，因此"沿用旧写法"不需要任何兼容 shim，而 `mysql:2:SELECT 1`
-// 也与 --type mysql 认同一套词。
+// ssh←exec、database←sql/db、mongodb←mongo、k8s←kubernetes/kube；以及驱动注册表里
+// 各驱动声明的名字——database←mysql/postgres/…。opsctl batch 的 `sql:2:SELECT 1` 前缀与
+// batch_exec 条目的 type 字段都落在这里，因此"沿用旧写法"不需要任何兼容 shim，而
+// `mysql:2:SELECT 1` 也与 --type mysql 认同一套词。
 //
 // 驱动名在这里只解析到 "database"：驱动约束不在类型解析这一层，它需要资产本身才能判定，
 // 由 AssertAssetType 落实。想连驱动一起解析的调用方用 resolveDeclaredType。
@@ -119,7 +101,7 @@ func CanonicalExecTypeFor(name string) (string, bool) {
 // 声明了就必须对得上：派发永远由资产导出，这里只把"模型/人写错方言"从协议层的
 // 服务端报错（读起来像基础设施故障）提前成一条点名双方类型的建模错误。
 //
-// 声明的若是驱动名（mysql/postgres/…，见 driverAliases），断言多走一层：类型对上之后
+// 声明的若是驱动名（mysql/postgres/…，来自驱动注册表），断言多走一层：类型对上之后
 // 还要求资产的 DatabaseConfig.Driver 一致。这正是允许驱动名当 --type 值的前提——
 // 只把 mysql 映射到 database 就等于让 type=mysql 在 PostgreSQL 资产上通过，
 // 恰好在它该拦住的地方失灵。

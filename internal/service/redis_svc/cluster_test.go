@@ -443,5 +443,6 @@ func TestGoRedisClusterExecutorDoOnNodeOutsideSlots(t *testing.T) {
 
 	_, err = exec.DoOnNode(ctx, deadAnnounced, "PING")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "connection refused", "the reason is the real dial error")
+	// 拒绝连接的措辞随系统而变（Windows 是 "actively refused"），只断言原因是那次真实的拨号。
+	assert.Contains(t, err.Error(), "dial tcp", "the reason is the real dial error")
 }

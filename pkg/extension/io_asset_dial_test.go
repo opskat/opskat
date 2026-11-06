@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opskat/opskat/pkg/extwire"
 	. "github.com/smartystreets/goconvey/convey"
 )
 
@@ -24,7 +25,7 @@ import (
 // that plays "the far side of the tunnel", and records what it was asked.
 type fakeAssetDialer struct {
 	farSide   string      // address actually connected to
-	openErr   error       // DialContextFor fails: the path itself cannot be built
+	openErr   error       // the path itself cannot be built
 	dialErr   error       // the returned dial fails: the tunnel is up but unreachable
 	direct    bool        // the asset has no connection settings: dial directly
 	tlsConfig *tls.Config // asset's declared TLS settings, nil = none
@@ -34,9 +35,18 @@ type fakeAssetDialer struct {
 	addrs  []string
 }
 
-func (f *fakeAssetDialer) DialContextFor(_ context.Context, assetID int64) (DialContextFunc, *tls.Config, string, error) {
+// connection is the connection path of a as the asset-type side resolves it
+// into the call's scope (fixtureScopes): a dial (nil = direct), TLS settings and
+// a fingerprint — none for an ad-hoc call, which is never cached by it. The
+// asset id -1 marks an ad-hoc call in the recorded sequence: it carries no real
+// asset id.
+func (f *fakeAssetDialer) connection(a *AssetRef) (DialContextFunc, *tls.Config, string, error) {
+	id, fingerprint := a.ID, "fixed"
+	if a.AdHoc != nil {
+		id, fingerprint = -1, ""
+	}
 	f.mu.Lock()
-	f.assets = append(f.assets, assetID)
+	f.assets = append(f.assets, id)
 	f.mu.Unlock()
 	if f.openErr != nil {
 		return nil, nil, "", f.openErr
@@ -44,24 +54,7 @@ func (f *fakeAssetDialer) DialContextFor(_ context.Context, assetID int64) (Dial
 	if f.direct {
 		return nil, nil, "", nil
 	}
-	return f.dialFunc(), f.tlsConfig, "fixed", nil
-}
-
-// DialContextForConfig is the ad-hoc counterpart a "test connection" call
-// resolves through (AdHocAssetDialer): same far side, same bookkeeping, minus
-// the fingerprint an ad-hoc call never caches by. assetID -1 marks an ad-hoc
-// call in the recorded sequence — it carries no real asset id.
-func (f *fakeAssetDialer) DialContextForConfig(_ context.Context, _ string, _ *AdHocAssetConfig) (DialContextFunc, *tls.Config, error) {
-	f.mu.Lock()
-	f.assets = append(f.assets, -1)
-	f.mu.Unlock()
-	if f.openErr != nil {
-		return nil, nil, f.openErr
-	}
-	if f.direct {
-		return nil, nil, nil
-	}
-	return f.dialFunc(), f.tlsConfig, nil
+	return f.dialFunc(), f.tlsConfig, fingerprint, nil
 }
 
 func (f *fakeAssetDialer) dialFunc() DialContextFunc {
@@ -154,16 +147,13 @@ func (f *fakeAssetDialer) dialed() ([]int64, []string) {
 }
 
 // newDialFixture loads the fixture extension (network.assetEndpoint declared)
-// over a DefaultHostProvider whose asset connection path is dialer.
-func newDialFixture(t *testing.T, dialer AssetDialer, config map[string]any) (*Plugin, *Manifest) {
+// over a DefaultHostProvider whose scopes carry dialer as the asset's
+// connection path.
+func newDialFixture(t *testing.T, dialer *fakeAssetDialer, config map[string]any) (*Plugin, *Manifest) {
 	t.Helper()
 	manifest := fixtureManifest(t)
-	manifest.Capabilities.Network.AssetEndpoint = true
-	inner := NewDefaultHostProvider(DefaultHostConfig{
-		AssetConfigs: assetConfigs{fixtureAsset.ID: mustJSON(t, config)},
-		AssetDialer:  dialer,
-	})
-	p := loadDescribedFixture(t, manifest, inner)
+	manifest.Permissions.Network.AssetEndpoint = true
+	p := loadDescribedFixture(t, manifest, fixtureHost(manifest, assetConfigs{fixtureAsset.ID: mustJSON(t, config)}, dialer))
 	return p, manifest
 }
 
@@ -183,7 +173,7 @@ func TestAssetConnectionPath(t *testing.T) {
 
 		Convey("the fixture declares the SSH tunnel on its asset type", func() {
 			_, m := newDialFixture(t, &fakeAssetDialer{farSide: server.Listener.Addr().String()}, map[string]any{"endpoint": esURL})
-			So(m.AssetTypeDef("fixture").Connection, ShouldResemble, &ConnectionDef{SSHTunnel: true})
+			So(faceOf(t, m).assetType("fixture").Connection, ShouldResemble, &extwire.Connection{SSHTunnel: true})
 		})
 
 		Convey("an HTTP request to the endpoint is dialed through the asset's connection path", func() {
@@ -220,14 +210,53 @@ func TestAssetConnectionPath(t *testing.T) {
 			defer direct.Close()
 			dialer := &fakeAssetDialer{farSide: server.Listener.Addr().String()}
 			p, m := newDialFixture(t, dialer, map[string]any{"endpoint": esURL})
-			m.Capabilities.HTTP.Allowlist = []string{direct.URL + "/"}
-			m.Capabilities.Tunnel = true // the allowlisted server is loopback
+			m.Permissions.Network.HTTP = []string{direct.URL + "/"}
+			m.Permissions.Network.AllowPrivate = true // the allowlisted server is loopback
 
 			out := callToolOn(t, p, fixtureAsset, "http_get", map[string]any{"url": direct.URL + "/"})
 
 			So(out["body"], ShouldEqual, "reached directly")
-			assets, addrs := dialer.dialed()
-			So(assets, ShouldBeEmpty)
+			// The call's scope is resolved — its connection path built — but
+			// nothing is dialed along it.
+			_, addrs := dialer.dialed()
+			So(addrs, ShouldBeEmpty)
+		})
+
+		Convey("with network.assetRoute, an HTTP request to another address goes along the asset's path", func() {
+			dialer := &fakeAssetDialer{farSide: server.Listener.Addr().String()}
+			p, m := newDialFixture(t, dialer, map[string]any{"endpoint": "http://other.internal.invalid:9200"})
+			m.Permissions.Network.AssetRoute = true
+
+			out := callToolOn(t, p, fixtureAsset, "http_get", map[string]any{"url": esURL + "/_cat/nodes"})
+
+			So(out["body"], ShouldEqual, "through the tunnel")
+			_, addrs := dialer.dialed()
+			So(addrs, ShouldResemble, []string{"es.internal.invalid:9200"})
+		})
+
+		Convey("with network.assetRoute, a TCP connection to another address is dialed along the asset's connection path", func() {
+			dialer := &fakeAssetDialer{farSide: broker.Addr().String()}
+			p, m := newDialFixture(t, dialer, map[string]any{"endpoint": brokerAddr})
+			m.Permissions.Network.AssetRoute = true
+			const nodeAddr = "node2.kafka.internal.invalid:9093"
+
+			out := callToolOn(t, p, fixtureAsset, "tcp_echo", map[string]any{"addr": nodeAddr})
+
+			So(out["echo"], ShouldEqual, "ping")
+			_, addrs := dialer.dialed()
+			So(addrs, ShouldResemble, []string{nodeAddr})
+		})
+
+		Convey("without network.assetRoute, a TCP connection to another address is refused", func() {
+			dialer := &fakeAssetDialer{farSide: broker.Addr().String()}
+			p, _ := newDialFixture(t, dialer, map[string]any{"endpoint": brokerAddr})
+
+			_, err := p.CallTool(ctx, ToolCall{Name: "tcp_echo", Args: mustJSON(t, map[string]any{"addr": "node2.kafka.internal.invalid:9093"}), Asset: fixtureAsset})
+
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "not an endpoint of the asset")
+			So(err.Error(), ShouldContainSubstring, "permissions.network.assetRoute")
+			_, addrs := dialer.dialed()
 			So(addrs, ShouldBeEmpty)
 		})
 
@@ -249,10 +278,30 @@ func TestAssetConnectionPath(t *testing.T) {
 			dialer := &fakeAssetDialer{openErr: errors.New("ssh tunnel asset 7 unreachable: connection refused")}
 			p, _ := newDialFixture(t, dialer, map[string]any{"endpoint": server.URL})
 
-			_, err := p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": server.URL + "/"}), fixtureAsset)
+			_, err := p.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": server.URL + "/"}), Asset: fixtureAsset})
 
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "ssh tunnel asset 7 unreachable: connection refused")
+		})
+
+		Convey("a path that cannot be built leaves an allowlisted request alone: it is dialed directly, as without an asset", func() {
+			direct := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte("reached directly"))
+			}))
+			defer direct.Close()
+			dialer := &fakeAssetDialer{openErr: errors.New("TLS config: read CA file /gone/ca.pem: no such file")}
+			p, m := newDialFixture(t, dialer, map[string]any{"endpoint": server.URL})
+			m.Permissions.Network.HTTP = []string{direct.URL + "/"}
+			m.Permissions.Network.AllowPrivate = true // the allowlisted server is loopback
+
+			out := callToolOn(t, p, fixtureAsset, "http_get", map[string]any{"url": direct.URL + "/"})
+			So(out["body"], ShouldEqual, "reached directly")
+			assets, _ := dialer.dialed()
+			So(assets, ShouldBeEmpty) // the path was never built
+
+			_, err := p.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": server.URL + "/"}), Asset: fixtureAsset})
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "/gone/ca.pem")
 		})
 
 		Convey("when the tunnel refuses the dial the host error reaches the caller, with no direct dial", func() {
@@ -260,11 +309,11 @@ func TestAssetConnectionPath(t *testing.T) {
 			hp, _ := newDialFixture(t, dialer, map[string]any{"endpoint": server.URL})
 			tp, _ := newDialFixture(t, dialer, map[string]any{"endpoint": broker.Addr().String()})
 
-			_, err := hp.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": server.URL + "/"}), fixtureAsset)
+			_, err := hp.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": server.URL + "/"}), Asset: fixtureAsset})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "administratively prohibited")
 
-			_, err = tp.CallTool(ctx, "tcp_echo", mustJSON(t, map[string]any{"addr": broker.Addr().String()}), fixtureAsset)
+			_, err = tp.CallTool(ctx, ToolCall{Name: "tcp_echo", Args: mustJSON(t, map[string]any{"addr": broker.Addr().String()}), Asset: fixtureAsset})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "administratively prohibited")
 		})
@@ -297,7 +346,7 @@ func TestAssetConnectionPath(t *testing.T) {
 			dialer := &fakeAssetDialer{farSide: tlsServer.Listener.Addr().String(), tlsConfig: &tls.Config{}}
 			p, _ := newDialFixture(t, dialer, map[string]any{"endpoint": httpsURL})
 
-			_, err := p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": httpsURL + "/_cluster/health"}), fixtureAsset)
+			_, err := p.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": httpsURL + "/_cluster/health"}), Asset: fixtureAsset})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "certificate")
 		})
@@ -319,7 +368,7 @@ func TestAssetConnectionPath(t *testing.T) {
 			dialer := &fakeAssetDialer{farSide: ln.Addr().String(), tlsConfig: &tls.Config{ServerName: "127.0.0.1"}}
 			p, _ := newDialFixture(t, dialer, map[string]any{"endpoint": brokerAddr})
 
-			_, err := p.CallTool(ctx, "tcp_echo", mustJSON(t, map[string]any{"addr": brokerAddr}), fixtureAsset)
+			_, err := p.CallTool(ctx, ToolCall{Name: "tcp_echo", Args: mustJSON(t, map[string]any{"addr": brokerAddr}), Asset: fixtureAsset})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "certificate")
 		})

@@ -29,7 +29,7 @@ type policyKindHandler struct {
 	// decode 把前端传入的策略 JSON 还原成对应的具体策略指针(*CommandPolicy 等)。
 	decode func(raw []byte) (any, error)
 	// test 用当前策略 + 资产组链测试命令;current 为 decode 的产物或 nil。
-	test func(ctx context.Context, current any, groups []*group_entity.Group, command string) PolicyTestOutput
+	test func(ctx context.Context, asset *asset_entity.Asset, current any, groups []*group_entity.Group, command string) PolicyTestOutput
 }
 
 var kindRegistry = map[string]policyKindHandler{}
@@ -45,7 +45,7 @@ func init() {
 			err := json.Unmarshal(raw, &p)
 			return &p, err
 		},
-		test: func(ctx context.Context, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
+		test: func(ctx context.Context, asset *asset_entity.Asset, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
 			cp, _ := current.(*asset_entity.CommandPolicy)
 			return testSSHPolicy(ctx, cp, groups, command)
 		},
@@ -56,9 +56,9 @@ func init() {
 			err := json.Unmarshal(raw, &p)
 			return &p, err
 		},
-		test: func(ctx context.Context, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
+		test: func(ctx context.Context, asset *asset_entity.Asset, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
 			qp, _ := current.(*asset_entity.QueryPolicy)
-			return testQueryPolicy(ctx, qp, groups, command)
+			return testQueryPolicyForAsset(ctx, asset, qp, groups, command)
 		},
 	})
 	registerPolicyKind(PolicyKindRedis, policyKindHandler{
@@ -67,7 +67,7 @@ func init() {
 			err := json.Unmarshal(raw, &p)
 			return &p, err
 		},
-		test: func(ctx context.Context, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
+		test: func(ctx context.Context, asset *asset_entity.Asset, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
 			rp, _ := current.(*asset_entity.RedisPolicy)
 			return testRedisPolicy(ctx, rp, groups, command)
 		},
@@ -78,7 +78,7 @@ func init() {
 			err := json.Unmarshal(raw, &p)
 			return &p, err
 		},
-		test: func(ctx context.Context, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
+		test: func(ctx context.Context, asset *asset_entity.Asset, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
 			kp, _ := current.(*asset_entity.K8sPolicy)
 			return testK8sPolicy(ctx, kp, groups, command)
 		},
@@ -89,7 +89,7 @@ func init() {
 			err := json.Unmarshal(raw, &p)
 			return &p, err
 		},
-		test: func(ctx context.Context, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
+		test: func(ctx context.Context, asset *asset_entity.Asset, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
 			ep, _ := current.(*asset_entity.EtcdPolicy)
 			return testEtcdPolicy(ctx, ep, groups, command)
 		},
@@ -100,7 +100,7 @@ func init() {
 			err := json.Unmarshal(raw, &p)
 			return &p, err
 		},
-		test: func(ctx context.Context, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
+		test: func(ctx context.Context, asset *asset_entity.Asset, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
 			mp, _ := current.(*asset_entity.MongoPolicy)
 			return testMongoPolicy(ctx, mp, groups, command)
 		},
@@ -111,7 +111,7 @@ func init() {
 			err := json.Unmarshal(raw, &p)
 			return &p, err
 		},
-		test: func(ctx context.Context, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
+		test: func(ctx context.Context, asset *asset_entity.Asset, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
 			kp, _ := current.(*asset_entity.KafkaPolicy)
 			return testKafkaPolicy(ctx, kp, groups, command)
 		},
@@ -122,7 +122,7 @@ func init() {
 			err := json.Unmarshal(raw, &p)
 			return &p, err
 		},
-		test: func(ctx context.Context, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
+		test: func(ctx context.Context, asset *asset_entity.Asset, current any, groups []*group_entity.Group, command string) PolicyTestOutput {
 			op, _ := current.(*asset_entity.OSSPolicy)
 			return testOSSPolicy(ctx, op, groups, command)
 		},

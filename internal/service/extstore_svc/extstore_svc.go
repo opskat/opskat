@@ -17,9 +17,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/pkg/appversion"
-	"github.com/opskat/opskat/internal/pkg/netdial"
+	"github.com/opskat/opskat/internal/pkg/netproxy"
 	"github.com/opskat/opskat/internal/service/update_svc"
-	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 	"github.com/opskat/opskat/pkg/extstore"
 )
 
@@ -32,12 +32,8 @@ const (
 )
 
 var httpClient = &http.Client{
-	Timeout: 30 * time.Second,
-	Transport: &http.Transport{
-		Proxy:               http.ProxyFromEnvironment,
-		DialContext:         netdial.Default().DialContext,
-		TLSHandshakeTimeout: 15 * time.Second,
-	},
+	Timeout:   30 * time.Second,
+	Transport: netproxy.Transport(),
 }
 
 // ErrorKind classifies why a refresh failed; each kind has its own store state.
@@ -73,10 +69,10 @@ func (e *RefreshError) Unwrap() error { return e.Err }
 type UnavailableReason string
 
 const (
-	// ReasonHostABI: the newest version needs a host ABI this app lacks.
-	ReasonHostABI UnavailableReason = UnavailableReason(extension.ReasonHostABI)
+	// ReasonHostABI: the newest version declares a host ABI this app does not run.
+	ReasonHostABI UnavailableReason = UnavailableReason(extmanifest.ReasonHostABI)
 	// ReasonMinAppVersion: the newest version needs a newer OpsKat release.
-	ReasonMinAppVersion UnavailableReason = UnavailableReason(extension.ReasonMinAppVersion)
+	ReasonMinAppVersion UnavailableReason = UnavailableReason(extmanifest.ReasonMinAppVersion)
 	// ReasonSource: the newest version lives in a source type this build
 	// cannot fetch.
 	ReasonSource UnavailableReason = "source"

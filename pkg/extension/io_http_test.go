@@ -51,6 +51,47 @@ func TestHTTPHandle(t *testing.T) {
 			So(h.Close(), ShouldBeNil)
 		})
 
+		Convey("a body the extension wrote is sent whatever the method", func() {
+			for _, method := range []string{"GET", "DELETE"} {
+				Convey(method, func() {
+					var gotMethod, gotBody string
+					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						body, _ := io.ReadAll(r.Body)
+						gotMethod, gotBody = r.Method, string(body)
+					}))
+					defer srv.Close()
+
+					h, err := newHTTPHandle(IOOpenParams{Method: method, URL: srv.URL + "/idx/_count", AllowPrivate: true})
+					So(err, ShouldBeNil)
+					_, err = h.Write([]byte(`{"query":{"match_all":{}}}`))
+					So(err, ShouldBeNil)
+					_, err = h.Flush()
+					So(err, ShouldBeNil)
+					So(gotMethod, ShouldEqual, method)
+					So(gotBody, ShouldEqual, `{"query":{"match_all":{}}}`)
+					So(h.Close(), ShouldBeNil)
+				})
+			}
+		})
+
+		Convey("POST with nothing written sends no body and Content-Length 0", func() {
+			gotLen, gotBody := "unset", "unset"
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				gotLen, gotBody = r.Header.Get("Content-Length"), string(body)
+				_, _ = w.Write([]byte("ok"))
+			}))
+			defer srv.Close()
+
+			h, err := newHTTPHandle(IOOpenParams{Method: "POST", URL: srv.URL + "/empty", AllowPrivate: true})
+			So(err, ShouldBeNil)
+			_, err = h.Flush()
+			So(err, ShouldBeNil)
+			So(gotLen, ShouldEqual, "0")
+			So(gotBody, ShouldEqual, "")
+			So(h.Close(), ShouldBeNil)
+		})
+
 		Convey("POST with body: open, write body, flush, read response, close", func() {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)

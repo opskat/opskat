@@ -20,6 +20,7 @@ import (
 	"github.com/opskat/opskat/internal/pkg/socksdial"
 	"github.com/opskat/opskat/internal/pkg/sshkeepalive"
 	"github.com/opskat/opskat/internal/pkg/sshtuning"
+	"github.com/opskat/opskat/internal/pkg/streambatch"
 	"github.com/opskat/opskat/internal/service/sessionid"
 	"github.com/opskat/opskat/internal/sshagent"
 
@@ -60,20 +61,49 @@ func (sc *sharedClient) release() {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	sc.refCount--
-	if sc.refCount <= 0 && !sc.closed {
-		sc.closed = true
-		// Close the client before joining the keepalive goroutine: SendRequest may
-		// be blocked on network I/O, and client.Close is what unblocks it.
-		if err := sc.client.Close(); err != nil {
-			logger.Default().Warn("close client", zap.Error(err))
-		}
-		if sc.stopKeepalive != nil {
-			sc.stopKeepalive()
-		}
-		for _, c := range sc.closers {
-			if err := c.Close(); err != nil {
-				logger.Default().Warn("close jump host resource", zap.Error(err))
-			}
+	if sc.refCount <= 0 {
+		sc.closeLocked(false)
+	}
+}
+
+// forceClose closes the connection even though other sessions still reference
+// it: used when the transport has stopped draining. Those sessions then end
+// through their read loop and still call release, which only drops the count.
+func (sc *sharedClient) forceClose() {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	sc.closeLocked(true)
+}
+
+// closeLocked closes the client, its keepalive and the jump host chain.
+// outermostFirst closes the chain (proxy socket, then jump clients) before the
+// client: through jump hosts client.Close sends channel-close over the jump
+// transport, which queues behind a write stuck on the wedged outer socket.
+func (sc *sharedClient) closeLocked(outermostFirst bool) {
+	if sc.closed {
+		return
+	}
+	sc.closed = true
+	if outermostFirst {
+		sc.closeChainLocked()
+	}
+	// Close the client before joining the keepalive goroutine: SendRequest may
+	// be blocked on network I/O, and client.Close is what unblocks it.
+	if err := sc.client.Close(); err != nil {
+		logger.Default().Warn("close client", zap.Error(err))
+	}
+	if sc.stopKeepalive != nil {
+		sc.stopKeepalive()
+	}
+	if !outermostFirst {
+		sc.closeChainLocked()
+	}
+}
+
+func (sc *sharedClient) closeChainLocked() {
+	for _, c := range sc.closers {
+		if err := c.Close(); err != nil {
+			logger.Default().Warn("close jump host resource", zap.Error(err))
 		}
 	}
 }
@@ -86,7 +116,8 @@ type Session struct {
 	session        *ssh.Session
 	stdin          io.WriteCloser
 	stdout         io.Reader
-	mu             sync.Mutex
+	mu             sync.Mutex // guards closed only; never held across network I/O
+	writeMu        sync.Mutex // serializes stdin writes; Close does not take it
 	closed         bool
 	onData         func(data []byte)      // 终端输出回调
 	onClosed       func(sessionID string) // 会话关闭回调
@@ -125,15 +156,15 @@ type Session struct {
 
 // Write 向终端写入数据（用户输入）
 func (s *Session) Write(data []byte) error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
+	s.writeMu.Lock()
+	if s.IsClosed() {
+		s.writeMu.Unlock()
 		return fmt.Errorf("session is closed")
 	}
 	hasNewline := bytes.ContainsAny(data, "\r\n")
 	s.markUserInput(data)
 	_, err := s.stdin.Write(data)
-	s.mu.Unlock()
+	s.writeMu.Unlock()
 	if err == nil && hasNewline {
 		s.ensureSyncProbe()
 	}
@@ -157,31 +188,57 @@ func (s *Session) submitStartupCommand(command string) error {
 
 // Resize 调整终端尺寸
 func (s *Session) Resize(cols, rows int) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
+	if s.IsClosed() {
 		return fmt.Errorf("session is closed")
 	}
 	return s.session.WindowChange(rows, cols)
 }
 
+// sessionCloseTimeout bounds the polite channel close. Sending channel-close
+// normally takes microseconds; it only waits this long when the transport has
+// stopped draining (remote frozen, send buffer full), which is when it would
+// otherwise hang until keepalive gives up (measured: ~113 s).
+const sessionCloseTimeout = 2 * time.Second
+
 // Close 关闭会话
 func (s *Session) Close() {
 	s.failPendingDirectoryChange(dirsync.Error(dirSyncErrSessionClosed))
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return
 	}
 	s.closed = true
+	s.mu.Unlock()
 	if s.session != nil {
-		if err := s.session.Close(); err != nil {
-			logger.Default().Warn("close session", zap.String("sessionID", s.ID), zap.Error(err))
-		}
+		s.closeChannel()
 	}
 	s.shared.release()
 	if s.onClosed != nil {
 		go s.onClosed(s.ID)
+	}
+}
+
+// closeChannel sends the polite channel close. It queues behind any write
+// already stuck on the transport, so after sessionCloseTimeout the whole
+// connection is force-closed: that fails the stuck write and the pending close,
+// and sibling panes on the same connection end with it.
+func (s *Session) closeChannel() {
+	done := make(chan error, 1)
+	go func() { done <- s.session.Close() }()
+	timer := time.NewTimer(sessionCloseTimeout)
+	defer timer.Stop()
+	var err error
+	select {
+	case err = <-done:
+	case <-timer.C:
+		logger.Default().Warn("ssh channel close timed out: transport not draining, force-closing connection",
+			zap.String("sessionID", s.ID), zap.Int64("assetID", s.AssetID), zap.Duration("timeout", sessionCloseTimeout))
+		s.shared.forceClose()
+		err = <-done
+	}
+	if err != nil {
+		logger.Default().Warn("close session", zap.String("sessionID", s.ID), zap.Error(err))
 	}
 }
 
@@ -213,9 +270,9 @@ func (s *Session) writeInternal(data []byte) error {
 // (EnableSync, so it can drop the pattern on a failed enable) use this plus
 // queueInternalEchoSuppression directly.
 func (s *Session) writeStdin(data []byte) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if s.IsClosed() {
 		return fmt.Errorf("session is closed")
 	}
 	_, err := s.stdin.Write(data)
@@ -332,12 +389,7 @@ func (m *Manager) Dial(cfg ConnectConfig) (*ssh.Client, []io.Closer, error) {
 	addr := fmt.Sprintf("%s:%d", cfg.Host, cfg.Port)
 	client, closers, err := m.dial(cfg, sshConfig, addr)
 	if err != nil {
-		if _, typed := sshagent.CodeOf(err); !typed && mfa != nil && mfa.answered.Load() {
-			// 应答方给出的答案之后握手仍失败：服务器拒绝了这次 MFA。以类型化的
-			// 「MFA 验证失败」上报，调用方据此不拿同一个码重试。
-			return nil, nil, fmt.Errorf("%w: %v", &sshagent.Error{Code: sshagent.CodeMFAFailed, Message: "server rejected the MFA answers"}, err)
-		}
-		return nil, nil, err
+		return nil, nil, mfa.classify(err)
 	}
 	// 非终端连接（连接池 / 端口转发 / AI）的 keepalive 由本函数负责。调用方先关闭
 	// 返回的 client（打断可能阻塞的 SendRequest），再按序关闭 closers；stop 放在
@@ -882,8 +934,21 @@ type answeredMFA struct {
 	answered atomic.Bool
 }
 
+// classify 把应答方给出答案之后仍失败的握手识别为「服务器拒绝了这次 MFA」，以类型化的
+// MFA 验证失败上报，调用方据此不拿同一个码重试。已类型化的错误与未作答的失败原样返回。
+func (a *answeredMFA) classify(err error) error {
+	if _, typed := sshagent.CodeOf(err); typed || a == nil || !a.answered.Load() {
+		return err
+	}
+	return fmt.Errorf("%w: %v", &sshagent.Error{Code: sshagent.CodeMFAFailed, Message: "server rejected the MFA answers"}, err)
+}
+
+// SubmitChallenge 交给应答方作答；等待作答的时间（终端输入、桌面端对话框）不计入
+// ctx 上的拨号时限（proxychain.AwaitAnswer），取消 ctx 仍结束等待。
 func (a *answeredMFA) SubmitChallenge(ctx context.Context, ch sshagent.MFAChallenge) ([]string, error) {
+	resume := proxychain.AwaitAnswer(ctx)
 	answers, err := a.inner.SubmitChallenge(ctx, ch)
+	resume()
 	if err == nil {
 		a.answered.Store(true)
 	}
@@ -991,8 +1056,42 @@ func buildAuthMethods(authType, password, key, keyPassphrase string, privateKeyP
 	return methods, nil
 }
 
-func BuildAuthMethodsForProxyChain(authType, password, key, keyPassphrase string, privateKeyPaths []string) ([]ssh.AuthMethod, error) {
-	return buildAuthMethods(authType, password, key, keyPassphrase, privateKeyPaths, kbiResponders{})
+// ProxyChainHandshake 为代理链上的一个 SSH 跳板层构造握手：与目标层同一套认证——
+// 口令 / 密钥经 buildAuthMethods（keyboard-interactive 第二因子），cfg.Agent 非 nil 时经
+// Agent 认证工厂。cfg 只读认证与主机密钥字段（Host/Port/Username/AuthType/Password/Key/
+// KeyPassphrase/PrivateKeys/Agent/HostKeyVerifyFunc）。
+//
+// newMFA 非 nil 时每次握手取一个应答方承接这台跳板的挑战（层解析一次、可能拨号多次，
+// 应答方持有「本连接内」的状态，不能跨握手共用）；应答之后握手仍失败报 MFA 验证失败。
+// newMFA 为 nil 时保持非交互：需要第二因子即报 ssh_agent_mfa_required。认证材料的错误
+// （如私钥解析失败）在构造时返回。
+func ProxyChainHandshake(cfg ConnectConfig, newMFA func() sshagent.InteractiveCaller) (func(ctx context.Context, conn net.Conn, addr string) (*ssh.Client, error), error) {
+	if _, err := buildClientConfig(cfg); err != nil {
+		return nil, err
+	}
+	return func(ctx context.Context, conn net.Conn, addr string) (*ssh.Client, error) {
+		layer := cfg
+		layer.Ctx = ctx
+		var mfa *answeredMFA
+		if newMFA != nil {
+			mfa = &answeredMFA{inner: newMFA()}
+			layer.MFA = mfa
+			if layer.Agent != nil {
+				agentCfg := *layer.Agent
+				agentCfg.MFA = mfa
+				layer.Agent = &agentCfg
+			}
+		}
+		sshConfig, err := buildClientConfig(layer)
+		if err != nil {
+			return nil, err
+		}
+		client, err := newClientLayer(ctx, layer, sshConfig, conn, addr)
+		if err != nil {
+			return nil, mfa.classify(err)
+		}
+		return client, nil
+	}, nil
 }
 
 // parsePrivateKey 解析私钥，支持 passphrase
@@ -1013,8 +1112,8 @@ func parsePrivateKey(data []byte, passphrase string) (ssh.Signer, error) {
 	return nil, err
 }
 
-// readOutput 持续读取终端输出并回调
-// 使用 timer 合并输出，减少高频 EventsEmit 调用导致前端事件队列阻塞
+// readOutput 持续读取终端输出，滤掉 dirsync 标记后经 streambatch 攒批回调，
+// 减少高频 EventsEmit 调用导致前端事件队列阻塞。
 func (m *Manager) readOutput(sess *Session) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1026,74 +1125,33 @@ func (m *Manager) readOutput(sess *Session) {
 		m.sessions.Delete(sess.ID)
 	}()
 
-	var pending bytes.Buffer
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
+	batch := streambatch.New(streambatch.DefaultWindow, streambatch.DefaultMaxBytes, sess.onData)
+	// 后注册先执行:尾部数据先于 sess.Close(→ onClosed)送达。
+	defer batch.Close()
 
-	flush := func() {
-		if pending.Len() > 0 && sess.onData != nil {
-			data := make([]byte, pending.Len())
-			copy(data, pending.Bytes())
-			pending.Reset()
-			sess.onData(data)
-		}
-	}
-
-	type readResult struct {
-		data []byte
-		err  error
-	}
-	readCh := make(chan readResult, 4)
-
-	go func() {
-		buf := make([]byte, 32768)
-		for {
-			n, err := sess.stdout.Read(buf)
-			if n > 0 {
-				data := make([]byte, n)
-				copy(data, buf[:n])
-				readCh <- readResult{data: data}
-			}
-			if err != nil {
-				readCh <- readResult{err: err}
-				return
-			}
-		}
-	}()
-
+	buf := make([]byte, 32768)
 	for {
-		select {
-		case r := <-readCh:
-			if r.err != nil {
-				if len(sess.parserRemainder) > 0 {
-					pending.Write(sess.parserRemainder)
-					sess.parserRemainder = nil
-				}
-				flush()
-				// Log the disconnect reason. io.EOF is the remote closing the
-				// channel cleanly (user `exit`, or a server-side idle logout
-				// such as sshd ClientAlive*/shell TMOUT, which client keepalive
-				// cannot prevent). Anything else (reset/timeout) is an abnormal
-				// transport drop. This is the one place that knows *why* a
-				// session ended — without it diagnosis is blind.
-				if errors.Is(r.err, io.EOF) {
-					logger.Default().Info("ssh session ended: remote closed channel",
-						zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID))
-				} else {
-					logger.Default().Warn("ssh session dropped: transport read error",
-						zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID), zap.Error(r.err))
-				}
-				return
+		n, err := sess.stdout.Read(buf)
+		if n > 0 {
+			batch.Add(sess.filterOutput(buf[:n]))
+		}
+		if err != nil {
+			batch.Add(sess.parserRemainder)
+			sess.parserRemainder = nil
+			// Log the disconnect reason. io.EOF is the remote closing the
+			// channel cleanly (user `exit`, or a server-side idle logout
+			// such as sshd ClientAlive*/shell TMOUT, which client keepalive
+			// cannot prevent). Anything else (reset/timeout) is an abnormal
+			// transport drop. This is the one place that knows *why* a
+			// session ended — without it diagnosis is blind.
+			if errors.Is(err, io.EOF) {
+				logger.Default().Info("ssh session ended: remote closed channel",
+					zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID))
+			} else {
+				logger.Default().Warn("ssh session dropped: transport read error",
+					zap.String("sessionID", sess.ID), zap.Int64("assetID", sess.AssetID), zap.Error(err))
 			}
-			filtered := sess.filterOutput(r.data)
-			if len(filtered) > 0 {
-				pending.Write(filtered)
-			}
-			if pending.Len() >= 32*1024 {
-				flush()
-			}
-		case <-ticker.C:
-			flush()
+			return
 		}
 	}
 }

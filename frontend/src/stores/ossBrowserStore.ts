@@ -12,6 +12,7 @@ import {
 import { oss_svc } from "../../wailsjs/go/models";
 import { registerTabCloseHook, type QueryTabMeta } from "./tabStore";
 import type { OssPrefixNode } from "@/lib/ossPrefixTree";
+import { errorMessage } from "@/lib/errorMessage";
 
 const OSS_PAGE_SIZE = 200;
 
@@ -40,7 +41,8 @@ export interface OssBrowserTabState {
 
 interface OssBrowserState {
   tabs: Record<string, OssBrowserTabState>;
-  loadBuckets: (tabId: string, assetId: number) => Promise<void>;
+  /** defaultBucket:资产配置的默认桶;非空且该 tab 还没进入任何桶时,加载后直接进入它。 */
+  loadBuckets: (tabId: string, assetId: number, defaultBucket?: string) => Promise<void>;
   selectBucket: (tabId: string, bucket: string) => Promise<void>;
   navigateToPrefix: (tabId: string, prefix: string) => Promise<void>;
   expandNode: (tabId: string, prefix: string) => Promise<void>;
@@ -104,7 +106,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
   return {
     tabs: {},
 
-    loadBuckets: async (tabId, assetId) => {
+    loadBuckets: async (tabId, assetId, defaultBucket = "") => {
       set((s) => ({
         tabs: {
           ...s.tabs,
@@ -120,9 +122,10 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
         const buckets = await OSSListBuckets(assetId);
         patch(tabId, (t) => ({ ...t, buckets: buckets ?? [], loading: { ...t.loading, buckets: false } }));
       } catch (err) {
-        patch(tabId, (t) => ({ ...t, loading: { ...t.loading, buckets: false }, error: String(err) }));
+        patch(tabId, (t) => ({ ...t, loading: { ...t.loading, buckets: false }, error: errorMessage(err) }));
         throw err;
       }
+      if (defaultBucket && get().tabs[tabId]?.currentBucket === "") await get().selectBucket(tabId, defaultBucket);
     },
 
     selectBucket: async (tabId, bucket) => {
@@ -172,7 +175,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
           loading: { ...t.loading, listing: false },
         }));
       } catch (err) {
-        patch(tabId, (t) => ({ ...t, loading: { ...t.loading, listing: false }, error: String(err) }));
+        patch(tabId, (t) => ({ ...t, loading: { ...t.loading, listing: false }, error: errorMessage(err) }));
         throw err;
       }
     },
@@ -203,7 +206,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
           },
         }));
       } catch (err) {
-        patch(tabId, (t) => ({ ...t, error: String(err) }));
+        patch(tabId, (t) => ({ ...t, error: errorMessage(err) }));
         throw err;
       }
     },
@@ -229,7 +232,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
           loading: { ...t.loading, page: false },
         }));
       } catch (err) {
-        patch(tabId, (t) => ({ ...t, loading: { ...t.loading, page: false }, error: String(err) }));
+        patch(tabId, (t) => ({ ...t, loading: { ...t.loading, page: false }, error: errorMessage(err) }));
         throw err;
       }
     },
@@ -256,7 +259,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
           await OSSRemoveObjects({ assetId: t0.assetId, bucket: t0.currentBucket, keys });
         }
       } catch (err) {
-        patch(tabId, (t) => ({ ...t, error: String(err) }));
+        patch(tabId, (t) => ({ ...t, error: errorMessage(err) }));
         throw err;
       }
       get().clearSelection(tabId);
@@ -300,7 +303,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
       try {
         await OSSRemoveObject({ assetId: t0.assetId, bucket: t0.currentBucket, key });
       } catch (err) {
-        patch(tabId, (t) => ({ ...t, error: String(err) }));
+        patch(tabId, (t) => ({ ...t, error: errorMessage(err) }));
         throw err;
       }
       patch(tabId, (t) => (t.focusedKey === key ? { ...t, focusedKey: null } : t));

@@ -5,7 +5,8 @@ import { fireEvent } from "@testing-library/react";
 import { TableDataTab } from "@/components/query/TableDataTab";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
-import { ExecuteSQL, OpenTable } from "../../wailsjs/go/query/Query";
+import { CountTableRows, ExecuteSQL, OpenTable, QueryTableRows } from "../../wailsjs/go/query/Query";
+import { BUILTIN_DRIVERS, mockGridEditStatements, provideDrivers } from "./dbDriverFixtures";
 
 function openTablePayload(rows: Record<string, unknown>[]) {
   return JSON.stringify({
@@ -69,12 +70,6 @@ const deleteCalls = () =>
     .mock.calls.map(([, sql]) => String(sql))
     .filter((sql) => sql.startsWith("DELETE"));
 
-const selectCalls = () =>
-  vi
-    .mocked(ExecuteSQL)
-    .mock.calls.map(([, sql]) => String(sql))
-    .filter((sql) => sql.startsWith("SELECT"));
-
 async function renderLoaded(rows = ROWS) {
   vi.mocked(OpenTable).mockResolvedValue(openTablePayload(rows));
   render(<TableDataTab tabId="query-1" innerTabId="table-1" database="appdb" table="users" />);
@@ -83,8 +78,14 @@ async function renderLoaded(rows = ROWS) {
 
 describe("TableDataTab multi-row delete", () => {
   beforeEach(() => {
+    provideDrivers(BUILTIN_DRIVERS);
+    mockGridEditStatements();
     vi.mocked(ExecuteSQL).mockReset();
     vi.mocked(OpenTable).mockReset();
+    vi.mocked(QueryTableRows).mockReset();
+    vi.mocked(CountTableRows).mockReset();
+    vi.mocked(QueryTableRows).mockResolvedValue({ columns: ["id", "name"], rows: ROWS });
+    vi.mocked(CountTableRows).mockResolvedValue(ROWS.length);
     setupStores();
   });
 
@@ -104,14 +105,14 @@ describe("TableDataTab multi-row delete", () => {
     await user.click(screen.getByText("query.confirmExecute"));
 
     await waitFor(() => expect(deleteCalls()).toHaveLength(2));
-    expect(deleteCalls()[0]).toContain("`id` = '1'");
-    expect(deleteCalls()[1]).toContain("`id` = '3'");
+    expect(deleteCalls()[0]).toContain('{"id":1}');
+    expect(deleteCalls()[1]).toContain('{"id":3}');
   });
 
   it("surfaces per-statement failures without dropping the rest", async () => {
     const user = userEvent.setup();
     vi.mocked(ExecuteSQL).mockImplementation(async (_id, sql) => {
-      if (String(sql).includes("`id` = '1'")) throw new Error("lock wait timeout");
+      if (String(sql).includes('{"id":1}')) throw new Error("lock wait timeout");
       return JSON.stringify({ affected_rows: 1 });
     });
     await renderLoaded();
@@ -128,11 +129,7 @@ describe("TableDataTab multi-row delete", () => {
 
   it("refreshes the grid once a statement succeeded, even when it matched no row", async () => {
     const user = userEvent.setup();
-    vi.mocked(ExecuteSQL).mockImplementation(async (_id, sql) =>
-      String(sql).startsWith("DELETE")
-        ? JSON.stringify({ affected_rows: 0 })
-        : JSON.stringify({ columns: ["id", "name"], rows: ROWS })
-    );
+    vi.mocked(ExecuteSQL).mockResolvedValue(JSON.stringify({ affected_rows: 0 }));
     await renderLoaded();
 
     fireEvent.click(gutter(0));
@@ -141,7 +138,8 @@ describe("TableDataTab multi-row delete", () => {
     await user.click(screen.getByText("query.confirmExecute"));
 
     // The statement ran without error, so the grid must not keep showing stale rows.
-    await waitFor(() => expect(selectCalls().length).toBeGreaterThan(0));
+    await waitFor(() => expect(vi.mocked(QueryTableRows)).toHaveBeenCalled());
+    await waitFor(() => expect(vi.mocked(CountTableRows)).toHaveBeenCalled());
   });
 
   it("removes an unsaved new row locally instead of generating SQL for it", async () => {

@@ -28,17 +28,35 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuShortcut,
   ConfirmDialog,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuShortcut,
+  DropdownMenuTrigger,
 } from "@opskat/ui";
-import { ExecuteSQL } from "../../../wailsjs/go/query/Query";
+import {
+  ExecuteSQL,
+  GetDropTableStatements,
+  GetStarterQuery,
+  GetTruncateTableStatements,
+} from "../../../wailsjs/go/query/Query";
+import { useShallow } from "zustand/shallow";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
-import { CreateTableDialog } from "./CreateTableDialog";
-import { AlterTableDialog } from "./AlterTableDialog";
-import { TableStructureDialog } from "./TableStructureDialog";
 import { ObjectBrowserSection } from "./ObjectBrowserSection";
-import { buildStarterSelectSql, quoteTableRef } from "@/lib/tableSql";
+import { useCanCreateTable, useDesignerAccess } from "./designer/access";
+import { defaultCreateTarget, targetLabel, targetOfTable, type CreateTableTarget } from "./designer/createTarget";
+import {
+  OBJECT_BROWSER_CAPABILITIES,
+  driverHasCapability,
+  findDatabaseDriver,
+  useDatabaseDrivers,
+} from "@/lib/dbDrivers";
+import { errorMessage } from "@/lib/errorMessage";
 
 interface DatabaseTreeProps {
   tabId: string;
@@ -69,10 +87,6 @@ interface VisibleDb {
   dbMatch: boolean;
   tables?: string[];
   schemas?: SchemaGroup[];
-}
-
-function isSchemaAwareDriver(driver: string | undefined): boolean {
-  return driver === "postgresql" || driver === "mssql";
 }
 
 function splitSchemaTable(table: string): { schema: string; name: string; qualifiedName: string } | null {
@@ -113,17 +127,46 @@ function buildUngroupedTables(tables: string[], filterLower: string, dbMatch: bo
   });
 }
 
+/** 资产的驱动没有注册时的提示(侧栏与右侧内容区共用)。 */
+export function DriverUnavailableNotice({ driver }: { driver: string | undefined }) {
+  const { t } = useTranslation();
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/10 px-2 py-2 text-xs text-destructive"
+    >
+      <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
+      <span className="break-all">{t("query.driverUnavailable", { driver: driver ?? "" })}</span>
+    </div>
+  );
+}
+
 export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const { t } = useTranslation();
-  const { dbStates, loadDatabases, toggleDbExpand, toggleSchemaExpand, openTableTab, openSqlTab, refreshTables } =
-    useQueryStore();
+  const dbState = useQueryStore((s) => s.dbStates[tabId]);
+  const {
+    loadDatabases,
+    toggleDbExpand,
+    toggleSchemaExpand,
+    openTableTab,
+    openDesignerTab,
+    openSqlTab,
+    openCreateTableTab,
+    refreshTables,
+  } = useQueryStore(
+    useShallow((s) => ({
+      loadDatabases: s.loadDatabases,
+      toggleDbExpand: s.toggleDbExpand,
+      toggleSchemaExpand: s.toggleSchemaExpand,
+      openTableTab: s.openTableTab,
+      openDesignerTab: s.openDesignerTab,
+      openSqlTab: s.openSqlTab,
+      openCreateTableTab: s.openCreateTableTab,
+      refreshTables: s.refreshTables,
+    }))
+  );
+  const treeRef = useRef<HTMLDivElement>(null);
   const [showCreateDatabase, setShowCreateDatabase] = useState(false);
-  const [showCreateTable, setShowCreateTable] = useState(false);
-  const [createTableDatabase, setCreateTableDatabase] = useState("");
-  const [showAlterTable, setShowAlterTable] = useState(false);
-  const [alterDatabase, setAlterDatabase] = useState("");
-  const [alterTableName, setAlterTableName] = useState("");
-  const [structureTarget, setStructureTarget] = useState<{ db: string; table: string } | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     type: "drop" | "truncate";
     targets: TableRef[];
@@ -133,9 +176,21 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const tab = useTabStore((s) => s.tabs.find((t) => t.id === tabId));
   const tabMeta = tab?.meta as QueryTabMeta | undefined;
   const driver = tabMeta?.driver;
+  const driversState = useDatabaseDrivers();
+  const driverDescriptor = useMemo(
+    () => (driversState.status === "ready" ? findDatabaseDriver(driversState.drivers, driver ?? "") : undefined),
+    [driversState, driver]
+  );
+  const driverUnavailable = driversState.status === "ready" && !driverDescriptor;
+  const driverReady = !!driverDescriptor;
+  const can = (capability: string) => driverHasCapability(driverDescriptor, capability);
+  // 能改表时「设计表」打开设计器,不能改(驱动没声明或只读连接)时「查看结构」打开只读设计器。
+  const access = useDesignerAccess(driverDescriptor, tabMeta?.assetId);
+  // 驱动没声明建表或资产是只读连接时,新建表的入口一个都不出现。
+  const canCreateTable = useCanCreateTable(driverDescriptor, tabMeta?.assetId);
   const defaultDatabase = tabMeta?.defaultDatabase ?? "";
+  const openNewTable = (target: CreateTableTarget) => openCreateTableTab(tabId, target.database, target.schema);
 
-  const dbState = dbStates[tabId];
   const [filter, setFilter] = useState("");
   const [showFilter, setShowFilter] = useState(false);
   // 选中集用 "db.table" 作键;顺序即用户可见的树顺序,批量操作照此执行。
@@ -146,18 +201,19 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   // Auto-load only when there's nothing cached. Restored tabs come in with
   // databases/tables already populated from localStorage, so we skip the
   // refetch and rely on the user's refresh button.
+  // Nothing is sent before the driver is known to be registered.
   useEffect(() => {
-    if (dbState && dbState.databases.length === 0 && !dbState.loadingDbs) {
+    if (driverReady && dbState && dbState.databases.length === 0 && !dbState.loadingDbs) {
       loadDatabases(tabId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabId]);
+  }, [tabId, driverReady]);
 
   const filterLower = filter.trim().toLowerCase();
 
   const visibleDbs = useMemo(() => {
     if (!dbState) return [];
-    const schemaAware = isSchemaAwareDriver(driver);
+    const schemaAware = driverHasCapability(driverDescriptor, "schemas");
     if (!filterLower) {
       return dbState.databases.map((db) => {
         const loaded = dbState.tables[db];
@@ -188,7 +244,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
       }
     }
     return out;
-  }, [dbState, driver, filterLower]);
+  }, [dbState, driverDescriptor, filterLower]);
 
   // 树上此刻真正可见的表节点,顺序与渲染顺序一致 —— Shift 取区间和筛选后剪枝都以它为准。
   const visibleTableRefs = useMemo(() => {
@@ -270,6 +326,42 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
     [visibleKeys]
   );
 
+  // 「在左侧树中定位」:表列表到位后(未加载的库由 revealTable 触发加载)在渲染期同步本地状态 ——
+  // 清筛选、展开表分组、单选该表;schema 展开(store 动作)与滚动在 effect 里做。
+  const revealRequest = dbState?.revealRequest;
+  const [handledNonce, setHandledNonce] = useState(revealRequest?.nonce ?? 0);
+  const [reveal, setReveal] = useState<{ nonce: number; db: string; table: string } | null>(null);
+  if (revealRequest && revealRequest.nonce !== handledNonce && dbState?.tables[revealRequest.db]) {
+    setHandledNonce(revealRequest.nonce);
+    setReveal(revealRequest);
+    setFilter("");
+    setOpenTables((prev) => ({ ...prev, [revealRequest.db]: true }));
+    setSelectedKeys([tableKey(revealRequest.db, revealRequest.table)]);
+  }
+  const revealSchema = reveal
+    ? visibleDbs
+        .find((entry) => entry.db === reveal.db)
+        ?.schemas?.find((g) => g.tables.some((node) => node.qualifiedName === reveal.table))?.schema
+    : undefined;
+  const revealSchemaOpen = !!reveal && (dbState?.expandedSchemas[reveal.db] ?? []).includes(revealSchema ?? "");
+  useEffect(() => {
+    if (!reveal) return;
+    selectionAnchorRef.current = tableKey(reveal.db, reveal.table);
+    if (revealSchema && !revealSchemaOpen) toggleSchemaExpand(tabId, reveal.db, revealSchema);
+  }, [reveal, revealSchema, revealSchemaOpen, toggleSchemaExpand, tabId]);
+
+  const scrolledNonceRef = useRef(0);
+  useEffect(() => {
+    if (!reveal || reveal.nonce === scrolledNonceRef.current) return;
+    const key = tableKey(reveal.db, reveal.table);
+    if (!visibleKeys.includes(key)) return;
+    const node = Array.from(treeRef.current?.querySelectorAll<HTMLElement>("[data-table-node]") ?? []).find(
+      (el) => el.dataset.tableNode === key
+    );
+    scrolledNonceRef.current = reveal.nonce;
+    node?.scrollIntoView({ block: "nearest" });
+  }, [reveal, visibleKeys]);
+
   /** 右键命中选中集则整集生效,否则先重置为单选该表(与结果网格同语义)。 */
   const contextTargets = useCallback(
     (database: string, table: string): TableRef[] => {
@@ -288,18 +380,19 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
     const succeeded: TableRef[] = [];
     let errorMsg = "";
     for (const target of targets) {
-      const qualified = quoteTableRef(target.database, target.table, driver);
-      const sql =
-        type === "drop"
-          ? `DROP TABLE ${qualified}`
-          : driver === "sqlite"
-            ? `DELETE FROM ${qualified}`
-            : `TRUNCATE TABLE ${qualified}`;
       try {
-        await ExecuteSQL(tabMeta.assetId, sql, target.database);
+        // 语句由驱动生成;生成失败的表不执行任何语句。
+        const statements = await (type === "drop" ? GetDropTableStatements : GetTruncateTableStatements)(
+          tabMeta.assetId,
+          target.database,
+          target.table
+        );
+        for (const sql of statements) {
+          await ExecuteSQL(tabMeta.assetId, sql, target.database);
+        }
         succeeded.push(target);
       } catch (err) {
-        errorMsg += `${target.database}.${target.table}: ${String(err)}\n`;
+        errorMsg += `${target.database}.${target.table}: ${errorMessage(err)}\n`;
       }
     }
 
@@ -330,7 +423,32 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
 
   if (!dbState) return null;
 
-  const { expandedDbs, loadingDbs, error } = dbState;
+  if (driverUnavailable) {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="flex items-center px-2 py-1.5 border-b border-border shrink-0">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            {t("query.databases")}
+          </span>
+        </div>
+        <DriverUnavailableNotice driver={driver} />
+      </div>
+    );
+  }
+
+  const { expandedDbs, error: dbError } = dbState;
+  const schemaAware = driverHasCapability(driverDescriptor, "schemas");
+  // 侧栏工具栏「新建表」的目标:选中的表所在的库,没有选中时取第一个展开的库,再没有时取默认库。
+  const toolbarTarget = defaultCreateTarget({
+    selected: selectedRefs[0],
+    databases: dbState.databases,
+    expandedDbs,
+    defaultDatabase,
+    schemas: schemaAware,
+  });
+  const driversLoading = driversState.status === "loading";
+  const loadingDbs = dbState.loadingDbs || driversLoading;
+  const error = driversState.status === "error" ? driversState.error : dbError;
   const renderTableItem = (db: string, tbl: string, label = tbl) => {
     const key = tableKey(db, tbl);
     const isSelected = selectedVisibleKeys.includes(key);
@@ -369,40 +487,64 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
             <Table2 className="h-3.5 w-3.5" />
             {isBatch ? t("query.openTables", { count: targets.length }) : t("query.openTable")}
           </ContextMenuItem>
-          <ContextMenuItem disabled={isBatch} onClick={() => setStructureTarget({ db, table: tbl })}>
-            <Columns3 className="h-3.5 w-3.5" />
-            {t("query.viewStructure")}
-          </ContextMenuItem>
+          {!access.canAlter && (
+            <ContextMenuItem disabled={isBatch} onClick={() => openDesignerTab(tabId, db, tbl, "view")}>
+              <Columns3 className="h-3.5 w-3.5" />
+              {t("query.viewStructure")}
+            </ContextMenuItem>
+          )}
+          {access.canAlter && (
+            <ContextMenuItem disabled={isBatch} onClick={() => openDesignerTab(tabId, db, tbl, "design")}>
+              <Wrench className="h-3.5 w-3.5" />
+              {t("query.alterTable")}
+            </ContextMenuItem>
+          )}
           <ContextMenuItem
             disabled={isBatch}
             onClick={() => {
-              setAlterDatabase(db);
-              setAlterTableName(tbl);
-              setShowAlterTable(true);
-            }}
-          >
-            <Wrench className="h-3.5 w-3.5" />
-            {t("query.alterTable")}
-          </ContextMenuItem>
-          <ContextMenuItem
-            disabled={isBatch}
-            onClick={() => {
-              const tableName = quoteTableRef(db, tbl, driver);
-              openSqlTab(tabId, db, buildStarterSelectSql(tableName, driver, 100));
+              if (!tabMeta?.assetId) return;
+              GetStarterQuery(tabMeta.assetId, db, tbl, 100).then(
+                (starter) => openSqlTab(tabId, db, starter),
+                (e) => toast.error(errorMessage(e))
+              );
             }}
           >
             <Search className="h-3.5 w-3.5" />
             {t("query.newSql")}
           </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem variant="destructive" onClick={() => setConfirmAction({ type: "truncate", targets })}>
-            <Eraser className="h-3.5 w-3.5" />
-            {isBatch ? t("query.truncateTables", { count: targets.length }) : t("query.truncateTable")}
-          </ContextMenuItem>
-          <ContextMenuItem variant="destructive" onClick={() => setConfirmAction({ type: "drop", targets })}>
-            <Trash2 className="h-3.5 w-3.5" />
-            {isBatch ? t("query.dropTables", { count: targets.length }) : t("query.dropTable")}
-          </ContextMenuItem>
+          {canCreateTable && (
+            <ContextMenuItem
+              data-testid="table-new-table"
+              onClick={() => openNewTable(targetOfTable(db, tbl, schemaAware))}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {t("query.newTable")}
+              <ContextMenuShortcut className="font-mono">
+                {t("query.newMenu.in", { name: targetLabel(targetOfTable(db, tbl, schemaAware)) })}
+              </ContextMenuShortcut>
+            </ContextMenuItem>
+          )}
+          {(can("truncate_table") || can("drop_table")) && <ContextMenuSeparator />}
+          {can("truncate_table") && (
+            <ContextMenuItem
+              variant="destructive"
+              data-testid="table-truncate"
+              onClick={() => setConfirmAction({ type: "truncate", targets })}
+            >
+              <Eraser className="h-3.5 w-3.5" />
+              {isBatch ? t("query.truncateTables", { count: targets.length }) : t("query.truncateTable")}
+            </ContextMenuItem>
+          )}
+          {can("drop_table") && (
+            <ContextMenuItem
+              variant="destructive"
+              data-testid="table-drop"
+              onClick={() => setConfirmAction({ type: "drop", targets })}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              {isBatch ? t("query.dropTables", { count: targets.length }) : t("query.dropTable")}
+            </ContextMenuItem>
+          )}
         </ContextMenuContent>
       </ContextMenu>
     );
@@ -439,18 +581,57 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
           >
             <SquarePen className="h-3.5 w-3.5" />
           </Button>
-          {driver !== "sqlite" && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6"
-              onClick={() => setShowCreateDatabase(true)}
-              title={t("query.createDatabase")}
-              aria-label={t("query.createDatabase")}
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
-          )}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-auto gap-0.5 px-1"
+                data-testid="database-new-menu"
+                title={t("query.newMenu.label")}
+                aria-label={t("query.newMenu.label")}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <ChevronDown className="size-2.5 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-48">
+              {canCreateTable && toolbarTarget && (
+                <DropdownMenuItem
+                  data-testid="database-new-menu-table"
+                  className="text-xs"
+                  onClick={() => openNewTable(toolbarTarget)}
+                >
+                  <Table2 className="h-3.5 w-3.5" />
+                  {t("query.newTable")}
+                  <DropdownMenuShortcut className="font-mono">
+                    {t("query.newMenu.in", { name: targetLabel(toolbarTarget) })}
+                  </DropdownMenuShortcut>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                data-testid="database-new-menu-sql"
+                className="text-xs"
+                onClick={() => openSqlTab(tabId)}
+              >
+                <SquarePen className="h-3.5 w-3.5" />
+                {t("query.newSql")}
+              </DropdownMenuItem>
+              {can("create_database") && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    data-testid="database-new-menu-database"
+                    className="text-xs"
+                    onClick={() => setShowCreateDatabase(true)}
+                  >
+                    <Database className="h-3.5 w-3.5" />
+                    {t("query.newMenu.database")}
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             variant="ghost"
             size="icon"
@@ -495,7 +676,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
 
       {/* Tree */}
       <ScrollArea className="flex-1 min-h-0">
-        <div className="p-1 space-y-0.5">
+        <div ref={treeRef} className="p-1 space-y-0.5">
           {loadingDbs ? (
             <div className="flex items-center justify-center py-4">
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -507,7 +688,6 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
           ) : (
             visibleDbs.map(({ db, dbMatch, tables: dbTables, schemas }) => {
               const isExpanded = filterLower ? true : expandedDbs.includes(db);
-              const schemaAware = isSchemaAwareDriver(driver);
               const isLoadingTables = dbState.loadingTables[db] === true;
               const isTablesOpen = filterLower ? true : (openTables[db] ?? true);
               const hasTables = !!dbTables && (dbTables.length > 0 || (!!schemas && schemas.length > 0));
@@ -540,15 +720,15 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                         <Search className="h-3.5 w-3.5" />
                         {t("query.newSql")}
                       </ContextMenuItem>
-                      <ContextMenuItem
-                        onClick={() => {
-                          setCreateTableDatabase(db);
-                          setShowCreateTable(true);
-                        }}
-                      >
-                        <Table2 className="h-3.5 w-3.5" />
-                        {t("query.addTable")}
-                      </ContextMenuItem>
+                      {canCreateTable && (
+                        <ContextMenuItem
+                          data-testid="database-add-table"
+                          onClick={() => openNewTable({ database: db })}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                          {t("query.newTable")}
+                        </ContextMenuItem>
+                      )}
                       <ContextMenuSeparator />
                       <ContextMenuItem
                         onClick={() => {
@@ -572,29 +752,85 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                       ) : (
                         <>
                           {/* Tables group node */}
-                          <div
-                            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
-                            onClick={() => {
-                              if (filterLower) return;
-                              if (isTablesOpen) dropSelectionUnder(`${db}.`);
-                              setOpenTables((prev) => ({ ...prev, [db]: !(prev[db] ?? false) }));
-                            }}
-                          >
-                            {isTablesOpen ? (
-                              <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                            ) : (
-                              <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                            )}
-                            <Table2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                            <span className="truncate text-muted-foreground">
-                              {t("query.objTables")} ({tableCount})
-                            </span>
-                          </div>
+                          <ContextMenu>
+                            <ContextMenuTrigger className="block w-full">
+                              <div
+                                data-testid={`tree-table-group-${db}`}
+                                className="group/tables flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
+                                onClick={() => {
+                                  if (filterLower) return;
+                                  if (isTablesOpen) dropSelectionUnder(`${db}.`);
+                                  setOpenTables((prev) => ({ ...prev, [db]: !(prev[db] ?? true) }));
+                                }}
+                              >
+                                {isTablesOpen ? (
+                                  <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                ) : (
+                                  <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                )}
+                                <Table2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                <span className="truncate text-muted-foreground">
+                                  {t("query.objTables")} ({tableCount})
+                                </span>
+                                {canCreateTable && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    data-testid="tree-table-group-new-table"
+                                    className="ml-auto size-5 opacity-0 group-hover/tables:opacity-100 focus-visible:opacity-100"
+                                    title={t("query.newTableIn", { name: db })}
+                                    aria-label={t("query.newTableIn", { name: db })}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openNewTable({ database: db });
+                                    }}
+                                  >
+                                    <Plus />
+                                  </Button>
+                                )}
+                              </div>
+                            </ContextMenuTrigger>
+                            <ContextMenuContent>
+                              {canCreateTable && (
+                                <ContextMenuItem
+                                  data-testid="table-group-new-table"
+                                  onClick={() => openNewTable({ database: db })}
+                                >
+                                  <Plus className="h-3.5 w-3.5" />
+                                  {t("query.newTable")}
+                                </ContextMenuItem>
+                              )}
+                              <ContextMenuItem
+                                onClick={() => {
+                                  dropSelectionUnder(`${db}.`);
+                                  refreshTables(tabId, db);
+                                }}
+                              >
+                                <RefreshCw className="h-3.5 w-3.5" />
+                                {t("query.refreshTables")}
+                              </ContextMenuItem>
+                            </ContextMenuContent>
+                          </ContextMenu>
                           {isTablesOpen && (
                             <div className="ml-3">
                               {!hasTables ? (
-                                <div className="px-2 py-1 text-xs text-muted-foreground italic">
-                                  {filterLower && !dbMatch ? t("query.noMatch") : t("query.noTables")}
+                                <div className="flex items-center gap-1 px-2 py-1 text-xs text-muted-foreground">
+                                  <span className="italic">
+                                    {filterLower && !dbMatch ? t("query.noMatch") : t("query.noTables")}
+                                  </span>
+                                  {canCreateTable && !filterLower && (
+                                    <>
+                                      <span aria-hidden>·</span>
+                                      <button
+                                        type="button"
+                                        data-testid="tree-empty-new-table"
+                                        className="text-primary hover:underline"
+                                        onClick={() => openNewTable({ database: db })}
+                                      >
+                                        {t("query.newTable")}
+                                      </button>
+                                    </>
+                                  )}
                                 </div>
                               ) : schemaAware && schemas ? (
                                 <>
@@ -638,7 +874,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                               )}
                             </div>
                           )}
-                          {!filterLower && tabMeta?.assetId ? (
+                          {!filterLower && tabMeta?.assetId && OBJECT_BROWSER_CAPABILITIES.some(can) ? (
                             <ObjectBrowserSection tabId={tabId} assetId={tabMeta.assetId} database={db} />
                           ) : null}
                         </>
@@ -657,64 +893,8 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
         onOpenChange={setShowCreateDatabase}
         assetId={tabMeta?.assetId ?? 0}
         defaultDatabase={defaultDatabase}
-        driver={driver}
+        options={driverDescriptor?.createDatabaseOptions ?? []}
         onSuccess={() => loadDatabases(tabId)}
-      />
-
-      <CreateTableDialog
-        open={showCreateTable}
-        onOpenChange={(open) => {
-          setShowCreateTable(open);
-          if (!open) setCreateTableDatabase("");
-        }}
-        assetId={tabMeta?.assetId ?? 0}
-        database={createTableDatabase || defaultDatabase}
-        driver={driver}
-        onSuccess={() => {
-          const targetDb = createTableDatabase || defaultDatabase;
-          if (targetDb) {
-            refreshTables(tabId, targetDb);
-          }
-          setShowCreateTable(false);
-          setCreateTableDatabase("");
-        }}
-      />
-
-      <AlterTableDialog
-        open={showAlterTable}
-        onOpenChange={(open) => {
-          setShowAlterTable(open);
-          if (!open) {
-            setAlterDatabase("");
-            setAlterTableName("");
-          }
-        }}
-        assetId={tabMeta?.assetId ?? 0}
-        database={alterDatabase || defaultDatabase}
-        table={alterTableName}
-        driver={driver}
-        onSuccess={(nextTableName) => {
-          const targetDb = alterDatabase || defaultDatabase;
-          if (targetDb) {
-            refreshTables(tabId, targetDb);
-          }
-          if (nextTableName && targetDb) {
-            openTableTab(tabId, targetDb, nextTableName);
-          }
-          setShowAlterTable(false);
-          setAlterDatabase("");
-          setAlterTableName("");
-        }}
-      />
-
-      <TableStructureDialog
-        open={structureTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setStructureTarget(null);
-        }}
-        tabId={tabId}
-        database={structureTarget?.db ?? ""}
-        table={structureTarget?.table ?? ""}
       />
 
       <ConfirmDialog

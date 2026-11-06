@@ -44,6 +44,7 @@ import {
 } from "./SSHConfigSection.config";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets } from "./proxyConfig";
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import { errorMessage } from "@/lib/errorMessage";
 
 const DEFAULT_GLOBAL_KEEPALIVE_SECONDS = 30;
 
@@ -439,7 +440,7 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
                           }
                         }
                       } catch (e) {
-                        toast.error(String(e));
+                        toast.error(errorMessage(e));
                       }
                     }}
                   >

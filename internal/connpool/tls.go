@@ -28,14 +28,47 @@ type TLSFields struct {
 // BuildAssetTLSConfig 根据资产配置里保存的 TLS 字段构建 *tls.Config：以内容形式保存的
 // 私钥（KeyPEM）是密文，这里解密后交给 BuildTLSConfig。
 func BuildAssetTLSConfig(name string, f TLSFields) (*tls.Config, error) {
+	f, err := decryptStoredKey(name, f)
+	if err != nil {
+		return nil, err
+	}
+	return BuildTLSConfig(name, f)
+}
+
+// decryptStoredKey 返回私钥内容（KeyPEM）解密成明文后的字段：资产配置里以内容形式保存的私钥
+// 是 credential_svc 密文。错误点名字段，不含内容。
+func decryptStoredKey(name string, f TLSFields) (TLSFields, error) {
 	if f.KeyPEM != "" {
 		key, err := credential_svc.Default().Decrypt(f.KeyPEM)
 		if err != nil {
-			return nil, fmt.Errorf("解密 %s TLS 客户端私钥失败: %w", name, err)
+			return f, fmt.Errorf("解密 %s TLS 客户端私钥失败: %w", name, err)
 		}
 		f.KeyPEM = key
 	}
-	return BuildTLSConfig(name, f)
+	return f, nil
+}
+
+// tlsContents 是 CA 证书、客户端证书、客户端私钥的原始内容，没给的项为 nil。
+type tlsContents struct {
+	ca, cert, key []byte
+}
+
+// readTLSContents 取出三项证书材料的内容：给出的内容原样，路径由本进程读取。KeyPEM 为明文。
+// 不解析内容；错误点名出问题的项，不含内容。
+func readTLSContents(name string, f TLSFields) (tlsContents, error) {
+	ca, err := tlsMaterial(name, "CA 证书", f.CAFile, f.CAPEM)
+	if err != nil {
+		return tlsContents{}, err
+	}
+	cert, err := tlsMaterial(name, "客户端证书", f.CertFile, f.CertPEM)
+	if err != nil {
+		return tlsContents{}, err
+	}
+	key, err := tlsMaterial(name, "客户端私钥", f.KeyFile, f.KeyPEM)
+	if err != nil {
+		return tlsContents{}, err
+	}
+	return tlsContents{ca: ca, cert: cert, key: key}, nil
 }
 
 // BuildTLSConfig 根据通用 TLS 字段构建 *tls.Config，KeyPEM 为明文。
@@ -46,25 +79,18 @@ func BuildTLSConfig(name string, f TLSFields) (*tls.Config, error) {
 		ServerName:         f.ServerName,
 		InsecureSkipVerify: f.Insecure,
 	}
-	ca, err := tlsMaterial(name, "CA 证书", f.CAFile, f.CAPEM)
+	contents, err := readTLSContents(name, f)
 	if err != nil {
 		return nil, err
 	}
-	if ca != nil {
+	if contents.ca != nil {
 		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(ca) {
+		if !pool.AppendCertsFromPEM(contents.ca) {
 			return nil, fmt.Errorf("解析 %s TLS CA 证书失败", name)
 		}
 		cfg.RootCAs = pool
 	}
-	cert, err := tlsMaterial(name, "客户端证书", f.CertFile, f.CertPEM)
-	if err != nil {
-		return nil, err
-	}
-	key, err := tlsMaterial(name, "客户端私钥", f.KeyFile, f.KeyPEM)
-	if err != nil {
-		return nil, err
-	}
+	cert, key := contents.cert, contents.key
 	if cert != nil || key != nil {
 		if cert == nil || key == nil {
 			return nil, fmt.Errorf("%s TLS 客户端证书和私钥必须同时配置", name)

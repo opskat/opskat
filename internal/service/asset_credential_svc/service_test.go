@@ -88,3 +88,13 @@ func TestUsageAssetNames(t *testing.T) {
 		assert.ErrorIs(t, err, repoErr)
 	})
 }
+
+func TestReferencingAssetIDsWiredIntoCredentialMgr(t *testing.T) {
+	repo := setupAssetRepo(t)
+	repo.EXPECT().FindByCredentialID(gomock.Any(), int64(7)).Return([]*asset_entity.Asset{{ID: 3}, {ID: 5}}, nil)
+
+	ids, err := referencingAssetIDs(context.Background(), 7)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []int64{3, 5}, ids)
+}

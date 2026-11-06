@@ -157,7 +157,7 @@ func resolveAssetForAudit(ctx context.Context, toolName string, input map[string
 	command = raw
 	if audit.ShouldCanonicalizeCommand(toolName) {
 		if canonicalize, ok := permission.CanonicalizeFor(asset.Type); ok {
-			if canonical, cerr := canonicalize(asset, raw); cerr == nil {
+			if canonical, cerr := canonicalize(ctx, asset, raw); cerr == nil {
 				command = canonical
 			}
 		}

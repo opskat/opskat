@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
@@ -15,7 +16,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
-	"github.com/opskat/opskat/internal/assettype"
+	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/internal/extreg"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 
@@ -34,6 +35,10 @@ var execStdin io.Reader = os.Stdin
 // execSSHStreamFn 是 exec 对 ssh 资产的流式执行入口，同上一套路。测试只需要断言
 // "ssh 资产走了这条路径"，不需要真的起一个 SSH 会话。
 var execSSHStreamFn = execSSHStreaming
+
+// execStdinFn 判断 stdin 有没有要转发给 ssh 命令的内容（预读最多等 wait，见 inspectStdin），
+// 同上一套路：测试替换它来模拟管道输入。
+var execStdinFn = func(wait time.Duration) (io.Reader, bool) { return inspectStdin(os.Stdin, wait) }
 
 // cmdExec 按资产真实类型分派命令执行：ssh 走 execSSHStreaming 这条已文档化的流式
 // 通道（stdin 管道转发、stdout/stderr 直写、远端 exit code 透传——SKILL.md 里
@@ -61,13 +66,22 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		return 1
 	}
 
-	// 归属直接问资产类型注册表（启动时由 registerExtensionAssetTypes 按缓存的 describe()
-	// 接线）：内置类型天然报 ("", false)，因为注册表拒绝让扩展占用一个内置类型名——
-	// 与桌面端的冲突规则同一条，opsctl 不会因为磁盘上躺着这样一个 manifest 就改道。
-	// 提前拿到这个答案，同时喂给 joinCommandWords（多词 argv 的引号策略——扩展的 flag
-	// DSL 没有远端 shell，元字符必须逐词保真；ssh 等类型的多词语义不变）和下面的派发
-	// 判断，避免同一个"是不是扩展资产"的问题被问两次、答案还可能不一致。
-	extName, isExtensionAsset := assettype.ExtensionOwnerOf(asset.Type)
+	// 归属先问资产类型注册表（启动时由 registerExtensionAssetTypes 按缓存的 describe()
+	// 接线），注册表不认识的类型再找已安装的扩展（见 extensionOwnerOf）：内置类型天然报
+	// ("", false)，因为注册表拒绝让扩展占用一个内置类型名——与桌面端的冲突规则同一条，
+	// opsctl 不会因为磁盘上躺着这样一个 manifest 就改道。提前拿到这个答案，同时喂给
+	// joinCommandWords（多词 argv 的引号策略——扩展的 flag DSL 没有远端 shell，元字符必须
+	// 逐词保真；ssh 等类型的多词语义不变）和下面的激活判断，避免同一个"是不是扩展资产"
+	// 的问题被问两次、答案还可能不一致。
+	if err := refusedExtensionError(ctx, asset); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
+	extName, isExtensionAsset, err := extensionOwnerOf(asset.Type)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
+	}
 
 	// --type 是可选断言：不参与派发（协议永远来自 asset.Type），只把方言写错的情况
 	// 提前变成一条点名双方类型的错误。必须在 requireApproval 之前——它会去问桌面端，
@@ -98,11 +112,21 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		return 1
 	}
 
-	// 扩展提供的资产类型：命令交回桌面进程执行。理由是执行位置而不是语义——WASM 运行时、
-	// 扩展的宿主能力与解密后的资产配置只存在于桌面进程里。桌面端跑的是同一个统一 exec
-	// handler，策略/审批/grant/审计因此与内置类型逐字一致，也由那一端落库。
+	// 扩展提供的资产类型：在本进程里只激活这一个扩展（spec 决策 1、3：执行一律在
+	// opsctl，桌面端至多是审批人），之后与内置类型走下面同一条规范化 → 审批 → 统一
+	// exec handler 的路径，策略、审批、grant 与审计都在这里落。
 	if isExtensionAsset {
-		return execViaDesktop(asset, extName, command, session)
+		if command, err = prepareExtensionExec(ctx, asset, extName, command); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return 1
+		}
+	}
+
+	// 数据库资产的驱动由扩展提供时，同样只激活这一个扩展，且早于审批：驱动不可用
+	// （扩展在桌面端被停用）不该让用户为一条注定失败的命令点头。
+	if err := activateDriverExtension(ctx, asset, activateExtensionFn); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		return 1
 	}
 
 	// Executor lookup / canonicalize / precheck — all side-effect-free, all must run
@@ -137,6 +161,18 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// 下一次同类命令上重新命中。
 	approvalType := permission.ApprovalTypeFor(asset.Type)
 	argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q,"scope":%q}`, asset.ID, command, scope)
+	// ssh 资产与注册了流式入口的类型（通用资产：命令方式透传 stdin，HTTP 的 -d @- 读 stdin）
+	// 会把 stdin 交给要执行的命令。在审批之前判断：管道里的内容模型审核看不到，有的话不能
+	// 靠审核放行（PipedInput）。资产没开模型审核时不预读，和原来一样直接转发。
+	var stdin io.Reader
+	var pipedInput bool
+	if asset.IsSSH() || streaming {
+		var wait time.Duration
+		if permission.ReviewsCommands(ctx, asset.ID) {
+			wait = stdinPeekWait
+		}
+		stdin, pipedInput = execStdinFn(wait)
+	}
 	approvalResult, err := execApprovalFn(ctx, approval.ApprovalRequest{
 		Type:      approvalType,
 		AssetID:   asset.ID,
@@ -145,8 +181,9 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 		// scope 不并进 Command/checkCommand：那两个字段驱动策略匹配与 grant pattern
 		// 落库（见上方注释），掺入节点地址会让同一条命令因 scope 不同而匹配不上同一条
 		// 规则。Detail 只是给审批人看的补充说明，同 cp 的 "src → dst" 用法。
-		Detail:    detail,
-		SessionID: session,
+		Detail:     detail,
+		SessionID:  session,
+		PipedInput: pipedInput,
 	})
 	// 注入 SessionID 到 context，供审计写入器使用
 	auditCtx := aictx.WithSessionID(ctx, approvalResult.SessionID)
@@ -165,20 +202,38 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	}
 
 	if asset.IsSSH() {
-		return execSSHStreamFn(ctx, auditCtx, asset, command, approvalResult)
+		return execSSHStreamFn(ctx, auditCtx, asset, command, stdin, approvalResult)
 	}
 	if streaming {
-		return execRegisteredStream(ctx, auditCtx, asset, stream, argv, argsJSON, approvalResult)
+		// 没有管道内容时（终端、空设备）仍交出 os.Stdin：命令方式的自定义命令可能要在终端里
+		// 交互，终端输入是人敲的，不是绕过审核的管道内容。
+		if stdin == nil {
+			stdin = os.Stdin
+		}
+		return execRegisteredStream(ctx, auditCtx, asset, stream, argv, stdin, argsJSON, approvalResult)
 	}
 	// 其余类型走统一 exec handler：opsctl 由此获得 database/redis/mongodb/etcd/kafka/k8s
-	// 的全部覆盖。scope 原样透传给 handleExec（tool_handlers_unified.go），它已经知道
-	// 按资产类型解释（目前只有 redis 会用到，非 redis 资产已在上面 validateRedisScope
-	// 挡掉了非空 scope，这里传空字符串等价于不传）。
-	return callHandler(auditCtx, handlers, "exec", map[string]any{
+	// 与扩展类型的全部覆盖。scope 原样透传给 handleExec（tool_handlers_unified.go），它
+	// 已经知道按资产类型解释（目前只有 redis 会用到，非 redis 资产已在上面
+	// validateRedisScope 挡掉了非空 scope，这里传空字符串等价于不传）。
+	params := map[string]any{
 		"asset":   strconv.FormatInt(asset.ID, 10),
 		"command": command,
 		"scope":   scope,
-	}, approvalResult.ToCheckResult())
+	}
+	if !isExtensionAsset {
+		return callHandler(auditCtx, handlers, "exec", params, approvalResult.ToCheckResult())
+	}
+	// 扩展经资产连接路径拨号（SSH 隧道、代理链）：ResolveProxyChain 把 withConnectionPathMFA
+	// 的应答方接到路径上每台 SSH 跳板，要 MFA 的跳板按 --mfa-code → 终端 → 桌面端的顺序应答，
+	// 都不行时以 NEEDS MFA 拒绝（拒绝经客体只剩文本，由 relayMFARefusals 认回来）。
+	// 工具的结果原样写到标准输出（不重排 JSON、不补换行），管道与脚本拿到的就是工具
+	// 给出的那一串。
+	result, code, ok := runHandler(withConnectionPathMFA(auditCtx), relayMFARefusals(handlers, "exec"), "exec", params, approvalResult.ToCheckResult())
+	if ok {
+		fmt.Print(result)
+	}
+	return code
 }
 
 // execApprovalDetail 构建审批弹窗里 exec 的补充说明：scope 非空时插进 --scope <value>，
@@ -208,11 +263,12 @@ func execApprovalDetailFor(ctx context.Context, asset *asset_entity.Asset, asset
 }
 
 // execRegisteredStream 执行注册了流式入口的类型（permission.StreamExecutorFor）：argv 保留
-// 调用方的参数边界，stdin / stdout / stderr 直接透传，退出码取自执行结果。请求没有完成时
+// 调用方的参数边界，stdin（cmdExec 判断过有没有管道内容）/ stdout / stderr 直接透传，退出码
+// 取自执行结果。请求没有完成时
 // 执行器保证 stdout 为空，这里把错误写到 stderr 并以 1 退出。审计 result 用执行器给出的
 // 摘要（HTTP：状态行），不捕获输出——响应体不进审计。
-func execRegisteredStream(ctx context.Context, auditCtx context.Context, asset *asset_entity.Asset, stream permission.StreamExecFunc, argv []string, argsJSON string, approvalResult ApprovalResult) int {
-	res, err := stream(ctx, asset, argv, permission.Stdio{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr})
+func execRegisteredStream(ctx context.Context, auditCtx context.Context, asset *asset_entity.Asset, stream permission.StreamExecFunc, argv []string, stdin io.Reader, argsJSON string, approvalResult ApprovalResult) int {
+	res, err := stream(ctx, asset, argv, permission.Stdio{Stdin: stdin, Stdout: os.Stdout, Stderr: os.Stderr})
 	writeOpsctlAudit(auditCtx, "exec", argsJSON, res.AuditResult, err, approvalResult.ToCheckResult())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -221,20 +277,12 @@ func execRegisteredStream(ctx context.Context, auditCtx context.Context, asset *
 	return res.ExitCode
 }
 
-// execSSHStreaming 是 ssh 资产的流式执行体：转发 stdin 管道、stdout/stderr 直写
-// 本地、透传远端 exit code，全程走 helper.ExecWithStdio 自行拨号。ctx 用于该调用；
-// auditCtx 已注入 approvalResult.SessionID，专供审计写入使用。
-func execSSHStreaming(ctx context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, approvalResult ApprovalResult) int {
+// execSSHStreaming 是 ssh 资产的流式执行体：把 stdin（没有要转发的内容时为 nil）转发给
+// 远端命令、stdout/stderr 直写本地、透传远端 exit code，全程走 helper.ExecWithStdio 自行
+// 拨号。ctx 用于该调用；auditCtx 已注入 approvalResult.SessionID，专供审计写入使用。
+func execSSHStreaming(ctx context.Context, auditCtx context.Context, asset *asset_entity.Asset, command string, stdin io.Reader, approvalResult ApprovalResult) int {
 	assetID := asset.ID
 	argsJSON := fmt.Sprintf(`{"asset_id":%d,"command":%q}`, assetID, command)
-
-	// Detect if stdin is a pipe (not a terminal)
-	var stdin io.Reader
-	if stat, err := os.Stdin.Stat(); err == nil {
-		if (stat.Mode() & os.ModeCharDevice) == 0 {
-			stdin = os.Stdin
-		}
-	}
 
 	// 捕获输出用于审计日志
 	outBuf := audit.NewLimitedBuffer(auditOutputLimit)
@@ -284,6 +332,15 @@ func buildExecAuditResult(exitCode int, stdout, stderr string) string {
 	return fmt.Sprintf("exit_code: %d\n%s", exitCode, output)
 }
 
+// driverTypeNames 列出可作 --type 值的数据库驱动名：注册表里每个驱动的 id 与别名。
+func driverTypeNames() string {
+	var names []string
+	for _, d := range dbregistry.List() {
+		names = append(names, d.Descriptor().Names()...)
+	}
+	return strings.Join(names, ", ")
+}
+
 func printExecUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
   opsctl exec <asset> [--type <type>] [--scope <db|host:port>] [--] <command>
@@ -316,21 +373,25 @@ Arguments:
               channel (pipes, exit code); generic assets stream too (see
               below); the other built-in types (database,
               redis, mongodb, etcd, kafka, k8s, oss) run through the unified
-              exec handler; an extension-provided type is executed by the
-              running desktop app, which owns the WASM runtime.
+              exec handler; so does an extension-provided type, after
+              opsctl loads that one extension itself — the desktop app does
+              not have to be running, and a disabled extension is refused.
               For an extension asset the command is "<tool> --flag=value" or
               "<tool> --flag value" (space form; a boolean flag never
               consumes the following word as its value — pass --flag=false
               explicitly to set it to false); run 'opsctl help <asset>' for
-              its tool and flag reference.
+              its tool and flag reference. opsctl has no file dialog: a tool
+              that asks for one fails; pass the file with its --<flag>-file
+              parameter instead.
 
 Flags:
   --type <type>   Optional assertion: fails fast if the asset is not of this
                   type. Accepts protocol aliases ("sql"/"db" for database,
                   "exec" for ssh, "mongo", "kubernetes"/"kube" for k8s), and
-                  database driver names ("mysql", "postgres", "mssql",
-                  "sqlite"), which additionally assert the asset's driver —
-                  "--type mysql" fails on a PostgreSQL asset.
+                  database driver names, which additionally assert the
+                  asset's driver — "--type mysql" fails on a PostgreSQL
+                  asset. Driver names:
+                    `+driverTypeNames()+`
                   Does not select dispatch — that always comes from the
                   asset's real type.
   --scope <s>     Only meaningful for redis assets (fails with exit code 1 on
@@ -389,30 +450,13 @@ Examples:
 `)
 }
 
-// execViaDesktop 把一条扩展资产上的命令交给运行中的桌面端执行。
-//
-// 桌面端不在时 fail closed：本进程既没有 WASM 运行时，也没有扩展的策略引擎，
-// 在这里"本地跑一下"等于同时绕开两者。
-func execViaDesktop(asset *asset_entity.Asset, extName, command, session string) int {
-	// `--<flag>-file` is opsctl-only: read here, so the desktop (and its approval,
-	// grants and audit) only ever sees the inline `--<flag> <content>` form.
-	command, err := extreg.ExpandFileFlags(extName, command, execStdin)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
+// prepareExtensionExec 在本进程里激活 extName，再把 opsctl 独有的 `--<flag>-file` 读成
+// 行内的 `--<flag> <content>`：规范化、策略、审批、grant 与审计只会见到行内形式，
+// 两种写法因此完全等价。激活在前——停用的扩展要先按名字拒绝，而不是在展开时报
+// "未注册"。
+func prepareExtensionExec(ctx context.Context, asset *asset_entity.Asset, extName, command string) (string, error) {
+	if err := activateExtensionFn(ctx, extName); err != nil {
+		return "", fmt.Errorf("asset %q is type=%s, provided by extension %q: %w", asset.Name, asset.Type, extName, err)
 	}
-	result, err := delegateExtExecFn(asset.ID, asset.Name, command, session)
-	if err != nil {
-		if strings.Contains(err.Error(), "cannot connect") {
-			fmt.Fprintf(os.Stderr,
-				"Error: asset %q is type=%s, provided by extension %q; the desktop app must be running to execute it\n",
-				asset.Name, asset.Type, extName)
-			return 1
-		}
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
-	}
-	// 结果原样输出，供管道与脚本消费。
-	fmt.Print(result)
-	return 0
+	return extreg.ExpandFileFlags(extName, command, execStdin)
 }

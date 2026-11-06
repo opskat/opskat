@@ -1,0 +1,145 @@
+package mssql
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+
+	"github.com/opskat/opskat/pkg/dbdriver"
+	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
+)
+
+// 改表：列按表所在的 schema 查 INFORMATION_SCHEMA（裸名按 dbo），类型写成完整的类型（见 columnTypeText）。改表名与
+// 列名用 sp_rename（新表名不带 schema，表留在原 schema），新增列 ADD
+// 不带 COLUMN 关键字，改类型与可空性用 ALTER COLUMN（必须同时给出类型）。默认值要经命名约束、注释要经
+// 扩展属性，都不在此修改，所以只能改已有列的类型与可空性，注释也不读。IDENTITY 列报告自增现状（只显示，已有列
+// 的自增不能改）。索引照 indexesSQL 读（见 readIndexes），删索引写在列的改动之前、建索引写在之后（见 alterIndexes）。
+var _ sqldb.TableAlterer = dialect{}
+
+const alterColumnsSQL = "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, " +
+	"DATETIME_PRECISION, IS_NULLABLE, COLUMN_DEFAULT, " +
+	"COLUMNPROPERTY(OBJECT_ID(QUOTENAME(TABLE_SCHEMA) + '.' + QUOTENAME(TABLE_NAME)), COLUMN_NAME, 'IsIdentity') AS IS_IDENTITY " +
+	"FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2 ORDER BY ORDINAL_POSITION"
+
+var alterAttributes = []dbdriver.AlterAttribute{dbdriver.AlterColumnType, dbdriver.AlterColumnNullable}
+
+func (dialect) AlterAttributes() []dbdriver.AlterAttribute { return alterAttributes }
+
+func (dialect) AlterableTable(ctx context.Context, conn *sql.Conn, _, table string) (*sqldb.AlterableTable, error) {
+	schema, name := splitSchemaTable(table)
+	records, err := sqldb.QueryRecords(ctx, conn, alterColumnsSQL, sql.Named("p1", schema), sql.Named("p2", name))
+	if err != nil {
+		return nil, err
+	}
+	out := &sqldb.AlterableTable{Name: name, Columns: make([]sqldb.AlterableColumn, 0, len(records))}
+	for _, row := range records {
+		columnType := columnTypeText(row)
+		out.Columns = append(out.Columns, sqldb.AlterableColumn{
+			ColumnDefinition: dbdriver.ColumnDefinition{
+				Name:          sqldb.PickString(row, "COLUMN_NAME"),
+				Type:          columnType,
+				Nullable:      strings.EqualFold(sqldb.PickString(row, "IS_NULLABLE"), "YES"),
+				DefaultValue:  sqldb.PickString(row, "COLUMN_DEFAULT"),
+				AutoIncrement: sqldb.PickString(row, "IS_IDENTITY") == "1",
+			},
+			Row: row,
+		})
+	}
+	indexes, err := readIndexes(ctx, conn, schema, name)
+	if err != nil {
+		return nil, fmt.Errorf("indexes: %w", err)
+	}
+	for _, index := range indexes {
+		out.Indexes = append(out.Indexes, index.indexDefinition())
+	}
+	return out, nil
+}
+
+// columnTypeText 是这一列完整的类型：ALTER COLUMN 必须连类型一起写，只改可空性时写回的就是它，所以
+// 不能丢掉类型的参数——字符与二进制类型带长度（-1 写成 max），decimal / numeric 带精度与小数位（裸的
+// decimal 是 decimal(18,0)），datetime2 / time / datetimeoffset 带时间精度。其余类型没有参数
+// （xml、text 等的 CHARACTER_MAXIMUM_LENGTH 不是类型的一部分）。
+func columnTypeText(row map[string]any) string {
+	dataType := sqldb.PickString(row, "DATA_TYPE")
+	switch strings.ToLower(dataType) {
+	case "char", "varchar", "nchar", "nvarchar", "binary", "varbinary":
+		switch length := sqldb.PickString(row, "CHARACTER_MAXIMUM_LENGTH"); {
+		case length == "-1":
+			return dataType + "(max)"
+		case length != "" && length != "0":
+			return dataType + "(" + length + ")"
+		}
+	case "decimal", "numeric":
+		if precision := sqldb.PickString(row, "NUMERIC_PRECISION"); precision != "" {
+			return dataType + "(" + precision + "," + sqldb.PickString(row, "NUMERIC_SCALE") + ")"
+		}
+	case "datetime2", "time", "datetimeoffset":
+		if precision := sqldb.PickString(row, "DATETIME_PRECISION"); precision != "" {
+			return dataType + "(" + precision + ")"
+		}
+	}
+	return dataType
+}
+
+func (d dialect) AlterTableSQL(ctx context.Context, conn *sql.Conn, change sqldb.TableChange) ([]string, error) {
+	name := func(text string) (string, error) { return sqldb.DefinitionLiterals.Literal(text, "") }
+	target := change.TargetRef
+
+	var statements, additions, renames, modifications []string
+	if change.Rename != "" {
+		from, err := name(change.Table)
+		if err != nil {
+			return nil, err
+		}
+		to, err := name(change.Rename)
+		if err != nil {
+			return nil, err
+		}
+		statements = append(statements, fmt.Sprintf("EXEC sp_rename %s, %s", from, to))
+	}
+	indexDrops, indexCreates, err := alterIndexes(ctx, conn, change)
+	if err != nil {
+		return nil, err
+	}
+	statements = append(statements, indexDrops...)
+	for _, column := range change.Columns {
+		c := column.Column
+		if column.IsNew() {
+			// 自增与按写法的默认值见 NewColumnSQL；没给写法的照旧按文本猜。
+			definition, err := sqldb.NewColumnSQL(d, definitionLiterals(c), quoteIdent, c)
+			if err != nil {
+				return nil, err
+			}
+			additions = append(additions, "ALTER TABLE "+target+" ADD "+definition)
+			continue
+		}
+		if column.Renamed {
+			// 列的对象名要带（改名之后的）表名作前缀。
+			from, err := name(change.Target + "." + column.Current.Name)
+			if err != nil {
+				return nil, err
+			}
+			to, err := name(c.Name)
+			if err != nil {
+				return nil, err
+			}
+			renames = append(renames, fmt.Sprintf("EXEC sp_rename %s, %s, 'COLUMN'", from, to))
+		}
+		if column.TypeChanged || column.NullableChanged {
+			nullable := " NOT NULL"
+			if c.Nullable {
+				nullable = " NULL"
+			}
+			modifications = append(modifications, "ALTER TABLE "+target+" ALTER COLUMN "+quoteIdent(c.Name)+" "+strings.TrimSpace(c.Type)+nullable)
+		}
+	}
+	// 先删列、再改名、然后加列：被删列的名字可以给改名的列或新列用，改名让出的旧名字可以给新列用。
+	for _, drop := range change.Drops {
+		statements = append(statements, "ALTER TABLE "+target+" DROP COLUMN "+quoteIdent(drop))
+	}
+	statements = append(statements, renames...)
+	statements = append(statements, additions...)
+	statements = append(statements, modifications...)
+	return append(statements, indexCreates...), nil
+}

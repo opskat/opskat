@@ -177,20 +177,113 @@ func (sshAdapter) OpenRead(
 func (sshAdapter) Write(
 	ctx context.Context, asset *asset_entity.Asset, p string, r io.Reader, _ int64,
 ) error {
+	prepared := preparedSFTPDirsFor(ctx, asset.ID)
 	return ExecuteWithSFTP(ctx, asset.ID, func(client *sftp.Client) error {
-		return writeSFTP(ctx, client, p, r)
+		return writeSFTP(ctx, client, p, r, prepared)
 	})
+}
+
+// sftpDirSet 是一次多条目传输里已经建好、核验过的目的目录（path.Clean 后的路径）：都在
+// 已批准范围之内，从范围往下每一级都是真目录、不是符号链接。只在 PrepareTransferDirs 里
+// 写入，之后被并发的 Write 只读共用。
+type sftpDirSet map[string]struct{}
+
+type sftpPreparedDirs struct {
+	assetID int64
+	dirs    sftpDirSet
+}
+
+type sftpPreparedDirsKey struct{}
+
+// PrepareTransferDirs 在写入开始前按 paths 的顺序把目的目录逐级建好：每个目录只 Lstat 一次、
+// 不存在才 Mkdir 一次。随后的 Write 对落在这些目录里的文件只再检查文件名自己那一级——
+// 原来每个文件都要把范围和每一级分量重新 Lstat 一遍，再 MkdirAll 一次。
+func (sshAdapter) PrepareTransferDirs(
+	ctx context.Context, asset *asset_entity.Asset, paths []string,
+) (context.Context, error) {
+	var dirs sftpDirSet
+	err := ExecuteWithSFTP(ctx, asset.ID, func(client *sftp.Client) error {
+		var prepErr error
+		dirs, prepErr = prepareSFTPDirs(client, transferWriteScope(ctx), paths)
+		return prepErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	return context.WithValue(ctx, sftpPreparedDirsKey{}, &sftpPreparedDirs{assetID: asset.ID, dirs: dirs}), nil
+}
+
+func preparedSFTPDirsFor(ctx context.Context, assetID int64) sftpDirSet {
+	prepared, _ := ctx.Value(sftpPreparedDirsKey{}).(*sftpPreparedDirs)
+	if prepared == nil || prepared.assetID != assetID {
+		return nil
+	}
+	return prepared.dirs
+}
+
+// prepareSFTPDirs 是 PrepareTransferDirs 在一条已有连接上的那一步。核验语义与
+// validateSFTPWritePath 相同（越出范围、范围本身或任一级目录是符号链接、某一级不是目录都拒绝），
+// 只是每个目录只核验一次。
+func prepareSFTPDirs(client *sftp.Client, scope string, paths []string) (sftpDirSet, error) {
+	if scope == "" {
+		return nil, fmt.Errorf("preparing remote destination directories requires an approved write scope")
+	}
+	cleanScope := path.Clean(scope)
+	exists, err := checkSFTPWriteScope(client, scope)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		if err := client.MkdirAll(cleanScope); err != nil {
+			return nil, fmt.Errorf("failed to create remote directory: %w", err)
+		}
+	}
+	dirs := sftpDirSet{cleanScope: {}}
+	for _, p := range paths {
+		clean := path.Clean(p)
+		if !sftpPathWithin(cleanScope, clean) {
+			return nil, fmt.Errorf("remote destination %q escapes approved scope %q", p, scope)
+		}
+		if clean == cleanScope {
+			continue
+		}
+		rel := strings.TrimPrefix(strings.TrimPrefix(path.Dir(clean), cleanScope), "/")
+		if rel == "" {
+			continue
+		}
+		current := cleanScope
+		for _, part := range strings.Split(rel, "/") {
+			current = path.Join(current, part)
+			if _, done := dirs[current]; done {
+				continue
+			}
+			exists, err := lstatSFTPComponent(client, p, current, true)
+			if err != nil {
+				return nil, err
+			}
+			if !exists {
+				if err := client.Mkdir(current); err != nil {
+					return nil, fmt.Errorf("failed to create remote directory %q: %w", current, err)
+				}
+			}
+			dirs[current] = struct{}{}
+		}
+	}
+	return dirs, nil
 }
 
 // writeSFTP 在已有的 SFTP 连接上流式写入 p，按需创建父目录。
 // 与 List 的 listSFTP 同一形态：连接由调用方管，这里只做那一件事，因此进程内 SFTP
-// 服务端就能验证"建父目录 + 字节往返"。
-func writeSFTP(ctx context.Context, client *sftp.Client, p string, r io.Reader) error {
-	if err := validateSFTPWritePath(ctx, client, p); err != nil {
+// 服务端就能验证"建父目录 + 字节往返"。prepared 是 PrepareTransferDirs 已经建好并核验过
+// 的目录，父目录在其中时跳过 MkdirAll 与逐级核验；为 nil 时逐文件处理。
+func writeSFTP(ctx context.Context, client *sftp.Client, p string, r io.Reader, prepared sftpDirSet) error {
+	if err := validateSFTPWritePath(ctx, client, p, prepared); err != nil {
 		return err
 	}
-	if err := client.MkdirAll(path.Dir(p)); err != nil {
-		return fmt.Errorf("failed to create remote directory: %w", err)
+	if _, ok := prepared[path.Dir(path.Clean(p))]; !ok {
+		if err := client.MkdirAll(path.Dir(p)); err != nil {
+			return fmt.Errorf("failed to create remote directory: %w", err)
+		}
 	}
 	f, err := client.Create(p)
 	if err != nil {
@@ -224,20 +317,23 @@ func writeSFTP(ctx context.Context, client *sftp.Client, p string, r io.Reader) 
 	return nil
 }
 
-func validateSFTPWritePath(ctx context.Context, client *sftp.Client, p string) error {
+// validateSFTPWritePath 拒绝越出已批准范围、或经过符号链接的写入目标。父目录已在 prepared
+// 里时，范围与各级目录已经核验过，只剩文件名那一级：它本身是符号链接照样拒绝。
+func validateSFTPWritePath(ctx context.Context, client *sftp.Client, p string, prepared sftpDirSet) error {
 	scope := transferWriteScope(ctx)
+	clean := path.Clean(p)
+	if scope != "" && !sftpPathWithin(path.Clean(scope), clean) {
+		return fmt.Errorf("remote destination %q escapes approved scope %q", p, scope)
+	}
+	if _, ok := prepared[path.Dir(clean)]; ok {
+		_, err := lstatSFTPComponent(client, p, clean, false)
+		return err
+	}
 	if scope != "" {
-		cleanScope, cleanPath := path.Clean(scope), path.Clean(p)
-		if cleanPath != cleanScope && !strings.HasPrefix(cleanPath, strings.TrimSuffix(cleanScope, "/")+"/") {
-			return fmt.Errorf("remote destination %q escapes approved scope %q", p, scope)
-		}
-		if info, err := client.Lstat(cleanScope); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("remote destination scope %q is a symbolic link", scope)
-		} else if err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("failed to inspect remote destination scope %q: %w", scope, err)
+		if _, err := checkSFTPWriteScope(client, scope); err != nil {
+			return err
 		}
 	}
-	clean := path.Clean(p)
 	current := path.Dir(clean)
 	parts := []string{path.Base(clean)}
 	if scope != "" {
@@ -248,21 +344,51 @@ func validateSFTPWritePath(ctx context.Context, client *sftp.Client, p string) e
 	}
 	for i, part := range parts {
 		current = path.Join(current, part)
-		info, err := client.Lstat(current)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return fmt.Errorf("failed to inspect remote destination %q: %w", current, err)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("remote destination %q contains symbolic link %q", p, current)
-		}
-		if i < len(parts)-1 && !info.IsDir() {
-			return fmt.Errorf("remote destination parent %q is not a directory", current)
+		if _, err := lstatSFTPComponent(client, p, current, i < len(parts)-1); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// sftpPathWithin 报告 clean 是否就是 cleanScope 或落在它之下（两者都已 path.Clean）。
+func sftpPathWithin(cleanScope, clean string) bool {
+	return clean == cleanScope || strings.HasPrefix(clean, strings.TrimSuffix(cleanScope, "/")+"/")
+}
+
+// checkSFTPWriteScope 核验已批准的目的范围本身：不得是符号链接；不存在不是错误，由
+// exists=false 交回。
+func checkSFTPWriteScope(client *sftp.Client, scope string) (exists bool, err error) {
+	info, err := client.Lstat(path.Clean(scope))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to inspect remote destination scope %q: %w", scope, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return true, fmt.Errorf("remote destination scope %q is a symbolic link", scope)
+	}
+	return true, nil
+}
+
+// lstatSFTPComponent 核验写入目标 p 路径上的一级 current：不得是符号链接；mustBeDir 时存在
+// 就必须是目录。不存在不是错误，由 exists=false 交回。
+func lstatSFTPComponent(client *sftp.Client, p, current string, mustBeDir bool) (exists bool, err error) {
+	info, err := client.Lstat(current)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to inspect remote destination %q: %w", current, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return true, fmt.Errorf("remote destination %q contains symbolic link %q", p, current)
+	}
+	if mustBeDir && !info.IsDir() {
+		return true, fmt.Errorf("remote destination parent %q is not a directory", current)
+	}
+	return true, nil
 }
 
 // ValidateDestination 远端文件系统与本地端同一个答案：没有形态约束（writeSFTP 会

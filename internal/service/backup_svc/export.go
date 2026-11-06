@@ -178,23 +178,9 @@ func resolveDependentAssets(selectedIDs map[int64]bool, assetMap map[int64]*asse
 			if !ok {
 				continue
 			}
-			switch {
-			case a.IsSSH() && a.Config != "":
-				cfg, err := a.GetSSHConfig()
-				if err == nil && cfg.JumpHostID > 0 && !selectedIDs[cfg.JumpHostID] {
-					selectedIDs[cfg.JumpHostID] = true
-					changed = true
-				}
-			case a.IsDatabase() && a.Config != "":
-				cfg, err := a.GetDatabaseConfig()
-				if err == nil && cfg.SSHAssetID > 0 && !selectedIDs[cfg.SSHAssetID] {
-					selectedIDs[cfg.SSHAssetID] = true
-					changed = true
-				}
-			case a.IsRedis() && a.Config != "":
-				cfg, err := a.GetRedisConfig()
-				if err == nil && cfg.SSHAssetID > 0 && !selectedIDs[cfg.SSHAssetID] {
-					selectedIDs[cfg.SSHAssetID] = true
+			for _, refID := range collectAssetSSHRefIDs(a) {
+				if _, exists := assetMap[refID]; exists && !selectedIDs[refID] {
+					selectedIDs[refID] = true
 					changed = true
 				}
 			}

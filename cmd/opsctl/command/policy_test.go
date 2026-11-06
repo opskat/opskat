@@ -18,6 +18,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/extension_state_entity"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/policy"
@@ -28,6 +29,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/grant_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo/mock_group_repo"
+	"github.com/opskat/opskat/pkg/extension/extensiontest"
 )
 
 // --- 测试脚手架 ---
@@ -603,4 +605,38 @@ func TestPolicyAllowDenyLandExtensionActionGlobRules(t *testing.T) {
 	env.stderrBuf.Reset()
 	assert.NotEqual(t, 0, env.run("allow", "acme-1", "--", "object.nuke:prod-*"))
 	assert.Contains(t, env.stderrBuf.String(), "object.list")
+}
+
+// A permanent rule on a database asset is classified by the asset's driver; when an
+// extension provides that driver, opsctl (which only registers extensions describe-only
+// at boot) must activate it in this process before the rules are planned.
+func TestPolicyAllowActivatesTheExtensionProvidingTheAssetsDriver(t *testing.T) {
+	env := setupDriverExt(t)
+	stderr := interactiveTerminal(t, "")
+
+	code := cmdPolicy(context.Background(), []string{"allow", "fx-db", "--", "SELECT * FROM users"}, "sess-1")
+
+	require.Equal(t, 0, code, "stderr: %s", stderr.String())
+	assert.Equal(t, []string{extensiontest.DBDriverFixtureName}, env.activations)
+}
+
+// A driver whose extension is disabled cannot classify, so the rule is refused naming
+// the driver and the disabled extension, and nothing is written.
+func TestPolicyWriteOnDisabledExtensionDriverIsRefusedNamingIt(t *testing.T) {
+	setupDriverExt(t, &extension_state_entity.ExtensionState{Name: extensiontest.DBDriverFixtureName, Enabled: false})
+	confirm := interactiveTerminal(t, "")
+
+	for _, verb := range []string{"allow", "deny"} {
+		var code int
+		out := captureStderr(t, func() {
+			code = cmdPolicy(context.Background(), []string{verb, "fx-db", "--", "SELECT * FROM users"}, "sess-1")
+		})
+
+		assert.Equal(t, 1, code, verb)
+		assert.Contains(t, out, "driver unavailable", verb)
+		assert.Contains(t, out, "fixturedb", verb)
+		assert.Contains(t, out, extensiontest.DBDriverFixtureName, verb)
+		assert.Contains(t, out, "disabled", verb)
+	}
+	assert.Empty(t, confirm.String(), "refused before any confirmation prompt")
 }

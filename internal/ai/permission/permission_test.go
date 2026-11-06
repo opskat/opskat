@@ -843,6 +843,8 @@ func TestCheckPermission_TypeAlias(t *testing.T) {
 		_, mockAsset, _ := setupPolicyTest(t)
 
 		Convey("unknown type → aictx.NeedConfirm", func() {
+			// 需要确认时还要读一次资产的权限模式
+			mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(&asset_entity.Asset{ID: 1}, nil).AnyTimes()
 			result := CheckPermission(context.Background(), "unknown", 1, "anything")
 			So(result.Decision, ShouldEqual, aictx.NeedConfirm)
 		})

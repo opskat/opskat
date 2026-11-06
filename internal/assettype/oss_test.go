@@ -107,3 +107,40 @@ func TestOSSHandlerPolicy(t *testing.T) {
 	require.True(t, ok, "Register should have written the asset-kind mapping from PolicyKind()")
 	assert.Equal(t, policyent.PolicyKindOSS, kind)
 }
+
+func TestOSSDefaultBucketCreateUpdateAndSafeView(t *testing.T) {
+	h := &ossHandler{}
+	a := &asset_entity.Asset{Type: asset_entity.AssetTypeOSS}
+	args := map[string]any{"endpoint": "acct.r2.cloudflarestorage.com", "access_key_id": "AKIA", "bucket": "  ootd  "}
+	require.NoError(t, h.ValidateCreateArgs(args))
+	require.NoError(t, h.ApplyCreateArgs(context.Background(), a, args))
+	cfg, err := a.GetOSSConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "ootd", cfg.Bucket, "桶名去首尾空格")
+	assert.Equal(t, "ootd", h.SafeView(a)["bucket"])
+
+	require.NoError(t, h.ApplyUpdateArgs(context.Background(), a, map[string]any{"region": "auto"}))
+	cfg, err = a.GetOSSConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "ootd", cfg.Bucket, "未提供 bucket 时保留原值")
+
+	require.NoError(t, h.ApplyUpdateArgs(context.Background(), a, map[string]any{"bucket": ""}))
+	cfg, err = a.GetOSSConfig()
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Bucket, "显式传空即清除默认桶")
+}
+
+// 默认桶只能是桶名:带 "/" 的预设子路径不受支持,必须在边界拒绝而不是存下来等浏览时再报错。
+func TestOSSDefaultBucketRejectsPath(t *testing.T) {
+	h := &ossHandler{}
+	base := map[string]any{"endpoint": "acct.r2.cloudflarestorage.com", "access_key_id": "AKIA"}
+	create := map[string]any{"endpoint": base["endpoint"], "access_key_id": base["access_key_id"], "bucket": "ootd/users"}
+	require.ErrorContains(t, h.ValidateCreateArgs(create), "bucket")
+
+	a := &asset_entity.Asset{Type: asset_entity.AssetTypeOSS}
+	require.NoError(t, h.ApplyCreateArgs(context.Background(), a, base))
+	require.ErrorContains(t, h.ApplyUpdateArgs(context.Background(), a, map[string]any{"bucket": "ootd/users"}), "bucket")
+	cfg, err := a.GetOSSConfig()
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Bucket)
+}

@@ -20,6 +20,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/extension_state_repo/mock_extension_state_repo"
 	"github.com/opskat/opskat/internal/service/extension_svc"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 )
 
 // emitted is one event the binder sent to the frontend.
@@ -59,7 +60,7 @@ func (r *eventRecorder) next(t *testing.T) emitted {
 	select {
 	case ev := <-r.ch:
 		return ev
-	case <-time.After(5 * time.Second):
+	case <-time.After(installWait):
 		t.Fatal("no event emitted")
 		return emitted{}
 	}
@@ -73,8 +74,8 @@ func newConfirmBinder(appCtx context.Context) (*Extension, *eventRecorder) {
 var sampleConfirm = extension_svc.InstallConfirm{
 	Name: "acme", DisplayName: "Acme", Icon: "cloud", From: "1.0.0", To: "2.0.0",
 	Source: extension_svc.InstallSourceFile, Size: 1234,
-	Capabilities: []extension_svc.CapabilityGrant{{Kind: extension_svc.CapCredentials, Value: "read"}},
-	Added:        []extension_svc.CapabilityGrant{{Kind: extension_svc.CapCredentials, Value: "read"}},
+	Capabilities: []extension_svc.CapabilityGrant{{Kind: extension_svc.CapCredentials, Value: "read", HighRisk: true}},
+	Added:        []extension_svc.CapabilityGrant{{Kind: extension_svc.CapCredentials, Value: "read", HighRisk: true}},
 }
 
 // startConfirm runs confirmInstall in the background and returns the event it
@@ -95,7 +96,7 @@ func result(t *testing.T, done <-chan error) error {
 	select {
 	case err := <-done:
 		return err
-	case <-time.After(5 * time.Second):
+	case <-time.After(installWait):
 		t.Fatal("confirmInstall did not return")
 		return nil
 	}
@@ -114,8 +115,8 @@ func TestConfirmInstall_EventCarriesTheConfirm(t *testing.T) {
 	assert.Equal(t, false, ev["downgrade"])
 	assert.Equal(t, "file", ev["source"])
 	assert.EqualValues(t, 1234, ev["size"])
-	assert.Equal(t, []any{map[string]any{"kind": "credentials", "value": "read"}}, ev["capabilities"])
-	assert.Equal(t, []any{map[string]any{"kind": "credentials", "value": "read"}}, ev["added"])
+	assert.Equal(t, []any{map[string]any{"kind": "credentials", "value": "read", "highRisk": true}}, ev["capabilities"])
+	assert.Equal(t, []any{map[string]any{"kind": "credentials", "value": "read", "highRisk": true}}, ev["added"])
 
 	require.NoError(t, e.RespondExtensionInstallConfirm(id, true))
 	assert.NoError(t, result(t, done))
@@ -204,11 +205,11 @@ func writeStubExtension(t *testing.T, name string) (string, describeStub) {
 	dir := filepath.Join(t.TempDir(), name)
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	manifest := fmt.Sprintf(`{"name":%q,"version":"1.0.0","hostABI":%q,"backend":{"runtime":"wasm","binary":"main.wasm"}}`,
-		name, extension.HostABIVersion)
+		name, extmanifest.HostABIVersion)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), stubWASM, 0o600))
-	desc := fmt.Sprintf(`{"i18n":{"displayName":%q},"assetTypes":[{"type":%q,"i18n":{"name":%q},`+
-		`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],"policies":{"type":%q}}`,
+	desc := fmt.Sprintf(`{"i18n":{"displayName":%q},"contributes":{"assetTypes":[{"type":%q,"i18n":{"name":%q},`+
+		`"configSchema":{"type":"object","properties":{"endpoint":{"type":"string"}}}}],"policy":{"type":%q}}}`,
 		name, name, name, name)
 	return dir, describeStub{payload: map[string][]byte{name: []byte(desc)}}
 }
@@ -228,10 +229,10 @@ func TestInstallFromPath_AsksFirst(t *testing.T) {
 	stateRepo.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 	manager := extension.NewManager(extDir, func(string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{Logger: zap.NewNop()})
-	}, zap.NewNop())
-	svc := extension_svc.New(manager, stateRepo, nil, nil, zap.NewNop(), nil, nil)
+	}, extension.NewContributionRegistry(extreg.Points()...), zap.NewNop())
+	svc := extension_svc.New(manager, stateRepo, nil, nil, nil, zap.NewNop(), nil, nil)
 	t.Cleanup(func() {
-		extreg.Unregister("ext-ask")
+		manager.Contributions().Revoke("ext-ask")
 		svc.Close(context.Background())
 	})
 	e, rec := newConfirmBinder(context.Background())
@@ -255,7 +256,7 @@ func TestInstallFromPath_AsksFirst(t *testing.T) {
 		select {
 		case o := <-done:
 			return o.info, o.err
-		case <-time.After(5 * time.Second):
+		case <-time.After(installWait):
 			t.Fatal("install did not return")
 			return nil, nil
 		}
@@ -274,3 +275,7 @@ func TestInstallFromPath_AsksFirst(t *testing.T) {
 	assert.Equal(t, "ext-ask", info.Name)
 	assert.NotNil(t, svc.Manager().GetExtension("ext-ask"))
 }
+
+// installWait 只是"安装卡死了"的保护时间，不是在测安装有多快：确认之后要编译扩展的 WASM，
+// 全量测试时许多包同时编译，Windows 上一次编译可能就要好几秒。
+const installWait = time.Minute

@@ -1,9 +1,6 @@
-import { buildPagedSelect, quoteIdent, quoteQualifiedIdent, quoteTableRef, sqlQuote } from "./tableSql";
-
 type TableRow = Record<string, unknown>;
 export type TableExportFormat = "csv" | "tsv" | "sql" | "xlsx";
 export type TableExportScope = "page" | "all";
-export type TableExportSortDir = "asc" | "desc" | null;
 export type TableExportRecordDelimiter = "lf" | "crlf";
 export type TableExportFieldDelimiter = "comma" | "tab" | "semicolon" | "pipe";
 export type TableExportTextQualifier = "double" | "single" | "none";
@@ -27,26 +24,13 @@ export interface TableExportOptions {
   nullValue?: string;
 }
 
-interface BuildTableExportSelectSqlInput {
-  database: string;
-  table: string;
-  driver?: string;
-  scope: TableExportScope;
-  whereClause: string;
-  orderByClause: string;
-  sortColumn: string | null;
-  sortDir: TableExportSortDir;
-  page: number;
-  pageSize: number;
-  columns?: string[]; // 投影列；省略则 SELECT *
-}
+/** SQL 语句由驱动生成（Query.GetRowStatements；整表导出时随导出游标交出），XLSX 由后端写盘；这里只拼分隔文本。 */
+export type DelimitedExportFormat = Extract<TableExportFormat, "csv" | "tsv">;
 
 interface BuildTableExportContentInput {
-  format: TableExportFormat;
+  format: DelimitedExportFormat;
   columns: string[];
   rows: TableRow[];
-  tableName: string;
-  driver?: string;
   includeHeaders?: boolean;
   options?: TableExportOptions;
 }
@@ -188,93 +172,18 @@ export function toTsvFields(columns: string[]): string {
   return columns.map((col) => escapeDelimited(col, "\t")).join("\t");
 }
 
-export function toInsertSql(tableName: string, columns: string[], rows: TableRow[], driver?: string): string {
-  const quotedTable = quoteQualifiedIdent(tableName, driver);
-  const columnSql = columns.map((col) => quoteIdent(col, driver)).join(", ");
-  return rows
-    .map((row) => {
-      const values = columns.map((col) => sqlQuote(row[col])).join(", ");
-      return `INSERT INTO ${quotedTable} (${columnSql}) VALUES (${values});`;
-    })
-    .join("\n");
-}
-
-export function toUpdateSql(
-  tableName: string,
-  columns: string[],
-  row: TableRow,
-  primaryKeys: string[],
-  driver?: string
-): string {
-  const quotedTable = quoteQualifiedIdent(tableName, driver);
-  const setSql = columns.map((col) => `${quoteIdent(col, driver)} = ${sqlQuote(row[col])}`).join(", ");
-  const whereColumns = primaryKeys.length > 0 ? primaryKeys : columns;
-  const whereSql = whereColumns
-    .map((col) => {
-      const value = row[col];
-      if (value == null) return `${quoteIdent(col, driver)} IS NULL`;
-      return `${quoteIdent(col, driver)} = ${sqlQuote(value)}`;
-    })
-    .join(" AND ");
-
-  if (driver === "postgresql" || driver === "sqlite") return `UPDATE ${quotedTable} SET ${setSql} WHERE ${whereSql};`;
-  // MSSQL 无 LIMIT，用 UPDATE TOP (1) 限制单行更新（对齐 MySQL 的 LIMIT 1 安全语义）。
-  if (driver === "mssql") return `UPDATE TOP (1) ${quotedTable} SET ${setSql} WHERE ${whereSql};`;
-  return `UPDATE ${quotedTable} SET ${setSql} WHERE ${whereSql} LIMIT 1;`;
-}
-
 export function buildTableExportContent({
   format,
   columns,
   rows,
-  tableName,
-  driver,
   includeHeaders = true,
   options = {},
 }: BuildTableExportContentInput): string {
   const mergedOptions = { ...options, includeHeaders };
   if (format === "csv") return toCsv(columns, rows, mergedOptions);
-  if (format === "tsv") return toTsv(columns, rows, mergedOptions);
-  return toInsertSql(tableName, columns, rows, driver);
+  return toTsv(columns, rows, mergedOptions);
 }
 
 export function safeTableExportFilenamePart(value: string): string {
   return value.replace(/[^a-z0-9._-]+/gi, "_").replace(/^_+|_+$/g, "") || "table";
-}
-
-export function buildTableExportSelectSql({
-  database,
-  table,
-  driver,
-  scope,
-  whereClause,
-  orderByClause,
-  sortColumn,
-  sortDir,
-  page,
-  pageSize,
-  columns,
-}: BuildTableExportSelectSqlInput): string {
-  const tableName = quoteTableRef(database, table, driver);
-  const selectExpr = columns && columns.length ? columns.map((col) => quoteIdent(col, driver)).join(", ") : "*";
-  const where = whereClause.trim();
-  const orderBy =
-    sortColumn && sortDir
-      ? `${quoteIdent(sortColumn, driver)} ${sortDir === "asc" ? "ASC" : "DESC"}`
-      : orderByClause.trim();
-  const wherePart = where ? ` WHERE ${where}` : "";
-  const orderByPart = orderBy ? ` ORDER BY ${orderBy}` : "";
-  if (scope === "page" && driver === "mssql") {
-    return buildPagedSelect({
-      tableRef: tableName,
-      wherePart,
-      orderByExpr: orderBy,
-      pageSize,
-      offset: page * pageSize,
-      driver,
-      selectExpr,
-    });
-  }
-  const pagePart = scope === "page" ? ` LIMIT ${pageSize} OFFSET ${page * pageSize}` : "";
-  return `SELECT ${selectExpr} FROM ${tableName}${wherePart}${orderByPart}${pagePart}`;
 }

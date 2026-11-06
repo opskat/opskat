@@ -40,6 +40,13 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+// 配置区块按需加载：按钮先随表单壳出现（禁用），区块挂上并上报可测试后才可点。
+async function enabledTestConnectionButton() {
+  const button = await screen.findByTestId("asset-test-connection");
+  await waitFor(() => expect(button).toBeEnabled());
+  return button;
+}
+
 const vncAsset = new asset_entity.Asset({
   ID: 42,
   Name: "unsaved-vnc",
@@ -73,7 +80,7 @@ describe("AssetForm custom test lifecycle", () => {
     }));
 
     render(<AssetForm open editAsset={vncAsset} onOpenChange={vi.fn()} />);
-    await userEvent.click(await screen.findByTestId("asset-test-connection"));
+    await userEvent.click(await enabledTestConnectionButton());
     await waitFor(() => expect(startVNCClient).toHaveBeenCalledTimes(1));
 
     await userEvent.click(screen.getByRole("button", { name: /asset.cancelTest/ }));
@@ -109,7 +116,7 @@ describe("AssetForm custom test lifecycle", () => {
     }));
 
     const view = render(<AssetForm open editAsset={vncAsset} onOpenChange={vi.fn()} />);
-    await userEvent.click(await screen.findByTestId("asset-test-connection"));
+    await userEvent.click(await enabledTestConnectionButton());
     await waitFor(() => expect(startVNCClient).toHaveBeenCalledTimes(1));
 
     view.rerender(<AssetForm open={false} editAsset={vncAsset} onOpenChange={vi.fn()} />);
@@ -136,7 +143,7 @@ describe("AssetForm custom test lifecycle", () => {
     }));
 
     render(<AssetForm open editAsset={vncAsset} onOpenChange={vi.fn()} />);
-    await userEvent.click(await screen.findByTestId("asset-test-connection"));
+    await userEvent.click(await enabledTestConnectionButton());
 
     await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith("asset.testConnectionSuccessDetail"));
     expect(DisconnectVNC).toHaveBeenCalledWith("temporary-vnc");
@@ -150,7 +157,7 @@ describe("AssetForm custom test lifecycle", () => {
     }));
 
     render(<AssetForm open editAsset={vncAsset} onOpenChange={vi.fn()} />);
-    await userEvent.click(await screen.findByTestId("asset-test-connection"));
+    await userEvent.click(await enabledTestConnectionButton());
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("vnc.failure.policyRejected"));
     expect(notifySuccess).not.toHaveBeenCalled();
@@ -167,7 +174,7 @@ describe("AssetForm custom test lifecycle", () => {
     });
 
     render(<AssetForm open editAsset={serialAsset} onOpenChange={vi.fn()} />);
-    await userEvent.click(await screen.findByTestId("asset-test-connection"));
+    await userEvent.click(await enabledTestConnectionButton());
 
     await waitFor(() =>
       expect(TestAssetConnection).toHaveBeenCalledWith(

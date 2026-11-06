@@ -57,6 +57,7 @@ func runOneTurn(t *testing.T, mock provider.Provider, systemPrompt string, messa
 			out = append(out, se)
 		})
 	}
+	translator.Close()
 	return out
 }
 
@@ -272,6 +273,7 @@ func TestRunner_EndToEnd_RealOpenAIProvider_503TriggersRetry(t *testing.T) {
 				}
 			})
 		}
+		translator.Close()
 
 		// 第一次 503 必须命中 cago retry：
 		//   - 后端 emit 一次 EventRetry → 前端 type:"retry" StreamEvent
@@ -507,7 +509,52 @@ func TestRunner_CancelEmitsStopped(t *testing.T) {
 				}
 			})
 		}
+		translator.Close()
 		So(seenStopped, ShouldBeTrue)
+	})
+}
+
+// 重试退避等待期间用户点停止：必须仍翻译出 stopped，否则前端 sending 永不复位、
+// 停止按钮点了没反应（后端 entry 已删，再点也是空操作）。
+func TestRunner_CancelDuringRetryBackoffEmitsStopped(t *testing.T) {
+	Convey("重试退避等待中 Runner.Cancel 后翻译出 stopped 事件", t, func() {
+		mock := providertest.New().QueueStream(provider.StreamChunk{Err: &provider.ProviderError{
+			Err:        errors.New("503 service unavailable"),
+			StatusCode: 503,
+		}})
+
+		cfg := SystemConfig{Provider: mock, Cwd: t.TempDir()}
+		sys, err := BuildSystem(context.Background(), cfg)
+		So(err, ShouldBeNil)
+		defer func() { _ = sys.Close(context.Background()) }()
+
+		conv := agent.LoadConversation("opskat-cancel-retry-test", nil)
+		runner := sys.Agent().Runner(conv)
+		defer func() { _ = runner.Close() }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		events, err := runner.Send(ctx, "go")
+		So(err, ShouldBeNil)
+
+		var types []string
+		translator := NewStreamTranslator()
+		for ev := range events {
+			translator.Translate(ev, func(se StreamEvent) {
+				types = append(types, se.Type)
+				// 收到 retry 时 cago 正要进入退避 sleep（InitialDelay 5s）。
+				if se.Type == "retry" {
+					go func() {
+						time.Sleep(50 * time.Millisecond)
+						_ = runner.Cancel("user_stop")
+					}()
+				}
+			})
+		}
+		translator.Close()
+		So(types, ShouldContain, "retry")
+		So(types, ShouldContain, "stopped")
+		So(ctx.Err(), ShouldBeNil) // 由 Cancel 结束，而非测试超时
 	})
 }
 

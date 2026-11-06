@@ -59,15 +59,17 @@ type hostOpFunc func(env hostCallEnv, params json.RawMessage) ([]byte, error)
 // hostOps is the control-plane dispatch table. A payload of nil means "no
 // result"; the reply is then just the OK tag.
 var hostOps = map[string]hostOpFunc{
-	"log":              opLog,
-	"kv.get":           opKVGet,
-	"kv.set":           opKVSet,
-	"asset.get_config": opAssetGetConfig,
-	"file_dialog":      opFileDialog,
-	"io.open":          opIOOpen,
-	"io.set_deadline":  opIOSetDeadline,
-	"action.event":     opActionEvent,
-	"action.should_stop": func(env hostCallEnv, _ json.RawMessage) ([]byte, error) {
+	OpLog:            opLog,
+	OpKVGet:          opKVGet,
+	OpKVSet:          opKVSet,
+	OpAssetGetConfig: opAssetGetConfig,
+	OpConfigGet:      opConfigGet,
+	OpFileDialog:     opFileDialog,
+	OpIOOpen:         opIOOpen,
+	OpIOSetDeadline:  opIOSetDeadline,
+	OpToolEvent:      opToolEvent,
+	OpKerberosTicket: opKerberosTicket,
+	OpToolShouldStop: func(env hostCallEnv, _ json.RawMessage) ([]byte, error) {
 		if env.inv.shouldStop() {
 			return []byte{1}, nil
 		}
@@ -204,6 +206,23 @@ func opAssetGetConfig(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	return env.host.GetAssetConfig(env.inv.asset.ID)
 }
 
+// configGate is the capability layer (capHost) as config.get reaches it: the
+// config is the call's scope's, which it resolves.
+type configGate interface {
+	scopeConfig(ctx context.Context, inv *invocation) (json.RawMessage, error)
+}
+
+// opConfigGet returns the config of the call's scope (Scope.Config), whatever
+// the guest sends: like asset.get_config it names nothing, since the host scopes
+// the call. A scope carrying no config — an asset's — is refused.
+func opConfigGet(env hostCallEnv, _ json.RawMessage) ([]byte, error) {
+	gate, ok := env.host.(configGate)
+	if !ok {
+		return nil, fmt.Errorf("config.get refused: this host resolves no scopes, so it has no config to give")
+	}
+	return gate.scopeConfig(env.ctx, env.inv)
+}
+
 func opFileDialog(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	var p struct {
 		Type string        `json:"type"`
@@ -225,6 +244,8 @@ func opIOOpen(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 		return nil, err
 	}
 	epoch := env.inv.io.Epoch()
+	// The capability layer (capHost) admits the stream against the call's scope,
+	// which it reads off the invocation env.ctx carries.
 	res, err := env.host.OpenIO(env.ctx, env.inv.asset, p)
 	if err != nil {
 		return nil, err
@@ -248,7 +269,33 @@ func opIOSetDeadline(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	return nil, env.inv.io.SetDeadline(p.Handle, p.Kind, deadlineTime(p.UnixNanos))
 }
 
-func opActionEvent(env hostCallEnv, params json.RawMessage) ([]byte, error) {
+// ticketGate is the capability layer (capHost) as auth.kerberos_ticket reaches
+// it: the call's scope and the manifest's kerberos permission both decide.
+type ticketGate interface {
+	kerberosTicket(ctx context.Context, inv *invocation, spn string) ([]byte, error)
+}
+
+// opKerberosTicket hands the guest a Kerberos ticket — the AP-REQ for the
+// service principal it names (service/host, as a login handshake gave them) —
+// from its call's scope. It names no asset: the scope's is the only one whose
+// tickets it may get.
+func opKerberosTicket(env hostCallEnv, params json.RawMessage) ([]byte, error) {
+	var p struct {
+		SPN string `json:"spn"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, err
+	}
+	gate, ok := env.host.(ticketGate)
+	if !ok {
+		return nil, fmt.Errorf("kerberos ticket refused: this host enforces no permissions, so it issues no tickets")
+	}
+	return gate.kerberosTicket(env.ctx, env.inv, p.SPN)
+}
+
+// opToolEvent hands one event to the host stamped with the call's invocation id.
+// Whether it reaches anyone is the host's call: only a page caller listens.
+func opToolEvent(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	var p struct {
 		Type string          `json:"type"`
 		Data json.RawMessage `json:"data"`
@@ -256,7 +303,7 @@ func opActionEvent(env hostCallEnv, params json.RawMessage) ([]byte, error) {
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, err
 	}
-	return nil, env.host.ActionEvent(env.inv.id, p.Type, p.Data)
+	return nil, env.host.ToolEvent(env.inv.id, p.Type, p.Data)
 }
 
 // readHandle reads up to size bytes, keeping io.EOF distinguishable while never

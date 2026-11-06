@@ -22,12 +22,15 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/pkg/appversion"
+	"github.com/opskat/opskat/internal/pkg/netproxy"
 )
 
-const (
-	githubRepo = "opskat/opskat"
-	apiBaseURL = "https://api.github.com/repos/" + githubRepo
+const githubRepo = "opskat/opskat"
 
+// apiBaseURL 是 GitHub release API 的地址；测试中可覆盖。
+var apiBaseURL = "https://api.github.com/repos/" + githubRepo
+
+const (
 	// ChannelStable 稳定版更新通道
 	ChannelStable = "stable"
 	// ChannelBeta 测试版更新通道
@@ -38,6 +41,11 @@ const (
 	// ChecksumFetchError 校验文件获取失败的错误前缀，前端用于识别此特定错误
 	ChecksumFetchError = "CHECKSUM_FETCH_FAILED:"
 )
+
+// newHTTPClient 返回走进程共用外网传输（遵循网络代理设置）的 client。
+func newHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, Transport: netproxy.Transport()}
+}
 
 // ReleaseAsset GitHub release 资产
 type ReleaseAsset struct {
@@ -80,7 +88,7 @@ func fetchRelease(channel string) (*ReleaseInfo, error) {
 
 // fetchReleaseFromURL 从指定 URL 获取单个 release
 func fetchReleaseFromURL(url string) (*ReleaseInfo, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := newHTTPClient(15 * time.Second)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request failed: %w", err)
@@ -111,7 +119,7 @@ func fetchReleaseFromURL(url string) (*ReleaseInfo, error) {
 // fetchLatestBetaRelease 获取最新的 beta 或 stable release（排除 nightly）
 func fetchLatestBetaRelease() (*ReleaseInfo, error) {
 	url := apiBaseURL + "/releases?per_page=20"
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := newHTTPClient(15 * time.Second)
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request failed: %w", err)
@@ -166,7 +174,7 @@ func fetchReleaseFromMirror(channel, mirrorPrefix string) (*ReleaseInfo, error) 
 	}
 
 	mirroredURL := ApplyMirror(infoURL, mirrorPrefix)
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newHTTPClient(30 * time.Second)
 	resp, err := client.Get(mirroredURL) //nolint:noctx // mirror URL constructed from constants
 	if err != nil {
 		return nil, fmt.Errorf("request mirror failed: %w", err)
@@ -299,7 +307,7 @@ func DownloadAndUpdate(channel, mirrorPrefix string, skipChecksum bool, onProgre
 
 	// 下载资产
 	actualDownloadURL := ApplyMirror(downloadURL, mirrorPrefix)
-	dlClient := &http.Client{Timeout: 30 * time.Minute}
+	dlClient := newHTTPClient(30 * time.Minute)
 	dlResp, err := dlClient.Get(actualDownloadURL)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
@@ -851,7 +859,7 @@ func FetchChecksums(assets []ReleaseAsset) (map[string]string, error) {
 		return nil, nil
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newHTTPClient(30 * time.Second)
 	resp, err := client.Get(checksumURL)
 	if err != nil {
 		return nil, fmt.Errorf("download SHA256SUMS.txt failed: %w", err)

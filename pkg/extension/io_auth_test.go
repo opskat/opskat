@@ -61,15 +61,13 @@ func (r *authRecorder) requests() []authSeen {
 func newAuthFixture(t *testing.T, endpoint, other, authType string) *Plugin {
 	t.Helper()
 	manifest := fixtureManifest(t)
-	manifest.Capabilities.Network.AssetEndpoint = true
-	manifest.Capabilities.Tunnel = true
-	manifest.Capabilities.HTTP.Allowlist = []string{other + "/"}
-	inner := NewDefaultHostProvider(DefaultHostConfig{
-		AssetConfigs: assetConfigs{fixtureAsset.ID: mustJSON(t, map[string]any{
-			"endpoint": endpoint, "authType": authType, "username": "elastic", "password": "s3cret",
-		})},
-	})
-	return loadDescribedFixture(t, manifest, inner)
+	manifest.Permissions.Network.AssetEndpoint = true
+	manifest.Permissions.Network.AllowPrivate = true
+	manifest.Permissions.Network.HTTP = []string{other + "/"}
+	configs := assetConfigs{fixtureAsset.ID: mustJSON(t, map[string]any{
+		"endpoint": endpoint, "authType": authType, "username": "elastic", "password": "s3cret",
+	})}
+	return loadDescribedFixture(t, manifest, fixtureHost(manifest, configs, nil))
 }
 
 // undecryptable fails every credential read, as a stored secret that no longer
@@ -126,12 +124,12 @@ func TestAssetAuthInjection(t *testing.T) {
 
 		Convey("credentials that cannot be decrypted fail the request before it is sent", func() {
 			manifest := fixtureManifest(t)
-			manifest.Capabilities.Network.AssetEndpoint = true
-			inner := NewDefaultHostProvider(DefaultHostConfig{AssetConfigs: undecryptable{assetConfigs{
+			manifest.Permissions.Network.AssetEndpoint = true
+			configs := undecryptable{assetConfigs{
 				fixtureAsset.ID: mustJSON(t, map[string]any{"endpoint": endpoint.URL, "authType": "basic", "username": "elastic", "password": "garbled"}),
-			}}})
-			p := loadDescribedFixture(t, manifest, inner)
-			_, err := p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": endpoint.URL + "/ok"}), fixtureAsset)
+			}}
+			p := loadDescribedFixture(t, manifest, fixtureHost(manifest, configs, nil))
+			_, err := p.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": endpoint.URL + "/ok"}), Asset: fixtureAsset})
 			So(err, ShouldNotBeNil)
 			So(err.Error(), ShouldContainSubstring, "credentials of asset")
 			So(endpoint.requests(), ShouldBeEmpty)
@@ -139,14 +137,14 @@ func TestAssetAuthInjection(t *testing.T) {
 
 		Convey("the guest never observes the injected values", func() {
 			p := newAuthFixture(t, endpoint.URL, other.URL, "signed")
-			raw, err := p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": endpoint.URL + "/ok"}), fixtureAsset)
+			raw, err := p.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": endpoint.URL + "/ok"}), Asset: fixtureAsset})
 			So(err, ShouldBeNil)
 			So(endpoint.requests(), ShouldResemble, []authSeen{{path: "/ok", token: signed}})
 			So(string(raw), ShouldNotContainSubstring, signed)
 
 			// A failed request's error travels back to the guest: it must name
 			// the URL the guest asked for, not the one carrying the credential.
-			_, err = p.CallTool(ctx, "http_get", mustJSON(t, map[string]any{"url": endpoint.URL + "/hangup"}), fixtureAsset)
+			_, err = p.CallTool(ctx, ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": endpoint.URL + "/hangup"}), Asset: fixtureAsset})
 			So(err, ShouldNotBeNil)
 			So(endpoint.requests()[1], ShouldResemble, authSeen{path: "/hangup", token: signed})
 			So(err.Error(), ShouldNotContainSubstring, "token=")
@@ -190,7 +188,7 @@ func TestAssetAuthRefusesTrace(t *testing.T) {
 		endpoint := newAuthRecorder(t)
 		target, _ := url.Parse(endpoint.URL)
 		auth := &requestAuth{
-			bindings:   []renderedBinding{{in: authInHeader, name: "Authorization", value: "Bearer s3cret"}},
+			bindings:   []AuthValue{{In: AuthInHeader, Name: "Authorization", Value: "Bearer s3cret"}},
 			isEndpoint: func(u *url.URL) bool { return u.Host == target.Host },
 		}
 		res, err := openHTTPResourceWithClient(IOOpenParams{Type: "http", Method: "TRACE", URL: endpoint.URL + "/ok"},
@@ -220,7 +218,7 @@ func TestAssetAuthRefusedRedirectDoesNotLeakTheInjectedQuery(t *testing.T) {
 		signed := base64.StdEncoding.EncodeToString([]byte("elastic:s3cret"))
 		p := newAuthFixture(t, srv.URL, other.URL, "signed")
 
-		_, err := p.CallTool(context.Background(), "http_get", mustJSON(t, map[string]any{"url": srv.URL + "/ok?q=1"}), fixtureAsset)
+		_, err := p.CallTool(context.Background(), ToolCall{Name: "http_get", Args: mustJSON(t, map[string]any{"url": srv.URL + "/ok?q=1"}), Asset: fixtureAsset})
 
 		So(err, ShouldNotBeNil)
 		So(err.Error(), ShouldContainSubstring, "not an endpoint of the asset")

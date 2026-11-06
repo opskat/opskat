@@ -180,6 +180,13 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 		// 内容识别或值替换——决策来源与 allow/deny 分类保持 correlation。
 		entry.MatchedPattern = info.Decision.MatchedPattern
 	}
+	if info.Decision != nil && info.Decision.Review != nil {
+		if data, err := json.Marshal(info.Decision.Review); err != nil {
+			logger.Ctx(ctx).Warn("marshal audit review", zap.String("toolName", info.ToolName), zap.Error(err))
+		} else {
+			entry.Review = string(data)
+		}
+	}
 
 	if repo := audit_repo.Audit(); repo != nil {
 		if err := repo.Create(context.Background(), entry); err != nil {

@@ -21,16 +21,34 @@ import {
   MoreHorizontal,
   Hash,
   ChevronRight,
+  Maximize2,
 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger, computeContextMenuPosition } from "@opskat/ui";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
-import { formatModKey } from "@/stores/shortcutStore";
+import {
+  eventMatchesBinding,
+  FIND_SCOPE_ATTR,
+  formatBinding,
+  formatModKey,
+  useShortcutStore,
+} from "@/stores/shortcutStore";
+import { CellExpandEditor } from "./CellExpandEditor";
+import { ColumnHeaderCard, type ColumnInfo } from "./ColumnHeaderCard";
 import { cellValueToDisplayText, cellValueToText } from "@/lib/cellValue";
 import { parseTabSeparatedRows } from "@/lib/tableImport";
 import type { CellValueFilterOperator } from "@/lib/tableSql";
 import { TABLE_FILTER_OPERATOR_LABEL_KEYS, TABLE_FILTER_OPERATOR_OPTIONS } from "@/lib/tableFilterOperators";
+import {
+  findMatches,
+  revealDelta,
+  type TableFindOptions,
+  type TableFindRange,
+  type TableFindResult,
+} from "@/lib/tableFind";
+import { TableFindBar, TableFindHighlight, type TableFindStatus } from "./TableFindBar";
+import { errorMessage } from "@/lib/errorMessage";
 
 export interface CellEdit {
   rowIdx: number;
@@ -65,11 +83,26 @@ export interface RenderCellContext {
   col: string;
 }
 
+function isTextEntryTarget(target: EventTarget): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT" ||
+    target.isContentEditable
+  );
+}
+
 interface QueryResultTableProps {
   columns: string[];
   rows: Record<string, unknown>[];
   loading?: boolean;
+  // 已有列时的 loading 保留表格(旧数据变淡只读 + 表头下进度条)而不是整块转圈。
+  // 关系型表数据与 SQL 结果开启;MongoDB 不传,行为不变。
+  keepShapeWhileLoading?: boolean;
   error?: string;
+  /** 有 error 时代替默认的纯文本错误,表格自身状态(列宽等)不因出错被卸载。 */
+  errorPanel?: React.ReactNode;
   editable?: boolean;
   edits?: Map<string, unknown>; // key: "rowIdx:col"
   onCellEdit?: (edit: CellEdit) => void;
@@ -81,6 +114,8 @@ interface QueryResultTableProps {
   onPasteBlock?: (block: { edits: CellEdit[]; newRowCount: number }) => void;
   onGenerateUuid?: (edit: CellEdit) => void;
   onCopyAs?: (format: CopyAsFormat, ctx: CellActionContext) => void;
+  /** 「复制为」里的 INSERT / UPDATE 语句条目是否出现(驱动声明了复制为 SQL);TSV 条目不受影响。 */
+  copyAsSql?: boolean;
   onFilterByCellValue?: (ctx: CellActionContext) => void;
   onSortByColumn?: (col: string, dir: Exclude<SortDir, null>) => void;
   onClearFilterSort?: () => void;
@@ -110,6 +145,16 @@ interface QueryResultTableProps {
   // Override the display-mode cell rendering. Does not affect edit-mode (input).
   // When provided, the returned node replaces the default NULL / String(value) span.
   renderCell?: (value: unknown, ctx: RenderCellContext) => React.ReactNode;
+  // 表格内查找（⌘F）：只有关系型表数据与 SQL 结果开启，其余使用方（MongoDB）不传则不受影响。
+  findEnabled?: boolean;
+  // 查找条的范围说明：当前页已加载的行数与页码（从 1 开始）。
+  findScope?: { rowCount: number; page: number };
+  // 已知为 NOT NULL 的列名:Delete / Backspace 设 NULL 时据此拒绝。不传(SQL 结果等不知道约束的场景)
+  // 表示未知,此时只读表格上的 Delete 本来就不生效。
+  notNullColumns?: ReadonlySet<string>;
+  // 表数据标签的列元数据(注释、默认值、索引等)。传入才有「显示注释」开关、注释行与表头悬停信息卡;
+  // SQL 结果与元数据加载失败时不传。
+  columnMeta?: Record<string, ColumnInfo>;
 }
 
 // Sentinel key used to represent NULL / undefined values in the column-filter
@@ -119,6 +164,8 @@ const DEFAULT_COLUMN_WIDTH = 160;
 const ROW_NUMBER_MIN_WIDTH = 44;
 const ROW_NUMBER_PADDING = 24;
 const ROW_NUMBER_CHAR_WIDTH = 8;
+const FIND_DEBOUNCE_MS = 120;
+const NO_FIND_RESULT: TableFindResult = { matches: [] };
 
 const CONTEXT_MENU_ITEM_CLASS =
   "relative flex w-full cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground";
@@ -136,6 +183,14 @@ function valueKey(v: unknown): string {
 
 function cellKey(rowIdx: number, col: string) {
   return `${rowIdx}:${col}`;
+}
+
+// 按单元格 key 找已渲染的格子。列名可以含引号等任意字符,逐个比 dataset 而不是拼属性选择器。
+function findCellElement(container: HTMLElement | null, key: string): HTMLElement | undefined {
+  if (!container) return undefined;
+  return Array.from(container.querySelectorAll<HTMLElement>("td[data-cell-key]")).find(
+    (el) => el.dataset.cellKey === key
+  );
 }
 
 type DateEditMode = "date" | "datetime";
@@ -298,8 +353,10 @@ function QueryResultTableImpl({
   columns,
   rows,
   loading,
+  keepShapeWhileLoading,
   error,
-  editable,
+  errorPanel,
+  editable: editableProp,
   edits,
   onCellEdit,
   onSetCellValue,
@@ -307,6 +364,7 @@ function QueryResultTableImpl({
   onPasteBlock,
   onGenerateUuid,
   onCopyAs,
+  copyAsSql = true,
   onFilterByCellValue,
   onSortByColumn,
   onClearFilterSort,
@@ -330,10 +388,29 @@ function QueryResultTableImpl({
   rowDensity = "default",
   focusCellRequest,
   renderCell,
+  findEnabled,
+  findScope,
+  notNullColumns,
+  columnMeta,
 }: QueryResultTableProps) {
   const { t } = useTranslation();
 
+  // 已有表头时的加载(刷新 / 翻页 / 排序 / 筛选 / 重新执行)保留表格形状:旧数据变淡、只读,
+  // 表头下方显示进度条;还没有列时(首次加载)才整块转圈。
+  const reloading = !!loading && !!keepShapeWhileLoading && columns.length > 0;
+  const editable = !!editableProp && !reloading;
+  // 列状态(宽度、冻结、类型 / 注释开关、本地排序)按有序列名保留:取数每次给新数组,名字不变就不重置。
+  const columnsKey = useMemo(() => JSON.stringify(columns), [columns]);
+
   const [editingCell, setEditingCell] = useState<string | null>(null);
+  // 展开编辑浮层(⇧↵ / 右键「展开编辑」):锚点取单元格左下角,值取打开瞬间的当前显示值(含未提交修改)。
+  const [expandEdit, setExpandEdit] = useState<{
+    rowIdx: number;
+    col: string;
+    value: unknown;
+    x: number;
+    y: number;
+  } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Sort state — controlled if onSortChange is provided, otherwise local
@@ -468,11 +545,14 @@ function QueryResultTableImpl({
   const filterSubTriggerRef = useRef<HTMLDivElement>(null);
   const filterSubMenuRef = useRef<HTMLDivElement>(null);
 
-  // Reset local sort and column widths when columns change
+  // Reset local sort and column state when the ordered column names change
   useEffect(() => {
     setLocalSortCol(null);
     setLocalSortDir(null);
     setColWidths({});
+    setFrozenColumns(new Set());
+    setShowFieldTypes(true);
+    setShowColumnComments(false);
     setSelectedCell(null);
     setSelectedRowIdxs(new Set());
     setSelectedColumns(new Set());
@@ -481,7 +561,7 @@ function QueryResultTableImpl({
     onSelectedCellChange?.(null);
     onSelectedRowsChange?.([]);
     setEditingCell(null);
-  }, [columns, onSelectedCellChange, onSelectedRowsChange]);
+  }, [columnsKey, onSelectedCellChange, onSelectedRowsChange]);
 
   // Reset selection / editing when row set changes (paging, refresh, filter)
   useEffect(() => {
@@ -493,6 +573,8 @@ function QueryResultTableImpl({
     onSelectedCellChange?.(null);
     onSelectedRowsChange?.([]);
     setEditingCell(null);
+    // 展开编辑浮层按行下标记修改:换了一批行后下标指向别的记录,一并关掉。
+    setExpandEdit(null);
   }, [rows, onSelectedCellChange, onSelectedRowsChange]);
 
   useEffect(() => {
@@ -569,7 +651,8 @@ function QueryResultTableImpl({
     return Math.max(ROW_NUMBER_MIN_WIDTH, ROW_NUMBER_PADDING + String(largest).length * ROW_NUMBER_CHAR_WIDTH);
   }, [rowNumberOffset, showRowNumber, sortedIndices.length]);
 
-  const frozenColumnOffsets = useMemo(() => {
+  // frozenAreaRight:行号列 + 冻结列占据的粘性区域右沿,落在它左边的普通格会被遮住。
+  const { frozenColumnOffsets, frozenAreaRight } = useMemo(() => {
     const offsets: Record<string, number> = {};
     // 冻结列停在行号列右侧,而不是容器左沿 —— 否则第一列会盖住行号。
     let left = rowNumberWidth;
@@ -578,12 +661,124 @@ function QueryResultTableImpl({
       offsets[col] = left;
       left += colWidths[col] ?? DEFAULT_COLUMN_WIDTH;
     }
-    return offsets;
+    return { frozenColumnOffsets: offsets, frozenAreaRight: left };
   }, [colWidths, displayColumns, frozenColumns, rowNumberWidth]);
+  // 滚动定位只在选中格变化时触发,读取最新的冻结几何即可 —— 拖列宽 / 冻结列不该把视图拽回选中格。
+  const frozenGeometryRef = useRef({ frozenColumnOffsets, frozenAreaRight });
+  useEffect(() => {
+    frozenGeometryRef.current = { frozenColumnOffsets, frozenAreaRight };
+  }, [frozenColumnOffsets, frozenAreaRight]);
+
+  // ---- 表格内查找（#328）：只查当前页已加载的行；当前命中即选中单元格 ----
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const [findOpen, setFindOpen] = useState(false);
+  const [findFocusRequest, setFindFocusRequest] = useState(0);
+  const [findQuery, setFindQuery] = useState("");
+  // 防抖后的关键词：匹配只在它变化时同步重算，输入本身不卡。
+  const [findTerm, setFindTerm] = useState("");
+  const [findOptions, setFindOptions] = useState<TableFindOptions>({
+    caseSensitive: false,
+    wholeCell: false,
+    regex: false,
+  });
+  const findActive = !!findEnabled && findOpen;
+
+  useEffect(() => {
+    if (findQuery === findTerm) return;
+    const timer = setTimeout(() => setFindTerm(findQuery), FIND_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [findQuery, findTerm]);
+
+  const findResult = useMemo(
+    () =>
+      findActive ? findMatches(rows, displayColumns, edits, findTerm, findOptions, sortedIndices) : NO_FIND_RESULT,
+    [displayColumns, edits, findActive, findOptions, findTerm, rows, sortedIndices]
+  );
+  const findHits = useMemo(() => {
+    const map = new Map<string, { index: number; ranges: TableFindRange[] }>();
+    findResult.matches.forEach((m, index) => map.set(cellKey(m.rowIdx, m.col), { index, ranges: m.ranges }));
+    return map;
+  }, [findResult]);
+  const currentFindIndex = selectedCell
+    ? findHits.get(cellKey(selectedCell.origIdx, selectedCell.col))?.index
+    : undefined;
+  const findStatus: TableFindStatus = !findTerm
+    ? { kind: "idle" }
+    : findResult.error
+      ? { kind: "invalidRegex" }
+      : findResult.matches.length === 0
+        ? { kind: "none" }
+        : {
+            kind: "count",
+            current: currentFindIndex == null ? null : currentFindIndex + 1,
+            total: findResult.matches.length,
+          };
+
+  // 命中成为选中单元格（行详情、⌘C 随之跟随）；焦点留在查找框里。
+  const selectFindMatch = useCallback(
+    (rowIdx: number, col: string) => {
+      setSelectedCell({ origIdx: rowIdx, col });
+      setSelectedRowIdxs(new Set());
+      setSelectedColumns(new Set());
+      columnSelectionAnchorRef.current = null;
+      rowSelectionAnchorRef.current = null;
+      onSelectedCellChange?.({ rowIdx, col });
+      onSelectedRowsChange?.([]);
+    },
+    [onSelectedCellChange, onSelectedRowsChange]
+  );
+
+  // 关键词、选项、翻页 / 刷新（rows）、排序筛选（sortedIndices）、列变化时回到第一个命中；
+  // 只有单元格修改（edits）变化时只更新计数，不挪动当前命中。
+  const findJumpKeyRef = useRef<readonly unknown[] | null>(null);
+  useEffect(() => {
+    const key = [findActive, findTerm, findOptions, rows, sortedIndices, displayColumns];
+    const prev = findJumpKeyRef.current;
+    findJumpKeyRef.current = key;
+    if (prev && key.every((v, i) => Object.is(v, prev[i]))) return;
+    const first = findResult.matches[0];
+    if (findActive && first) selectFindMatch(first.rowIdx, first.col);
+  }, [displayColumns, findActive, findOptions, findResult, findTerm, rows, selectFindMatch, sortedIndices]);
+
+  const stepFind = useCallback(
+    (direction: 1 | -1) => {
+      const { matches } = findResult;
+      if (matches.length === 0) return;
+      const next =
+        currentFindIndex == null
+          ? direction === 1
+            ? 0
+            : matches.length - 1
+          : (currentFindIndex + direction + matches.length) % matches.length;
+      selectFindMatch(matches[next].rowIdx, matches[next].col);
+    },
+    [currentFindIndex, findResult, selectFindMatch]
+  );
+
+  const openFind = useCallback(() => {
+    setFindOpen(true);
+    setFindFocusRequest((n) => n + 1);
+  }, []);
+
+  const closeFind = useCallback(() => {
+    setFindOpen(false);
+    containerRef.current?.focus();
+  }, []);
+
+  // ⌘F（与标签过滤共用 panel.filter 绑定）：全局处理器在结果区内让路，这里打开查找条。
+  const handleFindShortcut = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (!eventMatchesBinding(e.nativeEvent, useShortcutStore.getState().shortcuts["panel.filter"])) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openFind();
+    },
+    [openFind]
+  );
 
   // Sorting is enabled whenever we have an onSortChange callback (server-side)
   // or when we're in read-only mode (local client-side sort on the current page).
-  const canSort = isControlledSort || !editable;
+  const canSort = isControlledSort || !editableProp;
 
   // Column resize handler — 拖拽期间只改 DOM（rAF 合批），松手一次性 setState，避免整表 60Hz 重渲
   const handleResizeStart = useCallback((e: React.MouseEvent, col: string) => {
@@ -729,6 +924,17 @@ function QueryResultTableImpl({
   const pasteCellHandler = onPasteCell ?? onSetCellValue ?? onCellEdit;
   const uuidCellHandler = onGenerateUuid ?? onSetCellValue ?? onCellEdit;
   const canSetCellValue = !!editable && !!setCellValueHandler;
+  // 设为 NULL(Delete / Backspace 与右键「设为 NULL」共用):列已知为 NOT NULL 时不改动,只提示。
+  const setCellNull = useCallback(
+    (rowIdx: number, col: string) => {
+      if (notNullColumns?.has(col)) {
+        toast.warning(t("query.cannotSetNullNotNull", { column: col }));
+        return;
+      }
+      setCellValueHandler?.({ rowIdx, col, value: null });
+    },
+    [notNullColumns, setCellValueHandler, t]
+  );
   const canPasteCell = !!editable && !!pasteCellHandler;
   const canGenerateUuid = !!editable && !!uuidCellHandler;
   const dateEditMode =
@@ -821,7 +1027,7 @@ function QueryResultTableImpl({
       await navigator.clipboard.writeText(text);
       notifyCopied(t("query.copied"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setCtxMenu(null);
     }
@@ -858,7 +1064,7 @@ function QueryResultTableImpl({
       await navigator.clipboard.writeText(text);
       notifyCopied(t("query.copied"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     }
   }, [selectedRowIdxs, selectedColumns, selectedCell, sortedIndices, displayColumns, edits, rows, t]);
 
@@ -876,7 +1082,7 @@ function QueryResultTableImpl({
       await navigator.clipboard.writeText(text);
       notifyCopied(t("query.copied"));
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setCtxMenu(null);
     }
@@ -899,7 +1105,7 @@ function QueryResultTableImpl({
       const edit = { rowIdx: ctxMenu.rowIdx, col: ctxMenu.col, value: text };
       pasteCellHandler?.(edit);
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setCtxMenu(null);
     }
@@ -926,7 +1132,7 @@ function QueryResultTableImpl({
     try {
       text = await navigator.clipboard.readText();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
       return;
     }
     if (!text.trim()) return;
@@ -988,6 +1194,21 @@ function QueryResultTableImpl({
     },
     [ctxMenu, displayColumns, onCopyAs, rows, selectedColumns, selectedRowIdxs, sortedIndices]
   );
+
+  const openExpandEdit = useCallback((rowIdx: number, col: string, value: unknown) => {
+    const el = findCellElement(containerRef.current, cellKey(rowIdx, col));
+    const rect = el?.getBoundingClientRect();
+    // 先把焦点放回表格:浮层关闭后 Radix 把焦点还给打开前的元素,右键菜单的按钮此时已卸载。
+    containerRef.current?.focus();
+    setCtxMenu(null);
+    setCtxMenuPosition(null);
+    setExpandEdit({ rowIdx, col, value, x: rect?.left ?? 0, y: rect?.bottom ?? 0 });
+  }, []);
+
+  const closeExpandEdit = useCallback(() => {
+    setExpandEdit(null);
+    containerRef.current?.focus();
+  }, []);
 
   const handleOpenDateEditor = useCallback(() => {
     if (!ctxMenu || ctxMenu.kind !== "cell") return;
@@ -1299,12 +1520,24 @@ function QueryResultTableImpl({
     [selectCell]
   );
 
+  // PageUp / PageDown 的步长:容器当前能容纳的整行数(扣掉粘性表头),至少 1 行。
+  const visibleRowCount = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return 1;
+    const headHeight = container.querySelector<HTMLElement>("thead")?.offsetHeight ?? 0;
+    const measured = container.querySelector<HTMLElement>("tbody tr[data-index]")?.offsetHeight ?? 0;
+    const rowHeight = measured > 0 ? measured : rowEstimateSize;
+    return Math.max(1, Math.floor((container.clientHeight - headHeight) / rowHeight));
+  }, [rowEstimateSize]);
+
   // Arrow key navigation + Enter/F2 to edit + Escape to deselect/cancel
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       // When editing, the input owns key events — only Escape handled here already
       // (the input's onKeyDown calls setEditingCell(null) on Escape).
       if (editingCell) return;
+      // 查找条、列宽输入等容器内的其他输入框自己处理按键,表格键盘不插手。
+      if (e.target !== e.currentTarget && isTextEntryTarget(e.target)) return;
 
       // Keyboard copy: the browser keeps the key while the user has page text selected.
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c") {
@@ -1320,6 +1553,12 @@ function QueryResultTableImpl({
         if (!editable || !onPasteBlock || (!selectedCell && selectedRowIdxs.size === 0)) return;
         e.preventDefault();
         void pasteClipboardBlock();
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "a") {
+        e.preventDefault();
+        if (!allRowsSelected) toggleSelectAllRows();
         return;
       }
 
@@ -1356,8 +1595,51 @@ function QueryResultTableImpl({
         case "ArrowRight":
           nextColIdx = Math.min(displayColumns.length - 1, colIdx + 1);
           break;
+        case "Tab": {
+          // 行末 Tab / 行首 ⇧Tab 换行;整张表的最后 / 第一格不拦截,让焦点按浏览器默认移出表格。
+          const step = e.shiftKey ? -1 : 1;
+          const flat = displayIdx * displayColumns.length + colIdx + step;
+          if (flat < 0 || flat >= sortedIndices.length * displayColumns.length) return;
+          nextDisplayIdx = Math.floor(flat / displayColumns.length);
+          nextColIdx = flat % displayColumns.length;
+          break;
+        }
+        case "Home":
+          nextColIdx = 0;
+          if (e.ctrlKey || e.metaKey) nextDisplayIdx = 0;
+          break;
+        case "End":
+          nextColIdx = displayColumns.length - 1;
+          if (e.ctrlKey || e.metaKey) nextDisplayIdx = sortedIndices.length - 1;
+          break;
+        case "PageUp":
+        case "PageDown": {
+          const rowsPerPage = visibleRowCount();
+          nextDisplayIdx =
+            e.key === "PageUp"
+              ? Math.max(0, displayIdx - rowsPerPage)
+              : Math.min(sortedIndices.length - 1, displayIdx + rowsPerPage);
+          break;
+        }
+        case "Delete":
+        case "Backspace": {
+          if (!canSetCellValue) return;
+          e.preventDefault();
+          setCellNull(selectedCell.origIdx, selectedCell.col);
+          return;
+        }
         case "Enter":
         case "F2":
+          if (e.key === "Enter" && e.shiftKey) {
+            e.preventDefault();
+            const ck = cellKey(selectedCell.origIdx, selectedCell.col);
+            openExpandEdit(
+              selectedCell.origIdx,
+              selectedCell.col,
+              edits?.has(ck) ? edits.get(ck) : rows[selectedCell.origIdx]?.[selectedCell.col]
+            );
+            return;
+          }
           if (editable) {
             e.preventDefault();
             setEditingCell(cellKey(selectedCell.origIdx, selectedCell.col));
@@ -1389,6 +1671,14 @@ function QueryResultTableImpl({
       selectCell,
       copySelectionToClipboard,
       pasteClipboardBlock,
+      allRowsSelected,
+      toggleSelectAllRows,
+      visibleRowCount,
+      canSetCellValue,
+      setCellNull,
+      openExpandEdit,
+      edits,
+      rows,
     ]
   );
 
@@ -1445,20 +1735,74 @@ function QueryResultTableImpl({
   // Scroll the selected cell into view when navigating.
   // 虚拟化后,目标行可能根本不在 DOM 里,scrollIntoView 找不到 td。先用 virtualizer
   // 把目标行索引滚进视口(只动垂直方向),再下一帧用 scrollIntoView 处理水平方向。
+  // scrollIntoView 不知道粘性的行号列 / 冻结列:格子落在它们下面时仍算"可见",
+  // 所以再按粘性区域右沿把水平位置校正一次。
   useEffect(() => {
     if (!selectedCell || !containerRef.current) return;
     const displayIdx = sortedIndices.indexOf(selectedCell.origIdx);
     if (displayIdx >= 0) rowVirtualizer.scrollToIndex(displayIdx, { align: "auto" });
     const rafId = requestAnimationFrame(() => {
+      const container = containerRef.current;
       const key = cellKey(selectedCell.origIdx, selectedCell.col);
-      const el = containerRef.current?.querySelector<HTMLElement>(`[data-cell-key="${CSS.escape(key)}"]`);
-      el?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const el = findCellElement(container, key);
+      if (!container || !el) return;
+      el.scrollIntoView({ block: "nearest", inline: "nearest" });
+      const frozen = frozenGeometryRef.current;
+      if (frozen.frozenColumnOffsets[selectedCell.col] != null) return;
+      const cellRect = el.getBoundingClientRect();
+      const viewLeft = container.getBoundingClientRect().left;
+      const dx = revealDelta(
+        cellRect.left,
+        cellRect.right,
+        viewLeft + frozen.frozenAreaRight,
+        viewLeft + container.clientWidth
+      );
+      if (dx !== 0) container.scrollLeft += dx;
     });
     return () => cancelAnimationFrame(rafId);
   }, [selectedCell, sortedIndices, rowVirtualizer]);
 
-  if (loading) {
-    return (
+  // 进度条贴在表头下沿(查找条在上方时一并让开):表头高度随类型 / 注释行、行密度变化,
+  // 加载期间每次渲染按实际位置定位。
+  const theadRef = useRef<HTMLTableSectionElement>(null);
+  const progressRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const bar = progressRef.current;
+    const container = containerRef.current;
+    const head = theadRef.current;
+    if (bar && container && head) bar.style.top = `${container.offsetTop + head.offsetHeight}px`;
+  });
+
+  const findBar = findActive ? (
+    <TableFindBar
+      inputRef={findInputRef}
+      focusRequest={findFocusRequest}
+      query={findQuery}
+      onQueryChange={setFindQuery}
+      options={findOptions}
+      onOptionsChange={setFindOptions}
+      status={findStatus}
+      scope={findScope}
+      includesUnsaved={!!editableProp}
+      onNext={() => stepFind(1)}
+      onPrevious={() => stepFind(-1)}
+      onClose={closeFind}
+    />
+  ) : null;
+  // 结果区根节点:带上标记,全局 ⌘F 在此让路;查找条在加载 / 出错时也保留,关键词不丢。
+  const findScopeProps = findEnabled ? { [FIND_SCOPE_ATTR]: "", onKeyDown: handleFindShortcut } : {};
+  const withFindScope = (body: React.ReactNode) =>
+    findEnabled ? (
+      <div className="flex-1 min-h-0 flex flex-col" {...findScopeProps}>
+        {findBar}
+        {body}
+      </div>
+    ) : (
+      body
+    );
+
+  if (loading && !reloading) {
+    return withFindScope(
       <div className="flex items-center justify-center py-8">
         <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
@@ -1466,25 +1810,29 @@ function QueryResultTableImpl({
   }
 
   if (error) {
-    return <div className="px-3 py-4 text-xs text-destructive whitespace-pre-wrap font-mono">{error}</div>;
+    return withFindScope(
+      errorPanel ?? <div className="px-3 py-4 text-xs text-destructive whitespace-pre-wrap font-mono">{error}</div>
+    );
   }
 
   if (columns.length === 0) {
-    return (
+    return withFindScope(
       <div className="flex items-center justify-center py-8 text-xs text-muted-foreground">{t("query.noResult")}</div>
     );
   }
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
+    <div className="relative flex-1 min-h-0 flex flex-col" {...findScopeProps}>
+      {findBar}
       <div
         ref={containerRef}
         tabIndex={0}
         onKeyDown={handleKeyDown}
+        aria-busy={reloading || undefined}
         className="flex-1 overflow-auto min-h-0 query-table-scroll outline-none"
       >
         <table className="border-separate border-spacing-0 text-xs font-mono">
-          <thead className="bg-muted sticky top-0">
+          <thead ref={theadRef} className="bg-muted sticky top-0">
             <tr>
               {showRowNumber && (
                 <th
@@ -1541,7 +1889,9 @@ function QueryResultTableImpl({
                     <div className="flex items-start gap-1">
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-center gap-1">
-                          <span className="truncate text-sm text-foreground">{col}</span>
+                          <ColumnHeaderCard name={col} info={columnMeta?.[col]}>
+                            <span className="truncate text-sm text-foreground">{col}</span>
+                          </ColumnHeaderCard>
                           {canSort &&
                             (isSorted && sortDir === "asc" ? (
                               <ArrowUp className="h-3 w-3 shrink-0" />
@@ -1555,9 +1905,9 @@ function QueryResultTableImpl({
                             <span className="truncate">{typeText}</span>
                           </div>
                         )}
-                        {showColumnComments && (
+                        {columnMeta && showColumnComments && (
                           <div className="mt-1 truncate text-xs font-normal text-muted-foreground">
-                            {t("query.noComment")}
+                            {columnMeta[col]?.comment || "—"}
                           </div>
                         )}
                       </div>
@@ -1683,6 +2033,7 @@ function QueryResultTableImpl({
                     const displayValue = isEdited ? edits!.get(ck) : row[col];
                     const isEditing = editingCell === ck;
                     const isSelected = selectedCell?.origIdx === origIdx && selectedCell?.col === col;
+                    const findHit = findHits.get(ck);
                     const width = colWidths[col] ?? DEFAULT_COLUMN_WIDTH;
                     const frozenLeft = frozenColumnOffsets[col];
                     const isFrozen = frozenLeft != null;
@@ -1721,7 +2072,7 @@ function QueryResultTableImpl({
                           maxWidth: `${width}px`,
                           ...(isFrozen ? { left: `${frozenLeft}px` } : {}),
                         }}
-                        title={displayValue == null ? "NULL" : cellValueToDisplayText(displayValue)}
+                        title={displayValue == null ? t("query.nullValue") : cellValueToDisplayText(displayValue)}
                         onClick={() => handleCellClick(origIdx, col)}
                         onDoubleClick={() => {
                           if (!editable) return;
@@ -1748,12 +2099,18 @@ function QueryResultTableImpl({
                             }}
                           />
                         ) : (
-                          <div className="flex min-w-0 items-center gap-1">
+                          <div className={`flex min-w-0 items-center gap-1 ${reloading ? "opacity-50" : ""}`}>
                             <div className="min-w-0 flex-1">
-                              {renderCell ? (
+                              {findHit ? (
+                                <TableFindHighlight
+                                  text={cellValueToDisplayText(displayValue)}
+                                  ranges={findHit.ranges}
+                                  current={isSelected}
+                                />
+                              ) : renderCell ? (
                                 renderCell(displayValue, { rowIdx: origIdx, col })
                               ) : displayValue == null ? (
-                                <span className="text-muted-foreground italic">NULL</span>
+                                <span className="text-muted-foreground italic">{t("query.nullValue")}</span>
                               ) : (
                                 <span className="truncate block">{cellValueToDisplayText(displayValue)}</span>
                               )}
@@ -1787,6 +2144,16 @@ function QueryResultTableImpl({
           </tbody>
         </table>
       </div>
+      {reloading && (
+        <div
+          ref={progressRef}
+          role="progressbar"
+          aria-label={t("query.reloadingResults")}
+          className="pointer-events-none absolute inset-x-0 z-50 h-0.5 overflow-hidden bg-primary/15"
+        >
+          <div className="h-full w-1/3 bg-primary animate-indeterminate-progress motion-reduce:w-full motion-reduce:animate-none" />
+        </div>
+      )}
 
       {/* Cell context menu */}
       {ctxMenu &&
@@ -1869,10 +2236,14 @@ function QueryResultTableImpl({
                       type="button"
                       role="menuitem"
                       className={CONTEXT_MENU_ITEM_CLASS}
-                      onClick={() => handleSetCellValue(null)}
+                      onClick={() => {
+                        setCellNull(ctxMenu.rowIdx, ctxMenu.col);
+                        setCtxMenu(null);
+                      }}
                     >
                       <CircleSlash className="h-3.5 w-3.5" />
                       {t("query.setNull")}
+                      <span className="ml-auto text-xs text-muted-foreground">Delete</span>
                     </button>
                     {canSetDateTime && (
                       <button
@@ -1886,6 +2257,23 @@ function QueryResultTableImpl({
                       </button>
                     )}
                   </>
+                )}
+                {ctxMenu.kind === "cell" && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className={CONTEXT_MENU_ITEM_CLASS}
+                    onClick={() => {
+                      const ck = cellKey(ctxMenu.rowIdx, ctxMenu.col);
+                      openExpandEdit(ctxMenu.rowIdx, ctxMenu.col, edits?.has(ck) ? edits.get(ck) : ctxMenu.value);
+                    }}
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                    {t("query.expandEdit.menu")}
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {formatBinding({ code: "Enter", mod: false, ctrl: false, shift: true, alt: false })}
+                    </span>
+                  </button>
                 )}
                 <button type="button" role="menuitem" className={CONTEXT_MENU_ITEM_CLASS} onClick={handleCopyCell}>
                   <Copy className="h-3.5 w-3.5" />
@@ -1915,24 +2303,28 @@ function QueryResultTableImpl({
                         copyAsSubSide === "left" ? "right-full mr-1" : "left-full ml-1"
                       } ${copyAsSubOpen ? "block" : "hidden"}`}
                     >
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className={CONTEXT_MENU_ITEM_CLASS}
-                        onClick={() => handleCopyAs("insert")}
-                      >
-                        <ClipboardList className="h-3.5 w-3.5" />
-                        {t("query.copyAsInsert")}
-                      </button>
-                      <button
-                        type="button"
-                        role="menuitem"
-                        className={CONTEXT_MENU_ITEM_CLASS}
-                        onClick={() => handleCopyAs("update")}
-                      >
-                        <ClipboardList className="h-3.5 w-3.5" />
-                        {t("query.copyAsUpdate")}
-                      </button>
+                      {copyAsSql && (
+                        <>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className={CONTEXT_MENU_ITEM_CLASS}
+                            onClick={() => handleCopyAs("insert")}
+                          >
+                            <ClipboardList className="h-3.5 w-3.5" />
+                            {t("query.copyAsInsert")}
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className={CONTEXT_MENU_ITEM_CLASS}
+                            onClick={() => handleCopyAs("update")}
+                          >
+                            <ClipboardList className="h-3.5 w-3.5" />
+                            {t("query.copyAsUpdate")}
+                          </button>
+                        </>
+                      )}
                       <button
                         type="button"
                         role="menuitem"
@@ -2062,15 +2454,17 @@ function QueryResultTableImpl({
                       <span className="w-3.5 text-center">{showFieldTypes ? "✓" : ""}</span>
                       {t("query.showFieldType")}
                     </button>
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className={CONTEXT_MENU_ITEM_CLASS}
-                      onClick={handleToggleColumnComments}
-                    >
-                      <span className="w-3.5 text-center">{showColumnComments ? "✓" : ""}</span>
-                      {t("query.showComment")}
-                    </button>
+                    {columnMeta && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className={CONTEXT_MENU_ITEM_CLASS}
+                        onClick={handleToggleColumnComments}
+                      >
+                        <span className="w-3.5 text-center">{showColumnComments ? "✓" : ""}</span>
+                        {t("query.showComment")}
+                      </button>
+                    )}
                   </>
                 )}
                 {ctxMenu.kind === "cell" &&
@@ -2237,6 +2631,19 @@ function QueryResultTableImpl({
           </div>,
           document.body
         )}
+      {expandEdit && (
+        <CellExpandEditor
+          anchor={{ x: expandEdit.x, y: expandEdit.y }}
+          column={expandEdit.col}
+          columnType={columnTypes?.[expandEdit.col]}
+          rowNumber={rowNumberOffset + sortedIndices.indexOf(expandEdit.rowIdx) + 1}
+          value={expandEdit.value}
+          readOnly={!editable || !onCellEdit}
+          notNull={!!notNullColumns?.has(expandEdit.col)}
+          onCommit={(value) => onCellEdit?.({ rowIdx: expandEdit.rowIdx, col: expandEdit.col, value })}
+          onClose={closeExpandEdit}
+        />
+      )}
       {dateEditor &&
         createPortal(
           <div
@@ -2252,9 +2659,9 @@ function QueryResultTableImpl({
             <div className="mb-2 text-sm font-medium">{t("query.dateTimeDialogTitle")}</div>
             <div className="flex gap-2">
               <label className="flex-1">
-                <span className="mb-1 block text-xs text-muted-foreground">Date</span>
+                <span className="mb-1 block text-xs text-muted-foreground">{t("query.dateLabel")}</span>
                 <input
-                  aria-label="Date"
+                  aria-label={t("query.dateLabel")}
                   type="date"
                   className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring/45"
                   value={dateEditor.date}
@@ -2267,9 +2674,9 @@ function QueryResultTableImpl({
                 />
               </label>
               <label className="w-28">
-                <span className="mb-1 block text-xs text-muted-foreground">Time</span>
+                <span className="mb-1 block text-xs text-muted-foreground">{t("query.timeLabel")}</span>
                 <input
-                  aria-label="Time"
+                  aria-label={t("query.timeLabel")}
                   type="time"
                   step={1}
                   className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:ring-1 focus-visible:ring-ring/45"
@@ -2436,13 +2843,14 @@ function ColumnValuePanel({ col, entries, selected, onChange }: ColumnValuePanel
             const text = entry.text;
             const label =
               entry.value == null ? (
-                <span className="text-muted-foreground italic">NULL</span>
+                <span className="text-muted-foreground italic">{t("query.nullValue")}</span>
               ) : entry.value === "" ? (
                 <span className="text-muted-foreground italic">{t("query.filterEmptyString")}</span>
               ) : (
                 text
               );
-            const tooltip = entry.value == null ? "NULL" : entry.value === "" ? "(empty)" : text;
+            const tooltip =
+              entry.value == null ? t("query.nullValue") : entry.value === "" ? t("query.emptyStringTooltip") : text;
             return (
               <label
                 key={entry.key}

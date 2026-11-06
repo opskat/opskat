@@ -34,6 +34,7 @@ import type {
 import { CancelTest } from "../../../wailsjs/go/system/System";
 import { RedisProbe } from "../../../wailsjs/go/query/Query";
 import { redis_svc } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 type Translate = (key: string, opts?: Record<string, unknown>) => string;
 
@@ -179,7 +180,7 @@ export function RedisConfigSection({ editAsset, ctx, onValidityChange, ref }: Co
           patch({ masterName: groups[0].name });
         }
       } catch (err) {
-        if (isCurrent()) toast.error(String(err));
+        if (isCurrent()) toast.error(errorMessage(err));
       } finally {
         if (isCurrent()) {
           recognitionProbeRef.current = null;

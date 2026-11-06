@@ -3,6 +3,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
+import { extensionsPassthrough } from "./vite-plugins/extensionsPassthrough";
 
 // Windows 的 WebView2 Runtime 并非人人都跟得上 Evergreen 更新（#273 是 110、#226 是 100）。
 // Tailwind v4 按 Chrome 111 生成样式：主题 token 是 `--background: oklch(...)`，自定义属性
@@ -15,7 +16,7 @@ import path from "path";
 const MIN_CHROME = 100;
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), extensionsPassthrough()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

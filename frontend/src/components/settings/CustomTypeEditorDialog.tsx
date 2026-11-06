@@ -29,6 +29,7 @@ import { Field, Segmented } from "@/components/asset/fields";
 import { useCustomTypeStore } from "@/stores/customTypeStore";
 import { issueText } from "./customTypeIssue";
 import { custom_type_entity } from "../../../wailsjs/go/models";
+import { errorMessage } from "@/lib/errorMessage";
 
 // 认证类型的值个数 / 是否带名称,与 internal/pkg/authtmpl.builtinAuthTypes 一一对应
 // (header/query 各一个值 + 名称,basic 两个值 + 无名称)。
@@ -293,7 +294,7 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
       .catch((e) => {
         if (cancelled) return;
         setLoading(false);
-        toast.error(String(e));
+        toast.error(errorMessage(e));
         onOpenChange(false);
       });
     return () => {
@@ -332,7 +333,7 @@ export function CustomTypeEditorDialog({ open, typeId, onOpenChange, onSaved }: 
       onOpenChange(false);
       onSaved?.();
     } catch (e) {
-      toast.error(String(e));
+      toast.error(errorMessage(e));
     } finally {
       setSaving(false);
     }

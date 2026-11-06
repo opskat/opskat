@@ -29,6 +29,7 @@ import {
   type GenericFormState,
   type GenericSecretState,
 } from "./GenericConfigSection.config";
+import { errorMessage } from "@/lib/errorMessage";
 
 /** 通用资产的配置区:按所选自定义类型的字段结构生成输入;HTTP 方式另有连接页。 */
 export function GenericConfigSection({ ref, editAsset, variant, onValidityChange }: ConfigSectionProps) {
@@ -64,7 +65,7 @@ export function GenericConfigSection({ ref, editAsset, variant, onValidityChange
         if (!cancelled) setFetched({ ct, reloadKey });
       })
       .catch((e) => {
-        if (!cancelled) setFetched({ error: String(e), reloadKey });
+        if (!cancelled) setFetched({ error: errorMessage(e), reloadKey });
       });
     return () => {
       cancelled = true;

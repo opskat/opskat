@@ -27,7 +27,9 @@ export function ApprovalClassification({
     <div className={`flex flex-wrap items-center gap-x-3 gap-y-0.5 ${className}`}>
       <span className="text-muted-foreground">
         <span className={`font-medium ${labelClassName}`}>{t("ai.approvalActionLabel")}</span>
-        <span className="select-text">{action}</span>
+        <span data-testid="approval-action" className="select-text">
+          {action}
+        </span>
       </span>
       {list.length > 0 && (
         <span className="text-muted-foreground">

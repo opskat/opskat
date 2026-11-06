@@ -6,6 +6,7 @@ import { makeExtensionConfigSection } from "@/components/asset/ExtensionConfigSe
 import { makeExtensionDetailInfoCard } from "@/components/asset/detail/ExtensionDetailInfoCard";
 import type { AssetTypeDefinition, PolicyDefinition } from "@/lib/assetTypes/types";
 import type { ExtensionConfigSchema } from "./configSchema";
+import { SLOT_ASSET_CONNECT } from "./slots";
 import type { ExtAssetType, ExtManifest } from "./types";
 
 const registeredTypes = new Map<string, string[]>(); // extension name → asset types
@@ -40,7 +41,7 @@ function buildDefinition(extensionName: string, manifest: ExtManifest, at: ExtAs
   const testConnection = !!at.testConnection;
   const schema = at.configSchema as ExtensionConfigSchema | undefined;
   // slot="asset.connect" 是 manifest 里声明"双击这个资产打开哪个页面"的方式。
-  const connectPage = manifest.frontend?.pages?.find((p) => p.slot === "asset.connect");
+  const connectPage = manifest.frontend?.pages?.find((p) => p.slot === SLOT_ASSET_CONNECT);
 
   return {
     type,

@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/approval"
@@ -46,11 +44,6 @@ func (o *Opsctl) handleRequest(ctx context.Context, req approval.ApprovalRequest
 		return o.mfa.challenge(ctx, req)
 	}
 
-	// 扩展工具执行
-	if req.Type == "ext_tool" {
-		return o.handleExtToolExec(req)
-	}
-
 	// 扩展开发安装（opsctl ext dev）
 	if req.Type == "ext_dev_install" {
 		return o.handleExtDevInstall(req)
@@ -79,12 +72,13 @@ func (o *Opsctl) startApprovalServer() {
 }
 
 // requestSingleApproval 是 opsctl socket 上单条审批的入口：弹窗、等用户作答，"始终允许"
-// 时按 opsctl 的 grant 语义（审批类型 + 命令串）落库。
+// 时按 opsctl 的 grant 语义（审批类型 + 命令串）落库。扩展资产上分类成功的调用，请求带着
+// opsctl 用共用构造（permission.ApprovalItemFor）给出的动作、资源与“记住”的
+// <action>:<resource-glob>：弹窗展示同一个扩展审批项，“始终允许”落扩展授权
+// ext:<policyType>:…——与 AI 审批（HandleConfirm）对同一审批项落的相同。
 func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
-	parsed, reason := o.awaitSingleApproval(o.ctx, permission.ApprovalItem{
-		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
-		Command: req.Command, Detail: req.Detail,
-	}, req.SessionID)
+	item := permission.ApprovalItemOfRequest(req)
+	parsed, reason := o.awaitSingleApproval(o.ctx, item, req.SessionID)
 	switch parsed.Decision {
 	case permission.ApprovalAllow:
 		return approval.ApprovalResponse{Approved: true}
@@ -92,8 +86,17 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 		if req.SessionID == "" {
 			return approval.ApprovalResponse{Approved: false, Reason: "approval does not support a grant without a session"}
 		}
-		pattern, origin := grantPatternAndOrigin(req.Command, parsed.EditedItems)
-		permission.SaveGrantPatternsForApproval(i18n.Ctx(o.ctx, o.lang.Lang()), req.SessionID, req.AssetID, req.AssetName, req.Type, pattern, origin)
+		ctx := i18n.Ctx(o.ctx, o.lang.Lang())
+		if item.Action != "" {
+			// 用户批准的是这次调用；授权没落成只影响下一次（会再问），如实记下而不拒绝本次。
+			if err := permission.SaveExtensionItemGrant(ctx, req.SessionID, item, parsed.EditedItems); err != nil {
+				logger.Ctx(ctx).Warn("opsctl extension grant not saved",
+					zap.Int64("assetID", req.AssetID), zap.String("approvalType", req.Type), zap.Error(err))
+			}
+		} else {
+			pattern, origin := grantPatternAndOrigin(req.Command, parsed.EditedItems)
+			permission.SaveGrantPatternsForApproval(ctx, req.SessionID, req.AssetID, req.AssetName, req.Type, pattern, origin)
+		}
 		// 只回 Approved：ApproveGrant 在 opsctl 协议里是"整个会话已获批"（grant 审批），
 		// CLI 见到它会把会话写成活动会话——单条命令的"始终允许"不是那个意思。
 		return approval.ApprovalResponse{Approved: true}
@@ -102,17 +105,17 @@ func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.Ap
 	}
 }
 
-// opsctlAuditSource 是 opsctl 发起的审批与扩展工具调用落审计的来源列。
+// opsctlAuditSource 是 opsctl 发起的审批落审计的来源列。
 const opsctlAuditSource = "opsctl"
 
 // awaitSingleApproval 在桌面端 "opsctl:approval" 弹窗里展示 item，等用户作答并校验。
-// 它不落任何 grant："始终允许"授权什么由调用方决定——opsctl socket 按命令串落
-// （requestSingleApproval），扩展工具闸门交给 HandleConfirm 按 (action, resource) 落
-// （extToolConfirm）。拒绝时第二个返回值是原因。ctx 是发起这次审批的调用：它被取消
+// 它不落任何 grant："始终允许"授权什么由调用方决定——opsctl socket 按命令串、扩展调用
+// 按分类落（requestSingleApproval）。拒绝时第二个返回值是原因。ctx 是发起这次审批的调用：它被取消
 // 就不再等待，按拒绝返回，之后到达的作答找不到这条待决审批。
 func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.ApprovalItem, sessionID string) (permission.ParsedApprovalResponse, string) {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
-	kind := permission.ApprovalKindFor(item.Type, item.Command)
+	// 与 opsctl 终端提示同一判定：分类失败的扩展调用没有可落的规则，只给本次允许/拒绝。
+	kind := permission.ApprovalKindForItem(item.Type, item)
 	log := logger.Ctx(o.ctx).With(
 		zap.String("confirmID", confirmID),
 		zap.String("approvalType", item.Type),
@@ -147,6 +150,7 @@ func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.Approv
 		"resource":         item.Resource,
 		"resources":        item.Resources,
 		"remember_pattern": item.RememberPattern,
+		"review":           item.Review,
 		"session_id":       sessionID,
 	})
 
@@ -194,15 +198,15 @@ func grantPatternAndOrigin(command string, edited []permission.ApprovalItem) (st
 	return command, permission.GrantOriginSystem
 }
 
-// handleBatchApproval 处理批量执行审批（exec/sql/redis 混合）
+// handleBatchApproval 处理批量执行审批（各内置类型与扩展资产混合）。整批只有本次允许 /
+// 拒绝；扩展资产上分类成功的条目带着 opsctl 用共用构造（permission.ApprovalItemFor）
+// 给出的动作与资源，弹窗与单条审批一样在命令上方展示它们。
 func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
 	confirmID := fmt.Sprintf("batch_%d", time.Now().UnixNano())
 
 	expectedItems := make([]permission.ApprovalItem, 0, len(req.BatchItems))
 	for _, item := range req.BatchItems {
-		expectedItems = append(expectedItems, permission.ApprovalItem{
-			Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName, Command: item.Command, Detail: item.Detail,
-		})
+		expectedItems = append(expectedItems, permission.ApprovalItemOfBatchItem(item))
 	}
 	// 批量事件发送原始 items，展示与执行逐字一致。
 	items := make([]map[string]any, 0, len(expectedItems))
@@ -213,6 +217,10 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 			"asset_name": expectedItems[i].AssetName,
 			"command":    expectedItems[i].Command,
 			"detail":     expectedItems[i].Detail,
+			"action":     expectedItems[i].Action,
+			"resource":   expectedItems[i].Resource,
+			"resources":  expectedItems[i].Resources,
+			"review":     expectedItems[i].Review,
 		})
 	}
 
@@ -220,15 +228,15 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 		o.window.ActivateWindow()
 	}
 
-	wailsRuntime.EventsEmit(o.ctx, "opsctl:batch-approval", map[string]any{
+	ch := make(chan permission.ApprovalResponse, 1)
+	// 先登记再发事件：响应一到就要找得到这条待决审批。
+	o.pendingOpsctlApprovals.Store(confirmID, pendingOpsctlApproval{kind: permission.ApprovalKindBatch, items: expectedItems, ch: ch})
+	defer o.pendingOpsctlApprovals.Delete(confirmID)
+	o.emit("opsctl:batch-approval", map[string]any{
 		"confirm_id": confirmID,
 		"session_id": req.SessionID,
 		"items":      items,
 	})
-
-	ch := make(chan permission.ApprovalResponse, 1)
-	o.pendingOpsctlApprovals.Store(confirmID, pendingOpsctlApproval{kind: permission.ApprovalKindBatch, items: expectedItems, ch: ch})
-	defer o.pendingOpsctlApprovals.Delete(confirmID)
 
 	select {
 	case resp := <-ch:
@@ -352,15 +360,15 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 		o.window.ActivateWindow()
 	}
 
+	ch := make(chan permission.ApprovalResponse, 1)
+	// 先登记再发事件：响应一到就要找得到这条待决审批。
+	o.pendingOpsctlApprovals.Store(sessionID, pendingOpsctlApproval{kind: permission.ApprovalKindGrant, items: expectedItems, ch: ch})
+	defer o.pendingOpsctlApprovals.Delete(sessionID)
 	o.emit("opsctl:grant-approval", map[string]any{
 		"session_id":  sessionID,
 		"description": description,
 		"items":       eventItems,
 	})
-
-	ch := make(chan permission.ApprovalResponse, 1)
-	o.pendingOpsctlApprovals.Store(sessionID, pendingOpsctlApproval{kind: permission.ApprovalKindGrant, items: expectedItems, ch: ch})
-	defer o.pendingOpsctlApprovals.Delete(sessionID)
 
 	select {
 	case resp := <-ch:
@@ -435,101 +443,6 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 		return approval.ApprovalResponse{Approved: false, Reason: "app shutting down"}
 	}
 }
-
-// extToolGateResult is what gateExtToolCall hands back: the output and decision,
-// plus the normalized command the unified exec handler actually ran —
-// canonicalization can rewrite flag order/spelling, and the audit row should show
-// what ran, not what was sent.
-type extToolGateResult struct {
-	output            string
-	normalizedCommand string
-	decision          aictx.CheckResult
-}
-
-// gateExtToolCall runs one extension-tool invocation through the exact same
-// policy check / in-app approval / grant / audit pipeline AI's unified exec uses.
-//
-// NeedConfirm surfaces through the desktop's one "opsctl:approval" dialog
-// (extToolConfirm).
-//
-// It returns the context it built (audit source/session/decision slot all
-// installed on it) alongside the result: a caller's own WriteToolCall must use
-// that returned context, not the one it passed in, or the audit row it writes
-// carries none of what this function just annotated, the audit source included.
-func (o *Opsctl) gateExtToolCall(ctx context.Context, sessionID string, assetID int64, command string) (context.Context, extToolGateResult, error) {
-	ctx = aictx.WithAuditSource(ctx, opsctlAuditSource)
-	ctx = aictx.WithSessionID(ctx, sessionID)
-	checker := permission.NewCommandPolicyChecker(o.extToolConfirm(sessionID))
-	ctx = permission.WithPolicyChecker(ctx, checker)
-
-	// 审计行由**做出决策的进程**写：策略判定、审批结果与规范化命令都只在这里存在，
-	// 调用方侧只知道最终的结果字符串。command slot 让统一 exec 的规范化形式落库，
-	// 与 AI 会话那条路径一致。
-	var decision aictx.CheckResult
-	ctx = aictx.WithCheckResultSlot(ctx, &decision)
-	normalizedCommand := command
-	ctx = aictx.WithAuditCommandSlot(ctx, &normalizedCommand)
-
-	result, err := o.extExecutor.ExecuteExtTool(ctx, assetID, command)
-	return ctx, extToolGateResult{output: result, normalizedCommand: normalizedCommand, decision: decision}, err
-}
-
-// extToolConfirm is the confirm step of the extension-tool gate: the item
-// HandleConfirm built — for an extension type it carries the check_policy
-// (action, resource) and the formatted request — goes to the desktop's one
-// "opsctl:approval" dialog, and the user's answer goes back unchanged, edits
-// included. Persisting an "always allow" is HandleConfirm's: it grants the
-// classification, the only shape extension grant matching reads.
-func (o *Opsctl) extToolConfirm(sessionID string) permission.CommandConfirmFunc {
-	return func(ctx context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
-		parsed, _ := o.awaitSingleApproval(ctx, items[0], sessionID)
-		switch parsed.Decision {
-		case permission.ApprovalAllowAll:
-			return permission.ApprovalResponse{Decision: "allowAll", EditedItems: parsed.EditedItems}
-		case permission.ApprovalAllow:
-			return permission.ApprovalResponse{Decision: "allow"}
-		default:
-			return permission.ApprovalResponse{Decision: "deny"}
-		}
-	}
-}
-
-// handleExtToolExec 处理 opsctl 对扩展资产的委托执行请求。
-//
-// 桌面端在这里跑的是与 AI 会话完全相同的统一 exec handler：策略检查、审批弹窗、
-// "始终允许"落 grant、审计，全部由 gateExtToolCall 那条路径提供。本函数只负责把 opsctl
-// 的 socket 请求翻译成一次进程内调用，并按 opsctl 自己的语义（拒绝 = socket 错误）
-// 把结果译回 approval.ApprovalResponse。
-func (o *Opsctl) handleExtToolExec(req approval.ApprovalRequest) approval.ApprovalResponse {
-	if o.extExecutor == nil {
-		return approval.ApprovalResponse{ToolError: "extension system not initialized"}
-	}
-
-	ctx := i18n.Ctx(o.ctx, o.lang.Lang())
-	gateCtx, gateResult, err := o.gateExtToolCall(ctx, req.SessionID, req.AssetID, req.Command)
-	decision := gateResult.decision
-	extAuditWriter.WriteToolCall(gateCtx, audit.ToolCallInfo{
-		ToolName: "exec",
-		ArgsJSON: fmt.Sprintf(`{"asset_id":%d,"command":%q}`, req.AssetID, req.Command),
-		Command:  gateResult.normalizedCommand,
-		Result:   gateResult.output,
-		Error:    err,
-		Decision: &decision,
-	})
-	if err != nil {
-		return approval.ApprovalResponse{ToolError: err.Error()}
-	}
-	// 统一 exec 把拒绝当普通文本结果交回（那是给模型看的，模型据此调整），但对
-	// opsctl 而言命令没有执行——决策槽里的 Deny 是唯一可靠的信号，按错误回传，
-	// 客户端才会与内置类型一样 exit 1 + stderr，而不是把拒绝文本当输出打到 stdout。
-	if decision.Decision != aictx.Allow {
-		return approval.ApprovalResponse{ToolError: gateResult.output}
-	}
-	return approval.ApprovalResponse{Approved: true, ToolResult: gateResult.output}
-}
-
-// extAuditWriter 与 opsctl CLI 侧用的是同一个默认写入器实现，两条路径落同一组列语义。
-var extAuditWriter audit.AuditWriter = audit.NewDefaultAuditWriter()
 
 // RespondOpsctlApproval 前端响应 opsctl 审批请求（统一入口）
 func (o *Opsctl) RespondOpsctlApproval(confirmID string, resp permission.ApprovalResponse) {

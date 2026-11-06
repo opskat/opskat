@@ -4,6 +4,7 @@ import { sftp_svc } from "../../../../wailsjs/go/models";
 import { addExpandedPath, flattenSftpTree, type SftpTreeNode } from "@/lib/sftpDirTree";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { normalizeRemotePath } from "./utils";
+import { errorMessage } from "@/lib/errorMessage";
 
 const EMPTY_ENTRIES: sftp_svc.FileEntry[] = [];
 
@@ -44,7 +45,7 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
         return true;
       } catch (e) {
         if (requestId !== loadRequestRef.current) return false;
-        setError(String(e));
+        setError(errorMessage(e));
         return false;
       } finally {
         if (requestId === loadRequestRef.current) {
@@ -86,7 +87,7 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
               entries: node?.entries ?? EMPTY_ENTRIES,
               loaded: node?.loaded ?? false,
               loading: false,
-              error: String(e),
+              error: errorMessage(e),
             },
           };
         });

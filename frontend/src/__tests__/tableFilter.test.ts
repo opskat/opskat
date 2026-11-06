@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   addFilterCondition,
-  addFilterGroup,
   addSortCriterion,
-  buildFilterWhereClause,
-  buildSortOrderByClause,
   createFilterCondition,
   createSortCriterion,
   removeFilterItemsByColumn,
+  toFilterRequest,
+  toSortRequest,
   toggleFilterNegator,
   toggleFilterJoin,
   toggleSortDirection,
@@ -28,41 +27,6 @@ describe("table filter helpers", () => {
 
     expect(toggleFilterJoin(items, "email")[0]).toMatchObject({ join: "or" });
     expect(toggleFilterJoin(toggleFilterJoin(items, "email"), "email")[0]).toMatchObject({ join: "and" });
-  });
-
-  it("builds SQL with OR joins and bracket groups", () => {
-    const items: TableFilterItem[] = [
-      createFilterCondition("email", "email", { value: "11223", join: "or" }),
-      addFilterGroup([], ["id", "name"], "mysql", "group-1")[0],
-    ];
-    const group = items[1];
-    if (group.kind !== "group") throw new Error("expected group");
-    group.items = [createFilterCondition("id", "id", { value: 2 })];
-
-    expect(buildFilterWhereClause(items, "mysql")).toBe("`email` = '11223' OR (`id` = '2')");
-  });
-
-  it("builds SQL for LIKE and NOT LIKE criteria", () => {
-    const items: TableFilterItem[] = [
-      createFilterCondition("name-like", "name", { operator: "like", value: "bob" }),
-      createFilterCondition("email-not-like", "email", { operator: "not_like", value: "@test.com" }),
-    ];
-
-    expect(buildFilterWhereClause(items, "mysql")).toBe("`name` LIKE '%bob%' AND `email` NOT LIKE '%@test.com%'");
-  });
-
-  it("builds SQL for text, null, range, and list operators", () => {
-    const items: TableFilterItem[] = [
-      createFilterCondition("begins", "name", { operator: "begins_with", value: "Al" }),
-      createFilterCondition("not-ends", "email", { operator: "not_ends_with", value: "@old.com" }),
-      createFilterCondition("null", "deleted_at", { operator: "is_null" }),
-      createFilterCondition("range", "age", { operator: "between", value: [18, 30] }),
-      createFilterCondition("list", "status", { operator: "in_list", value: ["active", "pending"] }),
-    ];
-
-    expect(buildFilterWhereClause(items, "mysql")).toBe(
-      "`name` LIKE 'Al%' AND `email` NOT LIKE '%@old.com' AND `deleted_at` IS NULL AND `age` BETWEEN '18' AND '30' AND `status` IN ('active', 'pending')"
-    );
   });
 
   it("removes filters for a column from nested groups", () => {
@@ -89,29 +53,6 @@ describe("table filter helpers", () => {
     ]);
   });
 
-  it("builds disabled, negated, empty, and comparison criteria inside bracket groups", () => {
-    const items: TableFilterItem[] = [
-      createFilterCondition("name", "name", { value: "A", join: "and" }),
-      {
-        kind: "group",
-        id: "names-or-amount",
-        join: "and",
-        enabled: true,
-        negated: true,
-        items: [
-          createFilterCondition("name-b", "name", { value: "B", join: "or" }),
-          createFilterCondition("amount", "amount", { operator: ">", value: 100, join: "and" }),
-          createFilterCondition("ignored", "deleted_at", { enabled: false, value: null }),
-        ],
-      },
-      createFilterCondition("empty", "memo", { operator: "is_empty" }),
-    ];
-
-    expect(buildFilterWhereClause(items, "mysql")).toBe(
-      "`name` = 'A' AND NOT (`name` = 'B' OR `amount` > '100') AND (`memo` IS NULL OR `memo` = '')"
-    );
-  });
-
   it("toggles filter negators for conditions and groups", () => {
     const items: TableFilterItem[] = [
       createFilterCondition("name", "name", { value: "A" }),
@@ -120,7 +61,6 @@ describe("table filter helpers", () => {
 
     const negatedCondition = toggleFilterNegator(items, "name");
     expect(negatedCondition[0]).toMatchObject({ operator: "!=" });
-    expect(buildFilterWhereClause(negatedCondition, "mysql")).toBe("`name` <> 'A'");
 
     const negatedGroup = toggleFilterNegator(items, "group-1")[1];
     expect(negatedGroup).toMatchObject({ kind: "group", negated: true });
@@ -134,12 +74,50 @@ describe("table filter helpers", () => {
     expect(toggleSortDirection(second, "sort-id")[0]).toMatchObject({ dir: "desc" });
   });
 
-  it("builds ORDER BY SQL from sort criteria", () => {
+  it("turns filter items into the structured request the driver receives", () => {
+    const items: TableFilterItem[] = [
+      createFilterCondition("name", "name", { value: "A", join: "or" }),
+      createFilterCondition("gone", "deleted_at", { value: null, operator: "!=" }),
+      createFilterCondition("blank", "email", { operator: "contains" }),
+      createFilterCondition("off", "age", { operator: "between", value: [18, 30], enabled: false }),
+      {
+        kind: "group",
+        id: "group-1",
+        join: "and",
+        negated: true,
+        items: [
+          createFilterCondition("status", "status", { operator: "in_list", value: "a, b" }),
+          { kind: "group", id: "group-2", join: "or", enabled: false, items: [] },
+        ],
+      },
+    ];
+
+    // 请求里只有条件本身:没有界面用的 id,也没有任何 SQL。没填的值标成 unset,与填了 NULL 区分开。
+    expect(toFilterRequest(items)).toEqual([
+      { kind: "condition", join: "or", disabled: false, column: "name", operator: "=", value: "A" },
+      { kind: "condition", join: "and", disabled: false, column: "deleted_at", operator: "!=", value: null },
+      { kind: "condition", join: "and", disabled: false, column: "email", operator: "contains", unset: true },
+      { kind: "condition", join: "and", disabled: true, column: "age", operator: "between", value: [18, 30] },
+      {
+        kind: "group",
+        join: "and",
+        disabled: false,
+        negated: true,
+        items: [
+          { kind: "condition", join: "and", disabled: false, column: "status", operator: "in_list", value: "a, b" },
+          { kind: "group", join: "or", disabled: true, negated: false, items: [] },
+        ],
+      },
+    ]);
+    expect(JSON.parse(JSON.stringify(toFilterRequest(items)))[1]).toHaveProperty("value", null);
+  });
+
+  it("turns sort criteria into the structured request the driver receives", () => {
     expect(
-      buildSortOrderByClause(
-        [createSortCriterion("sort-id", "id", "asc"), createSortCriterion("sort-name", "name", "desc")],
-        "mysql"
-      )
-    ).toBe("`id` ASC, `name` DESC");
+      toSortRequest([createSortCriterion("sort-id", "id", "asc"), createSortCriterion("sort-name", "name", "desc")])
+    ).toEqual([
+      { column: "id", dir: "asc" },
+      { column: "name", dir: "desc" },
+    ]);
   });
 });

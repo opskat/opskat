@@ -35,6 +35,15 @@ func decodeDescribe(t *testing.T) map[string]any {
 	return out
 }
 
+// decodeContributes is describe()'s contributes object: one key per
+// contribution point.
+func decodeContributes(t *testing.T) map[string]any {
+	t.Helper()
+	contributes, ok := decodeDescribe(t)["contributes"].(map[string]any)
+	So(ok, ShouldBeTrue)
+	return contributes
+}
+
 func TestDescribeIsDerivedFromRegistrations(t *testing.T) {
 	Convey("describe reports what the registration calls declared", t, func() {
 		resetRegistries()
@@ -60,7 +69,8 @@ func TestDescribeIsDerivedFromRegistrations(t *testing.T) {
 			So(desc["icon"], ShouldEqual, "cloud")
 			i18n := desc["i18n"].(map[string]any)
 			So(i18n["displayName"], ShouldEqual, "manifest.displayName")
-			policies := desc["policies"].(map[string]any)
+			So(desc, ShouldNotContainKey, "policies")
+			policies := desc["contributes"].(map[string]any)["policy"].(map[string]any)
 			So(policies["type"], ShouldEqual, "demo")
 			So(policies["default"], ShouldResemble, []any{"ext:demo:readonly"})
 			groups := policies["groups"].([]any)
@@ -75,7 +85,7 @@ func TestDescribeIsDerivedFromRegistrations(t *testing.T) {
 
 		Convey("every registered tool is reported, with a schema reflected from its args", func() {
 			byName := map[string]map[string]any{}
-			for _, raw := range desc["tools"].([]any) {
+			for _, raw := range desc["contributes"].(map[string]any)["tools"].([]any) {
 				tool := raw.(map[string]any)
 				byName[tool["name"].(string)] = tool
 			}
@@ -110,7 +120,7 @@ func TestDescribeIsDerivedFromRegistrations(t *testing.T) {
 		})
 
 		Convey("asset type configSchema is reflected from the config struct", func() {
-			assetTypes := desc["assetTypes"].([]any)
+			assetTypes := desc["contributes"].(map[string]any)["assetTypes"].([]any)
 			So(len(assetTypes), ShouldEqual, 1)
 			at := assetTypes[0].(map[string]any)
 			So(at["type"], ShouldEqual, "demo")
@@ -135,7 +145,7 @@ func TestDescribeIsDerivedFromRegistrations(t *testing.T) {
 			// second list that could be left behind.
 			_ = decodeDescribe(t)
 			Tool("late", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("list")
-			tools := decodeDescribe(t)["tools"].([]any)
+			tools := decodeContributes(t)["tools"].([]any)
 			names := make([]string, 0, len(tools))
 			for _, raw := range tools {
 				names = append(names, raw.(map[string]any)["name"].(string))
@@ -185,30 +195,49 @@ func TestTypedToolDispatch(t *testing.T) {
 	})
 }
 
+// registrationError is what describe answers once a registration was invalid: the
+// error the host shows as the extension's load failure.
+func registrationError() error {
+	_, err := dispatch("describe", nil)
+	return err
+}
+
+// shouldFailDescribe asserts describe fails with an error containing every part.
+func shouldFailDescribe(parts ...string) {
+	err := registrationError()
+	So(err, ShouldNotBeNil)
+	for _, p := range parts {
+		So(err.Error(), ShouldContainSubstring, p)
+	}
+}
+
 func TestRegistrationRejectsBrokenDeclarations(t *testing.T) {
 	Convey("a registration that cannot produce a schema fails at init, not at call time", t, func() {
 		resetRegistries()
 
 		Convey("duplicate tool name", func() {
 			Tool("dup", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("list")
-			So(func() {
-				Tool("dup", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("list")
-			}, ShouldPanic)
+			So(registrationError(), ShouldBeNil)
+			Tool("dup", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("list")
+			shouldFailDescribe(`tool "dup" is already registered`)
+		})
+
+		Convey("a tool without a name", func() {
+			Tool("", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("list")
+			shouldFailDescribe("tool name is required")
 		})
 
 		Convey("args type the flag DSL cannot express", func() {
 			type nested struct {
 				Inner map[string]string `json:"inner"`
 			}
-			So(func() {
-				Tool("bad", func(_ *ToolContext, _ nested) (any, error) { return nil, nil })
-			}, ShouldPanic)
+			Tool("bad", func(_ *ToolContext, _ nested) (any, error) { return nil, nil }).Policy("list")
+			shouldFailDescribe(`tool "bad" arguments`)
 		})
 
 		Convey("args type that is not a struct", func() {
-			So(func() {
-				Tool("bad", func(_ *ToolContext, _ string) (any, error) { return nil, nil })
-			}, ShouldPanic)
+			Tool("bad", func(_ *ToolContext, _ string) (any, error) { return nil, nil }).Policy("list")
+			shouldFailDescribe(`tool "bad" arguments must be a struct`)
 		})
 	})
 }
@@ -221,7 +250,7 @@ func TestDescribeReportsConnectionDeclaration(t *testing.T) {
 		AssetType[demoConfig]("direct")
 
 		byType := map[string]map[string]any{}
-		for _, raw := range decodeDescribe(t)["assetTypes"].([]any) {
+		for _, raw := range decodeContributes(t)["assetTypes"].([]any) {
 			at := raw.(map[string]any)
 			byType[at["type"].(string)] = at
 		}
@@ -244,7 +273,7 @@ func TestDescribeReportsAuthDeclaration(t *testing.T) {
 		AssetType[demoConfig]("plain")
 
 		byType := map[string]map[string]any{}
-		for _, raw := range decodeDescribe(t)["assetTypes"].([]any) {
+		for _, raw := range decodeContributes(t)["assetTypes"].([]any) {
 			at := raw.(map[string]any)
 			byType[at["type"].(string)] = at
 		}
@@ -303,7 +332,7 @@ func TestPolicyFuncClassifiesEachCall(t *testing.T) {
 		})
 
 		Convey("describe declares the action set, not a fixed action", func() {
-			tool := decodeDescribe(t)["tools"].([]any)[0].(map[string]any)
+			tool := decodeContributes(t)["tools"].([]any)[0].(map[string]any)
 			So(tool["policyActions"], ShouldResemble, []any{"index.read", "index.write"})
 			So(tool, ShouldNotContainKey, "policyAction")
 		})
@@ -314,7 +343,7 @@ func TestPolicyFuncClassifiesEachCall(t *testing.T) {
 			raw, err := dispatch("check_policy", []byte(`{"tool":"list","args":{"bucket":"b1"}}`))
 			So(err, ShouldBeNil)
 			So(string(raw), ShouldEqual, `{"action":"list","resource":"b1"}`)
-			for _, rawTool := range decodeDescribe(t)["tools"].([]any) {
+			for _, rawTool := range decodeContributes(t)["tools"].([]any) {
 				tool := rawTool.(map[string]any)
 				if tool["name"] == "list" {
 					So(tool["policyAction"], ShouldEqual, "list")
@@ -329,17 +358,20 @@ func TestPolicyFuncClassifiesEachCall(t *testing.T) {
 		noop := func(_ *ToolContext, _ searchArgs) (any, error) { return nil, nil }
 
 		Convey("no declared actions", func() {
-			So(func() { Tool("a", noop).PolicyFunc(nil, classifySearch) }, ShouldPanic)
+			Tool("a", noop).PolicyFunc(nil, classifySearch)
+			shouldFailDescribe(`tool "a"`, "PolicyFunc needs the set of actions")
 		})
 		Convey("combined with a fixed action", func() {
-			So(func() { Tool("b", noop).Policy("index.read").PolicyFunc([]string{"index.read"}, classifySearch) }, ShouldPanic)
-			So(func() { Tool("c", noop).PolicyFunc([]string{"index.read"}, classifySearch).Policy("index.read") }, ShouldPanic)
+			Tool("b", noop).Policy("index.read").PolicyFunc([]string{"index.read"}, classifySearch)
+			shouldFailDescribe(`tool "b" already declares its policy`)
+			resetRegistries()
+			Tool("c", noop).PolicyFunc([]string{"index.read"}, classifySearch).Policy("index.read")
+			shouldFailDescribe(`tool "c" already classifies`)
 		})
 		Convey("combined with Resource, which PolicyFunc already answers", func() {
-			So(func() {
-				Tool("d", noop).PolicyFunc([]string{"index.read"}, classifySearch).
-					Resource(func(a searchArgs) string { return a.Index })
-			}, ShouldPanic)
+			Tool("d", noop).PolicyFunc([]string{"index.read"}, classifySearch).
+				Resource(func(a searchArgs) string { return a.Index })
+			shouldFailDescribe(`tool "d" already classifies`)
 		})
 	})
 }
@@ -386,7 +418,7 @@ func TestPolicyResourcesClassifiesACallTouchingSeveralResources(t *testing.T) {
 		})
 
 		Convey("describe declares the action set", func() {
-			tool := decodeDescribe(t)["tools"].([]any)[0].(map[string]any)
+			tool := decodeContributes(t)["tools"].([]any)[0].(map[string]any)
 			So(tool["policyActions"], ShouldResemble, []any{"index.read", "index.write"})
 		})
 
@@ -419,21 +451,26 @@ func TestPolicyResourcesClassifiesACallTouchingSeveralResources(t *testing.T) {
 		noop := func(_ *ToolContext, _ bulkArgs) (any, error) { return nil, nil }
 		classifyOne := func(a bulkArgs) (string, string) { return "index.read", "" }
 
-		So(func() { Tool("a", noop).PolicyResources(nil, classifyBulk) }, ShouldPanic)
-		So(func() { Tool("b", noop).Policy("index.read").PolicyResources([]string{"index.read"}, classifyBulk) }, ShouldPanic)
-		So(func() { Tool("c", noop).PolicyResources([]string{"index.read"}, classifyBulk).Policy("index.read") }, ShouldPanic)
-		So(func() {
-			Tool("d", noop).PolicyResources([]string{"index.read"}, classifyBulk).
-				Resource(func(bulkArgs) string { return "" })
-		}, ShouldPanic)
-		So(func() {
-			Tool("e", noop).PolicyFunc([]string{"index.read"}, classifyOne).
-				PolicyResources([]string{"index.read"}, classifyBulk)
-		}, ShouldPanic)
-		So(func() {
-			Tool("f", noop).PolicyResources([]string{"index.read"}, classifyBulk).
-				PolicyFunc([]string{"index.read"}, classifyOne)
-		}, ShouldPanic)
+		Tool("a", noop).PolicyResources(nil, classifyBulk)
+		shouldFailDescribe(`tool "a"`, "PolicyResources needs the set of actions")
+		resetRegistries()
+		Tool("b", noop).Policy("index.read").PolicyResources([]string{"index.read"}, classifyBulk)
+		shouldFailDescribe(`tool "b"`)
+		resetRegistries()
+		Tool("c", noop).PolicyResources([]string{"index.read"}, classifyBulk).Policy("index.read")
+		shouldFailDescribe(`tool "c"`)
+		resetRegistries()
+		Tool("d", noop).PolicyResources([]string{"index.read"}, classifyBulk).
+			Resource(func(bulkArgs) string { return "" })
+		shouldFailDescribe(`tool "d"`)
+		resetRegistries()
+		Tool("e", noop).PolicyFunc([]string{"index.read"}, classifyOne).
+			PolicyResources([]string{"index.read"}, classifyBulk)
+		shouldFailDescribe(`tool "e"`)
+		resetRegistries()
+		Tool("f", noop).PolicyResources([]string{"index.read"}, classifyBulk).
+			PolicyFunc([]string{"index.read"}, classifyOne)
+		shouldFailDescribe(`tool "f"`)
 	})
 }
 
@@ -539,7 +576,8 @@ func TestRejectArgsRefusesTheCallWithTheToolsReason(t *testing.T) {
 		resetRegistries()
 		reg := Tool("request", func(_ *ToolContext, _ pathArgs) (any, error) { return nil, nil }).
 			Policy("index.read").RejectArgs(rejectHostPath)
-		So(func() { reg.RejectArgs(rejectHostPath) }, ShouldPanic)
+		reg.RejectArgs(rejectHostPath)
+		shouldFailDescribe(`tool "request" already declares RejectArgs`)
 	})
 }
 
@@ -551,7 +589,7 @@ func TestDescribeReportsToolTimeout(t *testing.T) {
 		Tool("plain", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("read")
 
 		byName := map[string]map[string]any{}
-		for _, raw := range decodeDescribe(t)["tools"].([]any) {
+		for _, raw := range decodeContributes(t)["tools"].([]any) {
 			tool := raw.(map[string]any)
 			byName[tool["name"].(string)] = tool
 		}
@@ -559,15 +597,23 @@ func TestDescribeReportsToolTimeout(t *testing.T) {
 		So(byName["plain"], ShouldNotContainKey, "timeoutMs")
 
 		Convey("a timeout outside (0, 10m] fails at registration", func() {
-			reg := Tool("bad", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("read")
-			So(func() { reg.Timeout(10*time.Minute + time.Millisecond) }, ShouldPanic)
-			So(func() { reg.Timeout(0) }, ShouldPanic)
-			So(func() { reg.Timeout(10 * time.Minute) }, ShouldNotPanic)
+			newBad := func() *ToolReg[struct{}] {
+				return Tool("bad", func(_ *ToolContext, _ struct{}) (any, error) { return nil, nil }).Policy("read")
+			}
+			resetRegistries()
+			newBad().Timeout(10*time.Minute + time.Millisecond)
+			shouldFailDescribe(`tool "bad"`, "outside [1ms, 10m0s]")
+			resetRegistries()
+			newBad().Timeout(0)
+			shouldFailDescribe(`tool "bad"`, "outside [1ms, 10m0s]")
+			resetRegistries()
+			newBad().Timeout(10 * time.Minute)
+			So(registrationError(), ShouldBeNil)
 		})
 	})
 }
 
-func TestDescribeReportsFileParams(t *testing.T) {
+func TestDescribeReportsLargeParams(t *testing.T) {
 	type bulkArgs struct {
 		Body     string `json:"body"`
 		Index    string `json:"index"`
@@ -575,57 +621,172 @@ func TestDescribeReportsFileParams(t *testing.T) {
 		IndexArg string `json:"index-file"`
 	}
 	noop := func(_ *ToolContext, _ bulkArgs) (any, error) { return nil, nil }
-	Convey("a string parameter marked file-readable is reported by describe", t, func() {
+	Convey("a string parameter marked large is reported by describe", t, func() {
 		resetRegistries()
 		AssetType[demoConfig]("demo")
-		Tool("bulk", noop).Policy("write").FileParam("body")
+		Tool("bulk", noop).Policy("write").Large("body")
 		Tool("plain", noop).Policy("read")
 
 		byName := map[string]map[string]any{}
-		for _, raw := range decodeDescribe(t)["tools"].([]any) {
+		for _, raw := range decodeContributes(t)["tools"].([]any) {
 			tool := raw.(map[string]any)
 			byName[tool["name"].(string)] = tool
 		}
-		So(byName["bulk"]["fileParams"], ShouldResemble, []any{"body"})
-		So(byName["plain"], ShouldNotContainKey, "fileParams")
+		So(byName["bulk"]["large"], ShouldResemble, []any{"body"})
+		So(byName["plain"], ShouldNotContainKey, "large")
 
 		Convey("a non-string, unknown or repeated parameter fails at registration", func() {
-			reg := Tool("bad", noop).Policy("read")
-			So(func() { reg.FileParam("size") }, ShouldPanic)
-			So(func() { reg.FileParam("missing") }, ShouldPanic)
-			So(func() { reg.FileParam("body") }, ShouldNotPanic)
-			So(func() { reg.FileParam("body") }, ShouldPanic)
-			So(func() { reg.FileParam("index") }, ShouldPanic) // its -file spelling is the index-file parameter
+			resetRegistries()
+			Tool("bad", noop).Policy("read").Large("size")
+			shouldFailDescribe(`tool "bad" Large("size")`, "only a string parameter")
+			resetRegistries()
+			Tool("bad", noop).Policy("read").Large("missing")
+			shouldFailDescribe(`tool "bad" Large("missing")`, "no such parameter")
+			resetRegistries()
+			Tool("bad", noop).Policy("read").Large("body").Large("body")
+			shouldFailDescribe(`tool "bad" Large("body") is already declared`)
+			resetRegistries()
+			Tool("bad", noop).Policy("read").Large("body")
+			So(registrationError(), ShouldBeNil)
+			resetRegistries()
+			Tool("bad", noop).Policy("read").Large("index") // its -file spelling is the index-file parameter
+			shouldFailDescribe(`tool "bad" Large("index")`, "index-file")
 		})
+	})
+}
+
+func TestToolDeclaresPolicyOrPageOnly(t *testing.T) {
+	type args struct {
+		Q string `json:"q"`
+	}
+	noop := func(_ *ToolContext, _ args) (any, error) { return nil, nil }
+	describeErr := func() error {
+		_, err := dispatchDescribe()
+		return err
+	}
+	Convey("every tool is exactly a policy tool or a page-only tool", t, func() {
+		resetRegistries()
+		AssetType[demoConfig]("demo")
+
+		Convey("a page-only tool is reported with pageOnly and no policy action", func() {
+			Tool("ui", noop).PageOnly()
+			Tool("run", noop).Policy("read")
+			So(describeErr(), ShouldBeNil)
+			byName := map[string]map[string]any{}
+			for _, raw := range decodeContributes(t)["tools"].([]any) {
+				tool := raw.(map[string]any)
+				byName[tool["name"].(string)] = tool
+			}
+			So(byName["ui"]["pageOnly"], ShouldEqual, true)
+			So(byName["ui"], ShouldNotContainKey, "policyAction")
+			So(byName["run"], ShouldNotContainKey, "pageOnly")
+		})
+		Convey("a page-only tool may declare no timeout and reports it", func() {
+			Tool("ui", noop).PageOnly().NoTimeout()
+			So(describeErr(), ShouldBeNil)
+			tool := decodeContributes(t)["tools"].([]any)[0].(map[string]any)
+			So(tool["noTimeout"], ShouldEqual, true)
+		})
+		Convey("a tool declaring neither fails describe, naming the tool", func() {
+			Tool("bare", noop)
+			err := describeErr()
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `"bare"`)
+		})
+		Convey("a tool declaring both fails at registration, in either order", func() {
+			Tool("a", noop).Policy("read").PageOnly()
+			shouldFailDescribe(`tool "a"`, "PageOnly is exclusive")
+			resetRegistries()
+			Tool("b", noop).PageOnly().Policy("read")
+			shouldFailDescribe(`tool "b"`, "Policy is exclusive")
+			resetRegistries()
+			Tool("c", noop).PageOnly().PolicyFunc([]string{"read"}, func(args) (string, string) { return "read", "" })
+			shouldFailDescribe(`tool "c"`, "PolicyFunc is exclusive")
+			resetRegistries()
+			Tool("d", noop).PolicyResources([]string{"read"}, func(args) (string, []string) { return "read", nil }).PageOnly()
+			shouldFailDescribe(`tool "d"`, "PageOnly is exclusive")
+		})
+		Convey("a policy tool cannot declare no timeout", func() {
+			Tool("p", noop).Policy("read").NoTimeout()
+			err := describeErr()
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, `"p"`)
+		})
+		Convey("Timeout and NoTimeout exclude each other", func() {
+			Tool("e", noop).PageOnly().Timeout(time.Second).NoTimeout()
+			shouldFailDescribe(`tool "e" declares both Timeout and NoTimeout`)
+			resetRegistries()
+			Tool("f", noop).PageOnly().NoTimeout().Timeout(time.Second)
+			shouldFailDescribe(`tool "f" declares both Timeout and NoTimeout`)
+		})
+	})
+}
+
+type reviewerSettings struct {
+	BaseURL string `json:"baseURL" title:"settings.baseURL" format:"endpoint"`
+	APIKey  string `json:"apiKey" title:"settings.apiKey" format:"password"`
+	Mode    string `json:"mode,omitempty" enum:"fast,safe"`
+}
+
+func TestDescribeReportsSettingsDeclaration(t *testing.T) {
+	Convey("the extension's settings are reported only when declared", t, func() {
+		resetRegistries()
+		Extension(Meta{PolicyType: "demo"})
+		So(decodeContributes(t), ShouldNotContainKey, "settings")
+
+		Settings[reviewerSettings]().Auth(Auth{Groups: []AuthGroup{{
+			Bindings: []AuthBinding{{In: "header", Name: "Authorization", Value: "Bearer {{apiKey}}"}},
+		}}})
+		settings, ok := decodeContributes(t)["settings"].(map[string]any)
+		So(ok, ShouldBeTrue)
+		schema := settings["configSchema"].(map[string]any)
+		props := schema["properties"].(map[string]any)
+		So(props["baseURL"], ShouldResemble, map[string]any{"type": "string", "format": "endpoint", "title": "settings.baseURL"})
+		So(props["apiKey"].(map[string]any)["format"], ShouldEqual, "password")
+		So(schema["required"], ShouldResemble, []any{"baseURL", "apiKey"})
+		So(schema["propertyOrder"], ShouldResemble, []any{"baseURL", "apiKey", "mode"})
+		So(settings["auth"], ShouldResemble, map[string]any{"groups": []any{map[string]any{"bindings": []any{
+			map[string]any{"in": "header", "name": "Authorization", "value": "Bearer {{apiKey}}"},
+		}}}})
+	})
+
+	Convey("an extension has one settings form", t, func() {
+		resetRegistries()
+		Settings[reviewerSettings]()
+		Settings[reviewerSettings]()
+		shouldFailDescribe("settings are already declared")
 	})
 }
 
 func TestConfigSchemaEnumTagsAreChecked(t *testing.T) {
 	Convey("enumLabels and default that the host could not render fail at registration", t, func() {
-		refl := func(v any) func() { return func() { reflectSchema(reflect.TypeOf(v), "cfg", schemaModeConfig) } }
+		refl := func(v any) error {
+			_, err := reflectSchema(reflect.TypeOf(v), "cfg", schemaModeConfig)
+			return err
+		}
 		Convey("labels without an enum", func() {
 			type c struct {
 				A string `json:"a" enumLabels:"x"`
 			}
-			So(refl(c{}), ShouldPanicWith, "opskat: cfg: field A declares enumLabels without enum")
+			So(refl(c{}), ShouldBeError, "opskat: cfg: field A declares enumLabels without enum")
 		})
 		Convey("labels of a different length than the enum", func() {
 			type c struct {
 				A string `json:"a" enum:"x,y" enumLabels:"x"`
 			}
-			So(refl(c{}), ShouldPanic)
+			So(refl(c{}), ShouldNotBeNil)
 		})
 		Convey("a default that is not one of the options", func() {
 			type c struct {
 				A string `json:"a" enum:"x,y" default:"z"`
 			}
-			So(refl(c{}), ShouldPanic)
+			So(refl(c{}), ShouldNotBeNil)
 		})
 		Convey("a default on a non-string field", func() {
 			type c struct {
 				A int `json:"a" default:"1"`
 			}
-			So(refl(c{}), ShouldPanic)
+			So(refl(c{}), ShouldNotBeNil)
 		})
 	})
 }

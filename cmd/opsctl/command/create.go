@@ -339,7 +339,7 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 		writeCreateAssetError(ctx, streams.stderr, err)
 		return 1
 	}
-	if writeOnlyFieldPresent(contract, config) {
+	if writeOnlyFieldPresent(contract, config) || assettype.DriverOptionsHaveSecret(config, asset) {
 		switch configSource {
 		case "--config":
 			if err := warnArgvPlaintext(streams.stderr); err != nil {
@@ -428,7 +428,8 @@ func updateAsset(ctx context.Context, args []string, session string, streams com
 }
 
 // writeOnlyFieldPresent 判断 config 是否带了该类型的 write-only 字段（见 writeOnlyFields），
-// 或 proxy_chain 层里的 password / token（链本身以摘要进审批，密钥藏在层里）。
+// 或 proxy_chain 层里的 password / token（链本身以摘要进审批，密钥藏在层里）。driver_options
+// 里口令类的取值要按有效驱动认，由调用方另用 assettype.DriverOptionsHaveSecret 判断。
 func writeOnlyFieldPresent(contract assettype.AutomationContract, config map[string]any) bool {
 	if assettype.ProxyChainHasSecret(config) {
 		return true

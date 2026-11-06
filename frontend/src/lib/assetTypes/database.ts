@@ -1,7 +1,13 @@
+import { lazy } from "react";
 import { Database } from "lucide-react";
 import { registerAssetType } from "./_register";
-import { DatabaseDetailInfoCard } from "@/components/asset/detail/DatabaseDetailInfoCard";
-import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
+
+const DatabaseDetailInfoCard = lazy(() =>
+  import("@/components/asset/detail/DatabaseDetailInfoCard").then((m) => ({ default: m.DatabaseDetailInfoCard }))
+);
+const DatabaseConfigSection = lazy(() =>
+  import("@/components/asset/DatabaseConfigSection").then((m) => ({ default: m.DatabaseConfigSection }))
+);
 
 registerAssetType({
   type: "database",
