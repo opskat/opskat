@@ -1,6 +1,6 @@
 import { createServer, type Server, type Socket } from "node:net";
 import { test, expect, type Page } from "@playwright/test";
-import { openAssetForm } from "../fixtures/assets";
+import { openAssetForm, assetTreeRow } from "../fixtures/assets";
 import { findAssetByName, findAssetPersistenceByName } from "../fixtures/db";
 
 // A database driver provided by an extension is not a special species in the
@@ -138,7 +138,7 @@ test("an extension's database driver: create an asset, browse and query, disable
 
   // Browse: the tree lists the driver's database and tables, and a table opens with
   // its rows.
-  await page.getByTestId("asset-tree").getByText(name, { exact: true }).dblclick();
+  await (await assetTreeRow(page, name)).dblclick();
   await expect(page.getByTestId("database-query-panel")).toBeVisible({ timeout: 30_000 });
   const usersNode = page.locator('[data-table-node="app.users"]');
   if (!(await usersNode.isVisible())) await page.getByText("app", { exact: true }).click();

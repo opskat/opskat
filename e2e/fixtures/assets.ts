@@ -1,6 +1,17 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
 import { findAssetByName } from "./db";
+
+/**
+ * The asset tree is virtualized: only rows inside its viewport are mounted, so a row
+ * scrolled out of view (e.g. the newest asset after earlier specs filled the shared
+ * data dir) is not in the DOM at all. Filter the tree to `name` first, then address
+ * the row — this also keeps "the row is gone" assertions meaningful.
+ */
+export async function assetTreeRow(page: Page, name: string): Promise<Locator> {
+  await page.getByTestId("asset-tree-search").fill(name);
+  return page.getByTestId("asset-tree").getByText(name, { exact: true });
+}
 
 export async function openAssetForm(page: Page): Promise<void> {
   await page.getByTestId("add-asset-button").click();
@@ -21,7 +32,7 @@ export async function createSSHAssetViaUI(
   }
   await page.getByTestId("asset-form-submit").click();
   await expect(page.getByTestId("asset-form-dialog")).toBeHidden();
-  await expect(page.getByTestId("asset-tree").getByText(options.name, { exact: true })).toBeVisible();
+  await expect(await assetTreeRow(page, options.name)).toBeVisible();
   await expect.poll(() => findAssetByName(options.name)?.type, { timeout: 10_000 }).toBe("ssh");
 }
 
@@ -38,7 +49,7 @@ export async function createSQLiteAssetViaUI(
   await page.getByTestId("database-sqlite-path-input").fill(options.path);
   await page.getByTestId("asset-form-submit").click();
   await expect(page.getByTestId("asset-form-dialog")).toBeHidden();
-  await expect(page.getByTestId("asset-tree").getByText(options.name, { exact: true })).toBeVisible();
+  await expect(await assetTreeRow(page, options.name)).toBeVisible();
   await expect.poll(() => findAssetByName(options.name)?.type, { timeout: 10_000 }).toBe("database");
 }
 
@@ -58,6 +69,6 @@ export async function createRedisAssetViaUI(
   }
   await page.getByTestId("asset-form-submit").click();
   await expect(page.getByTestId("asset-form-dialog")).toBeHidden();
-  await expect(page.getByTestId("asset-tree").getByText(options.name, { exact: true })).toBeVisible();
+  await expect(await assetTreeRow(page, options.name)).toBeVisible();
   await expect.poll(() => findAssetByName(options.name)?.type, { timeout: 10_000 }).toBe("redis");
 }

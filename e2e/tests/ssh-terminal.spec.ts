@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect } from "@playwright/test";
 
-import { createSSHAssetViaUI } from "../fixtures/assets";
+import { createSSHAssetViaUI, assetTreeRow } from "../fixtures/assets";
 
 const SSH_MOCK_PORT = process.env.SSH_MOCK_PORT ?? "34218";
 
@@ -14,7 +14,7 @@ test("open an SSH terminal and observe a command executed by the remote shell", 
   const marker = `terminal-ran-${Date.now()}`;
   await createSSHAssetViaUI(page, { name, host: "127.0.0.1", port: SSH_MOCK_PORT });
 
-  await page.getByTestId("asset-tree").getByText(name, { exact: true }).dblclick();
+  await (await assetTreeRow(page, name)).dblclick();
   const terminal = page.locator('[data-testid^="terminal-"]');
   const trust = page.getByTestId("ssh-host-key-trust");
   await expect.poll(async () => (await trust.isVisible()) || (await terminal.isVisible()), { timeout: 30_000 }).toBe(true);

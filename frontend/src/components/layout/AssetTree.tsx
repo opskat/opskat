@@ -578,6 +578,7 @@ export function AssetTree({
           <div className="relative flex-1">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
             <input
+              data-testid="asset-tree-search"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               placeholder={t("asset.search")}
