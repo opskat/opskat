@@ -246,7 +246,7 @@ func TestRegisterRefusesAssetTypeCollisionLoudly(t *testing.T) {
 func TestConnTestRegistration(t *testing.T) {
 	t.Run("no handler declared: conntest has no tester for the type", func(t *testing.T) {
 		registerFake(t, &fakePlugin{})
-		_, ok := conntest.Lookup("acme-store")
+		_, ok := conntest.LookupDetailed("acme-store")
 		assert.False(t, ok)
 	})
 
@@ -258,15 +258,16 @@ func TestConnTestRegistration(t *testing.T) {
 		require.NoError(t, attachLoaded(l, "help", "desc"))
 		t.Cleanup(func() { detach(m.Name) })
 
-		fn, ok := conntest.Lookup("acme-store")
+		fn, ok := conntest.LookupDetailed("acme-store")
 		require.True(t, ok)
 
-		require.NoError(t, fn(context.Background(), `{"endpoint":"http://x"}`, ""))
+		_, err := fn(context.Background(), `{"endpoint":"http://x"}`, "")
+		require.NoError(t, err)
 		assert.Equal(t, "acme-store", plugin.lastTestConnType)
 		assert.JSONEq(t, `{"endpoint":"http://x"}`, string(plugin.lastTestConnConfig.Config))
 
 		detach(m.Name)
-		_, ok = conntest.Lookup("acme-store")
+		_, ok = conntest.LookupDetailed("acme-store")
 		assert.False(t, ok, "unregister must drop the conntest tester too")
 	})
 
@@ -283,7 +284,7 @@ func TestConnTestRegistration(t *testing.T) {
 
 		_, ok := assettype.Get("acme-store")
 		assert.False(t, ok, "a failed registration must not leave the asset type reachable")
-		_, ok = conntest.Lookup("acme-store")
+		_, ok = conntest.LookupDetailed("acme-store")
 		assert.False(t, ok)
 	})
 }
@@ -676,7 +677,7 @@ func registerWithConnection(t *testing.T, conn *extwire.Connection) {
 func TestDeclaredConnectionItemsBecomeAutomationFields(t *testing.T) {
 	registerWithConnection(t, &extwire.Connection{SSHTunnel: true, ProxyChain: true, TLS: true})
 
-	prepared, err := assettype.PrepareCreate("acme-store", map[string]any{
+	prepared, err := assettype.PrepareCreate(context.Background(), &asset_entity.Asset{Type: "acme-store"}, map[string]any{
 		"endpoint": "https://acme.test", "ssh_asset_id": float64(3), "tls": true, "tls_ca_pem": "CA-PEM",
 	})
 	require.NoError(t, err)
@@ -699,6 +700,26 @@ func TestHelpListsTheConfigFieldsAnAssetAccepts(t *testing.T) {
 		assert.Contains(t, help, field)
 	}
 	assert.NotContains(t, help, "`proxy_chain`", "a connection item the type did not declare is not offered")
+}
+
+// 决定 22：扩展加载（桌面路径）遇到与已有自定义类型标识重名的类型，整个扩展注册失败，
+// 错误指出扩展与冲突的类型，且不留下任何半截登记。
+func TestRegisterRefusesATypeThatShadowsACustomType(t *testing.T) {
+	assettype.SetCustomTypeSlugLookup(func(_ context.Context, slug string) (bool, error) { return slug == "acme-store", nil })
+	t.Cleanup(func() { assettype.SetCustomTypeSlugLookup(nil) })
+
+	m := testManifest()
+	l := loaded{name: m.Name, manifest: m, plugin: &fakePlugin{}}
+	err := attachLoaded(l, "# Acme\nProse about acme.", "acme skill")
+	t.Cleanup(func() { detach(m.Name) })
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `"acme"`)
+	assert.Contains(t, err.Error(), `"acme-store"`)
+	_, ok := assettype.Get("acme-store")
+	assert.False(t, ok)
+	_, ok = permission.ExecutorFor("acme-store")
+	assert.False(t, ok)
 }
 
 // countingDrivers records the lifetimes of the database drivers an attach creates.

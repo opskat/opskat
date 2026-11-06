@@ -20,7 +20,7 @@ func TestAuthTemplateFields(t *testing.T) {
 
 	_, err = authTemplateFields(`{{password`)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unclosed")
+	assert.Contains(t, err.Error(), "unterminated")
 }
 
 // Inject is the scope's credential injection for an asset whose type declares

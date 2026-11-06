@@ -75,8 +75,12 @@ func applyReviews(ctx context.Context, reqs []PermissionRequest, results []aictx
 // 解析不了的按 unparseable 失败。失败时按模式落成结果（辅助审批问人、Autopilot 拒绝），不送审。
 // send 为假时 final 就是这条命令的结果。
 func reviewRequestFor(ctx context.Context, req PermissionRequest, result aictx.CheckResult, mode string) (review ReviewRequest, final aictx.CheckResult, send bool) {
-	assetType, syntax := reviewTypeFor(req.AssetType)
-	review = ReviewRequest{AssetType: assetType, Command: req.Command, Syntax: syntax}
+	assetType, syntax, reviewRaw := reviewTypeFor(req.AssetType)
+	command := req.Command
+	if reviewRaw && req.RawCommand != "" {
+		command = req.RawCommand
+	}
+	review = ReviewRequest{AssetType: assetType, Command: command, Syntax: syntax}
 	if syntax != SyntaxShell {
 		return review, result, true
 	}
@@ -219,11 +223,11 @@ func pipedInputDenyMessage(ctx context.Context) string {
 // reviewTypeFor 返回交给模型审核的资产类型和命令写法。调用方可能传别名（opsctl exec 传的是
 // 审批类型 exec、sql），这里统一换成注册时的规范类型：模型看到的是真实的资产类型，缓存键也
 // 不会因入口不同而分成几份。没有注册的类型（扩展类型）原样使用，按纯文本处理。
-func reviewTypeFor(assetType string) (string, Syntax) {
+func reviewTypeFor(assetType string) (canonical string, syntax Syntax, reviewRaw bool) {
 	if handler, ok := permissionTypeFor(assetType); ok {
-		return handler.canonical, handler.reviewSyntax
+		return handler.canonical, handler.reviewSyntax, handler.reviewRawCommand
 	}
-	return assetType, SyntaxText
+	return assetType, SyntaxText, false
 }
 
 // ReviewSummary 把审核结果写成一句话，给审批提示和拒绝信息用，例如"模型审核未通过（可能中断服务）"。

@@ -163,7 +163,7 @@ func (w *DefaultAuditWriter) WriteToolCall(ctx context.Context, info ToolCallInf
 		AssetName:      assetName,
 		Command:        command,
 		Request:        truncateString(info.ArgsJSON, 4096),
-		Result:         truncateString(info.Result, 32768),
+		Result:         truncateString(projectResult(info), 32768),
 		Error:          errMsg,
 		Success:        success,
 		ConversationID: aictx.GetConversationID(ctx),

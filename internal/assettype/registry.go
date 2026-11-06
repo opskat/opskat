@@ -99,8 +99,8 @@ func Unregister(assetType string) {
 }
 
 func register(h AssetTypeHandler) error {
-	contract := h.AutomationContract()
-	if len(contract.ConfigFields) == 0 {
+	// 字段契约按资产解析的处理器（通用资产）没有静态字段，每次写入由 ContractOf 解析。
+	if _, dynamic := h.(dynamicAutomationContract); !dynamic && len(h.AutomationContract().ConfigFields) == 0 {
 		return fmt.Errorf("asset type %q must declare automation config fields", h.Type())
 	}
 	mu.Lock()

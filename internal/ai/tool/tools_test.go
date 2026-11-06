@@ -39,7 +39,7 @@ func TestTools_RegistryShape(t *testing.T) {
 			"cp",
 			"request_permission", "batch_exec",
 			// unified
-			"exec", "help",
+			"exec", "help", "get_asset_secret",
 		}
 
 		Convey("所有契约里的工具都注册了", func() {
@@ -67,6 +67,7 @@ func TestTools_RegistryShape(t *testing.T) {
 				"exec",
 				"put_asset", "put_group",
 				"delete_asset", "delete_group",
+				"get_asset_secret",
 			}
 			for _, name := range serialNames {
 				st, ok := names[name].(agent.SerialTool)

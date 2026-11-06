@@ -2,13 +2,10 @@ package extreg
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"regexp"
-	"strconv"
-	"strings"
 
+	"github.com/opskat/opskat/internal/pkg/authtmpl"
 	"github.com/opskat/opskat/pkg/extension"
 	"github.com/opskat/opskat/pkg/extwire"
 )
@@ -39,20 +36,24 @@ type AuthGroup struct {
 // the selected group's fields; derived here so the template grammar has one
 // reader. Output only: a declaration carrying "fields" is refused on the way in.
 func (g AuthGroup) MarshalJSON() ([]byte, error) {
+	tmpls, err := g.templates()
+	if err != nil {
+		return nil, err
+	}
 	type plain AuthGroup
 	return json.Marshal(struct {
 		plain
 		Fields []string `json:"fields"`
-	}{plain(g), g.fields()})
+	}{plain(g), tmpls.fields()})
 }
 
 // AuthBinding injects one rendered value template into a request.
 //
 // In is where (extension.AuthIn*): "header" (Name is the header), "query" (Name
 // is the parameter), or "basic" (no Name; Value renders "user:password" and is sent as
-// Authorization: Basic <base64>). Value is text with {{field}} and
-// {{base64(part, ...)}} placeholders, a part being a config field or a
-// double-quoted literal.
+// Authorization: Basic <base64>). Value is a template in the language custom
+// types share (internal/pkg/authtmpl): literal text with {{expression}}
+// placeholders, a bare name in an expression being a config field.
 type AuthBinding struct {
 	In    string `json:"in"`
 	Name  string `json:"name,omitempty"`
@@ -75,16 +76,24 @@ func AuthDefOf(a *extwire.Auth) *AuthDef {
 	return out
 }
 
+// template parses Value. Any name parses as a field reference — the asset-type
+// contribution point holds the references against the configSchema — and
+// request.* is not available to an extension binding.
+func (b AuthBinding) template() (*authtmpl.Template, error) {
+	return authtmpl.Parse(b.Value, authtmpl.ParseOptions{AnyField: true})
+}
+
 // authTemplateFields parses an auth binding's value template and returns the
-// config fields it references. It is the one reader of the template grammar: the
-// asset-type contribution point validates declarations with it before load, and
-// the injection below renders what it accepted.
+// config fields it references. The template language is the one custom asset
+// types use (internal/pkg/authtmpl): the asset-type contribution point validates
+// declarations with it before load, and the injection below renders what it
+// accepted.
 func authTemplateFields(value string) ([]string, error) {
-	tmpl, err := parseAuthTemplate(value)
+	tmpl, err := AuthBinding{Value: value}.template()
 	if err != nil {
 		return nil, err
 	}
-	return tmpl.fields(), nil
+	return tmpl.Fields(), nil
 }
 
 // activeGroup returns the group selected by selectorValue (ignored without a
@@ -101,13 +110,31 @@ func (a *AuthDef) activeGroup(selectorValue string) *AuthGroup {
 	return nil
 }
 
-// fields returns the config fields the group's templates reference.
-func (g *AuthGroup) fields() []string {
+// authTemplates is a group's bindings with their value templates parsed.
+type authTemplates struct {
+	bindings []AuthBinding
+	parsed   []*authtmpl.Template // parsed[i] is bindings[i].Value
+}
+
+// templates parses the group's value templates.
+func (g AuthGroup) templates() (*authTemplates, error) {
+	parsed := make([]*authtmpl.Template, len(g.Bindings))
+	for i, b := range g.Bindings {
+		tmpl, err := b.template()
+		if err != nil {
+			return nil, fmt.Errorf("bindings[%d]: %w", i, err)
+		}
+		parsed[i] = tmpl
+	}
+	return &authTemplates{bindings: g.Bindings, parsed: parsed}, nil
+}
+
+// fields returns the config fields the templates reference, each once.
+func (t *authTemplates) fields() []string {
 	out := []string{}
 	seen := map[string]bool{}
-	for _, b := range g.Bindings {
-		tmpl, _ := parseAuthTemplate(b.Value) // validated at load (authTemplateFields)
-		for _, f := range tmpl.fields() {
+	for _, tmpl := range t.parsed {
+		for _, f := range tmpl.Fields() {
 			if !seen[f] {
 				seen[f] = true
 				out = append(out, f)
@@ -117,15 +144,26 @@ func (g *AuthGroup) fields() []string {
 	return out
 }
 
-// render fills the group's bindings from values, the plaintext of the fields
-// they reference.
-func (g *AuthGroup) render(values map[string]string) []extension.AuthValue {
-	out := make([]extension.AuthValue, 0, len(g.Bindings))
-	for _, b := range g.Bindings {
-		tmpl, _ := parseAuthTemplate(b.Value) // validated at load (authTemplateFields)
-		out = append(out, extension.AuthValue{In: b.In, Name: b.Name, Value: tmpl.render(values)})
+// render fills the bindings from values, the plaintext of the fields they
+// reference; a field absent from values — one the asset's config leaves unset —
+// renders empty. The bindings share one render context, so now.* reads the same
+// instant in each of them.
+func (t *authTemplates) render(values map[string]string) ([]extension.AuthValue, error) {
+	fields := t.fields()
+	referenced := make(map[string]string, len(fields))
+	for _, f := range fields {
+		referenced[f] = values[f]
 	}
-	return out
+	rc := authtmpl.NewRenderContext(referenced)
+	out := make([]extension.AuthValue, 0, len(t.bindings))
+	for i, b := range t.bindings {
+		value, err := t.parsed[i].Render(rc)
+		if err != nil {
+			return nil, fmt.Errorf("bindings[%d]: %w", i, err)
+		}
+		out = append(out, extension.AuthValue{In: b.In, Name: b.Name, Value: value})
+	}
+	return out, nil
 }
 
 // CredentialValues returns the named config fields of an asset as plaintext,
@@ -152,168 +190,14 @@ func (a *AuthDef) Inject(values CredentialValues) extension.RequestAuth {
 		if group == nil {
 			return nil, nil
 		}
-		v, err := values(ctx, group.fields())
+		tmpls, err := group.templates()
 		if err != nil {
 			return nil, err
 		}
-		return group.render(v), nil
-	}
-}
-
-// authTemplate is a parsed binding value: literal text and placeholders.
-type authTemplate []authSegment
-
-// authSegment is one piece of a template: literal text, a field, or a base64
-// of parts (each part a field or a literal).
-type authSegment struct {
-	literal string
-	field   string
-	base64  []authSegment
-}
-
-// parseAuthTemplate parses "text {{field}} {{base64(field, \"lit\")}}".
-func parseAuthTemplate(s string) (authTemplate, error) {
-	var out authTemplate
-	for {
-		start := strings.Index(s, "{{")
-		if start < 0 {
-			if s != "" {
-				out = append(out, authSegment{literal: s})
-			}
-			return out, nil
-		}
-		if start > 0 {
-			out = append(out, authSegment{literal: s[:start]})
-		}
-		end := placeholderEnd(s[start+2:])
-		if end < 0 {
-			return nil, fmt.Errorf("template %q: unclosed {{", s)
-		}
-		expr := strings.TrimSpace(s[start+2 : start+2+end])
-		seg, err := parseAuthExpr(expr)
+		v, err := values(ctx, tmpls.fields())
 		if err != nil {
-			return nil, fmt.Errorf("template placeholder {{%s}}: %w", expr, err)
+			return nil, err
 		}
-		out = append(out, seg)
-		s = s[start+2+end+2:]
+		return tmpls.render(v)
 	}
-}
-
-// placeholderEnd returns the index of the "}}" closing a placeholder body,
-// skipping any inside a quoted literal; -1 when there is none.
-func placeholderEnd(s string) int {
-	inQuote := false
-	for i := 0; i < len(s); i++ {
-		switch {
-		case inQuote && s[i] == '\\':
-			i++
-		case s[i] == '"':
-			inQuote = !inQuote
-		case !inQuote && strings.HasPrefix(s[i:], "}}"):
-			return i
-		}
-	}
-	return -1
-}
-
-var authFieldRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
-
-func parseAuthExpr(expr string) (authSegment, error) {
-	if authFieldRe.MatchString(expr) {
-		return authSegment{field: expr}, nil
-	}
-	const fn = "base64("
-	if !strings.HasPrefix(expr, fn) || !strings.HasSuffix(expr, ")") {
-		return authSegment{}, fmt.Errorf("expected a config field or base64(<parts>)")
-	}
-	parts, err := parseAuthArgs(expr[len(fn) : len(expr)-1])
-	if err != nil {
-		return authSegment{}, fmt.Errorf("base64: %w", err)
-	}
-	return authSegment{base64: parts}, nil
-}
-
-// parseAuthArgs parses a comma-separated list of fields and quoted literals.
-func parseAuthArgs(s string) ([]authSegment, error) {
-	var parts []authSegment
-	s = strings.TrimSpace(s)
-	for s != "" {
-		var part authSegment
-		if s[0] == '"' {
-			quoted, err := strconv.QuotedPrefix(s)
-			if err != nil {
-				return nil, fmt.Errorf("bad string literal in %q", s)
-			}
-			lit, _ := strconv.Unquote(quoted)
-			part = authSegment{literal: lit}
-			s = s[len(quoted):]
-		} else {
-			n := strings.IndexByte(s, ',')
-			if n < 0 {
-				n = len(s)
-			}
-			name := strings.TrimSpace(s[:n])
-			if !authFieldRe.MatchString(name) {
-				return nil, fmt.Errorf("part %q is neither a config field nor a quoted literal", name)
-			}
-			part = authSegment{field: name}
-			s = s[n:]
-		}
-		parts = append(parts, part)
-		s = strings.TrimSpace(s)
-		if s == "" {
-			break
-		}
-		if s[0] != ',' {
-			return nil, fmt.Errorf("expected ',' before %q", s)
-		}
-		s = strings.TrimSpace(s[1:])
-		if s == "" {
-			return nil, fmt.Errorf("trailing ','")
-		}
-	}
-	if len(parts) == 0 {
-		return nil, fmt.Errorf("needs at least one part")
-	}
-	return parts, nil
-}
-
-// fields returns every config field the template references.
-func (t authTemplate) fields() []string {
-	var out []string
-	for _, seg := range t {
-		if seg.field != "" {
-			out = append(out, seg.field)
-		}
-		for _, p := range seg.base64 {
-			if p.field != "" {
-				out = append(out, p.field)
-			}
-		}
-	}
-	return out
-}
-
-// render fills the template from values; a field absent from values renders empty.
-func (t authTemplate) render(values map[string]string) string {
-	var b strings.Builder
-	for _, seg := range t {
-		switch {
-		case seg.base64 != nil:
-			var raw strings.Builder
-			for _, p := range seg.base64 {
-				if p.field != "" {
-					raw.WriteString(values[p.field])
-				} else {
-					raw.WriteString(p.literal)
-				}
-			}
-			b.WriteString(base64.StdEncoding.EncodeToString([]byte(raw.String())))
-		case seg.field != "":
-			b.WriteString(values[seg.field])
-		default:
-			b.WriteString(seg.literal)
-		}
-	}
-	return b.String()
 }

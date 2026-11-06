@@ -16,6 +16,7 @@ import (
 	"github.com/opskat/opskat/internal/repository/command_review_repo"
 	"github.com/opskat/opskat/internal/repository/conversation_repo"
 	"github.com/opskat/opskat/internal/repository/credential_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo"
 	"github.com/opskat/opskat/internal/repository/extension_data_repo"
 	"github.com/opskat/opskat/internal/repository/extension_describe_repo"
 	"github.com/opskat/opskat/internal/repository/extension_settings_repo"
@@ -220,6 +221,7 @@ func registerRepositories() {
 	// (and resolving their asset types from opsctl) off that path.
 	extension.SetDescribeCache(extensionDescribeCache{})
 	snippet_repo.RegisterSnippet(snippet_repo.NewSnippet())
+	custom_type_repo.RegisterCustomType(custom_type_repo.New())
 	command_review_repo.RegisterCommandReview(command_review_repo.NewCommandReview())
 }
 

@@ -1,6 +1,7 @@
 package assettype
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -29,7 +30,7 @@ func registerOptionsDriver(t *testing.T) {
 
 func createWithOptions(t *testing.T, opts map[string]any) (*asset_entity.Asset, error) {
 	t.Helper()
-	prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
+	prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{
 		"driver": "fakedb", "host": "fake.internal", "driver_options": opts,
 	})
 	if err != nil {
@@ -72,14 +73,14 @@ func TestDriverOptionsCreate(t *testing.T) {
 			require.Error(t, err, name)
 			assert.Contains(t, err.Error(), tc.want, name)
 		}
-		_, err := PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
+		_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{
 			"driver": "fakedb", "host": "h", "driver_options": "not-an-object",
 		})
 		require.Error(t, err)
 	})
 
 	t.Run("approval view shows plain options and only marks passwords as set", func(t *testing.T) {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{
 			"driver": "fakedb", "host": "fake.internal", "driver_options": map[string]any{"region": "eu", "retries": 5, "token": "s3cret"},
 		})
 		require.NoError(t, err)
@@ -91,7 +92,7 @@ func TestDriverOptionsCreate(t *testing.T) {
 	})
 
 	t.Run("approval view has no option keys when none are supplied", func(t *testing.T) {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{
 			"driver": "fakedb", "host": "fake.internal", "driver_options": map[string]any{"region": "eu"},
 		})
 		require.NoError(t, err)
@@ -105,7 +106,7 @@ func TestDriverOptionsCreate(t *testing.T) {
 			"driver_options": map[string]any{"retries": 7, "token": "s3cret"},
 		})
 		require.NoError(t, err)
-		prepared, err := PrepareUpdate(asset_entity.AssetTypeDatabase, args)
+		prepared, err := PrepareUpdate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args)
 		require.NoError(t, err)
 		assert.Equal(t, map[string]any{"retries": 7}, prepared.Approval["driver_options"])
 		assert.Equal(t, []string{"token"}, prepared.Approval["driver_options_secrets_set"])
@@ -120,7 +121,7 @@ func TestDriverOptionsCreate(t *testing.T) {
 			"driver_options": map[string]any{"retries": 7, "token": ""},
 		})
 		require.NoError(t, err)
-		prepared, err := PrepareUpdate(asset_entity.AssetTypeDatabase, args)
+		prepared, err := PrepareUpdate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args)
 		require.NoError(t, err)
 		assert.Equal(t, map[string]any{"retries": 7}, prepared.Approval["driver_options"])
 		assert.NotContains(t, prepared.Approval, "driver_options_secrets_set")
@@ -129,7 +130,7 @@ func TestDriverOptionsCreate(t *testing.T) {
 	// With no driver nobody can tell which options are passwords, so the approval
 	// cannot show them; it must not go ahead without them.
 	t.Run("options whose driver is unknown are refused, not left out of the approval", func(t *testing.T) {
-		_, err := PrepareUpdate(asset_entity.AssetTypeDatabase, map[string]any{
+		_, err := PrepareUpdate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{
 			"driver_options": map[string]any{"retries": 7},
 		})
 		require.Error(t, err)
@@ -137,14 +138,14 @@ func TestDriverOptionsCreate(t *testing.T) {
 }
 
 func TestDriverOptionsRejectedForDriversWithoutFields(t *testing.T) {
-	_, err := PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
+	_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{
 		"driver": "mysql", "host": "h", "port": 3306, "username": "u", "driver_options": map[string]any{"x": 1},
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `"x"`)
 
 	// 内置驱动照旧：配置里没有 driver_options 键。
-	prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
+	prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{
 		"driver": "mysql", "host": "h", "port": 3306, "username": "u",
 	})
 	require.NoError(t, err)

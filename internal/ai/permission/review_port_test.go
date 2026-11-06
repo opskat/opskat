@@ -117,7 +117,7 @@ func TestReviewSyntaxDeclaredAtRegistration(t *testing.T) {
 		{extType, SyntaxText},
 		{"review-syntax-unregistered", SyntaxText},
 	} {
-		if _, got := reviewTypeFor(c.assetType); got != c.want {
+		if _, got, _ := reviewTypeFor(c.assetType); got != c.want {
 			t.Errorf("%s: syntax = %q, want %q", c.assetType, got, c.want)
 		}
 	}

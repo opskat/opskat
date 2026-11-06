@@ -14,9 +14,11 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/model/entity/ssh_agent_source_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo"
 	"github.com/opskat/opskat/internal/repository/group_repo"
 	"github.com/opskat/opskat/internal/repository/ssh_agent_source_repo"
 
@@ -41,11 +43,13 @@ func setupBackupTest(t *testing.T) context.Context {
 		&asset_entity.Asset{},
 		&group_entity.Group{},
 		&ssh_agent_source_entity.SSHAgentSource{},
+		&custom_type_entity.CustomType{},
 	))
 	db.SetDefault(gdb)
 	asset_repo.RegisterAsset(asset_repo.NewAsset())
 	group_repo.RegisterGroup(group_repo.NewGroup())
 	ssh_agent_source_repo.RegisterSSHAgentSource(ssh_agent_source_repo.New())
+	custom_type_repo.RegisterCustomType(custom_type_repo.New())
 	return context.Background()
 }
 
