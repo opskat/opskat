@@ -118,14 +118,26 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 		}
 
 		// 4. 自定义类型。以标识（slug）而非自增 ID 跨库引用（Design decision 13），
-		// 不需要像其他实体那样维护 ID 重映射表：replace 模式用备份替换本地全部类型；
-		// merge 模式标识已存在时保留本地版本，备份中的资产按标识绑定到本地版本
-		// （因此出现的缺值按“新增必填字段”的规则展示，见 custom_type_svc.ResolveAsset）。
-		// localTypesBySlug 记下合并模式保留的本地版本：资产的值要按它的字段结构存储。
+		// 不需要像其他实体那样维护 ID 重映射表：replace 模式用备份替换本地类型，但不删
+		// 导入后仍留在本地的资产在用的类型（Design decision 14：不出现没有类型的孤儿资产）——
+		// 备份里有资产时本地资产全被替换，类型随之全部清掉；备份里没有资产时本地资产都留下，
+		// 它们在用的类型保留本地版本。merge 模式标识已存在时同样保留本地版本，备份中的资产
+		// 按标识绑定到本地版本（因此出现的缺值按“新增必填字段”的规则展示，见
+		// custom_type_svc.ResolveAsset）。localTypesBySlug 记下保留的本地版本：资产的值要按
+		// 它的字段结构存储。
 		localTypesBySlug := make(map[string]*custom_type_entity.CustomType)
 		if opts.ImportAssets && len(data.CustomTypes) > 0 {
+			localAssetsSurvive := !isReplace || len(data.Assets) == 0
 			if isReplace {
-				if err := tx.Exec("DELETE FROM custom_types").Error; err != nil {
+				var clear *gorm.DB
+				if localAssetsSurvive {
+					clear = tx.Exec(`DELETE FROM custom_types WHERE slug NOT IN (
+						SELECT json_extract(config, '$.custom_type') FROM assets WHERE type = ? AND json_extract(config, '$.custom_type') IS NOT NULL)`,
+						asset_entity.AssetTypeGeneric)
+				} else {
+					clear = tx.Exec("DELETE FROM custom_types")
+				}
+				if err := clear.Error; err != nil {
 					return fmt.Errorf("清除自定义类型失败: %w", err)
 				}
 			}
@@ -136,13 +148,13 @@ func Import(ctx context.Context, data *BackupData, opts *ImportOptions, crypto C
 					return fmt.Errorf("%s: %w", policy.PolicyFmt(ctx,
 						"custom type %s in the backup is invalid", "备份中的自定义类型 %s 无效", ct.Slug), err)
 				}
-				if !isReplace {
+				if localAssetsSurvive {
 					var existing custom_type_entity.CustomType
 					err := tx.Where("slug = ?", ct.Slug).First(&existing).Error
 					switch {
 					case err == nil:
 						localTypesBySlug[ct.Slug] = &existing
-						continue // 合并模式：标识已存在，保留本地版本
+						continue // 标识已存在（合并模式，或替换模式下本地资产在用）：保留本地版本
 					case !errors.Is(err, gorm.ErrRecordNotFound):
 						return fmt.Errorf("检查自定义类型 %s 是否存在失败: %w", ct.Slug, err)
 					}

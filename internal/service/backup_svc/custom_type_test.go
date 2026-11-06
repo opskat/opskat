@@ -156,6 +156,40 @@ func TestImport_CustomTypes_Replace(t *testing.T) {
 	assert.Equal(t, "Grafana From Backup", types[0].Name)
 }
 
+// 替换模式只在资产也被替换时才清空全部类型。备份里没有资产（例如只导出了类型的那台机器的
+// 全量备份）时本地资产都会留下，它们在用的类型不能删（Design decision 14：不出现没有类型的
+// 孤儿资产），同标识的备份版本也不覆盖它——这些资产的值按本地版本的字段结构存储。
+func TestImport_CustomTypes_ReplaceKeepsTypesStillUsedBySurvivingAssets(t *testing.T) {
+	ctx := setupBackupTest(t)
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("in-use")))
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("local-only")))
+	require.NoError(t, custom_type_repo.CustomType().Create(ctx, grafanaCustomType("unused")))
+	for name, slug := range map[string]string{"grafana-prod": "in-use", "grafana-lab": "local-only"} {
+		require.NoError(t, asset_repo.Asset().Create(ctx, createGenericAsset(t, name, slug,
+			map[string]asset_entity.GenericValue{"host": {Value: "g.internal"}})))
+	}
+
+	backupInUse := grafanaCustomType("in-use")
+	backupInUse.Name = "Grafana From Backup"
+	data := &BackupData{CustomTypes: []*custom_type_entity.CustomType{backupInUse, grafanaCustomType("from-backup")}}
+
+	_, err := Import(ctx, data, &ImportOptions{ImportAssets: true, Mode: "replace"}, nil)
+	require.NoError(t, err)
+
+	types, err := custom_type_repo.CustomType().List(ctx)
+	require.NoError(t, err)
+	names := map[string]string{}
+	for _, ct := range types {
+		names[ct.Slug] = ct.Name
+	}
+	assert.Equal(t, map[string]string{"in-use": "Grafana", "local-only": "Grafana", "from-backup": "Grafana"}, names,
+		"types surviving assets use stay in their local version; unused local types are replaced")
+	for _, name := range []string{"grafana-prod", "grafana-lab"} {
+		_, err = custom_type_svc.CustomType().ResolveAsset(ctx, findAssetByName(t, ctx, name))
+		assert.NoError(t, err, "%s still resolves its type", name)
+	}
+}
+
 func TestImport_CustomTypes_Merge_KeepsLocalOnSlugConflict(t *testing.T) {
 	ctx := setupBackupTest(t)
 	local := grafanaCustomType("grafana")
