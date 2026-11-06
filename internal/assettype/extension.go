@@ -97,7 +97,7 @@ func RegisterExtensionType(spec ExtensionTypeSpec) error {
 			return fmt.Errorf("check extension asset type %q against custom types: %w", spec.Type, err)
 		}
 		if taken {
-			return fmt.Errorf("extension %q asset type %q has the same name as the existing custom type %q: rename or remove the custom type first",
+			return fmt.Errorf("extension %q asset type %q has the same name as the existing custom type %q: delete the custom type first (a custom type's identifier cannot be changed)",
 				spec.ExtensionName, spec.Type, spec.Type)
 		}
 	}

@@ -407,7 +407,10 @@ concatenation of those, or a function call: `base64(x, …)`
 a signature and the timestamp it covers agree across the group's bindings, e.g.
 `{{hex(hmac_sha256(secret, now.unix_ms + "\n" + accessKey))}}`. A field the config
 leaves unset renders empty. A `Selector` value no group names injects nothing (e.g.
-`authType: "none"`).
+`authType: "none"`). Only `{{field}}` and `{{base64(part, …)}}` (each part a field or a
+double-quoted literal) work on every release; anything else above needs OpsKat 1.16.0 or
+later — set `"minAppVersion": "1.16.0"` in `manifest.json` when you use it, since older
+releases reject the template.
 The host refuses the extension at load when a template references a field the config
 does not declare, the selector is a `format:"password"` field, or a group cannot be
 selected unambiguously, and — like

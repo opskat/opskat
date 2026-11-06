@@ -591,6 +591,11 @@ type AuthGroup = extwire.AuthGroup
 //     hmac_sha256 return raw bytes — wrap them in base64 or hex;
 //   - now.unix / now.unix_ms, read once per request: every binding of the group
 //     sees the same instant.
+//
+// Only {{field}} and {{base64(part, ...)}} (each part a field or a double-quoted
+// literal) work on every release; anything else above needs OpsKat 1.16.0 or later —
+// set "minAppVersion": "1.16.0" in manifest.json when you use it, since older
+// releases reject the template.
 type AuthBinding = extwire.AuthBinding
 
 // Auth declares the credentials the host injects into requests to the asset's endpoint.
