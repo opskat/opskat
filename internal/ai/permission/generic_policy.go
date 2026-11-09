@@ -30,7 +30,7 @@ import (
 // Permission 已经查到的资产所属类型，登记的判定不必再查一次。
 var genericModeChecks = map[string]func(ctx context.Context, asset *asset_entity.Asset, ct *custom_type_entity.CustomType, subject string) aictx.CheckResult{
 	custom_type_entity.ExecModeHTTP: func(ctx context.Context, asset *asset_entity.Asset, _ *custom_type_entity.CustomType, subject string) aictx.CheckResult {
-		return checkPlainGlobPolicy(ctx, asset, subject)
+		return checkPlainGlobPolicy(ctx, asset, subject, MatchPlainGlob)
 	},
 }
 
@@ -65,7 +65,7 @@ func checkGenericPermission(ctx context.Context, assetID int64, subject string) 
 			// 取值把明文交给调用方（来自 AI 时进入对话上下文），没有规则放行时只能由人确认
 			// （Design decision 9）：模型审核判断的是操作会不会破坏什么，读一个值在它看来
 			// 无害，不能据审核结果放行。
-			result := checkPlainGlobPolicy(ctx, asset, subject)
+			result := checkPlainGlobPolicy(ctx, asset, subject, matchSecretAllow)
 			if result.Decision == aictx.NeedConfirm {
 				result.Unreviewable = true
 			}
@@ -79,10 +79,19 @@ func checkGenericPermission(ctx context.Context, assetID int64, subject string) 
 	return check(ctx, asset, ct, subject)
 }
 
+// matchSecretAllow 是取值的允许规则 / grant 匹配器：只有字面以 `secret:` 开头的规则能放行
+// 取值。`allow *` 的本意是"这些操作随便执行"，不是"密钥明文随便读"——分组 / 权限组上为
+// SSH 写的 `allow *` 同样作用到组里的通用资产，不能借它把明文交给调用方。拒绝规则不受此限，
+// 裸 `deny *` 照样拦取值。
+func matchSecretAllow(rule, subject string) bool {
+	return strings.HasPrefix(rule, SecretSubjectPrefix) && MatchPlainGlob(rule, subject)
+}
+
 // checkPlainGlobPolicy 用 MatchPlainGlob 按 deny → allow → grant → confirm 判定一个
 // 匹配对象。规则来自资产与组链的 CommandPolicy 以及它们引用的权限组（collectPolicies，
-// 与 SSH 同源），grant 与策略用同一个匹配器，保存格式就是匹配对象本身。
-func checkPlainGlobPolicy(ctx context.Context, asset *asset_entity.Asset, subject string) aictx.CheckResult {
+// 与 SSH 同源），grant 与策略用同一个匹配器，保存格式就是匹配对象本身。拒绝规则一律用
+// MatchPlainGlob；允许规则与 grant 用 allowMatch（取值传 matchSecretAllow）。
+func checkPlainGlobPolicy(ctx context.Context, asset *asset_entity.Asset, subject string, allowMatch policy.MatchFunc) aictx.CheckResult {
 	var groups []*group_entity.Group
 	if asset.GroupID > 0 {
 		groups = policy.ResolveGroupChain(ctx, asset.GroupID)
@@ -104,12 +113,12 @@ func checkPlainGlobPolicy(ctx context.Context, asset *asset_entity.Asset, subjec
 		}
 	}
 	for _, rule := range allowRules {
-		if MatchPlainGlob(rule, subject) {
+		if allowMatch(rule, subject) {
 			return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow, MatchedPattern: rule}
 		}
 	}
 	approvalType := ApprovalTypeFor(asset_entity.AssetTypeGeneric)
-	if pattern := matchGrantPatternsWith(ctx, asset.ID, groups, []string{subject}, approvalType, MatchPlainGlob); pattern != "" {
+	if pattern := matchGrantPatternsWith(ctx, asset.ID, groups, []string{subject}, approvalType, allowMatch); pattern != "" {
 		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceGrantAllow, MatchedPattern: pattern}
 	}
 	return aictx.CheckResult{Decision: aictx.NeedConfirm, HintRules: allowRules}

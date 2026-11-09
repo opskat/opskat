@@ -998,7 +998,7 @@
       "editType": "Edit type",
       "customTypeLabel": "Custom type",
       "policyTitle": "Access policy",
-      "policyHint": "Copied from the type's default policy on creation. HTTP rules match \"METHOD path\", secret reads match secret:<field>, commands match the arguments passed when the type has a command template, or the whole command when it has none. Anything unmatched asks for confirmation.",
+      "policyHint": "Copied from the type's default policy on creation. HTTP rules match \"METHOD path\", secret reads match secret:<field> and are only allowed by rules that start with secret: (a bare * does not count), commands match the arguments passed when the type has a command template, or the whole command when it has none. Anything unmatched asks for confirmation.",
       "policyPlaceholder": "e.g. GET /api/*, secret:token",
       "notFilled": "Not set",
       "managedCredential": "Managed credential",

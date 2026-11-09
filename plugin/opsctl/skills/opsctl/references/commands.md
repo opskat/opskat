@@ -232,7 +232,8 @@ type's field names if you don't already know them.
   allow rule). If it needs confirmation, the prompt discloses that the plaintext value will
   be output to the caller, and — when the call is going through the AI — that it enters the
   conversation and is sent to the model provider. "Allow always" saves `secret:<field>` as a
-  standing grant.
+  standing grant. Only allow rules and grants that start with `secret:` release a secret read
+  (a bare `*` does not); deny rules apply as written.
 - Prints the raw value to stdout followed by a newline, and exits 0. A denial never writes
   anything to stdout.
 - The audit log for this command records the asset, the field name and the decision — never

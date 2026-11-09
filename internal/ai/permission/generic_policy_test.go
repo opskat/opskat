@@ -13,6 +13,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
+	"github.com/opskat/opskat/internal/model/entity/group_entity"
 	"github.com/opskat/opskat/internal/repository/custom_type_repo"
 	"github.com/opskat/opskat/internal/repository/custom_type_repo/mock_custom_type_repo"
 	"github.com/opskat/opskat/internal/repository/grant_repo"
@@ -193,4 +194,57 @@ func TestAssertAssetType_CustomTypeSlug(t *testing.T) {
 	assert.Equal(t, asset_entity.AssetTypeGeneric, canonical)
 	_, ok = CanonicalExecTypeFor("web-01")
 	assert.False(t, ok, "an asset name is not a type")
+}
+
+// 取值只认显式写了 `secret:` 的允许规则与 grant：`allow *` 的本意是"这些操作随便执行"，
+// 不是"密钥明文随便读"——尤其分组 / 权限组上为 SSH 写的 `allow *`，会作用到组里的通用资产。
+// 拒绝规则照常全部生效，裸 `deny *` 同样拦取值。HTTP 请求的判定不受影响。
+func TestCheckPermission_GenericSecretOnlyAllowedByExplicitSecretRules(t *testing.T) {
+	setup := func(t *testing.T, assetPolicy, groupPolicy asset_entity.CommandPolicy) context.Context {
+		t.Helper()
+		ctx, mockAsset, groups := setupPolicyTest(t)
+		asset := &asset_entity.Asset{ID: 1, Name: "grafana-prod", Type: asset_entity.AssetTypeGeneric, GroupID: 7,
+			CmdPolicy: mustJSON(assetPolicy)}
+		require.NoError(t, asset.SetGenericConfig(&asset_entity.GenericConfig{CustomType: "grafana"}))
+		mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(asset, nil).AnyTimes()
+		groups.groups[7] = &group_entity.Group{ID: 7}
+		require.NoError(t, groups.groups[7].SetCommandPolicy(&groupPolicy))
+		registerGenericTypes(t, &custom_type_entity.CustomType{
+			Slug: "grafana", ExecMode: custom_type_entity.ExecModeHTTP,
+			HTTP:   &custom_type_entity.HTTPConfig{BaseURL: "https://g.internal"},
+			Fields: []custom_type_entity.Field{{Name: "token", Secret: true}},
+		})
+		return ctx
+	}
+	check := func(ctx context.Context, subject string) aictx.Decision {
+		return CheckPermission(ctx, asset_entity.AssetTypeGeneric, 1, subject).Decision
+	}
+
+	t.Run("bare or non-secret allow rules do not release a secret", func(t *testing.T) {
+		ctx := setup(t, asset_entity.CommandPolicy{AllowList: []string{"*", "s*", "*token"}}, asset_entity.CommandPolicy{AllowList: []string{"*"}})
+		assert.Equal(t, aictx.NeedConfirm, check(ctx, "secret:token"))
+		assert.Equal(t, aictx.Allow, check(ctx, "DELETE /api/x"), "the same rules still allow HTTP requests")
+	})
+	t.Run("an explicit secret: rule allows, on the asset or its group", func(t *testing.T) {
+		assert.Equal(t, aictx.Allow, check(setup(t, asset_entity.CommandPolicy{AllowList: []string{"secret:*"}}, asset_entity.CommandPolicy{}), "secret:token"))
+		assert.Equal(t, aictx.Allow, check(setup(t, asset_entity.CommandPolicy{}, asset_entity.CommandPolicy{AllowList: []string{"secret:token"}}), "secret:token"))
+	})
+	t.Run("deny rules apply as written", func(t *testing.T) {
+		assert.Equal(t, aictx.Deny, check(setup(t, asset_entity.CommandPolicy{AllowList: []string{"secret:*"}}, asset_entity.CommandPolicy{DenyList: []string{"*"}}), "secret:token"))
+	})
+	t.Run("grants follow the same rule", func(t *testing.T) {
+		ctx := setup(t, asset_entity.CommandPolicy{}, asset_entity.CommandPolicy{})
+		stub := newStubGrantRepo()
+		origGrant := grant_repo.Grant()
+		grant_repo.RegisterGrant(stub)
+		t.Cleanup(func() { grant_repo.RegisterGrant(origGrant) })
+		stub.sessions["s1"] = &grant_entity.GrantSession{ID: "s1", Status: grant_entity.GrantStatusApproved}
+		stub.items["s1"] = []*grant_entity.GrantItem{{GrantSessionID: "s1", AssetID: 1, ToolName: "generic", Command: "*"}}
+		grantCtx := aictx.WithSessionID(ctx, "s1")
+		assert.Equal(t, aictx.NeedConfirm, check(grantCtx, "secret:token"), "a `*` grant does not release a secret")
+		assert.Equal(t, aictx.Allow, check(grantCtx, "POST /api/x"))
+
+		stub.items["s1"] = append(stub.items["s1"], &grant_entity.GrantItem{GrantSessionID: "s1", AssetID: 1, ToolName: "generic", Command: "secret:token"})
+		assert.Equal(t, aictx.Allow, check(grantCtx, "secret:token"))
+	})
 }

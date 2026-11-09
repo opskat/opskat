@@ -998,7 +998,7 @@
       "editType": "编辑类型",
       "customTypeLabel": "自定义类型",
       "policyTitle": "权限策略",
-      "policyHint": "新建时复制自类型的默认策略；HTTP 按「方法 路径」匹配，取值按 secret:<字段>，命令方式有命令模板时按传入的参数匹配，没有模板时按整条命令匹配。未命中规则的操作需要确认。",
+      "policyHint": "新建时复制自类型的默认策略；HTTP 按「方法 路径」匹配，取值按 secret:<字段>，且只有以 secret: 开头的规则能放行（单独的 * 不算），命令方式有命令模板时按传入的参数匹配，没有模板时按整条命令匹配。未命中规则的操作需要确认。",
       "policyPlaceholder": "例如 GET /api/*、secret:token",
       "notFilled": "未填写",
       "managedCredential": "托管凭据",

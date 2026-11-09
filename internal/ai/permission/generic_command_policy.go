@@ -25,7 +25,7 @@ func init() {
 func checkCommandModePermission(ctx context.Context, asset *asset_entity.Asset, ct *custom_type_entity.CustomType, subject string) aictx.CheckResult {
 	// ct.Command 非空由 custom_type_entity.Validate 在保存时保证，这里信任这条约束。
 	if ct.Command.Template != "" {
-		return checkPlainGlobPolicy(ctx, asset, subject)
+		return checkPlainGlobPolicy(ctx, asset, subject, MatchPlainGlob)
 	}
 	var groups []*group_entity.Group
 	if asset.GroupID > 0 {
