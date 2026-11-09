@@ -1,6 +1,8 @@
 package policy
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	. "github.com/smartystreets/goconvey/convey"
@@ -84,6 +86,58 @@ func TestAssetKindRegistry(t *testing.T) {
 
 		Convey("未注册类型返回 false", func() {
 			_, ok := AssetKindOf("never-registered")
+			So(ok, ShouldBeFalse)
+		})
+	})
+}
+
+// 按资产的默认策略提供者（通用资产复制其自定义类型的默认规则）优先于按类型的静态
+// 提供者；提供者的错误原样返回，不回落到静态默认值——否则一台找不到类型的资产会被
+// 悄悄写上与类型无关的策略。
+func TestDefaultPolicyForAsset(t *testing.T) {
+	ctx := context.Background()
+	Convey("DefaultPolicyForAsset", t, func() {
+		Convey("没有按资产的提供者时用按类型的默认策略", func() {
+			RegisterDefaultPolicy("widget", func() any { return &CommandPolicy{Groups: []string{"static"}} })
+			defer UnregisterDefaultPolicy("widget")
+
+			p, ok, err := DefaultPolicyForAsset(ctx, "widget", `{"kind":"a"}`)
+			So(err, ShouldBeNil)
+			So(ok, ShouldBeTrue)
+			So(p.(*CommandPolicy).Groups, ShouldResemble, []string{"static"})
+		})
+
+		Convey("按资产的提供者拿到资产配置并优先生效", func() {
+			RegisterDefaultPolicy("widget", func() any { return &CommandPolicy{Groups: []string{"static"}} })
+			defer UnregisterDefaultPolicy("widget")
+			var seen string
+			RegisterAssetDefaultPolicy("widget", func(_ context.Context, assetConfig string) (any, error) {
+				seen = assetConfig
+				return &CommandPolicy{AllowList: []string{"GET *"}}, nil
+			})
+			defer UnregisterAssetDefaultPolicy("widget")
+
+			p, ok, err := DefaultPolicyForAsset(ctx, "widget", `{"kind":"a"}`)
+			So(err, ShouldBeNil)
+			So(ok, ShouldBeTrue)
+			So(seen, ShouldEqual, `{"kind":"a"}`)
+			So(p.(*CommandPolicy).AllowList, ShouldResemble, []string{"GET *"})
+		})
+
+		Convey("按资产的提供者出错时返回错误", func() {
+			RegisterAssetDefaultPolicy("widget", func(context.Context, string) (any, error) {
+				return nil, errors.New("type missing")
+			})
+			defer UnregisterAssetDefaultPolicy("widget")
+
+			_, _, err := DefaultPolicyForAsset(ctx, "widget", "")
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "type missing")
+		})
+
+		Convey("两种提供者都没有时返回 false", func() {
+			_, ok, err := DefaultPolicyForAsset(ctx, "nonexistent", "")
+			So(err, ShouldBeNil)
 			So(ok, ShouldBeFalse)
 		})
 	})

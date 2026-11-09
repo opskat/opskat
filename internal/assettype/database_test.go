@@ -132,7 +132,7 @@ func TestDatabaseHandlerServesADriverAddedByRegistrationAlone(t *testing.T) {
 	require.True(t, ok)
 
 	// 创建：没有 username（内置网络驱动的规则会拒绝），端口由假驱动自己补默认值。
-	prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
+	prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{
 		"driver": "fakedb", "host": "fake.internal", "database": "main", "password": "s3cret",
 	})
 	require.NoError(t, err)
@@ -154,11 +154,11 @@ func TestDatabaseHandlerServesADriverAddedByRegistrationAlone(t *testing.T) {
 	assert.Equal(t, "s3cret", decrypted)
 
 	// 必填规则也是假驱动自己的。
-	_, err = PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{"driver": "fakedb"})
+	_, err = PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{"driver": "fakedb"})
 	require.ErrorIs(t, err, dbdrivertest.ErrFakeHostRequired)
 
 	// 更新：只带改动的字段，其余保留。
-	update, err := PrepareUpdate(asset_entity.AssetTypeDatabase, map[string]any{"host": "fake-2.internal", "read_only": true})
+	update, err := PrepareUpdate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{"host": "fake-2.internal", "read_only": true})
 	require.NoError(t, err)
 	require.NoError(t, h.ApplyUpdateArgs(t.Context(), a, update.Config))
 	require.NoError(t, a.Validate())
@@ -183,7 +183,7 @@ func TestDatabaseHandlerRejectsPasswordForADriverWithoutPasswordField(t *testing
 
 	for _, field := range []string{"password", "credential_id"} {
 		args := map[string]any{"driver": "fakedb", "host": "fake.internal", field: "1"}
-		_, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+		_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args)
 		require.Error(t, err, field)
 		assert.Contains(t, err.Error(), field+" is not applicable")
 	}
@@ -196,7 +196,7 @@ func TestDatabaseHandlerRejectsPasswordForADriverWithoutPasswordField(t *testing
 		{map[string]any{"driver": "fakedb", "host": "fake.internal"}, "credential_id is not applicable to FakeDB"},
 		{map[string]any{"driver": "sqlite", "path": "/tmp/x.db"}, "credential_id is not applicable to SQLite"},
 	} {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, tt.args)
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, tt.args)
 		require.NoError(t, err)
 		_, err = prepared.BindCredential(CredentialBinding{ID: 7, Type: credential_entity.TypePassword})
 		require.EqualError(t, err, tt.want)
@@ -209,7 +209,7 @@ func TestDatabaseHandlerReportsUnregisteredDriverAsUnavailable(t *testing.T) {
 	require.True(t, ok)
 	args := map[string]any{"driver": "oracle", "host": "ora.internal", "port": float64(1521), "username": "system"}
 
-	_, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+	_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args)
 	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
 	assert.Contains(t, err.Error(), "oracle")
 
@@ -246,7 +246,7 @@ func TestMissingDriverParameterListsRegisteredDrivers(t *testing.T) {
 	// 后注册的驱动按它自己声明的顺序排进来，而不是按注册先后或名字。
 	dbdrivertest.Register(t, dbdrivertest.NewFake())
 
-	_, prepareErr := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+	_, prepareErr := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args)
 	for name, err := range map[string]error{
 		"PrepareCreate":      prepareErr,
 		"ValidateCreateArgs": h.ValidateCreateArgs(args),
@@ -273,7 +273,7 @@ func TestDatabaseHandlerCertificateFieldsFollowTheDriverDeclaration(t *testing.T
 	certFake(t)
 
 	t.Run("declared: create stores the fields and encrypts the key", func(t *testing.T) {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{
 			"driver": "fakedb", "host": "fake.internal", "password": "pw",
 			"tls": true, "tls_insecure": true, "tls_server_name": "db.example",
 			"tls_ca_pem": "CA", "tls_cert_pem": "CERT", "tls_key_pem": testKeyPEM,
@@ -308,7 +308,7 @@ func TestDatabaseHandlerCertificateFieldsFollowTheDriverDeclaration(t *testing.T
 		require.NoError(t, a.SetDatabaseConfig(&asset_entity.DatabaseConfig{
 			Driver: "fakedb", Host: "fake.internal", Port: 1, TLS: true, TLSCAPEM: "CA", TLSKeyPEM: "ENC",
 		}))
-		update, err := PrepareUpdate(asset_entity.AssetTypeDatabase, map[string]any{"tls_server_name": "n"})
+		update, err := PrepareUpdate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{"tls_server_name": "n"})
 		require.NoError(t, err)
 		_, err = h.(*databaseHandler).AutomationUpdateContext(a, update.Config)
 		require.NoError(t, err)
@@ -324,7 +324,7 @@ func TestDatabaseHandlerCertificateFieldsFollowTheDriverDeclaration(t *testing.T
 	t.Run("not declared: refused naming the keys, built-in drivers included", func(t *testing.T) {
 		for _, driver := range []string{"mysql", "postgresql", "sqlite"} {
 			args := map[string]any{"driver": driver, "host": "h", "username": "u", "path": "/tmp/x.db", "tls_ca_pem": "CA", "tls_server_name": "n"}
-			_, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+			_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args)
 			require.Error(t, err, driver)
 			assert.Contains(t, err.Error(), "tls_ca_pem", driver)
 			assert.Contains(t, err.Error(), "tls_server_name", driver)
@@ -370,7 +370,7 @@ func TestDatabaseHandlerKerberosFieldsFollowTheDriverDeclaration(t *testing.T) {
 	}
 
 	t.Run("declared: create stores the fields, encrypts the password, keeps it out of approval and view", func(t *testing.T) {
-		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, krbArgs())
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, krbArgs())
 		require.NoError(t, err)
 		assert.NotContains(t, prepared.Approval, "krb_password")
 		assert.NotContains(t, fmt.Sprint(prepared.Approval), "kpw-9")
@@ -403,7 +403,7 @@ func TestDatabaseHandlerKerberosFieldsFollowTheDriverDeclaration(t *testing.T) {
 	t.Run("declared: Kerberos create needs no asset password and stores none", func(t *testing.T) {
 		args := krbArgs()
 		delete(args, "password")
-		prepared, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+		prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args)
 		require.NoError(t, err)
 		a := &asset_entity.Asset{Name: "x", Type: asset_entity.AssetTypeDatabase}
 		require.NoError(t, h.ApplyCreateArgs(t.Context(), a, prepared.Config))
@@ -420,7 +420,7 @@ func TestDatabaseHandlerKerberosFieldsFollowTheDriverDeclaration(t *testing.T) {
 			Driver: "fakedb", Host: "fake.internal", Port: 1, AuthMethod: asset_entity.AuthMethodKerberos,
 			KrbPrincipal: "svc@EXAMPLE.COM", KrbPassword: "ENC", KrbKDC: "kdc",
 		}))
-		update, err := PrepareUpdate(asset_entity.AssetTypeDatabase, map[string]any{"krb_kdc": "other-kdc"})
+		update, err := PrepareUpdate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{"krb_kdc": "other-kdc"})
 		require.NoError(t, err)
 		_, err = h.(*databaseHandler).AutomationUpdateContext(a, update.Config)
 		require.NoError(t, err)
@@ -436,7 +436,7 @@ func TestDatabaseHandlerKerberosFieldsFollowTheDriverDeclaration(t *testing.T) {
 	t.Run("declared: unknown auth method is refused naming the key", func(t *testing.T) {
 		args := krbArgs()
 		args["auth_method"] = "ntlm"
-		_, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+		_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "auth_method")
 	})
@@ -444,7 +444,7 @@ func TestDatabaseHandlerKerberosFieldsFollowTheDriverDeclaration(t *testing.T) {
 	t.Run("not declared: refused naming the keys, built-in drivers included", func(t *testing.T) {
 		for _, driver := range []string{"mysql", "postgresql", "sqlite"} {
 			args := map[string]any{"driver": driver, "host": "h", "username": "u", "path": "/tmp/x.db", "auth_method": "kerberos", "krb_kdc": "k"}
-			_, err := PrepareCreate(asset_entity.AssetTypeDatabase, args)
+			_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, args)
 			require.Error(t, err, driver)
 			assert.Contains(t, err.Error(), "auth_method", driver)
 			assert.Contains(t, err.Error(), "krb_kdc", driver)

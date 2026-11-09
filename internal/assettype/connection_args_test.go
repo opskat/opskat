@@ -53,7 +53,7 @@ func decrypted(t *testing.T, ciphertext string) string {
 func TestExtensionTypeAcceptsDeclaredConnectionFields(t *testing.T) {
 	h := registerExtConn(t, ExtensionConnectionSpec{SSHTunnel: true, TLS: true})
 
-	prepared, err := PrepareCreate("acme-store", map[string]any{
+	prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: "acme-store"}, map[string]any{
 		"endpoint": "https://acme.test", "token": "s3cret",
 		"ssh_asset_id": float64(7),
 		"tls":          true, "tls_server_name": "acme.internal",
@@ -91,7 +91,7 @@ func TestExtensionTypeRejectsUndeclaredConnectionFields(t *testing.T) {
 	registerExtConn(t, ExtensionConnectionSpec{SSHTunnel: true})
 
 	for _, field := range []string{"tls", "tls_ca_pem", "proxy_chain"} {
-		_, err := PrepareCreate("acme-store", map[string]any{"endpoint": "https://acme.test", field: "x"})
+		_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: "acme-store"}, map[string]any{"endpoint": "https://acme.test", field: "x"})
 		require.Error(t, err, field)
 		assert.Contains(t, err.Error(), field)
 	}
@@ -113,7 +113,7 @@ func TestExtensionTypeUpdateSwitchesCertificateSourceAndKeepsTheRest(t *testing.
 		"endpoint":"https://acme.test",
 		"__opskat_connection":{"tls":{"enabled":true,"serverName":"acme.internal","caFile":"/etc/ca.pem"}}}`}
 
-	prepared, err := PrepareUpdate("acme-store", map[string]any{"tls_ca_pem": "CA-PEM", "tls_insecure": true})
+	prepared, err := PrepareUpdate(context.Background(), &asset_entity.Asset{Type: "acme-store"}, map[string]any{"tls_ca_pem": "CA-PEM", "tls_insecure": true})
 	require.NoError(t, err)
 	require.NoError(t, h.ApplyUpdateArgs(context.Background(), asset, prepared.Config))
 
@@ -138,7 +138,7 @@ func TestTLSCertificateGivenAsBothPathAndContentIsRejected(t *testing.T) {
 			{"tls_ca_file": "/etc/ca.pem", "tls_ca_pem": "CA-PEM"},
 			{"tls_ca_file": "/etc/ca.pem", "tls_cert_pem": "CERT-PEM"},
 		} {
-			_, err := PrepareUpdate(assetType, mixed)
+			_, err := PrepareUpdate(context.Background(), &asset_entity.Asset{Type: assetType}, mixed)
 			require.Error(t, err, assetType)
 			assert.Contains(t, err.Error(), "tls_ca_file", assetType)
 		}
@@ -183,7 +183,7 @@ var chainSummary = []string{"http_tunnel: https://gw.example.com/t", "ssh: asset
 func TestExtensionTypeStoresAProxyChain(t *testing.T) {
 	h := registerExtConn(t, ExtensionConnectionSpec{SSHTunnel: true, ProxyChain: true})
 
-	prepared, err := PrepareCreate("acme-store", map[string]any{"endpoint": "https://acme.test", "proxy_chain": chainArg})
+	prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: "acme-store"}, map[string]any{"endpoint": "https://acme.test", "proxy_chain": chainArg})
 	require.NoError(t, err)
 	assert.Equal(t, chainSummary, prepared.Approval["proxy_chain"],
 		"the approver sees each hop, never the secrets riding on it")
@@ -196,7 +196,7 @@ func TestExtensionTypeStoresAProxyChain(t *testing.T) {
 func TestProxyChainAndSSHTunnelReplaceEachOther(t *testing.T) {
 	h := registerExtConn(t, ExtensionConnectionSpec{SSHTunnel: true, ProxyChain: true})
 
-	_, err := PrepareCreate("acme-store", map[string]any{
+	_, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: "acme-store"}, map[string]any{
 		"endpoint": "https://acme.test", "ssh_asset_id": float64(7), "proxy_chain": chainArg,
 	})
 	require.Error(t, err, "one request cannot ask for both paths")
@@ -227,7 +227,7 @@ func TestProxyChainArgRejectsMalformedLayers(t *testing.T) {
 		"http tunnel not first":  []any{map[string]any{"type": "ssh", "ssh_asset_id": float64(1)}, map[string]any{"type": "http_tunnel", "url": "https://gw", "token": "t"}},
 		"http tunnel sans token": []any{map[string]any{"type": "http_tunnel", "url": "https://gw"}},
 	} {
-		_, err := PrepareUpdate(asset_entity.AssetTypeDatabase, map[string]any{"proxy_chain": chain})
+		_, err := PrepareUpdate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{"proxy_chain": chain})
 		assert.Error(t, err, name)
 	}
 }
@@ -310,7 +310,7 @@ func TestBuiltinTypesStoreAProxyChain(t *testing.T) {
 			for k, v := range tc.create {
 				args[k] = v
 			}
-			prepared, err := PrepareCreate(assetType, args)
+			prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: assetType}, args)
 			require.NoError(t, err)
 			assert.Equal(t, chainSummary, prepared.Approval["proxy_chain"])
 
@@ -340,7 +340,7 @@ func TestBuiltinSSHTunnelUpdateReplacesTheStoredChain(t *testing.T) {
 			for k, v := range tc.create {
 				args[k] = v
 			}
-			prepared, err := PrepareCreate(assetType, args)
+			prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: assetType}, args)
 			require.NoError(t, err)
 			asset := &asset_entity.Asset{Type: assetType}
 			require.NoError(t, prepared.Handler.ApplyCreateArgs(context.Background(), asset, prepared.Config))
@@ -385,7 +385,7 @@ func TestBuiltinTLSCertificateContent(t *testing.T) {
 			for k, v := range tc.create {
 				args[k] = v
 			}
-			prepared, err := PrepareCreate(assetType, args)
+			prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: assetType}, args)
 			require.NoError(t, err)
 			assert.Equal(t, "CA-PEM", prepared.Approval["tls_ca_pem"])
 			assert.NotContains(t, prepared.Approval, "tls_key_pem")
@@ -399,7 +399,7 @@ func TestBuiltinTLSCertificateContent(t *testing.T) {
 			assert.Equal(t, "CERT-PEM", cert)
 			assert.Equal(t, "KEY-PEM", decrypted(t, key), "the client key is stored encrypted")
 
-			update, err := PrepareUpdate(assetType, map[string]any{"tls_ca_file": "/etc/ca.pem"})
+			update, err := PrepareUpdate(context.Background(), &asset_entity.Asset{Type: assetType}, map[string]any{"tls_ca_file": "/etc/ca.pem"})
 			require.NoError(t, err)
 			require.NoError(t, prepared.Handler.ApplyUpdateArgs(context.Background(), asset, update.Config))
 			_, ca, cert, key, caFile, err := tc.read(asset)
@@ -418,7 +418,7 @@ func TestSSHAndRDPStoreTheirSSHTunnel(t *testing.T) {
 			for k, v := range builtinChainTypes[assetType].create {
 				args[k] = v
 			}
-			prepared, err := PrepareCreate(assetType, args)
+			prepared, err := PrepareCreate(context.Background(), &asset_entity.Asset{Type: assetType}, args)
 			require.NoError(t, err)
 			asset := &asset_entity.Asset{Type: assetType}
 			require.NoError(t, prepared.Handler.ApplyCreateArgs(context.Background(), asset, prepared.Config))

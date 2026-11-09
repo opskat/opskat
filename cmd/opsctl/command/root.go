@@ -11,7 +11,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/helper"
-	_ "github.com/opskat/opskat/internal/assettype"
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/buildinfo"
 	"github.com/opskat/opskat/internal/sshpool"
@@ -91,6 +91,7 @@ func Execute() int {
 	// （并写入缓存）；exec 再按需把目标资产所属的那一个扩展完整激活
 	// （activateExtensionFn），命令结束时释放。必须早于
 	// buildHandlerMap —— 工具描述里的类型清单是那时候取的。
+	assettype.SetCustomTypeSlugLookup(assettype.CustomTypeSlugExists)
 	registerExtensionAssetTypes()
 	defer releaseExtensions(ctx)
 
@@ -135,6 +136,8 @@ func Execute() int {
 		return cmdDelete(ctx, handlers, args, resolvedSession)
 	case "cp":
 		return cmdCp(ctx, handlers, args, resolvedSession)
+	case "secret":
+		return cmdSecret(ctx, handlers, args, resolvedSession)
 	case "ssh":
 		return cmdSSH(ctx, args)
 	case "batch":
@@ -205,6 +208,8 @@ Commands:
   update    Update an existing resource (asset or group)
   delete    Delete an asset or group (always requires human confirmation)
   cp        Copy files between local and remote servers (scp-style)
+  secret    Read a generic asset's field value ('secret get <asset> <field>'); a
+            secret field requires approval and never appears in logs
   batch     Execute multiple commands in parallel across assets
   policy    Manage permanent permission rules (show / allow / deny / rm, group, attach / detach)
   ext       Manage extensions (list, search, install, update, dev)

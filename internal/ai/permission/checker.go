@@ -145,13 +145,6 @@ func joinNote(msg, note string) string {
 	return msg + "\n" + note
 }
 
-// matchGrantPatterns 从 DB 中查找已批准 grant 的 items，用通配匹配命令
-// 返回首个匹配的 pattern，空字符串表示未匹配
-// groups 为资产所属的组链（组 → 父组 → ... → 根）
-func matchGrantPatterns(ctx context.Context, assetID int64, groups []*group_entity.Group, subCmds []string) string {
-	return matchGrantPatternsWith(ctx, assetID, groups, subCmds, "exec", policy.MatchCommandRule)
-}
-
 // grantItemAppliesTo 判断一条 grant item 是否属于当前检查的工具面。
 //
 // 只在 cp 与非 cp 之间划线，不是按 toolName 严格相等：存量行的 tool_name 一律被旧版
@@ -273,11 +266,17 @@ func (c *CommandPolicyChecker) Check(ctx context.Context, assetID int64, command
 // CheckForAsset 按资产类型分发权限检查。
 // detail 可选，透传给审批项供前端展示（cp 用它展示"本地 → 远端"的完整传输方向）。
 func (c *CommandPolicyChecker) CheckForAsset(ctx context.Context, assetID int64, assetType, command string, detail ...string) aictx.CheckResult {
-	result := CheckPermission(ctx, assetType, assetID, command)
+	return c.CheckRequest(ctx, PermissionRequest{AssetType: assetType, AssetID: assetID, Command: command}, detail...)
+}
+
+// CheckRequest 同 CheckForAsset，入参是完整的 PermissionRequest：调用方还有规则匹配之外的
+// 输入（如交给模型审核的原始命令 RawCommand）时用它。
+func (c *CommandPolicyChecker) CheckRequest(ctx context.Context, req PermissionRequest, detail ...string) aictx.CheckResult {
+	result := CheckPermissions(ctx, []PermissionRequest{req})[0]
 	if result.Decision != aictx.NeedConfirm {
 		return result
 	}
-	return c.handleConfirm(ctx, assetID, assetType, command, result.Review, detail...)
+	return c.handleConfirm(ctx, req.AssetID, req.AssetType, req.Command, result.Review, detail...)
 }
 
 // HandleConfirm 处理需要用户确认的情况。

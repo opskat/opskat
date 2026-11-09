@@ -9,6 +9,7 @@ export type SettingsTab =
   | "network"
   | "external-edit"
   | "appearance"
+  | "custom-types"
   | "status"
   | "extensions"
   | "about";

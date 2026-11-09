@@ -70,6 +70,9 @@ type ApprovalRequest struct {
 	// PipedInput 表示命令执行时还会从管道读入内容（opsctl exec 转发 stdin），只在 opsctl
 	// 本地做权限检查时用（见 permission.PermissionRequest.PipedInput），不发给桌面端。
 	PipedInput bool `json:"-"`
+	// RawCommand 是调用方写的原始命令（Command 是规范化后的匹配形状），只在 opsctl 本地做
+	// 权限检查时交给模型审核用（见 permission.PermissionRequest.RawCommand），不发给桌面端。
+	RawCommand string `json:"-"`
 }
 
 // MFACanceledReason 是桌面端在用户取消 / 关闭 MFA 对话框时回给 opsctl 的

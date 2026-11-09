@@ -1,9 +1,15 @@
 package ai
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+
+	"go.uber.org/mock/gomock"
+
+	"github.com/opskat/opskat/internal/repository/custom_type_repo"
+	"github.com/opskat/opskat/internal/repository/custom_type_repo/mock_custom_type_repo"
 )
 
 func TestFinishRunnerRemovesOnlyCompletedEntry(t *testing.T) {
@@ -89,4 +95,22 @@ func TestAllBuiltinAssetTypeSkills(t *testing.T) {
 			t.Fatalf("bogus is not a real asset type; must not be included, got %v", got)
 		}
 	})
+}
+
+// TestDefinedCustomTypeSummaries_ListErrorDegradesToEmpty locks that a listing failure
+// degrades to "no custom types shown" rather than failing the whole prompt build — this
+// is a best-effort discovery aid, not a required part of the system prompt.
+func TestDefinedCustomTypeSummaries_ListErrorDegradesToEmpty(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	repo := mock_custom_type_repo.NewMockCustomTypeRepo(ctrl)
+	repo.EXPECT().List(gomock.Any()).Return(nil, errors.New("db unavailable"))
+	orig := custom_type_repo.CustomType()
+	custom_type_repo.RegisterCustomType(repo)
+	t.Cleanup(func() { custom_type_repo.RegisterCustomType(orig) })
+
+	got := definedCustomTypeSummaries(context.Background())
+	if len(got) != 0 {
+		t.Fatalf("expected no custom types on a list error, got %v", got)
+	}
 }

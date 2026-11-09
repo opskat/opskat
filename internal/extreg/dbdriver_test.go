@@ -683,7 +683,7 @@ func TestExtensionDriverKerberosAssetMayLeaveTheUsernameEmpty(t *testing.T) {
 		KrbPrincipal: "alice@EXAMPLE.COM", KrbKeytabFile: "/etc/alice.keytab", KrbKDC: "kdc.example.com",
 	}
 	require.NoError(t, asset(kerberos).Validate())
-	_, err := assettype.PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{
+	_, err := assettype.PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{
 		"driver": "krbdb", "host": "db.example.com", "auth_method": "kerberos",
 		"krb_principal": "alice@EXAMPLE.COM", "krb_keytab_file": "/etc/alice.keytab", "krb_kdc": "kdc.example.com",
 	})
@@ -691,6 +691,6 @@ func TestExtensionDriverKerberosAssetMayLeaveTheUsernameEmpty(t *testing.T) {
 
 	password := &asset_entity.DatabaseConfig{Driver: "krbdb", Host: "db.example.com", Port: 1521}
 	require.Error(t, asset(password).Validate())
-	_, err = assettype.PrepareCreate(asset_entity.AssetTypeDatabase, map[string]any{"driver": "krbdb", "host": "db.example.com"})
+	_, err = assettype.PrepareCreate(context.Background(), &asset_entity.Asset{Type: asset_entity.AssetTypeDatabase}, map[string]any{"driver": "krbdb", "host": "db.example.com"})
 	require.ErrorContains(t, err, "username")
 }

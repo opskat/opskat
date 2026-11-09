@@ -1038,3 +1038,18 @@ func TestExtensionDriverFields_ManagedFromTheCommandLine(t *testing.T) {
 	assert.Contains(t, stdout, "fx-opts")
 	assert.Contains(t, stdout, "fixturedb")
 }
+
+func TestRegisterExtensionAssetTypesRefusesATypeThatShadowsACustomType(t *testing.T) {
+	dir := withExtensionDir(t)
+	writeExtManifest(t, installDescribeStub(t), dir, "acme", "acme-store")
+	forgetExtension(t, "acme")
+	assettype.SetCustomTypeSlugLookup(func(_ context.Context, slug string) (bool, error) { return slug == "acme-store", nil })
+	t.Cleanup(func() { assettype.SetCustomTypeSlugLookup(nil) })
+
+	stderr := captureStderr(t, registerExtensionAssetTypes)
+
+	assert.Contains(t, stderr, "Warning:")
+	assert.Contains(t, stderr, "acme-store")
+	_, registered := assettype.Get("acme-store")
+	assert.False(t, registered, "the custom type keeps the name for --type and help")
+}

@@ -204,6 +204,21 @@ func (mr *MockAssetRepoMockRecorder) ListAgentAuthBySourceID(ctx, sourceID any) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListAgentAuthBySourceID", reflect.TypeOf((*MockAssetRepo)(nil).ListAgentAuthBySourceID), ctx, sourceID)
 }
 
+// ListByCustomType mocks base method.
+func (m *MockAssetRepo) ListByCustomType(ctx context.Context, slug string) ([]*asset_entity.Asset, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListByCustomType", ctx, slug)
+	ret0, _ := ret[0].([]*asset_entity.Asset)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListByCustomType indicates an expected call of ListByCustomType.
+func (mr *MockAssetRepoMockRecorder) ListByCustomType(ctx, slug any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListByCustomType", reflect.TypeOf((*MockAssetRepo)(nil).ListByCustomType), ctx, slug)
+}
+
 // MoveToGroup mocks base method.
 func (m *MockAssetRepo) MoveToGroup(ctx context.Context, fromGroupID, toGroupID int64) error {
 	m.ctrl.T.Helper()

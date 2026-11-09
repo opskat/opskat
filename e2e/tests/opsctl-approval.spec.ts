@@ -1,26 +1,10 @@
-import { spawn } from "node:child_process";
 import { test, expect } from "@playwright/test";
 
 import { createRedisAssetViaUI } from "../fixtures/assets";
 import { waitForAuditLogs } from "../fixtures/db";
+import { runOpsctl } from "../fixtures/opsctl";
 
 const MOCK_REDIS_PORT = process.env.MOCK_REDIS_PORT ?? "34217";
-
-function runOpsctl(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  const child = spawn("go", ["run", "./cmd/opsctl", ...args], {
-    cwd: "..",
-    env: process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.setEncoding("utf8").on("data", (chunk) => (stdout += chunk));
-  child.stderr.setEncoding("utf8").on("data", (chunk) => (stderr += chunk));
-  return new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code) => resolve({ code, stdout, stderr }));
-  });
-}
 
 test("a non-interactive opsctl command is approved by the desktop and audited", async ({ page }) => {
   test.setTimeout(90_000);

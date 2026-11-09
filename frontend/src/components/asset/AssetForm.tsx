@@ -21,6 +21,7 @@ import { useAssetStore } from "@/stores/assetStore";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { EncryptPassword } from "../../../wailsjs/go/system/System";
 import { CancelTest, TestAssetConnection } from "../../../wailsjs/go/system/System";
+import { useCustomTypeStore } from "@/stores/customTypeStore";
 import { AssetTypePicker } from "@/components/asset/AssetTypePicker";
 import { AssetTypeSectionSuspense } from "@/components/asset/AssetTypeSectionSuspense";
 import { useAssetTypeOptions, getAssetTypeLabel } from "@/lib/assetTypes/options";
@@ -83,14 +84,21 @@ const DEFAULT_ICONS: Record<string, string> = {
   rdp: "monitor-up",
 };
 
+/** 表单给该类型资产预填的图标:类型定义声明了 formIcon 时用它(可为空串),否则取内置默认图标。 */
+function formIconFor(type: string): string {
+  return getAssetType(type)?.formIcon ?? (DEFAULT_ICONS[type] || "server");
+}
+
 export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }: AssetFormProps) {
   const { t } = useTranslation();
   const { createAsset, updateAsset } = useAssetStore();
 
-  const assetTypeOptions = useAssetTypeOptions();
+  const customTypes = useCustomTypeStore((s) => s.types);
+  const assetTypeOptions = useAssetTypeOptions(customTypes);
 
-  // Asset type
+  // Asset type(+ 子类型:通用资产的自定义类型标识)
   const [assetType, setAssetType] = useState<AssetType>("ssh");
+  const [typeVariant, setTypeVariant] = useState<string | undefined>(undefined);
 
   // Basic fields
   const [name, setName] = useState("");
@@ -104,16 +112,18 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   // 注册化类型走通用 ConfigSection 路径:section 自持 state,经 ref 暴露 build*。
   const sectionRef = useRef<AssetFormHandle>(null);
-  // validity 记着是哪个类型的区块报的：区块按需加载，换类型后新区块挂上之前，
-  // 上一个类型的 canSave/canTest 不能沿用。
-  const [sectionValidity, setSectionValidity] = useState<{ type: string; value: SectionValidity }>({
-    type: assetType,
+  // 区块按 类型+子类型 重挂载（通用资产换自定义类型也要换区块）。
+  const sectionKey = `${assetType}:${typeVariant ?? ""}`;
+  // validity 记着是哪个区块报的：区块按需加载，换类型/子类型后新区块挂上之前，
+  // 上一个区块的 canSave/canTest 不能沿用。
+  const [sectionValidity, setSectionValidity] = useState<{ key: string; value: SectionValidity }>({
+    key: sectionKey,
     value: NO_SECTION_VALIDITY,
   });
-  const validity = sectionValidity.type === assetType ? sectionValidity.value : NO_SECTION_VALIDITY;
+  const validity = sectionValidity.key === sectionKey ? sectionValidity.value : NO_SECTION_VALIDITY;
   const reportValidity = useCallback(
-    (value: SectionValidity) => setSectionValidity({ type: assetType, value }),
-    [assetType]
+    (value: SectionValidity) => setSectionValidity({ key: sectionKey, value }),
+    [sectionKey]
   );
   const ctx: AssetFormContext = useMemo(() => ({ isEdit: !!editAsset, encryptPassword: EncryptPassword }), [editAsset]);
 
@@ -153,15 +163,17 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
       if (editAsset) {
         const editType = (editAsset.Type || "ssh") as AssetType;
         setAssetType(editType);
+        setTypeVariant(getAssetType(editType)?.variantOf?.(editAsset));
         setName(editAsset.Name);
         setGroupId(editAsset.GroupID);
-        setIcon(editAsset.Icon || DEFAULT_ICONS[editType] || "server");
+        setIcon(editAsset.Icon || formIconFor(editType));
         setDescription(editAsset.Description);
 
         // config 回填一律由 ConfigSection 经 editAsset prop 完成——扩展类型的 section
         // 也是注册出来的（见 extension/assetTypes.ts），壳不再认识任何具体类型。
       } else {
         setAssetType("ssh");
+        setTypeVariant(undefined);
         setName("");
         setGroupId(defaultGroupId);
         setIcon("server");
@@ -171,10 +183,11 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     }
   }
 
-  const handleTypeChange = (newType: AssetType) => {
-    if (newType === assetType) return;
+  const handleTypeChange = (newType: AssetType, variant?: string, defaultIcon?: string) => {
+    if (newType === assetType && variant === typeVariant) return;
     setAssetType(newType);
-    setIcon(DEFAULT_ICONS[newType] || "server");
+    setTypeVariant(variant);
+    setIcon(defaultIcon ?? formIconFor(newType));
   };
 
   // 静默取消正在进行的测试（用于保存/关闭对话框等退出动作）。无 in-flight 测试时是 no-op。
@@ -223,8 +236,8 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           const tc = await handle.buildTestConfig!(ctx);
           if (cancelled) return {};
           testStarted = true;
-          await TestAssetConnection(testID, tc.assetType, tc.configJSON, tc.password);
-          return {};
+          const detail = await TestAssetConnection(testID, tc.assetType, tc.configJSON, tc.password);
+          return detail ? { successDetail: detail } : {};
         })();
         attempt = {
           result,
@@ -302,10 +315,10 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     await persistAsset(asset);
   };
 
-  const typeLabel = getAssetTypeLabel(assetType, t, assetTypeOptions);
+  const typeLabel = getAssetTypeLabel(assetType, t, assetTypeOptions, typeVariant);
   const sectionDef = getAssetType(assetType);
 
-  const isTestableAssetType = !!sectionDef?.testable;
+  const isTestableAssetType = !!sectionDef?.testable && validity.testable !== false;
 
   const isTestConnectionDisabled = testing || !validity.canTest;
 
@@ -366,7 +379,15 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             {/* Asset Type */}
             {!editAsset && (
               <Field label={t("asset.type")}>
-                <AssetTypePicker value={assetType} onChange={(v) => handleTypeChange(v as AssetType)} />
+                <AssetTypePicker
+                  value={assetType}
+                  variant={typeVariant}
+                  onChange={(v, variant, defaultIcon) => handleTypeChange(v as AssetType, variant, defaultIcon)}
+                  onLeave={() => {
+                    cancelActiveTest();
+                    onOpenChange(false);
+                  }}
+                />
               </Field>
             )}
 
@@ -406,12 +427,13 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             {sectionDef?.ConfigSection && (
               <AssetTypeSectionSuspense>
                 <sectionDef.ConfigSection
-                  key={assetType}
+                  key={sectionKey}
                   ref={sectionRef}
                   editAsset={editAsset ?? undefined}
                   ctx={ctx}
                   onValidityChange={reportValidity}
                   onIconChange={setIcon}
+                  variant={typeVariant}
                 />
               </AssetTypeSectionSuspense>
             )}
