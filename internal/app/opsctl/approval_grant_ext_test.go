@@ -95,7 +95,7 @@ func approvingGrantDialog(o *Opsctl, resp permission.ApprovalResponse) *int {
 			return
 		}
 		*shown++
-		go o.RespondOpsctlApproval(payload["session_id"].(string), resp)
+		go answerOrDeny(o, payload["session_id"].(string), resp)
 	}
 	return shown
 }
@@ -112,7 +112,7 @@ func TestHandleGrantApprovalPersistsExtensionGrantsThatMatch(t *testing.T) {
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}
 	approvingGrantDialog(o, permission.ApprovalResponse{Decision: "allow"})
 
-	resp := o.handleGrantApproval(grantRequest("delete:logs-*\nread"))
+	resp := o.handleGrantApproval(context.Background(), grantRequest("delete:logs-*\nread"))
 
 	require.True(t, resp.Approved)
 	persisted := make([]string, 0, len(repo.items["opsctl-sess"]))
@@ -140,7 +140,7 @@ func TestHandleGrantApprovalRefusesExtensionPatternsThatCouldNeverMatch(t *testi
 			o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}
 			shown := approvingGrantDialog(o, permission.ApprovalResponse{Decision: "allow"})
 
-			resp := o.handleGrantApproval(grantRequest(command))
+			resp := o.handleGrantApproval(context.Background(), grantRequest(command))
 
 			require.False(t, resp.Approved)
 			require.False(t, resp.ApproveGrant)
@@ -159,7 +159,7 @@ func TestHandleGrantApprovalRejectsAnInvalidExtensionEdit(t *testing.T) {
 		Type: grantExtTestType, AssetID: 3, AssetName: "es-logs", Command: "delete *",
 	}}})
 
-	resp := o.handleGrantApproval(grantRequest("delete:logs-*"))
+	resp := o.handleGrantApproval(context.Background(), grantRequest("delete:logs-*"))
 
 	require.False(t, resp.Approved)
 	require.Equal(t, grant_entity.GrantStatusRejected, repo.sessions["opsctl-sess"].Status)

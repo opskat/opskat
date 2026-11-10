@@ -45,8 +45,9 @@ var currentApp = appversion.Current
 // 都能发这条请求。所以这里不看环境变量之类发行包里根本不存在的开关，而是每次都让
 // 用户在桌面端的 opsctl 审批弹窗里确认：来源目录、扩展名/版本、声明的能力、会不会
 // 覆盖已装扩展。为了让"构建后重跑即热重载"的回路可用，同一绝对目录 + 同一扩展名 +
-// 同一组能力的确认只在本进程内存里记住；换目录、换扩展、能力变了都重新询问。
-func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.ApprovalResponse {
+// 同一组能力的确认只在本进程内存里记住；换目录、换扩展、能力变了都重新询问。ctx 是这次
+// 请求：opsctl 退出时确认弹窗随之关闭。
+func (o *Opsctl) handleExtDevInstall(ctx context.Context, req approval.ApprovalRequest) approval.ApprovalResponse {
 	log := logger.Ctx(o.ctx).With(zap.String("source", req.Path))
 	log.Info("extension dev install requested")
 
@@ -117,7 +118,7 @@ func (o *Opsctl) handleExtDevInstall(req approval.ApprovalRequest) approval.Appr
 			log.Info("extension dev install approved", zap.String("decision", "remembered"))
 			return nil
 		}
-		resp := o.extDevApprove(approval.ApprovalRequest{
+		resp := o.extDevApprove(ctx, approval.ApprovalRequest{
 			Type:    extDevApprovalType,
 			Command: sourceDir,
 			Detail:  extDevApprovalDetail(c, o.lang.Lang()),

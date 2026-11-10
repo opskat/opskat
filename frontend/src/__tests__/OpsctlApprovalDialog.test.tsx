@@ -82,7 +82,7 @@ describe("OpsctlApprovalDialog", () => {
     });
 
     // 「记住」是通往 allowAll 的唯一入口，删除审批必须没有它
-    expect(screen.queryByText("opsctlApproval.remember")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("opsctl-approval-remember")).not.toBeInTheDocument();
     // deny/allow 仍然存在
     expect(screen.getByText("opsctlApproval.deny")).toBeInTheDocument();
     expect(screen.getByText("opsctlApproval.allow")).toBeInTheDocument();
@@ -95,7 +95,7 @@ describe("OpsctlApprovalDialog", () => {
 
     fireSingleApproval(handlers, { type: "exec", session_id: "session-1" });
 
-    expect(screen.getByText("opsctlApproval.remember")).toBeInTheDocument();
+    expect(screen.getByTestId("opsctl-approval-remember")).toBeInTheDocument();
   });
 
   it("命令与详情正文可选中复制", () => {
@@ -146,8 +146,8 @@ describe("OpsctlApprovalDialog", () => {
       command: "object.read mybucket/secrets*",
       session_id: "session-1",
     });
-    fireEvent.click(screen.getByText("opsctlApproval.remember"));
-    fireEvent.click(screen.getByText("opsctlApproval.approve"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-remember"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-allow-all"));
 
     const response = vi.mocked(RespondOpsctlApproval).mock.calls[0]?.[1];
     expect(response?.decision).toBe("allowAll");
@@ -163,11 +163,11 @@ describe("OpsctlApprovalDialog", () => {
       command: "object.read mybucket/secrets*",
       session_id: "session-1",
     });
-    fireEvent.click(screen.getByText("opsctlApproval.remember"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-remember"));
     fireEvent.change(screen.getByPlaceholderText("opsctlApproval.patternPlaceholder"), {
       target: { value: "object.read mybucket/safe/*" },
     });
-    fireEvent.click(screen.getByText("opsctlApproval.approve"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-allow-all"));
 
     const response = vi.mocked(RespondOpsctlApproval).mock.calls[0]?.[1];
     expect(response?.edited_items).toHaveLength(1);
@@ -180,7 +180,7 @@ describe("OpsctlApprovalDialog", () => {
 
     fireSingleApproval(handlers, { kind: "once", type: "create", session_id: "session-1" });
 
-    expect(screen.queryByText("opsctlApproval.remember")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("opsctl-approval-remember")).not.toBeInTheDocument();
     expect(screen.getByText("opsctlApproval.allow")).toBeInTheDocument();
   });
 
@@ -310,7 +310,7 @@ describe("OpsctlApprovalDialog 批量审批折叠（kind=batch，D17）", () => 
     expect(screen.getAllByTestId("approval-action").map((el) => el.textContent)).toEqual(["write"]);
     expect(screen.getAllByTestId("approval-resource").map((el) => el.textContent)).toEqual(["logs-a", "logs-b"]);
     expect(screen.getByText("message.write orders")).toBeVisible();
-    expect(screen.queryByText("opsctlApproval.remember")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("opsctl-approval-remember")).not.toBeInTheDocument();
   });
 
   // batch verb（exec/sql/redis 混合批）同样走 opsctl:batch-approval，但 cmd/opsctl/command/

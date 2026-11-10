@@ -1,5 +1,6 @@
-import { useState, useCallback, type ComponentType } from "react";
+import { useState, useCallback, useEffect, useRef, type ComponentType, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -33,6 +34,7 @@ import {
   Puzzle,
 } from "lucide-react";
 import { hasApprovalCommandEdits } from "@/lib/approval";
+import { errorMessage } from "@/lib/errorMessage";
 import { approvalTypePresentation, hasPinnedDetail } from "./approvalTypePresentation";
 import type { ReviewInfo } from "@/lib/commandReview";
 import { ReviewNotice } from "./ReviewNotice";
@@ -162,15 +164,52 @@ function ScopeBadge({ item }: { item: ApprovalItemData }) {
   );
 }
 
+// 一轮连续审批：queue[0] 是当前条；handled 是这一轮里已经离开队首的条数（作答或被调用方
+// 放弃），用来给出「第 n 条 / 共 m 条」。队列清空即开始新的一轮。
+interface ApprovalRun {
+  queue: QueueItem[];
+  handled: number;
+}
+
 export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolean }) {
   const { t } = useTranslation();
-  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [run, setRun] = useState<ApprovalRun>({ queue: [], handled: 0 });
+  const queue = run.queue;
   const [editState, setEditState] = useState<Record<string, Record<number, string>>>({});
-  const [rememberMode, setRememberMode] = useState(false);
+  // 记住模式属于某一条：换入下一条自然回到普通状态。
+  const [rememberId, setRememberId] = useState<string | null>(null);
+  const [respondingId, setRespondingId] = useState<string | null>(null);
+  const denyRef = useRef<HTMLButtonElement>(null);
 
   const enqueue = useCallback((item: QueueItem) => {
-    setQueue((prev) => (prev.some((q) => q.id === item.id) ? prev : [...prev, item]));
+    setRun((prev) =>
+      prev.queue.some((q) => q.id === item.id)
+        ? prev
+        : { queue: [...prev.queue, item], handled: prev.queue.length === 0 ? 0 : prev.handled }
+    );
   }, []);
+
+  const remove = useCallback((id: string) => {
+    setRun((prev) => {
+      const index = prev.queue.findIndex((q) => q.id === id);
+      if (index < 0) return prev;
+      const next = prev.queue.filter((q) => q.id !== id);
+      return { queue: next, handled: next.length === 0 ? 0 : prev.handled + (index === 0 ? 1 : 0) };
+    });
+    setEditState((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }, []);
+
+  // 调用方放弃等待（opsctl 退出、Ctrl-C、超时）：三种审批都按 confirm id 关掉对应条目，
+  // grant 的 confirm id 是它的 session id。
+  useWailsEvent(
+    "opsctl:approval-closed",
+    useCallback((data: { confirm_id: string }) => remove(data.confirm_id), [remove])
+  );
 
   useWailsEvent(
     "opsctl:approval",
@@ -271,6 +310,15 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
 
   const current = queue[0] || null;
   const open = !!current;
+  const rememberMode = !!current && rememberId === current.id;
+  const responding = !!current && respondingId === current.id;
+  const position = { current: run.handled + 1, total: run.handled + queue.length };
+
+  // 下一条在同一组按钮下原地换入：焦点回到「拒绝」，不让一次回车/空格落到没看过的那条上。
+  const currentId = current?.id;
+  useEffect(() => {
+    if (currentId && !suspended) denyRef.current?.focus();
+  }, [currentId, suspended]);
   const rememberValues = current
     ? current.items.map((item, i) => editState[current.id]?.[i] ?? rememberPrefill(item))
     : [];
@@ -351,8 +399,9 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
   );
 
   const respond = useCallback(
-    (decision: string) => {
-      if (!current) return;
+    async (decision: string) => {
+      if (!current || respondingId) return;
+      const id = current.id;
 
       const resp = new permission.ApprovalResponse();
       resp.decision = decision;
@@ -377,21 +426,54 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
         });
       }
 
-      RespondOpsctlApproval(current.id, resp);
-      setQueue((prev) => prev.slice(1));
-      setRememberMode(false);
-      setEditState((prev) => {
-        const next = { ...prev };
-        delete next[current.id];
-        return next;
-      });
+      setRespondingId(id);
+      try {
+        await RespondOpsctlApproval(id, resp);
+        remove(id);
+      } catch (e) {
+        // 后端不收这次应答（审批已不存在、记住的模式不合规则）：说明原因。允许类的应答留着
+        // 这一条让用户改正或拒绝；拒绝本身失败说明这条已经没人在等，留着只会卡住队列。
+        toast.error(t("opsctlApproval.respondFailed"), { description: errorMessage(e) });
+        if (decision === "deny") remove(id);
+      } finally {
+        setRespondingId(null);
+      }
     },
-    [current, editState]
+    [current, editState, respondingId, remove, t]
   );
+
+  // 作答后下一条在同一组按钮下换入，同一次双击的第二下（detail > 1）会落到用户没看过的
+  // 那一条上——包括「记住并允许」：第一下进入记住模式，第二下就成了永久授权。
+  const onAnswer = (action: () => void) => (e: MouseEvent) => {
+    if (e.detail > 1) return;
+    action();
+  };
+
+  const enterRememberMode = () => {
+    if (!current) return;
+    // 初始化 editState：命令审批预填命令，分类过的扩展审批预填 <action>:<resource>
+    const edits: Record<number, string> = {};
+    current.items.forEach((it, idx) => {
+      edits[idx] = rememberPrefill(it);
+    });
+    setEditState((prev) => ({ ...prev, [current.id]: { ...prev[current.id], ...edits } }));
+    setRememberId(current.id);
+  };
+
+  const exitRememberMode = () => {
+    if (!current) return;
+    // single 的 editState 只承载记住的模式：退出即丢弃，再进入时重新预填。
+    setEditState((prev) => {
+      const next = { ...prev };
+      delete next[current.id];
+      return next;
+    });
+    setRememberId(null);
+  };
 
   const handleOpenChange = useCallback(
     (v: boolean) => {
-      if (!v) respond("deny");
+      if (!v) void respond("deny");
     },
     [respond]
   );
@@ -404,6 +486,10 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
         showCloseButton={false}
         onInteractOutside={(e) => e.preventDefault()}
         onEscapeKeyDown={(e) => e.preventDefault()}
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          denyRef.current?.focus();
+        }}
       >
         {current && (
           <>
@@ -417,8 +503,15 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
                     : current.kind === "delete"
                       ? t("ai.approvalDeleteTitle")
                       : t("opsctlApproval.title")}
-                {queue.length > 1 && (
-                  <span className="text-sm font-normal text-muted-foreground">(1/{queue.length})</span>
+                {position.total > 1 && (
+                  <span
+                    data-testid="opsctl-approval-position"
+                    data-current={position.current}
+                    data-total={position.total}
+                    className="text-sm font-normal text-muted-foreground"
+                  >
+                    {t("opsctlApproval.queuePosition", position)}
+                  </span>
                 )}
               </DialogTitle>
               <DialogDescription>
@@ -468,42 +561,52 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
                   }
                   textClassName="text-xs"
                   inputClassName="text-xs"
+                  onCancel={exitRememberMode}
                 />
               )}
             </div>
 
             <DialogFooter className="gap-2">
-              <Button data-testid="opsctl-approval-deny" variant="outline" onClick={() => respond("deny")}>
+              <Button
+                ref={denyRef}
+                data-testid="opsctl-approval-deny"
+                variant="outline"
+                disabled={responding}
+                onClick={onAnswer(() => void respond("deny"))}
+              >
                 {t("opsctlApproval.deny")}
               </Button>
               {current.kind === "single" &&
                 current.sessionID &&
                 (rememberMode ? (
                   <Button
+                    data-testid="opsctl-approval-allow-all"
                     variant="secondary"
-                    disabled={hasRememberPatternErrors(current.items, rememberValues)}
-                    onClick={() => respond("allowAll")}
+                    disabled={responding || hasRememberPatternErrors(current.items, rememberValues)}
+                    onClick={onAnswer(() => void respond("allowAll"))}
                   >
-                    {t("opsctlApproval.approve")}
+                    {t("ai.approvalRememberAndAllow")}
                   </Button>
                 ) : (
                   <Button
+                    data-testid="opsctl-approval-remember"
                     variant="secondary"
-                    onClick={() => {
-                      // 初始化 editState：命令审批预填命令，分类过的扩展审批预填 <action>:<resource>
-                      const edits: Record<number, string> = {};
-                      current.items.forEach((it, idx) => {
-                        edits[idx] = rememberPrefill(it);
-                      });
-                      setEditState((prev) => ({ ...prev, [current.id]: { ...prev[current.id], ...edits } }));
-                      setRememberMode(true);
-                    }}
+                    disabled={responding}
+                    onClick={onAnswer(enterRememberMode)}
                   >
-                    {t("opsctlApproval.remember")}
+                    {t("ai.approvalRememberAndAllow")}
                   </Button>
                 ))}
-              <Button data-testid="opsctl-approval-allow" onClick={() => respond("allow")}>
-                {current.kind === "grant" ? t("opsctlApproval.approve") : t("opsctlApproval.allow")}
+              <Button
+                data-testid="opsctl-approval-allow"
+                disabled={responding}
+                onClick={onAnswer(() => void respond("allow"))}
+              >
+                {current.kind === "grant"
+                  ? t("opsctlApproval.approve")
+                  : current.kind === "single"
+                    ? t("ai.approvalAllowOnce")
+                    : t("opsctlApproval.allow")}
               </Button>
             </DialogFooter>
           </>

@@ -31,12 +31,12 @@ func (o *Opsctl) handleRequest(ctx context.Context, req approval.ApprovalRequest
 
 	// 授权审批
 	if req.Type == "grant" {
-		return o.handleGrantApproval(req)
+		return o.handleGrantApproval(ctx, req)
 	}
 
 	// 批量执行审批
 	if req.Type == "batch" {
-		return o.handleBatchApproval(req)
+		return o.handleBatchApproval(ctx, req)
 	}
 
 	// SSH MFA 挑战：opsctl 不可交互时请桌面端代答；请求方断开即关闭对话框
@@ -46,7 +46,7 @@ func (o *Opsctl) handleRequest(ctx context.Context, req approval.ApprovalRequest
 
 	// 扩展开发安装（opsctl ext dev）
 	if req.Type == "ext_dev_install" {
-		return o.handleExtDevInstall(req)
+		return o.handleExtDevInstall(ctx, req)
 	}
 
 	// 扩展商店（opsctl ext search / install / update）
@@ -57,7 +57,7 @@ func (o *Opsctl) handleRequest(ctx context.Context, req approval.ApprovalRequest
 		return o.handleExtStoreInstall(ctx, req)
 	}
 
-	return o.requestSingleApproval(req)
+	return o.requestSingleApproval(ctx, req)
 }
 
 // startApprovalServer 启动 opsctl 审批 本地 IPC 服务
@@ -75,10 +75,11 @@ func (o *Opsctl) startApprovalServer() {
 // 时按 opsctl 的 grant 语义（审批类型 + 命令串）落库。扩展资产上分类成功的调用，请求带着
 // opsctl 用共用构造（permission.ApprovalItemFor）给出的动作、资源与“记住”的
 // <action>:<resource-glob>：弹窗展示同一个扩展审批项，“始终允许”落扩展授权
-// ext:<policyType>:…——与 AI 审批（HandleConfirm）对同一审批项落的相同。
-func (o *Opsctl) requestSingleApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
+// ext:<policyType>:…——与 AI 审批（HandleConfirm）对同一审批项落的相同。ctx 是这次请求：
+// 请求方离开时弹窗里的这一条随之关闭（awaitSingleApproval）。
+func (o *Opsctl) requestSingleApproval(ctx context.Context, req approval.ApprovalRequest) approval.ApprovalResponse {
 	item := permission.ApprovalItemOfRequest(req)
-	parsed, reason := o.awaitSingleApproval(o.ctx, item, req.SessionID)
+	parsed, reason := o.awaitSingleApproval(ctx, item, req.SessionID)
 	switch parsed.Decision {
 	case permission.ApprovalAllow:
 		return approval.ApprovalResponse{Approved: true}
@@ -111,7 +112,8 @@ const opsctlAuditSource = "opsctl"
 // awaitSingleApproval 在桌面端 "opsctl:approval" 弹窗里展示 item，等用户作答并校验。
 // 它不落任何 grant："始终允许"授权什么由调用方决定——opsctl socket 按命令串、扩展调用
 // 按分类落（requestSingleApproval）。拒绝时第二个返回值是原因。ctx 是发起这次审批的调用：它被取消
-// 就不再等待，按拒绝返回，之后到达的作答找不到这条待决审批。
+// 就不再等待，关掉弹窗里的这一条（closeAbandonedApproval）并按拒绝返回，之后到达的作答
+// 找不到这条待决审批。
 func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.ApprovalItem, sessionID string) (permission.ParsedApprovalResponse, string) {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
 	// 与 opsctl 终端提示同一判定：分类失败的扩展调用没有可落的规则，只给本次允许/拒绝。
@@ -170,7 +172,7 @@ func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.Approv
 		}
 		return parsed, ""
 	case <-ctx.Done():
-		log.Info("opsctl approval abandoned: the call was canceled")
+		o.closeAbandonedApproval(log, confirmID)
 		return denied, "call canceled"
 	case <-o.ctx.Done():
 		log.Error("opsctl approval failed", zap.Error(o.ctx.Err()))
@@ -200,9 +202,16 @@ func grantPatternAndOrigin(command string, edited []permission.ApprovalItem) (st
 
 // handleBatchApproval 处理批量执行审批（各内置类型与扩展资产混合）。整批只有本次允许 /
 // 拒绝；扩展资产上分类成功的条目带着 opsctl 用共用构造（permission.ApprovalItemFor）
-// 给出的动作与资源，弹窗与单条审批一样在命令上方展示它们。
-func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
+// 给出的动作与资源，弹窗与单条审批一样在命令上方展示它们。ctx 是这次请求，请求方离开即
+// 关掉弹窗里的这一条。
+func (o *Opsctl) handleBatchApproval(ctx context.Context, req approval.ApprovalRequest) approval.ApprovalResponse {
 	confirmID := fmt.Sprintf("batch_%d", time.Now().UnixNano())
+	log := logger.Ctx(o.ctx).With(
+		zap.String("confirmID", confirmID),
+		zap.String("sessionID", req.SessionID),
+		zap.Int("items", len(req.BatchItems)),
+	)
+	log.Info("opsctl batch approval started")
 
 	expectedItems := make([]permission.ApprovalItem, 0, len(req.BatchItems))
 	for _, item := range req.BatchItems {
@@ -243,12 +252,16 @@ func (o *Opsctl) handleBatchApproval(req approval.ApprovalRequest) approval.Appr
 		parsed, err := permission.ParseApprovalResponse(permission.ApprovalKindBatch, resp, expectedItems)
 		if err != nil || parsed.Decision != permission.ApprovalAllow {
 			if err != nil {
-				logger.Ctx(o.ctx).Warn("opsctl batch approval response invalid",
-					zap.String("confirmID", confirmID))
+				log.Warn("opsctl batch approval response invalid")
 			}
+			log.Info("opsctl batch approval completed", zap.Bool("approved", false))
 			return approval.ApprovalResponse{Approved: false, Reason: "user denied"}
 		}
+		log.Info("opsctl batch approval completed", zap.Bool("approved", true))
 		return approval.ApprovalResponse{Approved: true}
+	case <-ctx.Done():
+		o.closeAbandonedApproval(log, confirmID)
+		return approval.ApprovalResponse{Approved: false, Reason: "call canceled"}
 	case <-o.ctx.Done():
 		return approval.ApprovalResponse{Approved: false, Reason: "app shutting down"}
 	case <-o.appCtx.Done():
@@ -304,8 +317,9 @@ func extensionGrantsFor(ctx context.Context, items []permission.ApprovalItem) (m
 	return grants, nil
 }
 
-// handleGrantApproval 处理批量计划审批
-func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.ApprovalResponse {
+// handleGrantApproval 处理批量计划审批；弹窗以 session id 作为 confirm id。reqCtx 是这次
+// 请求：请求方离开即关掉弹窗里的这一条，待决的授权会话记为拒绝。
+func (o *Opsctl) handleGrantApproval(reqCtx context.Context, req approval.ApprovalRequest) approval.ApprovalResponse {
 	ctx := i18n.Ctx(o.ctx, o.lang.Lang())
 	sessionID := req.SessionID
 
@@ -431,6 +445,13 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 			}
 		}
 		return finalResp
+	case <-reqCtx.Done():
+		o.closeAbandonedApproval(logger.Ctx(ctx).With(zap.String("sessionID", sessionID), zap.String("approvalType", "grant")), sessionID)
+		if err := grant_repo.Grant().UpdateSessionStatus(ctx, sessionID, grant_entity.GrantStatusRejected); err != nil {
+			logger.Ctx(ctx).Error("update grant session status to rejected on abandon",
+				zap.String("sessionID", sessionID), zap.Error(err))
+		}
+		return approval.ApprovalResponse{Approved: false, Reason: "call canceled"}
 	case <-o.ctx.Done():
 		if err := grant_repo.Grant().UpdateSessionStatus(ctx, sessionID, grant_entity.GrantStatusRejected); err != nil {
 			logger.Default().Error("update grant session status to rejected on shutdown", zap.Error(err))
@@ -444,20 +465,37 @@ func (o *Opsctl) handleGrantApproval(req approval.ApprovalRequest) approval.Appr
 	}
 }
 
-// RespondOpsctlApproval 前端响应 opsctl 审批请求（统一入口）
-func (o *Opsctl) RespondOpsctlApproval(confirmID string, resp permission.ApprovalResponse) {
-	if v, ok := o.pendingOpsctlApprovals.Load(confirmID); ok {
-		pending := v.(pendingOpsctlApproval)
-		if _, err := permission.ParseApprovalResponse(pending.kind, resp, pending.items); err != nil {
-			// Response payload is an IPC input and may contain credential-shaped text.
-			// Keep only correlation fields; the static message already identifies validation failure.
-			logger.Ctx(o.ctx).Warn("invalid opsctl approval response denied",
-				zap.String("confirmID", confirmID), zap.String("kind", pending.kind))
-			resp = permission.ApprovalResponse{Decision: "deny"}
-		}
-		select {
-		case pending.ch <- resp:
-		default:
-		}
+// closeAbandonedApproval 在请求方离开（进程退出、Ctrl-C、超时）后关掉弹窗里对应的一条。
+// 先摘掉待决登记再发事件：此后到达的作答一律得到"已不在等待"，不会落进没人收的 channel。
+func (o *Opsctl) closeAbandonedApproval(log *zap.Logger, confirmID string) {
+	o.pendingOpsctlApprovals.Delete(confirmID)
+	o.emit("opsctl:approval-closed", map[string]any{"confirm_id": confirmID})
+	log.Info("opsctl approval closed", zap.String("reason", "requester gone"))
+}
+
+// RespondOpsctlApproval 前端响应 opsctl 审批请求（统一入口）。这是 IPC 边界：审批已不在
+// 等待（请求方已离开、已作答过）或应答不合法（如记住的模式不合规则）时返回错误，审批保持
+// 原状——不合法的应答不会被当成拒绝，弹窗留着让用户改正或另行作答。
+func (o *Opsctl) RespondOpsctlApproval(confirmID string, resp permission.ApprovalResponse) error {
+	log := logger.Ctx(o.ctx).With(zap.String("confirmID", confirmID))
+	// 先只读校验、再原子取走：校验失败的审批必须仍挂在 pending 上，等用户的下一次作答。
+	v, ok := o.pendingOpsctlApprovals.Load(confirmID)
+	if !ok {
+		log.Warn("opsctl approval response rejected", zap.String("reason", "not pending"))
+		return fmt.Errorf("approval %s is no longer pending", confirmID)
 	}
+	pending := v.(pendingOpsctlApproval)
+	if _, err := permission.ParseApprovalResponse(pending.kind, resp, pending.items); err != nil {
+		// Response payload is an IPC input and may contain credential-shaped text: the log
+		// keeps only correlation fields; the error goes back to the user who typed it.
+		log.Warn("opsctl approval response rejected", zap.String("reason", "invalid"), zap.String("kind", pending.kind))
+		return fmt.Errorf("invalid approval response: %w", err)
+	}
+	if _, ok := o.pendingOpsctlApprovals.LoadAndDelete(confirmID); !ok {
+		log.Warn("opsctl approval response rejected", zap.String("reason", "not pending"))
+		return fmt.Errorf("approval %s is no longer pending", confirmID)
+	}
+	// 取走登记的这一次作答是唯一的发送者，ch 容量为 1，不会阻塞。
+	pending.ch <- resp
+	return nil
 }

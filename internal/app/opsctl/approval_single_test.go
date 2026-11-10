@@ -10,9 +10,17 @@ import (
 	"github.com/opskat/opskat/internal/approval"
 )
 
+// answerOrDeny is the user's click reaching RespondOpsctlApproval. An answer the
+// backend refuses leaves the approval pending and shows the reason; the stand-in
+// user then denies, so a refused answer can only ever end as a denial.
+func answerOrDeny(o *Opsctl, confirmID string, resp permission.ApprovalResponse) {
+	if err := o.RespondOpsctlApproval(confirmID, resp); err != nil {
+		_ = o.RespondOpsctlApproval(confirmID, permission.ApprovalResponse{Decision: "deny"})
+	}
+}
+
 // answeringDialog stands in for the frontend's "opsctl:approval" dialog: it
-// records what the dialog was shown and answers with resp, the way the user's
-// click reaches RespondOpsctlApproval.
+// records what the dialog was shown and answers with resp (answerOrDeny).
 func answeringDialog(o *Opsctl, resp permission.ApprovalResponse) *map[string]any {
 	shown := new(map[string]any)
 	o.emit = func(name string, payload map[string]any) {
@@ -20,7 +28,7 @@ func answeringDialog(o *Opsctl, resp permission.ApprovalResponse) *map[string]an
 			return
 		}
 		*shown = payload
-		go o.RespondOpsctlApproval(payload["confirm_id"].(string), resp)
+		go answerOrDeny(o, payload["confirm_id"].(string), resp)
 	}
 	return shown
 }
@@ -32,7 +40,7 @@ func TestRequestSingleApprovalAllowAllDoesNotApproveTheSession(t *testing.T) {
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}
 	answeringDialog(o, permission.ApprovalResponse{Decision: "allowAll"})
 
-	resp := o.requestSingleApproval(approval.ApprovalRequest{
+	resp := o.requestSingleApproval(context.Background(), approval.ApprovalRequest{
 		Type: "exec", AssetID: 7, AssetName: "web-01", Command: "uptime", SessionID: "session-1",
 	})
 

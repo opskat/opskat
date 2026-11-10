@@ -52,7 +52,7 @@ type Opsctl struct {
 	extStore        ExtStore
 	// extDevApprove 把一次 ext dev 安装交给用户确认；New 接到 requestSingleApproval
 	// （既有的 opsctl 审批弹窗），测试替换它以免触达 Wails 事件。
-	extDevApprove   func(approval.ApprovalRequest) approval.ApprovalResponse
+	extDevApprove   func(context.Context, approval.ApprovalRequest) approval.ApprovalResponse
 	extDevApprovals extDevApprovalMemory
 
 	pendingOpsctlApprovals sync.Map // map[string]pendingOpsctlApproval

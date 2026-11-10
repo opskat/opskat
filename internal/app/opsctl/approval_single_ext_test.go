@@ -55,7 +55,7 @@ func TestRequestSingleApprovalShowsTheExtensionItem(t *testing.T) {
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}
 	shown := answeringDialog(o, permission.ApprovalResponse{Decision: "allow"})
 
-	resp := o.requestSingleApproval(extSingleRequest())
+	resp := o.requestSingleApproval(context.Background(), extSingleRequest())
 
 	require.True(t, resp.Approved)
 	require.Equal(t, "delete", (*shown)["action"])
@@ -71,7 +71,7 @@ func TestRequestSingleApprovalAllowAllSavesTheExtensionGrant(t *testing.T) {
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}
 	answeringDialog(o, permission.ApprovalResponse{Decision: "allowAll"})
 
-	resp := o.requestSingleApproval(extSingleRequest())
+	resp := o.requestSingleApproval(context.Background(), extSingleRequest())
 
 	require.True(t, resp.Approved)
 	require.Len(t, repo.items["opsctl-sess"], 1)
@@ -88,7 +88,7 @@ func TestRequestSingleApprovalAllowAllSavesTheEditedExtensionGrant(t *testing.T)
 		Type: grantExtTestType, AssetID: 3, AssetName: "es-logs", Command: "delete:logs-*",
 	}}})
 
-	resp := o.requestSingleApproval(extSingleRequest())
+	resp := o.requestSingleApproval(context.Background(), extSingleRequest())
 
 	require.True(t, resp.Approved)
 	require.Len(t, repo.items["opsctl-sess"], 1)
@@ -104,7 +104,7 @@ func TestRequestSingleApprovalRefusesAnExtensionEditChangingTheAction(t *testing
 		Type: grantExtTestType, AssetID: 3, AssetName: "es-logs", Command: "read",
 	}}})
 
-	resp := o.requestSingleApproval(extSingleRequest())
+	resp := o.requestSingleApproval(context.Background(), extSingleRequest())
 
 	require.False(t, resp.Approved)
 	require.Empty(t, repo.items)
@@ -119,7 +119,7 @@ func TestRequestSingleApprovalAllowAllOfACallWithoutResource(t *testing.T) {
 	req := extSingleRequest()
 	req.Resource, req.Resources, req.RememberPattern = "", nil, "delete:"
 
-	resp := o.requestSingleApproval(req)
+	resp := o.requestSingleApproval(context.Background(), req)
 
 	require.True(t, resp.Approved)
 	require.Len(t, repo.items["opsctl-sess"], 1)
@@ -149,7 +149,7 @@ func TestRequestSingleApprovalOfAnUnclassifiedExtensionCallIsOnceOnly(t *testing
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}
 	shown := answeringDialog(o, permission.ApprovalResponse{Decision: "allowAll"})
 
-	resp := o.requestSingleApproval(approval.ApprovalRequest{
+	resp := o.requestSingleApproval(context.Background(), approval.ApprovalRequest{
 		Type: typ, AssetID: 3, AssetName: "es-logs", SessionID: "opsctl-sess", Command: "delete",
 	})
 
