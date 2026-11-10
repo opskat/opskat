@@ -201,7 +201,18 @@
     "partial": "部分运行",
     "processing": "处理中...",
     "deleteConfirmTitle": "确认删除配置",
-    "deleteConfirmDesc": "确定要删除转发配置 \"{{name}}\" 吗？此操作不可撤销。"
+    "deleteConfirmDesc": "确定要删除转发配置 \"{{name}}\" 吗？此操作不可撤销。",
+    "assetChangeFailed": "切换资产失败",
+    "deleteFailed": "删除转发配置失败",
+    "saveFailed": "保存转发配置失败",
+    "saved": "转发配置已保存",
+    "startFailed": "启动转发失败",
+    "stopFailed": "停止转发失败",
+    "type": {
+      "dynamic": "动态转发 (SOCKS5)",
+      "local": "本地转发",
+      "remote": "远程转发"
+    }
   },
   "appQuit": {
     "activityTitle": "仍有任务正在执行",
@@ -310,7 +321,12 @@
     "moveLeft": "左移",
     "moveRight": "右移",
     "moveToStart": "移到最前",
-    "moveToEnd": "移到最后"
+    "moveToEnd": "移到最后",
+    "closeConfirmAction": "关闭标签页",
+    "closeConfirmDescBoth": "将断开 {{sessions}} 个会话，并中断 {{transfers}} 个进行中的传输。",
+    "closeConfirmDescSessions": "将断开 {{sessions}} 个会话。",
+    "closeConfirmDescTransfers": "将中断 {{transfers}} 个进行中的传输。",
+    "closeConfirmTitle": "关闭标签页？"
   },
   "theme": {
     "label": "主题",
@@ -1011,7 +1027,15 @@
       "usageNotesHint": "使用说明在类型「{{name}}」里维护，同类型的资产共用。",
       "viewUsageNotes": "查看",
       "usageNotesTitle": "「{{name}}」使用说明"
-    }
+    },
+    "copyName": "{{name}} - 副本",
+    "copyTitle": "复制{{type}}",
+    "discardConfirm": "放弃修改",
+    "discardDescription": "这个资产有尚未保存的修改，现在离开会丢失它们。",
+    "discardKeepEditing": "继续编辑",
+    "discardTitle": "放弃未保存的修改？",
+    "formMissingUsername": "请填写用户名。",
+    "formTabHasErrors": "有错误"
   },
   "sshKey": {
     "title": "SSH 密钥",
@@ -1162,7 +1186,8 @@
         "connect": "连接",
         "auth": "认证",
         "shell": "终端"
-      }
+      },
+      "cancelled": "已取消连接"
     },
     "session": {
       "reconnect": "重新连接",
@@ -1245,7 +1270,19 @@
     "reasoningEffortMedium": "中",
     "reasoningEffortHigh": "高",
     "reasoningEffortXHigh": "极深",
-    "reasoningEffortMax": "最大"
+    "reasoningEffortMax": "最大",
+    "group": {
+      "about": "关于",
+      "ai": "AI",
+      "connection": "连接",
+      "data": "数据",
+      "general": "通用"
+    },
+    "nav": {
+      "ai": "服务商与命令审核",
+      "importBackup": "导入与备份",
+      "label": "设置分区"
+    }
   },
   "backup": {
     "title": "备份",
@@ -1263,7 +1300,7 @@
     "passwordRequired": "请设置备份密码",
     "passwordConfirm": "确认密码",
     "passwordMismatch": "两次密码不一致",
-    "enterPassword": "请输入密份密码",
+    "enterPassword": "请输入备份密码",
     "decrypting": "解密中...",
     "gist": "GitHub Gist",
     "gistDesc": "加密备份到 GitHub Gist",
@@ -1513,7 +1550,27 @@
       "syncing": "联动中",
       "referencedThisSession": "本次引用"
     },
-    "approvalGenericTarget": "目标"
+    "approvalGenericTarget": "目标",
+    "approvalAllowOnce": "仅本次允许",
+    "approvalType": {
+      "cp": "文件传输",
+      "delete": "删除",
+      "etcd": "etcd",
+      "exec": "命令",
+      "grant": "授权",
+      "k8s": "Kubernetes",
+      "kafka": "Kafka",
+      "local_bash": "本地命令",
+      "local_edit": "编辑文件",
+      "local_write": "写入文件",
+      "mongo": "MongoDB",
+      "oss": "对象存储",
+      "redis": "Redis",
+      "serial": "串口",
+      "sql": "SQL"
+    },
+    "approvalView": "查看",
+    "approvalWaitingDesc": "等待你审批"
   },
   "shortcut": {
     "title": "快捷键",
@@ -1553,7 +1610,10 @@
     "page.home": "切换到首页",
     "page.settings": "切换到设置",
     "page.sshkeys": "切换到 SSH 密钥",
-    "command.quickopen": "快速打开"
+    "command.quickopen": "快速打开",
+    "panel": {
+      "toolbar": "显示 / 隐藏工具条"
+    }
   },
   "commandPalette": {
     "placeholder": "搜索资产、标签或代码片段...",
@@ -1561,7 +1621,8 @@
       "opened": "已打开",
       "recent": "最近",
       "assets": "资产",
-      "snippets": "代码片段"
+      "snippets": "代码片段",
+      "actions": "页面与操作"
     },
     "empty": {
       "noContent": "暂无内容，先在左侧添加资产",
@@ -1590,7 +1651,8 @@
     "hideAssetTree": "隐藏资产列表",
     "showAssetTree": "显示资产列表",
     "hideAIPanel": "隐藏 AI 对话",
-    "showAIPanel": "显示 AI 对话"
+    "showAIPanel": "显示 AI 对话",
+    "pendingApprovals": "{{count}} 个会话等待审批"
   },
   "sideTabs": {
     "title": "打开的 Tabs",
@@ -1862,7 +1924,10 @@
       "entry": "外部编辑待处理",
       "title": "外部编辑待处理文件",
       "description": "冲突、错误和恢复文件统一在这里处理。关闭窗口不会丢失记录。",
-      "empty": "当前没有待处理文件。"
+      "empty": "当前没有待处理文件。",
+      "acceptRemoteConfirmDesc": "本地副本里还没写回远程的修改会被丢弃，换成远程上的当前内容，且无法撤销。",
+      "acceptRemoteConfirmTitle": "用远程版本替换本地修改？",
+      "overwriteRecoveryDesc": "远程文件会被替换成本地副本的内容，远程上的当前版本会被丢弃，且无法撤销。"
     },
     "state": {
       "clean": "已同步",
@@ -1910,7 +1975,12 @@
       "next": "下一处冲突",
       "closeDirtyTitle": "放弃未提交的合并稿？",
       "closeDirtyDesc": "关闭合并窗口不会删除冲突记录，但当前未保存的最终稿编辑会丢失。",
-      "closeDirtyConfirm": "放弃并关闭"
+      "closeDirtyConfirm": "放弃并关闭",
+      "takeBlockUnlocated": "这处差异前后的内容已在最终稿里手动改过，无法自动替换，请直接编辑最终稿。",
+      "takeLocal": "采用本地",
+      "takeLocalHint": "把最终稿里第 {{index}} 处差异换成本地内容",
+      "takeRemote": "采用远端",
+      "takeRemoteHint": "把最终稿里第 {{index}} 处差异换成远端内容"
     },
     "compare": {
       "title": "只读差异比对",
@@ -1923,7 +1993,9 @@
       "previous": "上一处不同点",
       "next": "下一处不同点",
       "loadFailed": "对比视图加载失败",
-      "helper": "左侧远端，右侧本地；支持行号与同步滚动，便于逐段观察差异。"
+      "helper": "左侧远端，右侧本地；支持行号与同步滚动，便于逐段观察差异。",
+      "localLeftHelper": "左侧本地，右侧远端；支持行号与同步滚动，便于逐段查看差异。",
+      "localLeftRemoteRight": "左本地 / 右远端"
     },
     "settings": {
       "tab": "外部编辑",
@@ -1949,6 +2021,10 @@
       "noArgs": "无启动参数",
       "editorUnavailable": "可执行路径修复前暂不可用",
       "saved": "外部编辑设置已保存"
+    },
+    "side": {
+      "local": "本地（我的修改）",
+      "remote": "远端（服务器上）"
     }
   },
   "integration": {
@@ -2085,7 +2161,10 @@
     "scopeAll": "所有资产",
     "genericHttp": "HTTP 请求",
     "genericCommand": "命令",
-    "genericSecret": "取值"
+    "genericSecret": "取值",
+    "queuePosition": "第 {{current}} 条 / 共 {{total}} 条",
+    "rememberCancel": "不记住",
+    "respondFailed": "审批应答未被接受"
   },
   "audit": {
     "title": "审计日志",
@@ -2131,7 +2210,18 @@
     "sessionGroupThisWeek": "本周",
     "sessionGroupEarlier": "更早",
     "sessionOps": "{{count}} 条操作",
-    "sessionPatterns": "会话已允许模式"
+    "sessionPatterns": "会话已允许模式",
+    "decisionSources": {
+      "assisted": "辅助审批",
+      "autopilot": "自动驾驶",
+      "grant": "授权",
+      "policy": "策略",
+      "user": "手动审批"
+    },
+    "decisions": {
+      "allow": "已放行",
+      "deny": "已拒绝"
+    }
   },
   "zmodem": {
     "downloadComplete": "{{name}} 接收完成",
@@ -2274,7 +2364,9 @@
       "accessDenied": "目标目录不可访问",
       "remoteFailed": "终端拒绝了此次目录切换",
       "nonceFailed": "无法启动已验证的目录切换"
-    }
+    },
+    "clearCompleted": "清除已完成",
+    "showInFolder": "打开所在目录"
   },
   "error": {
     "boundary": {
@@ -3286,7 +3378,23 @@
       "label": "新建",
       "in": "在 {{name}}",
       "database": "新建数据库…"
-    }
+    },
+    "deleteEntryConfirmDesc": "将从 Stream 中删除条目 {{id}}，此操作不可撤销。",
+    "deleteEntryConfirmTitle": "删除 Stream 条目？",
+    "discardAll": "放弃全部",
+    "discardAllDesc": "{{count}} 处未提交的修改将丢失，无法恢复。",
+    "discardAllTitle": "放弃未提交的修改？",
+    "kafkaACLCreated": "已为 {{principal}} 创建 ACL",
+    "kafkaConnectorPaused": "已暂停 Connector {{name}}",
+    "kafkaConnectorResumed": "已恢复 Connector {{name}}",
+    "kafkaMessageSent": "消息已发送到 {{topic}}",
+    "kafkaTopicCreated": "已创建 Topic {{name}}",
+    "mongo": {
+      "noCollections": "暂无集合",
+      "noDatabases": "暂无数据库"
+    },
+    "pendingEditsCount": "{{count}} 处修改未提交",
+    "previewAndCommit": "预览并提交"
   },
   "systemStatus": {
     "title": "系统状态",
@@ -3607,7 +3715,9 @@
       "newFolder": "新建文件夹",
       "newFolderPrompt": "文件夹名称",
       "newFolderSuccess": "文件夹已创建",
-      "deleteFolderConfirm": "删除文件夹 {{name}} 及其下全部对象？"
+      "deleteFolderConfirm": "删除文件夹 {{name}} 及其下全部对象？",
+      "deleteConfirmManyIrreversible": "将永久删除 {{count}} 个对象，此操作不可恢复。",
+      "sidebarTitle": "存储桶"
     },
     "transfer": {
       "upload": "上传",
@@ -3690,9 +3800,11 @@
     },
     "tree": {
       "filterPlaceholder": "过滤 key",
-      "truncated": "+{{count}} 隐藏，limit={{limit}}",
+      "truncated": "仅列出前 {{limit}} 条。可在「查询」页用 key 前缀缩小范围。",
       "loadFailed": "加载 keyspace 失败",
-      "refresh": "刷新 keyspace"
+      "refresh": "刷新 keyspace",
+      "empty": "暂无 key",
+      "title": "键空间"
     },
     "view": {
       "kv": "KV 浏览"
@@ -3710,7 +3822,8 @@
       "execSuccess": "执行成功",
       "execFailed": "执行失败",
       "elapsed": "耗时 {{ms}}ms",
-      "noResult": "暂无结果，输入命令并执行"
+      "noResult": "暂无结果，输入命令并执行",
+      "execConfirmButton": "执行"
     },
     "detail": {
       "selectKey": "在左侧选择一个 key 查看详情",
@@ -3914,5 +4027,24 @@
     "scores": "评分",
     "retried": "自动重试过：共请求 {{attempts}} 次",
     "reviewedBy": "由 {{name}} {{version}} 的命令审核器判断"
+  },
+  "asyncState": {
+    "loadFailed": "加载失败",
+    "loading": "加载中…"
+  },
+  "fileConflict": {
+    "applyToRest": "其余 {{count}} 个冲突也这样处理",
+    "checkFailed": "无法确认 {{path}} 是否已存在，已跳过该项：{{error}}",
+    "existing": "已有项",
+    "folder": "文件夹",
+    "incoming": "新项",
+    "keepBoth": "保留两者",
+    "keepBothHint": "选择保留两者时，新项将另存为 {{name}}",
+    "overwrite": "覆盖",
+    "progress": "第 {{current}} / {{total}} 项",
+    "renameTitle": "要覆盖已有的同名项吗？",
+    "skip": "跳过",
+    "title": "目标位置已有同名项",
+    "unknown": "—"
   }
 }
