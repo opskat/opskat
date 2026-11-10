@@ -45,6 +45,8 @@ describe("OSSObjectList", () => {
   const base = {
     selection: new Set<string>(),
     loading: false,
+    error: null as string | null,
+    onRetry: vi.fn(),
     loadingPage: false,
     truncated: false,
     onNavigatePrefix: vi.fn(),
@@ -82,7 +84,8 @@ describe("OSSObjectList", () => {
 
   it("shows an empty-folder placeholder when there are no prefixes and no objects", () => {
     render(<OSSObjectList {...base} prefixes={[]} objects={[]} />);
-    expect(screen.getByTestId("oss-list-empty")).toHaveTextContent("oss.browser.emptyDir");
+    expect(screen.getByText("oss.browser.emptyDir")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("shows a download button on object rows that fires onDownload", () => {
@@ -183,7 +186,7 @@ describe("OSSObjectList", () => {
 
   it("shows a visible spinner while the initial list or next page is loading", () => {
     const { rerender } = render(<OSSObjectList {...base} prefixes={[]} objects={[]} loading />);
-    expect(screen.getByTestId("oss-list-loading-spinner")).toHaveClass("animate-spin");
+    expect(screen.getByRole("status").querySelector(".animate-spin")).not.toBeNull();
     rerender(<OSSObjectList {...base} prefixes={[]} objects={[obj("docs/a.txt", 1)]} loadingPage />);
     expect(screen.getByTestId("oss-list-page-spinner-icon")).toHaveClass("animate-spin");
   });
@@ -230,6 +233,8 @@ describe("OSSObjectList — keyboard copy", () => {
   const base = {
     selection: new Set<string>(),
     loading: false,
+    error: null as string | null,
+    onRetry: vi.fn(),
     loadingPage: false,
     truncated: false,
     onNavigatePrefix: vi.fn(),

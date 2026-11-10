@@ -16,6 +16,9 @@ export interface OSSObjectListProps {
   objects: oss_svc.ObjectItem[];
   selection: Set<string>;
   loading: boolean;
+  /** Why the listing failed (null when it didn't); shown with `onRetry` instead of the empty folder. */
+  error: string | null;
+  onRetry: () => void;
   loadingPage: boolean;
   truncated: boolean;
   onNavigatePrefix: (prefix: string) => void;
@@ -32,6 +35,8 @@ export function OSSObjectList({
   objects,
   selection,
   loading,
+  error,
+  onRetry,
   loadingPage,
   truncated,
   onNavigatePrefix,
@@ -69,6 +74,8 @@ export function OSSObjectList({
       className="min-h-0 flex-1 overflow-auto"
       empty={prefixes.length === 0 && objects.length === 0}
       loading={loading}
+      error={error}
+      onRetry={onRetry}
       loadingPage={loadingPage}
       truncated={truncated}
       testIdPrefix="oss-list"

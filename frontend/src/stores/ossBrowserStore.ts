@@ -34,6 +34,8 @@ export interface OssBrowserTabState {
   selection: Set<string>;
   loading: { buckets: boolean; listing: boolean; page: boolean };
   error: string | null;
+  /** Why the current prefix's object listing failed; only navigateToPrefix sets / clears it. */
+  listingError: string | null;
   viewMode: "list" | "grid";
   focusedKey: string | null;
   thumbnails: Record<string, string>;
@@ -73,6 +75,7 @@ function emptyTabState(assetId: number): OssBrowserTabState {
     selection: new Set(),
     loading: { buckets: false, listing: false, page: false },
     error: null,
+    listingError: null,
     viewMode: "list",
     focusedKey: null,
     thumbnails: {},
@@ -151,7 +154,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
         selection: new Set(),
         focusedKey: null,
         loading: { ...t.loading, listing: true },
-        error: null,
+        listingError: null,
       }));
       try {
         const res = await listInto(tabId, prefix, "");
@@ -175,7 +178,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
           loading: { ...t.loading, listing: false },
         }));
       } catch (err) {
-        patch(tabId, (t) => ({ ...t, loading: { ...t.loading, listing: false }, error: errorMessage(err) }));
+        patch(tabId, (t) => ({ ...t, loading: { ...t.loading, listing: false }, listingError: errorMessage(err) }));
         throw err;
       }
     },

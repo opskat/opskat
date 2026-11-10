@@ -14,6 +14,7 @@ import { RedisStreamViewer } from "@/components/query/RedisStreamViewer";
 import { parseRedisCommandLine } from "@/lib/redisCommand";
 import { redisKeyDeleted, toastRedisDeleteFailures } from "@/lib/redisDelete";
 import { errorMessage } from "@/lib/errorMessage";
+import { AsyncState } from "@/components/common/AsyncState";
 
 interface RedisKeyDetailProps {
   tabId: string;
@@ -240,9 +241,12 @@ export function RedisKeyDetail({ tabId }: RedisKeyDetailProps) {
             </div>
           </div>
         ) : !keyInfo ? (
-          <div className="flex flex-1 items-center justify-center">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          </div>
+          <AsyncState
+            status={state.keyDetailError ? "error" : "loading"}
+            error={state.keyDetailError}
+            onRetry={handleRefreshKey}
+            className="flex-1"
+          />
         ) : (
           <>
             {/* Header */}

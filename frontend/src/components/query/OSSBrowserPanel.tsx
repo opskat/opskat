@@ -101,6 +101,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     (prefix: string) => void expandNode(tabId, prefix).catch(fail),
     [expandNode, tabId, fail]
   );
+  const onRetryListing = useCallback(() => void refresh(tabId).catch(fail), [refresh, tabId, fail]);
   const onSelectBucket = useCallback(
     (bucket: string) => void selectBucket(tabId, bucket).catch(fail),
     [selectBucket, tabId, fail]
@@ -261,6 +262,8 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                   objects={state.listing?.objects ?? []}
                   focusedKey={state.focusedKey}
                   loading={state.loading.listing}
+                  error={state.listingError}
+                  onRetry={onRetryListing}
                   loadingPage={state.loading.page}
                   truncated={state.listing?.truncated ?? false}
                   thumbnails={state.thumbnails}
@@ -276,6 +279,8 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                   objects={state.listing?.objects ?? []}
                   selection={state.selection}
                   loading={state.loading.listing}
+                  error={state.listingError}
+                  onRetry={onRetryListing}
                   loadingPage={state.loading.page}
                   truncated={state.listing?.truncated ?? false}
                   focusedKey={state.focusedKey}

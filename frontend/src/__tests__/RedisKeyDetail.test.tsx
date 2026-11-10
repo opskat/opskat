@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { toast } from "sonner";
 import type { redis_svc } from "../../wailsjs/go/models";
@@ -180,6 +180,26 @@ describe("RedisKeyDetail", () => {
 
     fireEvent.click(screen.getByText("query.rawText"));
     expect(screen.getByTestId("redis-string-value").textContent).toBe("hi 中");
+  });
+
+  it("shows why the key failed to load and reloads it on retry, instead of spinning forever", async () => {
+    vi.mocked(RedisGetKeyDetail).mockRejectedValueOnce(new Error("NOPERM no permissions to run GET"));
+
+    render(<RedisKeyDetail tabId="query-10" />);
+    await act(async () => {
+      await useQueryStore.getState().selectKey("query-10", "user:1");
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("NOPERM no permissions to run GET");
+    expect(screen.queryByTestId("redis-string-value")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "action.retry" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("redis-string-value")).toHaveTextContent("value");
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(RedisGetKeyDetail).toHaveBeenCalledTimes(2);
   });
 
   it("executes command input with quoted arguments preserved", async () => {

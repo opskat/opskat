@@ -222,6 +222,7 @@ These project blocks already solve picker / credential / icon / form-field probl
 | `PasswordSourceField` | [`components/asset/PasswordSourceField.tsx`](../frontend/src/components/asset/PasswordSourceField.tsx) | Inline-password vs managed-credential selector; lazy-decrypts an existing secret via backend |
 | `IconPicker` | [`components/asset/IconPicker.tsx`](../frontend/src/components/asset/IconPicker.tsx) | Icon + custom color picker; value is `"name"` or `"name#hexcolor"`; also exports `getIconComponent` / `getIconColor` (§8) |
 | `Segmented` | [`components/asset/fields.tsx`](../frontend/src/components/asset/fields.tsx) | Pill segmented control (radiogroup, floating active pill) — prefer it over a `Select` for a 2–4 option toggle (auth type, key source, connection method) |
+| `AsyncState` | [`components/common/AsyncState.tsx`](../frontend/src/components/common/AsyncState.tsx) | Loading / empty / error+retry block for a region backed by one request (`status` `loading` / `error` / `ready`, `error`, `onRetry`, `empty`); the empty state shows only after a successful empty result (§10) |
 | Asset config-form fields | [`fields.tsx`](../frontend/src/components/asset/fields.tsx) · [`configFields.tsx`](../frontend/src/components/asset/configFields.tsx) · [`ConfigTabs.tsx`](../frontend/src/components/asset/ConfigTabs.tsx) | `Field` / `FieldLabel` label+control primitives plus the schema-driven field/tab renderer (`ConfigGroupSchema` → underline-tab groups) the asset form is built from; the wiring hook is in [`adding-an-asset-type.md` §F3](./references/adding-an-asset-type.md#f3-configsection-and-pure-configts-serialization) |
 
 ### 6.4 Toast (`notify` + sonner)
@@ -359,13 +360,13 @@ UI state is Zustand, **one store per domain** in [`frontend/src/stores/`](../fro
 
 ## 10. State patterns
 
-Every async flow covers the states below. **OpsKat does not ship shared state components** (no `StateScreen` / `EmptyState` / `LoadingState` / `Skeleton` / `Progress` primitive) — the convention is composed inline from primitives and `notify`. Follow the convention consistently; if a state block starts repeating across panes, extract one shared component (and document it here) rather than copy-pasting a third time.
+Every async flow covers the states below. **A region backed by one request uses the shared [`AsyncState`](../frontend/src/components/common/AsyncState.tsx) block** (§6.3): `status="loading"` → spinner; `status="error"` → the failure reason (monospace, 12px) plus a Retry button wired to `onRetry`; `status="ready"` → the `empty` content when it is passed (pass it only for a successful empty result), otherwise the children. A failed load must never fall through to the empty state — "nothing here" after an error hides the failure once the toast fades. There is no `Skeleton` / `Progress` primitive; other states are composed inline from primitives and `notify`. If another state block starts repeating across panes, extract it into a shared component (and document it here) rather than copy-pasting a third time.
 
 | State | Standard presentation |
 | --- | --- |
 | **Loading** | A `Loader2` (`lucide-react`, `animate-spin`, usually `text-primary`/`text-muted-foreground`) sized to context — inline `size-4` in a button/row, larger when a pane is still empty. Keep the pane's shape stable; show the spinner where content will land, don't collapse the layout. |
-| **Empty** | A centered `muted-foreground` icon + a short title + (optional) primary CTA, composed inline. Reuse a neighboring pane's empty block for the same surface rather than re-styling. |
-| **Error** | An inline message with the failure cause; for transient failures raise `toast.error(...)` (bottom-right, §6.4) with specific, actionable copy. Put raw error detail in a `font-mono` block, not the headline. |
+| **Empty** | A centered `muted-foreground` icon + a short title + (optional) primary CTA — passed as `AsyncState`'s `empty` for a request-backed region. Reuse a neighboring pane's empty block for the same surface rather than re-styling. |
+| **Error** | A failed load stays on screen as `AsyncState`'s error block (cause + Retry); for transient failures of an action raise `toast.error(...)` (bottom-right, §6.4) with specific, actionable copy. Put raw error detail in a `font-mono` block, not the headline. |
 | **Success** | `notifySuccess(...)` / `notifyCopied(...)` (top-center, §6.4) for transient confirmation; for a result that stays on screen, render it in place. |
 | **In-progress** | Stream the work (terminal output, query rows, transfer progress) with per-item status, and disable the triggering control with an inline spinner while it runs. |
 

@@ -124,6 +124,8 @@ export interface RedisTabState {
   dbKeyCounts: Record<number, number>;
   scanRequestId?: number;
   keyDetailRequestId?: number;
+  /** Why the selected key's detail failed to load; cleared when a new load starts. */
+  keyDetailError?: string | null;
   openKeyTabs?: string[];
   activeRedisKey?: string | null;
   removedKey?: string;
@@ -1153,6 +1155,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
             ...s.redisStates[tabId],
             selectedKey: key,
             keyInfo: null,
+            keyDetailError: null,
             keyDetailRequestId: requestId,
             openKeyTabs: openKeyTabs.includes(key) ? openKeyTabs : [...openKeyTabs, key],
             activeRedisKey: key,
@@ -1191,8 +1194,21 @@ export const useQueryStore = create<QueryState>((set, get) => ({
           },
         };
       });
-    } catch {
-      /* ignore */
+    } catch (err) {
+      set((s) => {
+        const current = s.redisStates[tabId];
+        if (
+          !current ||
+          current.keyDetailRequestId !== requestId ||
+          current.selectedKey !== key ||
+          current.currentDb !== db
+        ) {
+          return { redisStates: s.redisStates };
+        }
+        return {
+          redisStates: { ...s.redisStates, [tabId]: { ...current, keyDetailError: errorMessage(err) } },
+        };
+      });
     }
   },
 

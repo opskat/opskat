@@ -2,12 +2,15 @@ import type { ReactNode, UIEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Loader2 } from "lucide-react";
 import { shouldLoadNextPage } from "@/lib/ossListScroll";
+import { AsyncState } from "@/components/common/AsyncState";
 
 interface OSSObjectCollectionFrameProps {
   children: ReactNode;
   className: string;
   empty: boolean;
   loading: boolean;
+  error: string | null;
+  onRetry: () => void;
   loadingPage: boolean;
   truncated: boolean;
   testIdPrefix: "oss-list" | "oss-grid";
@@ -20,6 +23,8 @@ export function OSSObjectCollectionFrame({
   className,
   empty,
   loading,
+  error,
+  onRetry,
   loadingPage,
   truncated,
   testIdPrefix,
@@ -28,22 +33,15 @@ export function OSSObjectCollectionFrame({
 }: OSSObjectCollectionFrameProps) {
   const { t } = useTranslation();
 
-  if (loading) {
+  if (loading || error || empty) {
     return (
-      <div
-        className="flex items-center gap-1.5 p-3 text-xs text-muted-foreground"
-        data-testid={`${testIdPrefix}-loading`}
-      >
-        <Loader2 className="size-3.5 animate-spin text-primary" data-testid={`${testIdPrefix}-loading-spinner`} />
-        {t("oss.browser.loading")}
-      </div>
-    );
-  }
-  if (empty) {
-    return (
-      <div className="p-6 text-center text-xs text-muted-foreground" data-testid={`${testIdPrefix}-empty`}>
-        {t("oss.browser.emptyDir")}
-      </div>
+      <AsyncState
+        status={loading ? "loading" : error ? "error" : "ready"}
+        error={error}
+        onRetry={onRetry}
+        empty={t("oss.browser.emptyDir")}
+        className="min-h-0 flex-1"
+      />
     );
   }
 

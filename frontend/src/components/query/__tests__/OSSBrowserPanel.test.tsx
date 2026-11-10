@@ -72,6 +72,57 @@ describe("OSSBrowserPanel", () => {
     expect(screen.queryByTestId("oss-no-bucket")).not.toBeInTheDocument();
   });
 
+  it.each(["list", "grid"] as const)(
+    "shows why the object listing failed in the %s view, not an empty folder, and retries it",
+    async (viewMode) => {
+      useAssetStore.setState({
+        assets: [{ ID: 7, Type: "oss", Config: '{"endpoint":"e","access_key_id":"a","bucket":"ootd"}' }] as never,
+      });
+      vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "ootd", creationDate: 0 }] as never);
+      vi.mocked(OSSListObjects)
+        .mockRejectedValueOnce(new Error("AccessDenied: list not allowed"))
+        .mockResolvedValueOnce({
+          prefixes: [],
+          objects: [
+            { key: "a.txt", size: 1, lastModified: 0, etag: "", storageClass: "", contentType: "", isPrefix: false },
+          ],
+          nextContinuationToken: "",
+          isTruncated: false,
+        } as never);
+      useOssBrowserStore.setState({
+        tabs: {
+          [TAB]: {
+            assetId: 7,
+            buckets: null,
+            currentBucket: "",
+            currentPrefix: "",
+            tree: {},
+            expanded: new Set(),
+            listing: null,
+            selection: new Set(),
+            loading: { buckets: false, listing: false, page: false },
+            error: null,
+            listingError: null,
+            viewMode,
+            focusedKey: null,
+            thumbnails: {},
+          },
+        },
+      });
+
+      render(<OSSBrowserPanel tabId={TAB} />);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("AccessDenied: list not allowed");
+      expect(screen.queryByText("oss.browser.emptyDir")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "action.retry" }));
+
+      expect(await screen.findByText("a.txt")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(OSSListObjects).toHaveBeenCalledTimes(2);
+    }
+  );
+
   it("guards against a missing asset id", () => {
     useTabStore.setState({ tabs: [], activeTabId: null });
     render(<OSSBrowserPanel tabId="nope" />);
