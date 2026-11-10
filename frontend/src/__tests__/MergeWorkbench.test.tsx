@@ -1,4 +1,4 @@
-import { render, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as MonacoNS from "monaco-editor";
 import { ExternalEditMergeWorkbench } from "../components/terminal/external-edit/MergeWorkbench";
@@ -165,5 +165,75 @@ describe("ExternalEditMergeWorkbench", () => {
 
     const saveBtn = container.querySelector('[data-testid="external-edit-merge-workbench"] button:last-of-type');
     expect(saveBtn).toBeTruthy();
+  });
+  it("orders the panes local | final | remote and labels the sides with the local and remote tones", () => {
+    const { container } = render(
+      <ExternalEditMergeWorkbench
+        mergeResult={defaultMergeResult}
+        savingSessionId={null}
+        onClose={vi.fn()}
+        onError={vi.fn()}
+      />
+    );
+
+    const panes = [...container.querySelectorAll("[data-idea-pane]")].map((pane) =>
+      pane.getAttribute("data-idea-pane")
+    );
+    expect(panes).toEqual(["local", "final", "remote"]);
+    const localTitle = within(screen.getByTestId("external-edit-idea-pane-local")).getByText("externalEdit.side.local");
+    const remoteTitle = within(screen.getByTestId("external-edit-idea-pane-remote")).getByText(
+      "externalEdit.side.remote"
+    );
+    expect(localTitle.className).toContain("text-success");
+    expect(remoteTitle.className).toContain("text-info");
+  });
+
+  it("takes the remote or the local version of the current block into the final draft with one click", () => {
+    const mergeResult = {
+      ...defaultMergeResult,
+      localContent: "a\nlocal-1\nb\nlocal-2\nc\n",
+      remoteContent: "a\nremote-1\nb\nremote-2\nc\n",
+      finalContent: "a\nlocal-1\nb\nlocal-2\nc\n",
+    };
+    render(
+      <ExternalEditMergeWorkbench
+        mergeResult={mergeResult}
+        savingSessionId={null}
+        onClose={vi.fn()}
+        onError={vi.fn()}
+      />
+    );
+
+    const finalPane = () => screen.getByTestId("external-edit-merge-final").textContent;
+    fireEvent.click(screen.getByRole("button", { name: "externalEdit.merge.takeRemote" }));
+    expect(finalPane()).toBe("a\nremote-1\nb\nlocal-2\nc\n");
+
+    fireEvent.click(screen.getByRole("button", { name: "externalEdit.merge.next" }));
+    fireEvent.click(screen.getByRole("button", { name: "externalEdit.merge.takeRemote" }));
+    expect(finalPane()).toBe("a\nremote-1\nb\nremote-2\nc\n");
+
+    fireEvent.click(screen.getByRole("button", { name: "externalEdit.merge.previous" }));
+    fireEvent.click(screen.getByRole("button", { name: "externalEdit.merge.takeLocal" }));
+    expect(finalPane()).toBe("a\nlocal-1\nb\nremote-2\nc\n");
+  });
+
+  it("saves the final draft built from the taken blocks", async () => {
+    const applyMerge = vi.fn(async () => ({ status: "saved" }));
+    useExternalEditStore.setState({ applyMerge });
+    render(
+      <ExternalEditMergeWorkbench
+        mergeResult={defaultMergeResult}
+        savingSessionId={null}
+        onClose={vi.fn()}
+        onError={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "externalEdit.merge.takeRemote" }));
+    fireEvent.click(screen.getByRole("button", { name: "externalEdit.actions.saveMerge" }));
+
+    await waitFor(() =>
+      expect(applyMerge).toHaveBeenCalledWith("conflict", "line1\nremote-change\nline3\n", "remote-hash")
+    );
   });
 });

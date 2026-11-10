@@ -64,8 +64,8 @@ export function ExternalEditCompareWorkbench({ compareResult, onDismiss }: Compa
   return (
     <ExternalEditIdeaFrame
       fileName={compareResult.fileName}
-      helper={t("externalEdit.compare.helper")}
-      layoutLabel={t("externalEdit.compare.remoteLeftLocalRight")}
+      helper={t("externalEdit.compare.localLeftHelper")}
+      layoutLabel={t("externalEdit.compare.localLeftRemoteRight")}
       mode="compare"
       remotePath={compareResult.remotePath}
       sidebarLabel={t("externalEdit.compare.projectView")}
@@ -110,35 +110,49 @@ export function ExternalEditCompareWorkbench({ compareResult, onDismiss }: Compa
       }
     >
       <div
-        className="min-h-0 flex-1 bg-card p-2"
+        className="flex min-h-0 flex-1 flex-col gap-2 bg-card p-2"
         data-idea-layout="read-only-diff"
         data-testid="external-edit-compare-idea-layout"
       >
-        <CodeDiffViewer
-          activeBlockIndex={activeBlockIndex}
-          badge={t("externalEdit.compare.readOnly")}
-          className="border-border bg-card text-card-foreground"
-          height="100%"
-          language="plaintext"
-          modified={compareResult.localContent || ""}
-          modifiedTitle={t("externalEdit.compare.localDraft")}
-          navigationToken={navigationToken}
-          original={compareResult.remoteContent || ""}
-          originalTitle={t("externalEdit.compare.remoteSnapshot")}
-          testId="external-edit-compare-diff-editor"
-          onDiffStatsChange={({ total }) => {
-            setWorkbenchState((current) => {
-              const base = getCurrentCompareState(current, compareResult);
-              const nextActiveBlockIndex = Math.min(base.activeBlockIndex, Math.max(total - 1, 0));
-              if (base.diffTotal === total && base.activeBlockIndex === nextActiveBlockIndex) return base;
-              return {
-                ...base,
-                activeBlockIndex: nextActiveBlockIndex,
-                diffTotal: total,
-              };
-            });
-          }}
-        />
+        {/* Monaco 的 original 在左、modified 在右：本地作 original，远端作 modified */}
+        <div
+          className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 text-xs"
+          data-testid="external-edit-compare-side-labels"
+        >
+          <div className="min-w-0 truncate rounded border border-success/30 bg-success/5 px-2 py-1 font-semibold text-success">
+            {t("externalEdit.side.local")}
+          </div>
+          <div className="rounded-full border border-border bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground">
+            {t("externalEdit.compare.readOnly")}
+          </div>
+          <div className="min-w-0 truncate rounded border border-info/30 bg-info/5 px-2 py-1 text-right font-semibold text-info">
+            {t("externalEdit.side.remote")}
+          </div>
+        </div>
+        <div className="min-h-0 flex-1">
+          <CodeDiffViewer
+            activeBlockIndex={activeBlockIndex}
+            className="border-border bg-card text-card-foreground"
+            height="100%"
+            language="plaintext"
+            modified={compareResult.remoteContent || ""}
+            navigationToken={navigationToken}
+            original={compareResult.localContent || ""}
+            testId="external-edit-compare-diff-editor"
+            onDiffStatsChange={({ total }) => {
+              setWorkbenchState((current) => {
+                const base = getCurrentCompareState(current, compareResult);
+                const nextActiveBlockIndex = Math.min(base.activeBlockIndex, Math.max(total - 1, 0));
+                if (base.diffTotal === total && base.activeBlockIndex === nextActiveBlockIndex) return base;
+                return {
+                  ...base,
+                  activeBlockIndex: nextActiveBlockIndex,
+                  diffTotal: total,
+                };
+              });
+            }}
+          />
+        </div>
       </div>
     </ExternalEditIdeaFrame>
   );

@@ -960,8 +960,9 @@ describe("RemoteFileEditorTab", () => {
     });
 
     expect(await screen.findByTestId("external-edit-compare-workbench")).toBeInTheDocument();
-    expect(screen.getByTestId("diff-modified")).toHaveTextContent("listen 8080;");
-    expect(screen.getByTestId("diff-original")).toHaveTextContent("listen 80;");
+    // 本地在左（original）、远端在右（modified）
+    expect(screen.getByTestId("diff-original")).toHaveTextContent("listen 8080;");
+    expect(screen.getByTestId("diff-modified")).toHaveTextContent("listen 80;");
   });
 
   it("renders the strip's diff and external-open actions as icon-only buttons", async () => {

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import type * as MonacoNS from "monaco-editor";
-import { Button, ConfirmDialog } from "@opskat/ui";
+import { Button, cn, ConfirmDialog } from "@opskat/ui";
 import { CodeEditor } from "@/components/CodeEditor";
 import { buildTextDiffBlocks } from "@/lib/textDiffBlocks";
 import type { ExternalEditMergePrepareResult } from "@/lib/externalEditApi";
@@ -14,6 +15,7 @@ import {
   type MergeEditorRefs,
   type MergePaneRole,
 } from "./merge-decorations";
+import { takeMergeBlock } from "./merge-take";
 
 interface MergeWorkbenchProps {
   mergeResult: ExternalEditMergePrepareResult;
@@ -132,6 +134,47 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
     []
   );
 
+  const takeActiveBlock = (side: "local" | "remote") => {
+    // 按钮在没有差异块时禁用，activeBlockIndex 总落在 conflictBlocks 内
+    const next = takeMergeBlock({
+      final: finalContent,
+      local: mergeResult.localContent || "",
+      remote: mergeResult.remoteContent || "",
+      block: conflictBlocks[activeBlockIndex],
+      side,
+    });
+    if (next === null) {
+      toast.error(t("externalEdit.merge.takeBlockUnlocated"));
+      return;
+    }
+    if (next === finalContent) return;
+    setWorkbenchState((current) => ({
+      ...getCurrentMergeState(current, mergeResult),
+      finalContent: next,
+      dirty: true,
+    }));
+  };
+
+  const takeBlockButton = (side: "local" | "remote") => (
+    <Button
+      variant="outline"
+      size="xs"
+      className={cn(
+        "bg-transparent",
+        side === "local"
+          ? "border-success/40 text-success hover:bg-success/10 hover:text-success"
+          : "border-info/40 text-info hover:bg-info/10 hover:text-info"
+      )}
+      disabled={conflictTotal === 0}
+      title={t(side === "local" ? "externalEdit.merge.takeLocalHint" : "externalEdit.merge.takeRemoteHint", {
+        index: activeBlockIndex + 1,
+      })}
+      onClick={() => takeActiveBlock(side)}
+    >
+      {t(side === "local" ? "externalEdit.merge.takeLocal" : "externalEdit.merge.takeRemote")}
+    </Button>
+  );
+
   const handleApply = async () => {
     try {
       await applyMerge(mergeResult.primaryDraftSessionId, finalContent, mergeResult.remoteHash);
@@ -211,8 +254,9 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
           data-testid="external-edit-merge-idea-layout"
         >
           <ExternalEditIdeaEditorPane
+            actions={takeBlockButton("local")}
             badge={t("externalEdit.merge.readOnlySide")}
-            title={t("externalEdit.merge.localDraft")}
+            title={t("externalEdit.side.local")}
             tone="local"
           >
             <CodeEditor
@@ -267,8 +311,9 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
             />
           </ExternalEditIdeaEditorPane>
           <ExternalEditIdeaEditorPane
+            actions={takeBlockButton("remote")}
             badge={t("externalEdit.merge.readOnlySide")}
-            title={t("externalEdit.merge.remoteDraft")}
+            title={t("externalEdit.side.remote")}
             tone="remote"
           >
             <CodeEditor

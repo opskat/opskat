@@ -98,7 +98,9 @@ export function ExternalEditIdeaEditorPane({ actions, badge, children, tone, tit
       <div
         className={cn(
           "flex h-9 items-center justify-between border-b px-3 text-xs",
-          tone === "final" ? "border-warning/30 bg-warning/10" : "border-border bg-card"
+          tone === "final" && "border-warning/30 bg-warning/10",
+          tone === "local" && "border-success/30 bg-success/5",
+          tone === "remote" && "border-info/30 bg-info/5"
         )}
       >
         <span

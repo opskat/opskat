@@ -1,6 +1,16 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, GitMerge } from "lucide-react";
-import { Button, cn, Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@opskat/ui";
+import {
+  Button,
+  cn,
+  ConfirmDialog,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@opskat/ui";
 import type { ExternalEditSession } from "@/lib/externalEditApi";
 import type { ExternalEditAttentionItem } from "@/stores/externalEditStore";
 
@@ -16,6 +26,15 @@ export type ExternalEditPendingItem =
 
 const ACTION_BUTTON_CLASS =
   "!h-auto max-w-full justify-start !whitespace-normal break-words px-2 py-1.5 text-left leading-4";
+
+// 覆盖远程会丢弃远端版本、接收远程会丢弃本地修改：两者都先确认，文案写明被丢弃的一方。
+interface DiscardConfirm {
+  action: "overwrite" | "acceptRemote";
+  session: ExternalEditSession;
+  confirmText: string;
+  title: string;
+  description: string;
+}
 
 interface PendingDialogProps {
   open: boolean;
@@ -47,193 +66,238 @@ export function ExternalEditPendingDialog({
   onContinueEdit,
 }: PendingDialogProps) {
   const { t } = useTranslation();
+  const [discardConfirm, setDiscardConfirm] = useState<DiscardConfirm | null>(null);
+
+  const confirmOverwrite = (session: ExternalEditSession, decision: "pending" | "conflict") =>
+    setDiscardConfirm({
+      action: "overwrite",
+      session,
+      confirmText: t("externalEdit.actions.overwrite"),
+      title: t("externalEdit.builtIn.overwriteConfirmTitle"),
+      description: t(
+        decision === "conflict"
+          ? "externalEdit.builtIn.overwriteConfirmDesc"
+          : "externalEdit.pending.overwriteRecoveryDesc"
+      ),
+    });
+
+  const confirmAcceptRemote = (session: ExternalEditSession, confirmText: string) =>
+    setDiscardConfirm({
+      action: "acceptRemote",
+      session,
+      confirmText,
+      title: t("externalEdit.pending.acceptRemoteConfirmTitle"),
+      description: t("externalEdit.pending.acceptRemoteConfirmDesc"),
+    });
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="max-h-[82vh] max-w-3xl grid-rows-[auto,minmax(0,1fr),auto] gap-0 overflow-hidden p-0"
-        data-testid="external-edit-pending-dialog"
-      >
-        <DialogHeader className="shrink-0 border-b px-6 py-4" data-testid="external-edit-pending-dialog-header">
-          <DialogTitle>{t("externalEdit.pending.title")}</DialogTitle>
-          <DialogDescription>{t("externalEdit.pending.description")}</DialogDescription>
-        </DialogHeader>
-        <div className="min-h-0 space-y-3 overflow-y-auto px-6 py-4" data-testid="external-edit-pending-dialog-body">
-          {pendingItems.length === 0 ? (
-            <div className="rounded border bg-muted/20 px-3 py-4 text-sm text-muted-foreground">
-              {t("externalEdit.pending.empty")}
-            </div>
-          ) : (
-            pendingItems.map((item) => {
-              const session = item.session;
-              const fileName = session.remotePath.split("/").filter(Boolean).pop() || session.remotePath;
-              const isPendingDecision = item.decisionType === "pending";
-              const isConflictDecision = item.decisionType === "conflict";
-              const isError = item.type === "error";
-              const isRemoteMissing = item.type === "remote_missing" || session.state === "remote_missing";
-              const cardTone = isConflictDecision
-                ? "border-warning/30 bg-warning/5"
-                : isPendingDecision
-                  ? "border-info/30 bg-info/5"
-                  : isError
-                    ? "border-destructive/30 bg-destructive/5"
-                    : "border-warning/30 bg-warning/5";
-              return (
-                <div
-                  key={item.id}
-                  className={cn("rounded border px-4 py-4 text-sm", cardTone)}
-                  data-testid={`external-edit-pending-${item.type}`}
-                >
-                  <div className="flex flex-col gap-3">
-                    <div className="min-w-0 space-y-1.5" data-testid={`external-edit-pending-content-${session.id}`}>
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="break-words font-medium text-foreground"
-                          data-testid={`external-edit-pending-file-${session.id}`}
-                        >
-                          {fileName}
-                        </span>
-                        {autoSavePhases?.[session.documentKey] && (
-                          <span className="shrink-0 rounded bg-info/15 px-1.5 py-0.5 text-[10px] font-medium text-info">
-                            {t("externalEdit.saving")}
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent
+          className="max-h-[82vh] max-w-3xl grid-rows-[auto,minmax(0,1fr),auto] gap-0 overflow-hidden p-0"
+          data-testid="external-edit-pending-dialog"
+        >
+          <DialogHeader className="shrink-0 border-b px-6 py-4" data-testid="external-edit-pending-dialog-header">
+            <DialogTitle>{t("externalEdit.pending.title")}</DialogTitle>
+            <DialogDescription>{t("externalEdit.pending.description")}</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 space-y-3 overflow-y-auto px-6 py-4" data-testid="external-edit-pending-dialog-body">
+            {pendingItems.length === 0 ? (
+              <div className="rounded border bg-muted/20 px-3 py-4 text-sm text-muted-foreground">
+                {t("externalEdit.pending.empty")}
+              </div>
+            ) : (
+              pendingItems.map((item) => {
+                const session = item.session;
+                const fileName = session.remotePath.split("/").filter(Boolean).pop() || session.remotePath;
+                const isPendingDecision = item.decisionType === "pending";
+                const isConflictDecision = item.decisionType === "conflict";
+                const isError = item.type === "error";
+                const isRemoteMissing = item.type === "remote_missing" || session.state === "remote_missing";
+                const cardTone = isConflictDecision
+                  ? "border-warning/30 bg-warning/5"
+                  : isPendingDecision
+                    ? "border-info/30 bg-info/5"
+                    : isError
+                      ? "border-destructive/30 bg-destructive/5"
+                      : "border-warning/30 bg-warning/5";
+                return (
+                  <div
+                    key={item.id}
+                    className={cn("rounded border px-4 py-4 text-sm", cardTone)}
+                    data-testid={`external-edit-pending-${item.type}`}
+                  >
+                    <div className="flex flex-col gap-3">
+                      <div className="min-w-0 space-y-1.5" data-testid={`external-edit-pending-content-${session.id}`}>
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="break-words font-medium text-foreground"
+                            data-testid={`external-edit-pending-file-${session.id}`}
+                          >
+                            {fileName}
                           </span>
+                          {autoSavePhases?.[session.documentKey] && (
+                            <span className="shrink-0 rounded bg-info/15 px-1.5 py-0.5 text-[10px] font-medium text-info">
+                              {t("externalEdit.saving")}
+                            </span>
+                          )}
+                        </div>
+                        <div
+                          className="break-all whitespace-normal text-xs text-muted-foreground"
+                          data-testid={`external-edit-pending-path-${session.id}`}
+                        >
+                          {session.remotePath}
+                        </div>
+                        <div
+                          className="break-words whitespace-normal text-xs leading-5 text-muted-foreground"
+                          data-testid={`external-edit-pending-summary-${session.id}`}
+                        >
+                          {isConflictDecision && t("externalEdit.conflict.remoteChangedTitle")}
+                          {isPendingDecision && t("externalEdit.recovery.summary")}
+                          {!isConflictDecision &&
+                            !isPendingDecision &&
+                            !isError &&
+                            isRemoteMissing &&
+                            t("externalEdit.conflict.remoteMissingTitle")}
+                          {isError && (session.lastError?.summary || t("externalEdit.error.title"))}
+                        </div>
+                      </div>
+                      <div
+                        className="flex w-full flex-wrap items-start gap-2"
+                        data-testid={`external-edit-pending-actions-${session.id}`}
+                      >
+                        {isConflictDecision && (
+                          <>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              className={ACTION_BUTTON_CLASS}
+                              disabled={savingSessionId === session.id || session.state !== "conflict"}
+                              onClick={() => void onMerge(session)}
+                            >
+                              <GitMerge className="mr-1 h-3 w-3" />
+                              {t("externalEdit.actions.merge")}
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              className={ACTION_BUTTON_CLASS}
+                              disabled={savingSessionId === session.id || session.state !== "conflict"}
+                              onClick={() => confirmAcceptRemote(session, t("externalEdit.actions.acceptRemote"))}
+                            >
+                              {t("externalEdit.actions.acceptRemote")}
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              className={ACTION_BUTTON_CLASS}
+                              disabled={savingSessionId === session.id || session.state !== "conflict"}
+                              onClick={() => confirmOverwrite(session, "conflict")}
+                            >
+                              {t("externalEdit.actions.overwrite")}
+                            </Button>
+                          </>
+                        )}
+                        {isPendingDecision && (
+                          <>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              className={ACTION_BUTTON_CLASS}
+                              disabled={savingSessionId === session.id}
+                              onClick={() => void onContinueEdit(session, item.sourceType)}
+                            >
+                              {continueEditLabel}
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              className={ACTION_BUTTON_CLASS}
+                              disabled={savingSessionId === session.id}
+                              onClick={() => confirmAcceptRemote(session, t("externalEdit.actions.reread"))}
+                            >
+                              {t("externalEdit.actions.reread")}
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              className={ACTION_BUTTON_CLASS}
+                              disabled={savingSessionId === session.id}
+                              onClick={() => confirmOverwrite(session, "pending")}
+                            >
+                              {t("externalEdit.actions.overwrite")}
+                            </Button>
+                          </>
+                        )}
+                        {!isConflictDecision && !isPendingDecision && isRemoteMissing && (
+                          <>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              className={ACTION_BUTTON_CLASS}
+                              disabled={savingSessionId === session.id}
+                              onClick={() => void onOverwrite(session)}
+                            >
+                              {t("externalEdit.actions.saveAgain")}
+                            </Button>
+                          </>
+                        )}
+                        {isError && (
+                          <>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              className={ACTION_BUTTON_CLASS}
+                              onClick={() => onOpenErrorDetail(session.id)}
+                            >
+                              <AlertTriangle className="mr-1 h-3 w-3" />
+                              {t("externalEdit.actions.viewError")}
+                            </Button>
+                          </>
                         )}
                       </div>
-                      <div
-                        className="break-all whitespace-normal text-xs text-muted-foreground"
-                        data-testid={`external-edit-pending-path-${session.id}`}
-                      >
-                        {session.remotePath}
-                      </div>
-                      <div
-                        className="break-words whitespace-normal text-xs leading-5 text-muted-foreground"
-                        data-testid={`external-edit-pending-summary-${session.id}`}
-                      >
-                        {isConflictDecision && t("externalEdit.conflict.remoteChangedTitle")}
-                        {isPendingDecision && t("externalEdit.recovery.summary")}
-                        {!isConflictDecision &&
-                          !isPendingDecision &&
-                          !isError &&
-                          isRemoteMissing &&
-                          t("externalEdit.conflict.remoteMissingTitle")}
-                        {isError && (session.lastError?.summary || t("externalEdit.error.title"))}
-                      </div>
                     </div>
-                    <div
-                      className="flex w-full flex-wrap items-start gap-2"
-                      data-testid={`external-edit-pending-actions-${session.id}`}
-                    >
-                      {isConflictDecision && (
-                        <>
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            className={ACTION_BUTTON_CLASS}
-                            disabled={savingSessionId === session.id || session.state !== "conflict"}
-                            onClick={() => void onMerge(session)}
-                          >
-                            <GitMerge className="mr-1 h-3 w-3" />
-                            {t("externalEdit.actions.merge")}
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            className={ACTION_BUTTON_CLASS}
-                            disabled={savingSessionId === session.id || session.state !== "conflict"}
-                            onClick={() => void onAcceptRemote(session)}
-                          >
-                            {t("externalEdit.actions.acceptRemote")}
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="destructive"
-                            className={ACTION_BUTTON_CLASS}
-                            disabled={savingSessionId === session.id || session.state !== "conflict"}
-                            onClick={() => void onOverwrite(session)}
-                          >
-                            {t("externalEdit.actions.overwrite")}
-                          </Button>
-                        </>
-                      )}
-                      {isPendingDecision && (
-                        <>
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            className={ACTION_BUTTON_CLASS}
-                            disabled={savingSessionId === session.id}
-                            onClick={() => void onContinueEdit(session, item.sourceType)}
-                          >
-                            {continueEditLabel}
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            className={ACTION_BUTTON_CLASS}
-                            disabled={savingSessionId === session.id}
-                            onClick={() => void onAcceptRemote(session)}
-                          >
-                            {t("externalEdit.actions.reread")}
-                          </Button>
-                          <Button
-                            size="xs"
-                            variant="destructive"
-                            className={ACTION_BUTTON_CLASS}
-                            disabled={savingSessionId === session.id}
-                            onClick={() => void onOverwrite(session)}
-                          >
-                            {t("externalEdit.actions.overwrite")}
-                          </Button>
-                        </>
-                      )}
-                      {!isConflictDecision && !isPendingDecision && isRemoteMissing && (
-                        <>
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            className={ACTION_BUTTON_CLASS}
-                            disabled={savingSessionId === session.id}
-                            onClick={() => void onOverwrite(session)}
-                          >
-                            {t("externalEdit.actions.saveAgain")}
-                          </Button>
-                        </>
-                      )}
-                      {isError && (
-                        <>
-                          <Button
-                            size="xs"
-                            variant="outline"
-                            className={ACTION_BUTTON_CLASS}
-                            onClick={() => onOpenErrorDetail(session.id)}
-                          >
-                            <AlertTriangle className="mr-1 h-3 w-3" />
-                            {t("externalEdit.actions.viewError")}
-                          </Button>
-                        </>
-                      )}
-                    </div>
+                    {mergePrepareErrors[session.id] && (
+                      <div className="mt-2 rounded border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive">
+                        {mergePrepareErrors[session.id]}
+                      </div>
+                    )}
                   </div>
-                  {mergePrepareErrors[session.id] && (
-                    <div className="mt-2 rounded border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive">
-                      {mergePrepareErrors[session.id]}
-                    </div>
-                  )}
-                </div>
-              );
-            })
-          )}
-        </div>
-        <div className="flex shrink-0 justify-end border-t px-6 py-3" data-testid="external-edit-pending-dialog-footer">
-          <Button
-            variant="outline"
-            onClick={() => {
-              onOpenChange(false);
-            }}
+                );
+              })
+            )}
+          </div>
+          <div
+            className="flex shrink-0 justify-end border-t px-6 py-3"
+            data-testid="external-edit-pending-dialog-footer"
           >
-            {t("action.close")}
-          </Button>
-        </div>
-      </DialogContent>
-    </Dialog>
+            <Button
+              variant="outline"
+              onClick={() => {
+                onOpenChange(false);
+              }}
+            >
+              {t("action.close")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <ConfirmDialog
+        open={discardConfirm !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setDiscardConfirm(null);
+        }}
+        title={discardConfirm?.title ?? ""}
+        description={discardConfirm?.description ?? ""}
+        cancelText={t("action.cancel")}
+        confirmText={discardConfirm?.confirmText}
+        onConfirm={() => {
+          if (!discardConfirm) return;
+          setDiscardConfirm(null);
+          const { action, session } = discardConfirm;
+          void (action === "overwrite" ? onOverwrite(session) : onAcceptRemote(session));
+        }}
+      />
+    </>
   );
 }
