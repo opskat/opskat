@@ -84,17 +84,17 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
     <div key={i} className="rounded-lg bg-warning/5 p-2.5 space-y-1.5">
       <div className="flex items-center gap-1.5">
         <TypeBadge type={item.type} command={item.command} compact />
-        {item.asset_name && <span className="text-[11px] text-warning">{item.asset_name}</span>}
+        {item.asset_name && <span className="text-xs text-warning">{item.asset_name}</span>}
       </div>
-      {item.review && <ReviewNotice review={item.review} className="text-[11px]" />}
+      {item.review && <ReviewNotice review={item.review} className="text-xs" />}
       <div className="rounded bg-warning/5 px-2 py-[5px]">
-        <code className="select-text block font-mono text-[10px] text-muted-foreground whitespace-pre-wrap break-all">
+        <code className="select-text block font-mono text-xs text-foreground whitespace-pre-wrap break-all">
           {item.command}
         </code>
       </div>
       {hasPinnedDetail(item) && (
         // 这一条自己的说明（通用资产的目标地址 / 程序名）批准时必须看到，与单条审批一样常驻。
-        <div className="text-[10px] text-muted-foreground/80">
+        <div className="text-[11px] text-muted-foreground/80">
           <div className="select-none">{t(detailSummaryKey(item))}</div>
           <DetailPre text={item.detail} structured={!!item.action} />
         </div>
@@ -151,10 +151,10 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                     : t("ai.approvalSingleTitle")}
           </span>
           {block.agentRole && (
-            <span className="text-[10px] text-muted-foreground bg-muted rounded px-1 py-0.5">{block.agentRole}</span>
+            <span className="text-[11px] text-muted-foreground bg-muted rounded px-1 py-0.5">{block.agentRole}</span>
           )}
         </div>
-        <span className="inline-flex items-center rounded-full bg-warning/15 h-5 px-2 text-[10px] font-semibold text-warning">
+        <span className="inline-flex items-center rounded-full bg-warning/15 h-5 px-2 text-[11px] font-semibold text-warning">
           {t("ai.approvalPending")}
         </span>
       </div>
@@ -198,7 +198,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   className="text-[11px]"
                   labelClassName="text-warning"
                 />
-                {item.review && <ReviewNotice review={item.review} className="text-[11px]" />}
+                {item.review && <ReviewNotice review={item.review} className="text-xs" />}
                 {kind === "grant" ? (
                   <Textarea
                     value={editedCommands[i] || ""}
@@ -210,7 +210,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   <div className="rounded-md bg-warning/5 px-2.5 py-2">
                     <code
                       data-testid="ai-approval-command"
-                      className="select-text block font-mono text-[11px] text-muted-foreground whitespace-pre-wrap break-all"
+                      className="select-text block font-mono text-xs text-foreground whitespace-pre-wrap break-all"
                     >
                       <TruncatedText testId="ai-approval-command-text" text={item.command} />
                     </code>
@@ -220,12 +220,12 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   (kind === "delete" || hasPinnedDetail(item) ? (
                     // 删除不可逆：警告不能藏在一次点击之后，常驻展示而不是 <details> 折叠。
                     // 这一条自己的说明（通用资产的目标地址 / 程序名）批准时必须看到，同样常驻。
-                    <div className="text-[10px] text-muted-foreground/80">
+                    <div className="text-[11px] text-muted-foreground/80">
                       <div className="select-none">{t(detailSummaryKey(item))}</div>
                       <DetailPre text={item.detail} structured={!!item.action} />
                     </div>
                   ) : (
-                    <details className="text-[10px] text-muted-foreground/80">
+                    <details className="text-[11px] text-muted-foreground/80">
                       <summary className="cursor-pointer select-none">{t(detailSummaryKey(item))}</summary>
                       <DetailPre text={item.detail} structured={!!item.action} />
                     </details>
@@ -250,13 +250,13 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
           items={items}
           values={rememberValues}
           onChange={(i, value) => setEditedCommands((prev) => ({ ...prev, [i]: value }))}
-          textClassName="text-[10px]"
+          textClassName="text-[11px]"
           inputClassName="text-[11px] h-8 bg-background border-border"
         />
       )}
       {kind === "local_tool" && rememberMode && (
         <div className="space-y-1.5 pt-0.5">
-          <div className="text-[10px] text-muted-foreground">{t("opsctlApproval.patternLabel")}</div>
+          <div className="text-[11px] text-muted-foreground">{t("opsctlApproval.patternLabel")}</div>
           <Textarea
             value={editedCommands[0] || ""}
             onChange={(e) => setEditedCommands((prev) => ({ ...prev, 0: e.target.value }))}
@@ -264,7 +264,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             rows={Math.max(2, (editedCommands[0] || "").split("\n").length)}
             placeholder={t("opsctlApproval.patternPlaceholder")}
           />
-          <div className="text-[10px] text-muted-foreground/70">{t("ai.approvalLocalToolPatternHint")}</div>
+          <div className="text-[11px] text-muted-foreground/70">{t("ai.approvalLocalToolPatternHint")}</div>
         </div>
       )}
 
@@ -304,7 +304,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
               className="h-8 rounded-md px-4 text-xs bg-warning hover:bg-warning/90 text-warning-foreground font-semibold"
               onClick={() => respond("allow")}
             >
-              {t("ai.approvalApprove")}
+              {t("ai.approvalAllow")}
             </Button>
           </>
         ) : (
@@ -341,7 +341,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                     setRememberMode(true);
                   }}
                 >
-                  {t("opsctlApproval.remember")}
+                  {t("ai.approvalRememberAndAllow")}
                 </Button>
               ))}
             <Button
@@ -350,7 +350,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
               className="h-8 rounded-md px-4 text-xs bg-warning hover:bg-warning/90 text-warning-foreground font-semibold"
               onClick={() => respond("allow")}
             >
-              {rememberMode ? t("ai.approvalOnlyOnce") : t("ai.approvalAllow")}
+              {kind === "single" || kind === "local_tool" ? t("ai.approvalAllowOnce") : t("ai.approvalAllow")}
             </Button>
           </>
         )}
@@ -428,12 +428,13 @@ function TypeBadge({ type, command, compact }: { type: string; command: string; 
     oss: S3Icon,
   };
   const Icon = op?.icon ?? icons[type] ?? Terminal;
-  const label = op ? t(op.labelKey) : type.toUpperCase();
+  const labelKey = op?.labelKey ?? approvalTypePresentation(type).labelKey;
+  const label = labelKey ? t(labelKey) : type;
   if (compact) {
     return (
       <span
         data-testid="approval-type-badge"
-        className="inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-[18px] px-[5px] text-[8px] font-bold text-warning bg-background"
+        className="inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-5 px-1.5 text-[11px] font-bold text-warning bg-background"
       >
         <Icon className="h-[11px] w-[11px]" />
         {label}
@@ -443,7 +444,7 @@ function TypeBadge({ type, command, compact }: { type: string; command: string; 
   return (
     <span
       data-testid="approval-type-badge"
-      className="inline-flex items-center gap-1 rounded border border-warning/30 h-5 px-1.5 text-[9px] font-bold text-warning bg-background"
+      className="inline-flex items-center gap-1 rounded border border-warning/30 h-5 px-1.5 text-[11px] font-bold text-warning bg-background"
     >
       <Icon className="h-3 w-3" />
       {label}
@@ -458,7 +459,7 @@ function ScopeBadge({
 }) {
   const { t } = useTranslation();
   const cls =
-    "inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-[18px] px-[5px] text-[8px] font-semibold text-warning bg-background";
+    "inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-5 px-1.5 text-[11px] font-semibold text-warning bg-background";
   if (item.asset_id > 0) {
     return (
       <span className={cls}>

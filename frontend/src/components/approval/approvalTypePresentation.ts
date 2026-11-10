@@ -9,9 +9,11 @@ export interface ApprovalOp {
 
 /**
  * 一种审批类型(后端 permission.ApprovalTypeFor)在审批界面上与默认呈现的差异。审批组件按类型查
- * 这张表,自己不认识具体类型;没登记的类型全部走默认呈现(类型名大写的徽标、detail 可折叠)。
+ * 这张表,自己不认识具体类型;没登记的类型全部走默认呈现(原始类型名的徽标、detail 可折叠)。
  */
 export interface ApprovalTypePresentation {
+  /** 徽标上的类型名(翻译 key);没登记的类型(扩展的动态资产类型)显示原始类型名。 */
+  labelKey?: string;
   /** 徽标显示操作类型而不是类型名。 */
   op?: (command: string) => ApprovalOp;
   /**
@@ -22,6 +24,25 @@ export interface ApprovalTypePresentation {
 }
 
 const presentations: Record<string, ApprovalTypePresentation> = {
+  ...Object.fromEntries(
+    [
+      "exec",
+      "serial",
+      "sql",
+      "redis",
+      "mongo",
+      "kafka",
+      "grant",
+      "cp",
+      "local_bash",
+      "local_write",
+      "local_edit",
+      "delete",
+      "etcd",
+      "k8s",
+      "oss",
+    ].map((type) => [type, { labelKey: `ai.approvalType.${type}` }])
+  ),
   // 通用资产(permission.ApprovalTypeFor("generic"))。
   generic: { op: genericApprovalOp, pinnedDetailLabelKey: "ai.approvalGenericTarget" },
 };
