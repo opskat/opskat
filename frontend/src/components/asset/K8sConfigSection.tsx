@@ -16,17 +16,17 @@ export function K8sConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
     ? t("asset.k8sKubeconfigEditPlaceholder")
     : t("asset.k8sKubeconfigPlaceholder");
 
+  // kubeconfig 新建必填;编辑态空也可保存(沿用已存的密文)。validate 与 kubeconfig 字段共用。
+  const kubeconfigError = (s: K8sFormState) => (isEditing || s.kubeconfig.trim() ? "" : "asset.formMissingKubeconfig");
+
   const { state, patch } = useConfigSection<K8sFormState>({
     ref,
     editAsset,
     onValidityChange,
     init: (a) => (a ? parseK8sConfig(a.Config ?? "", a.sshTunnelId || 0) : { ...K8S_DEFAULTS }),
     validate: (s) => {
-      // kubeconfig 新建必填;编辑态空也可保存(保全旧 saveDisabledReason 逻辑)。
-      const baseOk = isEditing || !!s.kubeconfig.trim();
-      const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
-      const canSave = baseOk && !proxyChainError;
-      return { canTest: false, canSave, saveDisabledReason: baseOk ? proxyChainError : "asset.formMissingKubeconfig" };
+      const reason = kubeconfigError(s) || proxyChainValidationKey(s.proxyChainLayers);
+      return { canTest: false, canSave: !reason, saveDisabledReason: reason };
     },
     build: async (s, ctx) => {
       let ciphertext = "";
@@ -62,11 +62,13 @@ export function K8sConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
       fields: [
         {
           kind: "custom",
-          render: (s, p) => (
-            <Field label={t("asset.k8sKubeconfig")} required={!isEditing}>
+          error: kubeconfigError,
+          render: (s, p, error) => (
+            <Field label={t("asset.k8sKubeconfig")} required={!isEditing} error={error}>
               {s.showKubeconfig ? (
                 <div className="relative min-w-0 overflow-hidden">
                   <Textarea
+                    aria-invalid={!!error || undefined}
                     value={s.kubeconfig}
                     onChange={(e) => p({ kubeconfig: e.target.value })}
                     placeholder={kubeconfigPlaceholder}
@@ -84,7 +86,13 @@ export function K8sConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
                   </Button>
                 </div>
               ) : (
-                <Button type="button" variant="outline" className="w-full" onClick={() => p({ showKubeconfig: true })}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  aria-invalid={!!error || undefined}
+                  className="w-full"
+                  onClick={() => p({ showKubeconfig: true })}
+                >
                   <Eye className="h-3.5 w-3.5 mr-1" />
                   {isEditing ? t("asset.k8sRevealKubeconfig") : t("asset.k8sEnterKubeconfig")}
                 </Button>

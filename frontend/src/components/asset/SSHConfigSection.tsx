@@ -85,6 +85,19 @@ function AgentSourceSelect({ sources, loading, sourceId, onSourceChange, testid 
   );
 }
 
+/** agent-auth:未选来源 / 未选指纹 / 已存指纹当前缺失 → 禁止保存;绝不推断替代项。validate 与 agent 字段共用。 */
+function sshAgentError(s: SSHFormState): string {
+  if (s.authType !== "agent") return "";
+  if (s.agentMissingFingerprint) return "asset.agentKeyUnavailable";
+  if (s.agentSourceId <= 0) return "asset.agentSourceRequired";
+  return s.agentKeyFingerprint ? "" : "asset.agentKeyRequired";
+}
+
+/** 开了 agent 转发就得选转发来源:validate 与转发来源字段共用。 */
+function sshAgentForwardError(s: SSHFormState): string {
+  return s.agentForwarding && s.agentForwardSourceId <= 0 ? "asset.agentForwardSourceRequired" : "";
+}
+
 export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const { t } = useTranslation();
   // password-auth 凭据复用 db 族抽象;key-auth ssh_key 凭据 + 本地密钥由本 section 自持。
@@ -105,15 +118,8 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
     validate: (s) => {
       const ok = !!s.host.trim();
       const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
-      // agent-auth:未选来源 / 未选指纹 / 已存指纹当前缺失 → 禁止保存;绝不推断替代项。
-      let agentError = "";
-      if (s.authType === "agent") {
-        if (s.agentMissingFingerprint) agentError = "asset.agentKeyUnavailable";
-        else if (s.agentSourceId <= 0) agentError = "asset.agentSourceRequired";
-        else if (!s.agentKeyFingerprint) agentError = "asset.agentKeyRequired";
-      }
-      const agentForwardError =
-        s.agentForwarding && s.agentForwardSourceId <= 0 ? "asset.agentForwardSourceRequired" : "";
+      const agentError = sshAgentError(s);
+      const agentForwardError = sshAgentForwardError(s);
       const canUse = ok && !proxyChainError && !agentError && !agentForwardError;
       return {
         canTest: canUse,
@@ -466,9 +472,11 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
         {
           kind: "custom",
           visibleWhen: (s) => s.authType === "agent",
-          render: () => (
+          error: sshAgentError,
+          // 缺来源画在来源下、缺密钥画在密钥下;已存密钥缺失由下方的醒目提示承担。
+          render: (_s, _p, error) => (
             <div className="flex flex-col gap-4">
-              <Field label={t("asset.agentSource")}>
+              <Field label={t("asset.agentSource")} error={state.agentSourceId <= 0 ? error : undefined}>
                 <AgentSourceSelect
                   sources={agentSources}
                   loading={agentSourceLoading}
@@ -497,7 +505,10 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
                 </div>
               )}
 
-              <Field label={t("asset.agentSelectKey")}>
+              <Field
+                label={t("asset.agentSelectKey")}
+                error={state.agentSourceId > 0 && !state.agentMissingFingerprint ? error : undefined}
+              >
                 {state.agentSourceId <= 0 ? (
                   <p className="text-xs text-muted-foreground">{t("asset.agentSelectSourceFirst")}</p>
                 ) : state.agentSourceId > 0 && agentIdentitySource !== state.agentSourceId ? (
@@ -610,7 +621,8 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
         },
         {
           kind: "custom",
-          render: (s, patchState) => (
+          error: sshAgentForwardError,
+          render: (s, patchState, error) => (
             <div className="flex flex-col gap-4">
               <Field label={t("asset.sshAgentForwarding")}>
                 <Switch
@@ -622,7 +634,7 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
                 />
               </Field>
               {s.agentForwarding && (
-                <Field label={t("asset.sshAgentForwardSource")}>
+                <Field label={t("asset.sshAgentForwardSource")} error={error}>
                   <AgentSourceSelect
                     sources={agentSources}
                     loading={agentSourceLoading}

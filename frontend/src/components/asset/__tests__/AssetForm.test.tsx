@@ -13,6 +13,7 @@ import { notifySuccess } from "@/lib/notify";
 import { toast } from "sonner";
 import { EventsOff } from "../../../../wailsjs/runtime/runtime";
 import { registerExtensionAssetTypes, unregisterExtensionAssetTypes } from "@/extension/assetTypes";
+import { GetDecryptedExtensionConfig } from "../../../../wailsjs/go/extension/Extension";
 import type { ExtManifest } from "@/extension/types";
 
 const mocks = vi.hoisted(() => ({
@@ -271,7 +272,8 @@ describe("AssetForm generic assets", () => {
     const submit = screen.getByTestId("asset-form-submit");
     await waitFor(() => expect(submit).toBeEnabled());
     await userEvent.click(submit);
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("asset.generic.missingRequired"));
+    expect(await screen.findByTestId("generic-required-host")).toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalled();
     expect(CreateAsset).not.toHaveBeenCalled();
 
     await userEvent.type(host, "g.example.com");
@@ -375,7 +377,7 @@ describe("AssetForm validates on save", () => {
     await waitFor(() => expect(UpdateAsset).toHaveBeenCalledTimes(1));
   });
 
-  it("shows the section's reason when no field can carry the error", async () => {
+  it("shows a section rule under its custom field instead of a toast", async () => {
     const serialAsset = new asset_entity.Asset({
       ID: 9,
       Name: "serial",
@@ -388,7 +390,8 @@ describe("AssetForm validates on save", () => {
 
     await userEvent.click(submit);
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("asset.formMissingSerialPort"));
+    expect(await screen.findByText("asset.formMissingSerialPort")).toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalled();
     expect(UpdateAsset).not.toHaveBeenCalled();
   });
 
@@ -458,6 +461,19 @@ describe("extension asset type test connection surfaces the outcome in the form"
     );
     await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith("asset.testConnectionSuccess"));
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("toasts the section's reason when no field can carry it", async () => {
+    // 已存配置还在解密:区块不渲染任何字段,原因只能由壳报出来。
+    vi.mocked(GetDecryptedExtensionConfig).mockReturnValueOnce(new Promise(() => {}));
+    render(<AssetForm open editAsset={acmeAsset} onOpenChange={vi.fn()} />);
+    const submit = await screen.findByTestId("asset-form-submit");
+    await waitFor(() => expect(submit).toBeEnabled());
+
+    await userEvent.click(submit);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("asset.extConfigLoading"));
+    expect(UpdateAsset).not.toHaveBeenCalled();
   });
 
   it("a failed test connection shows the failure to the user", async () => {

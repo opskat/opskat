@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import { renderForSave } from "./rejectedSave";
 import { createRef } from "react";
 import { K8sConfigSection } from "@/components/asset/K8sConfigSection";
 import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
@@ -89,5 +90,16 @@ describe("K8sConfigSection ref 契約", () => {
     render(<K8sConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
     const result = await ref.current!.buildConfig(ctx);
     expect(result.sshTunnelId).toBe(42);
+  });
+});
+
+describe("K8sConfigSection on a rejected save", () => {
+  it("shows a missing kubeconfig under the kubeconfig field when creating", () => {
+    const { rejectSave, reportShown } = renderForSave(<K8sConfigSection ctx={ctx} onValidityChange={vi.fn()} />);
+    expect(screen.queryByText("asset.formMissingKubeconfig")).toBeNull();
+    rejectSave();
+    expect(screen.getByText("asset.formMissingKubeconfig")).toBeInTheDocument();
+    expect(screen.getByTestId("config-tab-error-connection")).toBeInTheDocument();
+    expect(reportShown).toHaveBeenCalled();
   });
 });

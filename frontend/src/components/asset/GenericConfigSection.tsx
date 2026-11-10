@@ -6,7 +6,7 @@ import { ConfigTabs, type ConfigGroup } from "@/components/asset/ConfigTabs";
 import { Fields, type FieldDesc } from "@/components/asset/configFields";
 import { Field, FieldLabel } from "@/components/asset/fields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
-import { useConfigSection } from "@/components/asset/useConfigSection";
+import { useConfigSection, useSaveAttempt } from "@/components/asset/useConfigSection";
 import { useAssetCredential } from "@/components/asset/useAssetCredential";
 import { CustomTypeEditorDialog } from "@/components/settings/CustomTypeEditorDialog";
 import { useAssetStore } from "@/stores/assetStore";
@@ -185,8 +185,9 @@ function GenericTypeForm({
   });
 
   const missing = new Set(genericMissingFields(ct, state));
-  // 编辑态直接标出缺值(常见入口是详情页的「去填写」);新建时等用户动过该字段再标。
-  const showRequired = (name: string) => missing.has(name) && (touched[name] || !!editAsset);
+  // 编辑态直接标出缺值(常见入口是详情页的「去填写」);新建时等用户动过该字段、或点过保存被拒后再标。
+  const saveAttempt = useSaveAttempt();
+  const showRequired = (name: string) => missing.has(name) && (touched[name] || !!editAsset || saveAttempt > 0);
   const touch = (name: string) => setTouched((m) => (m[name] ? m : { ...m, [name]: true }));
 
   const setValue = (name: string, value: string) => {
@@ -284,11 +285,14 @@ function GenericTypeForm({
     ...tlsCertFields<GenericFormState>(),
   ];
 
-  const groups: ConfigGroup[] = [{ key: "config", label: "asset.generic.tabConfig", render: renderFields }];
+  const groups: ConfigGroup[] = [
+    { key: "config", label: "asset.generic.tabConfig", error: missing.size > 0, render: renderFields },
+  ];
   if (isHttp) {
     groups.push({
       key: "connection",
       label: "asset.tabConnection",
+      error: !!proxyChainValidationKey(state.proxyChainLayers),
       render: () => <Fields fields={connectionFields} state={state} patch={patch} />,
     });
   }

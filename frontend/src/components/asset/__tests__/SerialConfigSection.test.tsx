@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import { renderForSave } from "./rejectedSave";
 import { createRef } from "react";
 import { vi } from "vitest";
 import { buildSerialConfig, parseSerialConfig, SERIAL_DEFAULTS } from "@/components/asset/SerialConfigSection.config";
@@ -97,5 +98,15 @@ describe("SerialConfigSection ref 契约", () => {
     const ref = createRef<AssetFormHandle>();
     render(<SerialConfigSection ref={ref} editAsset={editAsset} ctx={fakeCtx} onValidityChange={onValidity} />);
     expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" });
+  });
+});
+
+describe("SerialConfigSection on a rejected save", () => {
+  it("shows a missing port path under the port field", () => {
+    const { rejectSave, reportShown } = renderForSave(<SerialConfigSection ctx={fakeCtx} onValidityChange={vi.fn()} />);
+    expect(screen.queryByText("asset.formMissingSerialPort")).toBeNull();
+    rejectSave();
+    expect(screen.getByText("asset.formMissingSerialPort")).toBeInTheDocument();
+    expect(reportShown).toHaveBeenCalled();
   });
 });

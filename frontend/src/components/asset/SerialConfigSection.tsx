@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { RefreshCw } from "lucide-react";
-import { Field } from "@/components/asset/fields";
+import { CheckedField, Field } from "@/components/asset/fields";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { ListSerialPorts } from "../../../wailsjs/go/serial/Serial";
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
@@ -31,6 +31,11 @@ const PARITY_OPTIONS = ["none", "odd", "even", "mark", "space"];
 // 因为 go.bug.st/serial v1.6.4 自身不暴露这条配置，而 nativeOpen 会强制关闭它。
 const FLOW_CONTROL_OPTIONS = ["none", "hardware"];
 
+/** 串口路径必填:validate 与端口字段共用。 */
+function serialPortError(portPath: string): string {
+  return portPath.trim() ? "" : "asset.formMissingSerialPort";
+}
+
 export function SerialConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const { t } = useTranslation();
   const [ports, setPorts] = useState<SerialPortInfo[]>([]);
@@ -45,8 +50,8 @@ export function SerialConfigSection({ editAsset, onValidityChange, ref }: Config
     onValidityChange,
     init: (a) => (a ? parseSerialConfig(a.Config) : { ...SERIAL_DEFAULTS }),
     validate: (s) => {
-      const ok = !!s.portPath.trim();
-      return { canTest: ok, canSave: ok, saveDisabledReason: ok ? "" : "asset.formMissingSerialPort" };
+      const reason = serialPortError(s.portPath);
+      return { canTest: !reason, canSave: !reason, saveDisabledReason: reason };
     },
     build: async (s) => ({ configJSON: buildSerialConfig(s), sshTunnelId: 0 }),
     buildTest: async (s) => ({ assetType: "serial", configJSON: buildSerialConfig(s), password: "" }),
@@ -93,7 +98,8 @@ export function SerialConfigSection({ editAsset, onValidityChange, ref }: Config
 
   return (
     <div className="flex flex-col gap-4">
-      <Field
+      <CheckedField
+        error={serialPortError(state.portPath)}
         label={
           <span className="flex w-full items-center justify-between">
             {t("asset.serialPortPath")}
@@ -112,34 +118,39 @@ export function SerialConfigSection({ editAsset, onValidityChange, ref }: Config
         }
         required
       >
-        <Select value={selectValue} onValueChange={handlePortSelect}>
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder={t("asset.serialPortPathPlaceholder")} />
-          </SelectTrigger>
-          <SelectContent>
-            {ports.map((p) => (
-              <SelectItem key={p.name} value={p.name}>
-                {p.displayName}
-                {p.serialNumber ? ` (${p.serialNumber})` : ""}
-              </SelectItem>
-            ))}
-            {ports.length === 0 && !loadingPorts && (
-              <SelectItem value={NO_PORTS_PLACEHOLDER} disabled>
-                {t("asset.serialNoPortsDetected")}
-              </SelectItem>
+        {(invalid) => (
+          <>
+            <Select value={selectValue} onValueChange={handlePortSelect}>
+              <SelectTrigger className="w-full" aria-invalid={(invalid && !customMode) || undefined}>
+                <SelectValue placeholder={t("asset.serialPortPathPlaceholder")} />
+              </SelectTrigger>
+              <SelectContent>
+                {ports.map((p) => (
+                  <SelectItem key={p.name} value={p.name}>
+                    {p.displayName}
+                    {p.serialNumber ? ` (${p.serialNumber})` : ""}
+                  </SelectItem>
+                ))}
+                {ports.length === 0 && !loadingPorts && (
+                  <SelectItem value={NO_PORTS_PLACEHOLDER} disabled>
+                    {t("asset.serialNoPortsDetected")}
+                  </SelectItem>
+                )}
+                <SelectItem value={CUSTOM_PORT}>{t("asset.serialManualInput")}</SelectItem>
+              </SelectContent>
+            </Select>
+            {customMode && (
+              <Input
+                aria-invalid={invalid || undefined}
+                value={state.portPath}
+                onChange={(e) => patch({ portPath: e.target.value })}
+                placeholder={t("asset.serialPortPathPlaceholder")}
+                className="mt-2 font-mono"
+              />
             )}
-            <SelectItem value={CUSTOM_PORT}>{t("asset.serialManualInput")}</SelectItem>
-          </SelectContent>
-        </Select>
-        {customMode && (
-          <Input
-            value={state.portPath}
-            onChange={(e) => patch({ portPath: e.target.value })}
-            placeholder={t("asset.serialPortPathPlaceholder")}
-            className="mt-2 font-mono"
-          />
+          </>
         )}
-      </Field>
+      </CheckedField>
 
       <div className="flex items-end gap-3">
         <Field label={t("asset.serialBaudRate")} className="flex-1">

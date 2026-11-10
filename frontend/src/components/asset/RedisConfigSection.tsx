@@ -19,7 +19,9 @@ import {
   parseNodeAddressMap,
   parseRedisConfig,
   parseRedisNodes,
+  redisMasterNameError,
   redisModeRequiredKey,
+  redisNodesError,
   resolveSaveSentinelPassword,
   resolveTestSentinelPassword,
   REDIS_DEFAULTS,
@@ -360,6 +362,7 @@ export function RedisConfigSection({ editAsset, ctx, onValidityChange, ref }: Co
           label: "asset.redisSeedNodes",
           visibleWhen: (s) => s.mode === "cluster",
           required: true,
+          error: (s) => redisNodesError(s.nodes),
           mono: true,
           rows: 3,
           placeholder: "10.0.0.1:6379\n10.0.0.2:6379",
@@ -369,14 +372,16 @@ export function RedisConfigSection({ editAsset, ctx, onValidityChange, ref }: Co
         {
           kind: "custom",
           visibleWhen: (s) => s.mode === "sentinel",
-          render: (s, patchFn) => {
+          error: (s) => redisNodesError(s.nodes),
+          render: (s, patchFn, error) => {
             const otherSentinels = lastProbe?.sentinel?.otherSentinels ?? [];
             const current = parseRedisNodes(s.nodes);
             const missing = otherSentinels.filter((addr) => !current.includes(addr));
             return (
-              <Field label={t("asset.redisSentinelNodes")} required>
+              <Field label={t("asset.redisSentinelNodes")} required error={error}>
                 <Textarea
                   data-testid="redis-nodes-textarea"
+                  aria-invalid={!!error || undefined}
                   rows={3}
                   className="font-mono text-sm"
                   value={s.nodes}
@@ -407,11 +412,13 @@ export function RedisConfigSection({ editAsset, ctx, onValidityChange, ref }: Co
         {
           kind: "custom",
           visibleWhen: (s) => s.mode === "sentinel",
-          render: (s, patchFn) => (
-            <Field label={t("asset.redisMasterName")} required>
+          error: (s) => redisMasterNameError(s.masterName),
+          render: (s, patchFn, error) => (
+            <Field label={t("asset.redisMasterName")} required error={error}>
               <div className="flex gap-2">
                 <Input
                   data-testid="redis-master-name-input"
+                  aria-invalid={!!error || undefined}
                   className="flex-1 font-mono"
                   value={s.masterName}
                   onChange={(e) => patchFn({ masterName: e.target.value })}
@@ -562,6 +569,8 @@ export function RedisConfigSection({ editAsset, ctx, onValidityChange, ref }: Co
         {
           kind: "custom",
           visibleWhen: (s) => s.mode !== "standalone",
+          // 映射的错误(带行号)本来就实时画在输入框下;这里只让页签带标记、保存被拒时切过来。
+          error: (s) => nodeAddressMapValidationKey(s.nodeAddressMap),
           render: (s, patchFn) => {
             const unreachable = lastProbe?.cluster?.unreachableNodes ?? [];
             const listed = listedMappingAnnouncedAddresses(s.nodeAddressMap);

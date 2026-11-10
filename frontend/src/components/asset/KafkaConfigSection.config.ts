@@ -108,6 +108,11 @@ export function kafkaBrokers(brokersText: string): string[] {
     .filter(Boolean);
 }
 
+/** 至少要能解析出一个 broker:validate 与 brokers 字段共用。 */
+export function kafkaBrokersError(brokersText: string): string {
+  return kafkaBrokers(brokersText).length > 0 ? "" : "asset.formMissingKafkaBrokers";
+}
+
 /** 主连接 base config(无凭据、无伴随;键序锁旧 buildKafkaConfig,末尾 ssh_asset_id|proxy 按 connectionType 二选一)。
  *  section 据此追加主凭据/伴随后再 stringify。proxyPassword / proxyChainSecrets 由调用方预解析;
  *  tlsKey 是 resolveTLSKey 预解析出的 TLS 私钥密文(保存与测试相同)。 */

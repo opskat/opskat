@@ -25,6 +25,8 @@ import {
   buildDatabaseConfig,
   kerberosActive,
   parseDatabaseConfig,
+  sqlitePathError,
+  sqliteSSHError,
   withDriverAuthMethod,
   DATABASE_DEFAULTS,
   type DatabaseFormState,
@@ -74,8 +76,9 @@ function DatabaseConfigForm({
       const needsHost = driverUsesField(d, "host");
       const isRemote = driverUsesField(d, "sqlite_source") && s.sqliteSource === "remote_ssh_vfs";
       const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
-      const baseOk =
-        (!needsPath || !!s.path.trim()) && (!isRemote || s.sshTunnelId > 0) && (!needsHost || !!s.host.trim());
+      const pathError = needsPath ? sqlitePathError(s.path) : "";
+      const sshError = isRemote ? sqliteSSHError(s.sshTunnelId) : "";
+      const baseOk = !pathError && !sshError && (!needsHost || !!s.host.trim());
       const driverFieldInvalid = invalidDriverField(d, s);
       const driverFieldsOk = !driverFieldInvalid && !missingRequiredDriverField(d, s);
       const krbReason = kerberosActive(s, d) ? kerberosInvalidReason(s) : "";
@@ -86,10 +89,10 @@ function DatabaseConfigForm({
         else if (baseOk && driverFieldInvalid) saveDisabledReason = "asset.formInvalidDriverField";
         else if (baseOk && !driverFieldsOk) saveDisabledReason = "asset.formMissingDriverField";
         else if (baseOk) saveDisabledReason = krbReason;
-        else if (isRemote && s.path.trim() && s.sshTunnelId <= 0) {
-          saveDisabledReason = "asset.formMissingSQLiteSSH";
-        } else if (needsPath && !s.path.trim()) {
-          saveDisabledReason = "asset.formMissingPath";
+        else if (s.path.trim() && sshError) {
+          saveDisabledReason = sshError;
+        } else if (pathError) {
+          saveDisabledReason = pathError;
         } else {
           saveDisabledReason = "asset.formMissingHost";
         }

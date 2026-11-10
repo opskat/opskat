@@ -1,5 +1,7 @@
 import type { ComponentType, ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@opskat/ui";
+import { useShownError } from "@/components/asset/useConfigSection";
 
 /** 资产表单字段标签:11px、字距 0.3、弱化色,贴合 v3 设计稿。 */
 export function FieldLabel({
@@ -44,6 +46,31 @@ export function Field({
       {children}
       {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
+  );
+}
+
+/**
+ * 按资产表单的保存约定校验的字段:error 是该字段当前的错误(i18n key,空串 = 无错),只在保存被拒后
+ * 画在控件下并向壳报告;children 拿到 invalid 给控件设 aria-invalid。声明式字段走 FieldDesc.error,
+ * 这个给区块里手写的控件用。
+ */
+export function CheckedField({
+  error,
+  children,
+  ...field
+}: {
+  label?: ReactNode;
+  required?: boolean;
+  className?: string;
+  error: string;
+  children: (invalid: boolean) => ReactNode;
+}) {
+  const { t } = useTranslation();
+  const invalid = useShownError(error !== "");
+  return (
+    <Field {...field} error={invalid ? t(error) : undefined}>
+      {children(invalid)}
+    </Field>
   );
 }
 

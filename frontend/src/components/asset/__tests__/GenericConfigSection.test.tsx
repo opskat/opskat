@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { renderForSave } from "./rejectedSave";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { GenericConfigSection } from "@/components/asset/GenericConfigSection";
@@ -342,5 +343,23 @@ describe("GenericConfigSection", () => {
       expect(switched.tls_ca_file).toBeUndefined();
       expect((await tested(ref)).tls_ca_file).toBeUndefined();
     });
+  });
+});
+
+describe("GenericConfigSection on a rejected save", () => {
+  it("marks untouched required fields under themselves and reports them as shown", async () => {
+    const { rejectSave, reportShown } = renderForSave(
+      <GenericConfigSection ctx={ctx} variant="grafana" onValidityChange={() => {}} />
+    );
+    const host = await screen.findByTestId("generic-field-host");
+    expect(screen.queryByTestId("generic-required-host")).toBeNull();
+
+    rejectSave();
+
+    expect(screen.getByTestId("generic-required-host")).toBeInTheDocument();
+    expect(screen.getByTestId("generic-required-token")).toBeInTheDocument();
+    expect(host).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByTestId("config-tab-error-config")).toBeInTheDocument();
+    expect(reportShown).toHaveBeenCalled();
   });
 });

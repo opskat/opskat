@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
+import { renderForSave } from "./rejectedSave";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { createRef } from "react";
 import { SSHConfigSection } from "@/components/asset/SSHConfigSection";
@@ -533,5 +534,44 @@ describe("SSHConfigSection Agent 认证", () => {
     expect(parsed.auth_type).toBe("password");
     expect(parsed.agent_source_id).toBeUndefined();
     expect(parsed.agent_key_fingerprint).toBeUndefined();
+  });
+});
+
+describe("SSHConfigSection on a rejected save", () => {
+  it("shows a missing agent source under the agent source field", async () => {
+    const editAsset = new asset_entity.Asset({
+      ID: 5,
+      Type: "ssh",
+      Config: '{"host":"h","port":22,"username":"u","auth_type":"agent"}',
+    });
+    const { rejectSave, reportShown } = renderForSave(
+      <SSHConfigSection editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />
+    );
+    await screen.findByText("asset.agentNoSources");
+    expect(screen.queryByText("asset.agentSourceRequired")).toBeNull();
+
+    rejectSave();
+
+    expect(screen.getByText("asset.agentSourceRequired")).toBeInTheDocument();
+    expect(screen.getByTestId("config-tab-error-connection")).toBeInTheDocument();
+    expect(reportShown).toHaveBeenCalled();
+  });
+
+  it("switches to Advanced and shows a missing forwarding source under its field", async () => {
+    const editAsset = new asset_entity.Asset({
+      ID: 5,
+      Type: "ssh",
+      Config: '{"host":"h","port":22,"username":"u","auth_type":"password","agent_forwarding":true}',
+    });
+    const { rejectSave } = renderForSave(
+      <SSHConfigSection editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />
+    );
+    await screen.findByTestId("ssh-host-input");
+
+    rejectSave();
+
+    expect(screen.getByTestId("config-tab-advanced")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("config-tab-error-advanced")).toBeInTheDocument();
+    expect(screen.getByText("asset.agentForwardSourceRequired")).toBeInTheDocument();
   });
 });
