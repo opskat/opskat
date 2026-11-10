@@ -13,8 +13,6 @@ import { registerTabCloseHook, type QueryTabMeta } from "./tabStore";
 import { useOssBrowserStore } from "./ossBrowserStore";
 import i18n from "../i18n";
 
-const DONE_LINGER_MS = 5000;
-
 export type OssTransferStatus = "active" | "done" | "error" | "cancelled";
 
 export interface OssTransfer {
@@ -30,7 +28,14 @@ export interface OssTransfer {
   speed: number;
   status: OssTransferStatus;
   error?: string;
+  /** 重试所需参数（调用入口的原始实参）。 */
+  retry: OssRetrySpec;
 }
+
+export type OssRetrySpec =
+  | { kind: "upload"; assetId: number; bucket: string; prefix: string; localPath: string; key: string }
+  | { kind: "download"; assetId: number; bucket: string; key: string }
+  | { kind: "downloadFolder"; assetId: number; bucket: string; prefix: string };
 
 interface OssTransferProgressEvent {
   transferId: string;
@@ -77,9 +82,11 @@ interface OssTransferState {
     prefix: string,
     localPath: string,
     key?: string
-  ) => Promise<void>;
-  startDownload: (tabId: string, assetId: number, bucket: string, key: string) => Promise<void>;
-  startDownloadFolder: (tabId: string, assetId: number, bucket: string, prefix: string) => Promise<void>;
+  ) => Promise<string | null>;
+  startDownload: (tabId: string, assetId: number, bucket: string, key: string) => Promise<string | null>;
+  startDownloadFolder: (tabId: string, assetId: number, bucket: string, prefix: string) => Promise<string | null>;
+  /** 用原参数重新发起失败/已取消的传输；新行取代旧行（下载会重新询问保存位置）。 */
+  retry: (tabId: string, transferId: string) => Promise<void>;
   cancel: (transferId: string) => void;
   clear: (tabId: string, transferId: string) => void;
   clearCompleted: (tabId: string) => void;
@@ -153,9 +160,6 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
           EventsOff(eventName);
           const done = get().tabs[tabId]?.transfers[transferId];
           if (done?.direction === "upload") maybeRefreshAfterUpload(tabId, done.targetPrefix);
-          setTimeout(() => {
-            if (get().tabs[tabId]?.transfers[transferId]?.status === "done") removeTransfer(tabId, transferId);
-          }, DONE_LINGER_MS);
           break;
         }
         case "cancelled":
@@ -191,13 +195,14 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
     startUploadPath: async (tabId, assetId, bucket, prefix, localPath, key = prefix + basename(localPath)) => {
       const name = basename(key);
       const id = await OSSUploadObjectPath(assetId, bucket, key, localPath);
-      if (!id) return;
+      if (!id) return null;
       addTransfer({
         transferId: id,
         tabId,
         direction: "upload",
         name,
         targetPrefix: prefix,
+        retry: { kind: "upload", assetId, bucket, prefix, localPath, key },
         bytesDone: 0,
         bytesTotal: 0,
         speed: 0,
@@ -205,16 +210,18 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
       });
       subscribeProgress(tabId, id);
       await OSSStartTransfer(id);
+      return id;
     },
 
     startDownload: async (tabId, assetId, bucket, key) => {
       const id = await OSSDownloadObject(assetId, bucket, key);
-      if (!id) return; // 空串 = 用户取消保存对话框
+      if (!id) return null; // 空串 = 用户取消保存对话框
       addTransfer({
         transferId: id,
         tabId,
         direction: "download",
         name: basename(key),
+        retry: { kind: "download", assetId, bucket, key },
         bytesDone: 0,
         bytesTotal: 0,
         speed: 0,
@@ -222,17 +229,19 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
       });
       subscribeProgress(tabId, id);
       await OSSStartTransfer(id);
+      return id;
     },
 
     startDownloadFolder: async (tabId, assetId, bucket, prefix) => {
       const id = await OSSDownloadFolder(assetId, bucket, prefix);
-      if (!id) return; // 空串 = 用户取消目录对话框
+      if (!id) return null; // 空串 = 用户取消目录对话框
       addTransfer({
         transferId: id,
         tabId,
         direction: "download",
         name: basename(prefix),
         files: { done: 0, total: 0 },
+        retry: { kind: "downloadFolder", assetId, bucket, prefix },
         bytesDone: 0,
         bytesTotal: 0,
         speed: 0,
@@ -240,6 +249,20 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
       });
       subscribeProgress(tabId, id);
       await OSSStartTransfer(id);
+      return id;
+    },
+
+    retry: async (tabId, transferId) => {
+      const old = get().tabs[tabId]?.transfers[transferId];
+      if (!old) return;
+      const r = old.retry;
+      const newId =
+        r.kind === "upload"
+          ? await get().startUploadPath(tabId, r.assetId, r.bucket, r.prefix, r.localPath, r.key)
+          : r.kind === "download"
+            ? await get().startDownload(tabId, r.assetId, r.bucket, r.key)
+            : await get().startDownloadFolder(tabId, r.assetId, r.bucket, r.prefix);
+      if (newId) removeTransfer(tabId, transferId);
     },
 
     cancel: (transferId) => {

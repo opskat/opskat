@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { OSSTransferDock } from "../OSSTransferDock";
-import type { OssTransfer } from "@/stores/ossTransferStore";
+import { useOssTransferStore, type OssTransfer } from "@/stores/ossTransferStore";
 
 function tx(over: Partial<OssTransfer>): OssTransfer {
   return {
@@ -13,6 +13,7 @@ function tx(over: Partial<OssTransfer>): OssTransfer {
     bytesTotal: 100,
     speed: 1024,
     status: "active",
+    retry: { kind: "upload", assetId: 1, bucket: "b", prefix: "", localPath: "/x/a.txt", key: "a.txt" },
     ...over,
   };
 }
@@ -99,5 +100,47 @@ describe("OSSTransferDock", () => {
       />
     );
     expect(screen.getByTestId("oss-transfer-clear-completed")).toBeEnabled();
+  });
+
+  const renderOne = (over: Partial<OssTransfer>) =>
+    render(<OSSTransferDock transfers={[tx(over)]} onCancel={vi.fn()} onClear={vi.fn()} onClearCompleted={vi.fn()} />);
+
+  it("labels every state with text, not just an icon colour", () => {
+    for (const [status, key] of [
+      ["active", "sftp.transferring"],
+      ["done", "sftp.completed"],
+      ["error", "sftp.failed"],
+      ["cancelled", "sftp.cancelled"],
+    ] as const) {
+      const { unmount } = renderOne({ status });
+      expect(screen.getByTestId("oss-transfer-state-t1")).toHaveTextContent(key);
+      unmount();
+    }
+  });
+
+  it("shows transferred/total size and speed while active", () => {
+    renderOne({ bytesDone: 2048, bytesTotal: 4096, speed: 1024 });
+    expect(screen.getByText("2.0 KB/4.0 KB")).toBeInTheDocument();
+    expect(screen.getByText("1.0 KB/s")).toBeInTheDocument();
+  });
+
+  it("shows the failure reason in the row and retries through the store", () => {
+    const retry = vi.fn().mockResolvedValue(undefined);
+    useOssTransferStore.setState({ retry });
+    renderOne({ status: "error", error: "AccessDenied: no permission" });
+    expect(screen.getByText("AccessDenied: no permission")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("oss-transfer-retry-t1"));
+    expect(retry).toHaveBeenCalledWith("q", "t1");
+  });
+
+  it("offers retry for cancelled rows but not for done or active ones", () => {
+    const { unmount } = renderOne({ status: "cancelled" });
+    expect(screen.getByTestId("oss-transfer-retry-t1")).toBeInTheDocument();
+    unmount();
+    for (const status of ["done", "active"] as const) {
+      const r = renderOne({ status });
+      expect(screen.queryByTestId("oss-transfer-retry-t1")).toBeNull();
+      r.unmount();
+    }
   });
 });

@@ -1,7 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useSFTPStore, type SFTPTransfer } from "../stores/sftpStore";
 import { SFTPUploadFile } from "../../wailsjs/go/ssh/SSH";
-import { SFTPDownload, SFTPCancelTransfer } from "../../wailsjs/go/ssh/SSH";
+import { SFTPDownload, SFTPDownloadDir, SFTPCancelTransfer } from "../../wailsjs/go/ssh/SSH";
+import { EventsOn } from "../../wailsjs/runtime/runtime";
+
+function emit(transferId: string, event: Record<string, unknown>) {
+  const call = vi
+    .mocked(EventsOn)
+    .mock.calls.filter((c) => c[0] === "transfer:progress:" + transferId)
+    .at(-1);
+  if (!call) throw new Error("no EventsOn for " + transferId);
+  (call[1] as (e: unknown) => void)({ transferId, ...event });
+}
 
 function makeTransfer(
   id: string,
@@ -262,6 +272,87 @@ describe("sftpStore", () => {
       expect(result).toBe("dl-123");
       expect(useSFTPStore.getState().transfers["dl-123"].tabId).toBe("tab1");
       expect(useSFTPStore.getState().transfers["dl-123"].direction).toBe("download");
+    });
+  });
+
+  describe("finished rows", () => {
+    const target = { tabId: "tab1", sessionId: "s1" };
+
+    it("keeps a done row until the user clears it", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(SFTPUploadFile).mockResolvedValue("u1");
+        await useSFTPStore.getState().startUploadFile(target, "/l/a.txt", "/r/a.txt");
+        emit("u1", { status: "done" });
+        vi.advanceTimersByTime(60_000);
+        expect(useSFTPStore.getState().transfers["u1"].status).toBe("done");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("an explicit cancelled event is cancelled; any error stays failed with its reason", async () => {
+      vi.mocked(SFTPUploadFile).mockResolvedValueOnce("u1").mockResolvedValueOnce("u2");
+      await useSFTPStore.getState().startUploadFile(target, "/l/a.txt", "/r/a.txt");
+      await useSFTPStore.getState().startUploadFile(target, "/l/b.txt", "/r/b.txt");
+      emit("u1", { status: "cancelled" });
+      emit("u2", { status: "error", error: "wrapped: context canceled by peer" });
+      expect(useSFTPStore.getState().transfers["u1"].status).toBe("cancelled");
+      expect(useSFTPStore.getState().transfers["u2"].status).toBe("error");
+      expect(useSFTPStore.getState().transfers["u2"].error).toBe("wrapped: context canceled by peer");
+    });
+
+    it("records the local path a download finished at", async () => {
+      vi.mocked(SFTPDownload).mockResolvedValue("d1");
+      await useSFTPStore.getState().startDownload(target, "/r/a.txt");
+      emit("d1", { status: "done", localPath: "/Users/me/a.txt" });
+      expect(useSFTPStore.getState().transfers["d1"].localPath).toBe("/Users/me/a.txt");
+    });
+  });
+
+  describe("retryTransfer", () => {
+    const target = { tabId: "tab1", sessionId: "s1" };
+    beforeEach(() => {
+      vi.mocked(SFTPUploadFile).mockReset();
+      vi.mocked(SFTPDownload).mockReset();
+      vi.mocked(SFTPDownloadDir).mockReset();
+    });
+
+    it("re-runs a failed upload with the same local and remote paths and replaces the row", async () => {
+      vi.mocked(SFTPUploadFile).mockResolvedValueOnce("u1").mockResolvedValueOnce("u2");
+      await useSFTPStore.getState().startUploadFile(target, "/l/a.txt", "/r/a.txt");
+      emit("u1", { status: "error", error: "boom" });
+
+      await useSFTPStore.getState().retryTransfer("u1");
+
+      expect(SFTPUploadFile).toHaveBeenLastCalledWith("s1", "/l/a.txt", "/r/a.txt");
+      const ids = Object.keys(useSFTPStore.getState().transfers);
+      expect(ids).toEqual(["u2"]);
+      expect(useSFTPStore.getState().transfers["u2"].status).toBe("active");
+    });
+
+    it("re-runs a failed download and a failed directory download", async () => {
+      vi.mocked(SFTPDownload).mockResolvedValueOnce("d1").mockResolvedValueOnce("d2");
+      vi.mocked(SFTPDownloadDir).mockResolvedValueOnce("g1").mockResolvedValueOnce("g2");
+      await useSFTPStore.getState().startDownload(target, "/r/a.txt");
+      await useSFTPStore.getState().startDownloadDir(target, "/r/dir");
+      emit("d1", { status: "error", error: "x" });
+      emit("g1", { status: "cancelled" });
+
+      await useSFTPStore.getState().retryTransfer("d1");
+      await useSFTPStore.getState().retryTransfer("g1");
+
+      expect(SFTPDownload).toHaveBeenLastCalledWith("s1", "/r/a.txt");
+      expect(SFTPDownloadDir).toHaveBeenLastCalledWith("s1", "/r/dir");
+      expect(Object.keys(useSFTPStore.getState().transfers).sort()).toEqual(["d2", "g2"]);
+    });
+
+    it("keeps the failed row when the retry dialog is dismissed", async () => {
+      vi.mocked(SFTPDownload).mockResolvedValueOnce("d1").mockResolvedValueOnce("");
+      await useSFTPStore.getState().startDownload(target, "/r/a.txt");
+      emit("d1", { status: "error", error: "x" });
+      await useSFTPStore.getState().retryTransfer("d1");
+      expect(Object.keys(useSFTPStore.getState().transfers)).toEqual(["d1"]);
     });
   });
 });

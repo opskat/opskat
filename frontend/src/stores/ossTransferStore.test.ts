@@ -95,7 +95,7 @@ describe("ossTransferStore", () => {
     expect(row.name).toBe("a.txt");
   });
 
-  it("a done event marks done, EventsOff, and auto-removes after 5s", async () => {
+  it("a done event marks done, EventsOff, and keeps the row until cleared", async () => {
     await upload(["oss-1"]);
     handlerFor("oss-1")({
       transferId: "oss-1",
@@ -109,8 +109,39 @@ describe("ossTransferStore", () => {
     });
     expect(useOssTransferStore.getState().tabs[TAB].transfers["oss-1"].status).toBe("done");
     expect(EventsOff).toHaveBeenCalledWith("transfer:progress:oss-1");
-    vi.advanceTimersByTime(5000);
-    expect(useOssTransferStore.getState().tabs[TAB].transfers["oss-1"]).toBeUndefined();
+    vi.advanceTimersByTime(60_000);
+    expect(useOssTransferStore.getState().tabs[TAB].transfers["oss-1"].status).toBe("done");
+  });
+
+  it("retry re-runs a failed upload to the same key and replaces the row", async () => {
+    await upload(["oss-1"]);
+    handlerFor("oss-1")({ transferId: "oss-1", status: "error", error: "boom" });
+    vi.mocked(OSSUploadObjectPath).mockResolvedValueOnce("oss-2" as never);
+
+    await useOssTransferStore.getState().retry(TAB, "oss-1");
+
+    expect(OSSUploadObjectPath).toHaveBeenLastCalledWith(9, "b", "docs/oss-1.txt", "/x/oss-1.txt");
+    expect(Object.keys(useOssTransferStore.getState().tabs[TAB].transfers)).toEqual(["oss-2"]);
+  });
+
+  it("retry re-runs a cancelled download and folder download", async () => {
+    vi.mocked(OSSDownloadObject)
+      .mockResolvedValueOnce("d1" as never)
+      .mockResolvedValueOnce("d2" as never);
+    vi.mocked(OSSDownloadFolder)
+      .mockResolvedValueOnce("f1" as never)
+      .mockResolvedValueOnce("f2" as never);
+    await useOssTransferStore.getState().startDownload(TAB, 9, "b", "docs/a.txt");
+    await useOssTransferStore.getState().startDownloadFolder(TAB, 9, "b", "docs/");
+    handlerFor("d1")({ transferId: "d1", status: "cancelled" });
+    handlerFor("f1")({ transferId: "f1", status: "error", error: "x" });
+
+    await useOssTransferStore.getState().retry(TAB, "d1");
+    await useOssTransferStore.getState().retry(TAB, "f1");
+
+    expect(OSSDownloadObject).toHaveBeenLastCalledWith(9, "b", "docs/a.txt");
+    expect(OSSDownloadFolder).toHaveBeenLastCalledWith(9, "b", "docs/");
+    expect(Object.keys(useOssTransferStore.getState().tabs[TAB].transfers).sort()).toEqual(["d2", "f2"]);
   });
 
   it("on upload done, refreshes the browser only when targetPrefix === currentPrefix", async () => {

@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +19,27 @@ import (
 )
 
 // --- SFTP 文件传输 ---
+
+// sftpTransferEvent 是传输终态事件：在通用进度之上带本地路径，让前端能「打开所在目录」。
+type sftpTransferEvent struct {
+	transfer.Progress
+	LocalPath string `json:"localPath,omitempty"`
+}
+
+// finalTransferEvent 把传输结果映射为终态事件：被取消（context.Canceled）单独成 "cancelled"，
+// 前端不必再从错误文案里推断。
+func finalTransferEvent(transferID, localPath string, err error) sftpTransferEvent {
+	ev := sftpTransferEvent{Progress: transfer.Progress{TransferID: transferID, Status: "done"}, LocalPath: localPath}
+	switch {
+	case err == nil:
+	case errors.Is(err, context.Canceled):
+		ev.Status = "cancelled"
+	default:
+		ev.Status = "error"
+		ev.Error = err.Error()
+	}
+	return ev
+}
 
 // SFTPGetwd 获取远程工作目录（用户 home）
 func (s *SSH) SFTPGetwd(sessionID string) (string, error) {
@@ -76,18 +98,7 @@ func (s *SSH) SFTPDownload(sessionID, remotePath string) (string, error) {
 		err := s.sftp.Download(s.ctx, transferID, sessionID, remotePath, localPath, func(p transfer.Progress) {
 			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, p)
 		})
-		if err != nil {
-			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
-				TransferID: transferID,
-				Status:     "error",
-				Error:      err.Error(),
-			})
-			return
-		}
-		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
-			TransferID: transferID,
-			Status:     "done",
-		})
+		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, finalTransferEvent(transferID, localPath, err))
 	}()
 	return transferID, nil
 }
@@ -111,18 +122,7 @@ func (s *SSH) SFTPDownloadDir(sessionID, remotePath string) (string, error) {
 		err := s.sftp.DownloadDir(s.ctx, transferID, sessionID, remotePath, localDir, func(p transfer.Progress) {
 			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, p)
 		})
-		if err != nil {
-			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
-				TransferID: transferID,
-				Status:     "error",
-				Error:      err.Error(),
-			})
-			return
-		}
-		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
-			TransferID: transferID,
-			Status:     "done",
-		})
+		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, finalTransferEvent(transferID, localDir, err))
 	}()
 	return transferID, nil
 }
@@ -142,11 +142,7 @@ func (s *SSH) SFTPUploadFile(sessionID, localPath, remotePath string) (string, e
 		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, p)
 	}
 	emitDone := func(err error) {
-		if err != nil {
-			emitProgress(transfer.Progress{TransferID: transferID, Status: "error", Error: err.Error()})
-			return
-		}
-		emitProgress(transfer.Progress{TransferID: transferID, Status: "done"})
+		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, finalTransferEvent(transferID, "", err))
 	}
 
 	go func() {
