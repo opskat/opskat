@@ -14,6 +14,7 @@ import {
 } from "../../../wailsjs/go/system/System";
 import { loadExtensionLocales } from "@/extension/i18n";
 import { policy_group_entity } from "../../../wailsjs/go/models";
+import { AsyncState, type AsyncStatus } from "@/components/common/AsyncState";
 import { errorMessage } from "@/lib/errorMessage";
 
 interface PolicyGroupManagerProps {
@@ -117,6 +118,10 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
   const activeTab =
     open && activeTabState.initialTab === initialActiveTab ? activeTabState.activeTab : initialActiveTab;
   const [groups, setGroups] = useState<policy_group_entity.PolicyGroupItem[]>([]);
+  // Result of the latest list request, keyed by tab: a tab without a result yet is loading.
+  const [groupsResult, setGroupsResult] = useState<{ tab: string; error: string | null } | null>(null);
+  const groupsStatus: AsyncStatus =
+    groupsResult?.tab !== activeTab ? "loading" : groupsResult.error ? "error" : "ready";
   const [tabs, setTabs] = useState(builtinTabs);
   const [editState, setEditState] = useState<EditState | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
@@ -177,8 +182,10 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
         await loadExtensionLocales(name);
       }
       setGroups(items || []);
-    } catch {
+      setGroupsResult({ tab: activeTab, error: null });
+    } catch (e) {
       setGroups([]);
+      setGroupsResult({ tab: activeTab, error: errorMessage(e) });
     }
   }, [activeTab]);
 
@@ -342,6 +349,17 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
         </div>
 
         <div className="flex-1 overflow-y-auto space-y-4 py-2">
+          {groupsStatus !== "ready" && (
+            <AsyncState
+              status={groupsStatus}
+              error={groupsResult?.error}
+              onRetry={() => {
+                setGroupsResult(null);
+                void fetchGroups();
+              }}
+            />
+          )}
+
           {/* Built-in groups */}
           {builtinGroups.length > 0 && (
             <div>
@@ -443,7 +461,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
                 {t("asset.policyGroup.create")}
               </Button>
             </div>
-            {customGroups.length === 0 && !editState && (
+            {groupsStatus === "ready" && customGroups.length === 0 && !editState && (
               <div className="text-center text-xs text-muted-foreground py-4">{t("asset.policyGroup.empty")}</div>
             )}
             <div className="space-y-1">
@@ -632,7 +650,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
           title={t("asset.policyGroup.deleteConfirmTitle")}
           description={t("asset.policyGroup.deleteConfirm", { name: deleteConfirm?.name })}
           cancelText={t("action.cancel")}
-          confirmText={t("action.confirm")}
+          confirmText={t("action.delete")}
           onConfirm={() => {
             if (deleteConfirm) {
               handleDelete(deleteConfirm.id);

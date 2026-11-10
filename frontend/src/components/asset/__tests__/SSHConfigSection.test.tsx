@@ -15,13 +15,19 @@ let keyCreds: credential_entity.Credential[] = [];
 let agentSources: system.AgentSourceSummary[] = [];
 let agentIdentities: ssh_agent_svc.IdentitySummary[] = [];
 let agentInspectError: string | null = null;
+// 列表加载失败注入:null 表示成功。
+let keyListError: string | null = null;
+let agentListError: string | null = null;
+let localKeysError: string | null = null;
 
 vi.mock("../../../../wailsjs/go/system/System", () => ({
   ListCredentialsByType: (type: string) =>
-    Promise.resolve(type === "ssh_key" ? keyCreds : type === "password" ? pwCreds : []),
+    type === "ssh_key" && keyListError
+      ? Promise.reject(new Error(keyListError))
+      : Promise.resolve(type === "ssh_key" ? keyCreds : type === "password" ? pwCreds : []),
   GetAssetPassword: () => Promise.resolve(""),
   GetSSHConnectionSettings: () => Promise.resolve({ keepAliveIntervalSeconds: 30 }),
-  ListAgentSources: () => Promise.resolve(agentSources),
+  ListAgentSources: () => (agentListError ? Promise.reject(new Error(agentListError)) : Promise.resolve(agentSources)),
   InspectAgentSource: (id: number) =>
     agentInspectError
       ? Promise.reject(new Error(agentInspectError))
@@ -29,7 +35,7 @@ vi.mock("../../../../wailsjs/go/system/System", () => ({
 }));
 
 vi.mock("../../../../wailsjs/go/ssh/SSH", () => ({
-  ListLocalSSHKeys: () => Promise.resolve([]),
+  ListLocalSSHKeys: () => (localKeysError ? Promise.reject(new Error(localKeysError)) : Promise.resolve([])),
   SelectSSHKeyFile: () => Promise.resolve(null),
 }));
 
@@ -39,6 +45,9 @@ beforeEach(() => {
   agentSources = [];
   agentIdentities = [];
   agentInspectError = null;
+  keyListError = null;
+  agentListError = null;
+  localKeysError = null;
 });
 
 function makeCred(id: number, username: string, type = "password"): credential_entity.Credential {
@@ -573,5 +582,59 @@ describe("SSHConfigSection on a rejected save", () => {
     expect(screen.getByTestId("config-tab-advanced")).toHaveAttribute("aria-selected", "true");
     expect(screen.getByTestId("config-tab-error-advanced")).toBeInTheDocument();
     expect(screen.getByText("asset.agentForwardSourceRequired")).toBeInTheDocument();
+  });
+});
+
+describe("SSHConfigSection credential / key / agent source load failures", () => {
+  const user = () => userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
+  const editKey = (extra = "") =>
+    new asset_entity.Asset({
+      Type: "ssh",
+      Config: `{"host":"h","port":22,"username":"u","auth_type":"key"${extra}}`,
+    });
+
+  it("managed key dropdown shows the failure with retry, not the 'no managed keys' hint", async () => {
+    keyListError = "vault locked";
+    const u = user();
+    render(<SSHConfigSection ref={createRef()} editAsset={editKey()} ctx={ctx} onValidityChange={() => {}} />);
+    expect(await screen.findByText(/vault locked/)).toBeInTheDocument();
+    expect(screen.queryByText("asset.noManagedKeys")).not.toBeInTheDocument();
+
+    keyListError = null;
+    keyCreds = [makeCred(10, "alice", "ssh_key")];
+    await u.click(screen.getByTestId("async-state-retry"));
+    expect(await screen.findByText("asset.selectKeyPlaceholder")).toBeInTheDocument();
+  });
+
+  it("local key scan failure shows the failure with retry, not the 'no keys found' hint", async () => {
+    localKeysError = "permission denied";
+    const u = user();
+    render(
+      <SSHConfigSection
+        ref={createRef()}
+        editAsset={editKey(',"key_source":"file"')}
+        ctx={ctx}
+        onValidityChange={() => {}}
+      />
+    );
+    await u.click(await screen.findByTestId("ssh-key-source-option-file"));
+    expect(await screen.findByText(/permission denied/)).toBeInTheDocument();
+    expect(screen.queryByText("asset.noLocalKeys")).not.toBeInTheDocument();
+  });
+
+  it("agent source list failure shows the failure with retry, not the 'no sources' hint", async () => {
+    agentListError = "agent socket down";
+    render(
+      <SSHConfigSection
+        ref={createRef()}
+        editAsset={
+          new asset_entity.Asset({ Type: "ssh", Config: '{"host":"h","port":22,"username":"u","auth_type":"agent"}' })
+        }
+        ctx={ctx}
+        onValidityChange={() => {}}
+      />
+    );
+    expect(await screen.findByText(/agent socket down/)).toBeInTheDocument();
+    expect(screen.queryByText("asset.agentNoSources")).not.toBeInTheDocument();
   });
 });

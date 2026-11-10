@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useAsyncList, type ListLoad } from "./useAsyncList";
 import { ListCredentialsByType } from "../../../wailsjs/go/system/System";
 import { asset_entity, credential_entity } from "../../../wailsjs/go/models";
 import {
@@ -11,6 +12,8 @@ import {
 export interface UseAssetCredential {
   value: CredentialState;
   managedPasswords: credential_entity.Credential[];
+  /** Load state of `managedPasswords`; pass to `PasswordSourceField` so a failed load isn't shown as "none". */
+  managedPasswordsLoad: ListLoad;
   setPassword: (v: string) => void;
   setPasswordSource: (v: "inline" | "managed") => void;
   setPasswordCredentialId: (v: number) => void;
@@ -30,18 +33,15 @@ export function useAssetCredential(
       return { ...CREDENTIAL_DEFAULTS };
     }
   });
-  const [managedPasswords, setManagedPasswords] = useState<credential_entity.Credential[]>([]);
-
-  useEffect(() => {
+  const { items: managedPasswords, load: managedPasswordsLoad } = useAsyncList<credential_entity.Credential>(() =>
     ListCredentialsByType("password")
-      .then((p) => setManagedPasswords(p || []))
-      .catch(() => setManagedPasswords([]));
-  }, []);
+  );
 
   const patch = (p: Partial<CredentialState>) => setValue((s) => ({ ...s, ...p }));
   return {
     value,
     managedPasswords,
+    managedPasswordsLoad,
     setPassword: (v) => patch({ password: v }),
     setPasswordSource: (v) => patch({ passwordSource: v }),
     setPasswordCredentialId: (v) => patch({ passwordCredentialId: v }),

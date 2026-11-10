@@ -87,6 +87,7 @@ import {
 import { useSortable } from "@dnd-kit/sortable";
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
 import { errorMessage } from "@/lib/errorMessage";
+import { AsyncState } from "@/components/common/AsyncState";
 
 interface AssetTreeProps {
   collapsed: boolean;
@@ -241,11 +242,11 @@ export function AssetTree({
   const assets = useAssetStore((s) => s.assets);
   const groups = useAssetStore((s) => s.groups);
   const collapsedGroupIds = useAssetStore((s) => s.collapsedGroupIds);
-  const fetchAssets = useAssetStore((s) => s.fetchAssets);
-  const fetchGroups = useAssetStore((s) => s.fetchGroups);
   const deleteAsset = useAssetStore((s) => s.deleteAsset);
   const deleteGroup = useAssetStore((s) => s.deleteGroup);
   const refresh = useAssetStore((s) => s.refresh);
+  const initialized = useAssetStore((s) => s.initialized);
+  const loadError = useAssetStore((s) => s.loadError);
   const connectingAssetIds = useTerminalStore((s) => s.connectingAssetIds);
   const activeAssetIds = useActiveAssetIds();
   const [filter, setFilter] = useState("");
@@ -266,9 +267,9 @@ export function AssetTree({
   const [draggingRowKey, setDraggingRowKey] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchAssets();
-    fetchGroups();
-  }, [fetchAssets, fetchGroups]);
+    // Failures are recorded in the store (`loadError`) and rendered with a retry below.
+    refresh().catch(() => {});
+  }, [refresh]);
 
   useEffect(() => {
     saveFilter(selectedTypes);
@@ -625,40 +626,48 @@ export function AssetTree({
               onGroupContextMenu={handleGroupContextMenu}
               t={t}
             />
-            {treeIsEmpty && (
-              <div className="flex flex-col items-center gap-2 px-3 py-6 text-center">
-                <div className="flex h-8 w-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-                  <Server className="h-4 w-4" />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <p className="text-xs font-medium text-sidebar-foreground">
-                    {t(isFilteredEmpty ? "asset.noMatchTitle" : "asset.emptyTitle")}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {t(isFilteredEmpty ? "asset.noMatchDesc" : "asset.emptyDesc")}
-                  </p>
-                </div>
-                {isFilteredEmpty ? (
-                  <div className="flex flex-wrap justify-center gap-1">
-                    {hasSearchFilter && (
-                      <Button variant="ghost" size="xs" onClick={() => setFilter("")}>
-                        {t("asset.clearSearch")}
-                      </Button>
-                    )}
-                    {hasTypeFilter && (
-                      <Button variant="ghost" size="xs" onClick={() => setSelectedTypes([])}>
-                        {t("asset.clearTypeFilter")}
+            <AsyncState
+              status={loadError ? "error" : initialized ? "ready" : "loading"}
+              error={loadError}
+              onRetry={() => refresh().catch(() => {})}
+              className="py-6"
+              empty={
+                treeIsEmpty ? (
+                  <div className="flex flex-col items-center gap-2 px-3 py-6 text-center">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                      <Server className="h-4 w-4" />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <p className="text-xs font-medium text-sidebar-foreground">
+                        {t(isFilteredEmpty ? "asset.noMatchTitle" : "asset.emptyTitle")}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {t(isFilteredEmpty ? "asset.noMatchDesc" : "asset.emptyDesc")}
+                      </p>
+                    </div>
+                    {isFilteredEmpty ? (
+                      <div className="flex flex-wrap justify-center gap-1">
+                        {hasSearchFilter && (
+                          <Button variant="ghost" size="xs" onClick={() => setFilter("")}>
+                            {t("asset.clearSearch")}
+                          </Button>
+                        )}
+                        {hasTypeFilter && (
+                          <Button variant="ghost" size="xs" onClick={() => setSelectedTypes([])}>
+                            {t("asset.clearTypeFilter")}
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      <Button variant="outline" size="xs" onClick={() => onAddAsset()}>
+                        <Plus className="h-3 w-3" />
+                        {t("asset.addAsset")}
                       </Button>
                     )}
                   </div>
-                ) : (
-                  <Button variant="outline" size="xs" onClick={() => onAddAsset()}>
-                    <Plus className="h-3 w-3" />
-                    {t("asset.addAsset")}
-                  </Button>
-                )}
-              </div>
-            )}
+                ) : undefined
+              }
+            />
             <DropIndicator />
           </div>
           <DragOverlay dropAnimation={null}>

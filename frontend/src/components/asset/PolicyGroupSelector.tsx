@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { Plus, X, Shield, Lock, Puzzle } from "lucide-react";
 import { Button, Popover, PopoverContent, PopoverTrigger } from "@opskat/ui";
 import { ListPolicyGroups } from "../../../wailsjs/go/system/System";
+import { AsyncState, type AsyncStatus } from "@/components/common/AsyncState";
+import { errorMessage } from "@/lib/errorMessage";
 import { loadExtensionLocales } from "@/extension/i18n";
 import type { policy_group_entity } from "../../../wailsjs/go/models";
 
@@ -32,6 +34,11 @@ export function PolicyGroupSelector({ policyType, selectedIds, onChange, refresh
   const { t } = useTranslation();
   const [groups, setGroups] = useState<policy_group_entity.PolicyGroupItem[]>([]);
   const [open, setOpen] = useState(false);
+  // Result of the latest request, keyed by its inputs: a key without a result yet is loading.
+  const queryKey = `${policyType}:${refreshKey ?? 0}`;
+  const [result, setResult] = useState<{ key: string; error: string | null } | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const status: AsyncStatus = result?.key !== queryKey ? "loading" : result.error ? "error" : "ready";
 
   // policyType / refreshKey（外部触发刷新）变化时重新拉取
   useEffect(() => {
@@ -44,12 +51,18 @@ export function PolicyGroupSelector({ policyType, selectedIds, onChange, refresh
           await loadExtensionLocales(name);
         }
         setGroups(items || []);
-      } catch {
+        setResult({ key: queryKey, error: null });
+      } catch (e) {
         setGroups([]);
+        setResult({ key: queryKey, error: errorMessage(e) });
       }
     };
     void fetchGroups();
-  }, [policyType, refreshKey]);
+  }, [policyType, queryKey, retryCount]);
+  const retry = () => {
+    setResult(null);
+    setRetryCount((n) => n + 1);
+  };
 
   const displayName = (g: policy_group_entity.PolicyGroupItem) => {
     if (g.extensionName) return t(g.name, { ns: `ext-${g.extensionName}` });
@@ -106,9 +119,13 @@ export function PolicyGroupSelector({ policyType, selectedIds, onChange, refresh
             </Button>
           </PopoverTrigger>
           <PopoverContent className="w-56 p-1" align="start">
-            {availableGroups.length === 0 ? (
-              <div className="px-2 py-3 text-center text-xs text-muted-foreground">{t("asset.policyGroup.noMore")}</div>
-            ) : (
+            <AsyncState
+              status={status}
+              error={result?.error}
+              onRetry={retry}
+              className="py-3"
+              empty={availableGroups.length === 0 ? t("asset.policyGroup.noMore") : undefined}
+            >
               <div className="max-h-48 overflow-y-auto">
                 {availableGroups.map((g) => (
                   <button
@@ -132,10 +149,13 @@ export function PolicyGroupSelector({ policyType, selectedIds, onChange, refresh
                   </button>
                 ))}
               </div>
-            )}
+            </AsyncState>
           </PopoverContent>
         </Popover>
       </div>
+      {status === "error" && (
+        <AsyncState status="error" error={result?.error} onRetry={retry} className="items-start p-0 text-left" />
+      )}
     </div>
   );
 }

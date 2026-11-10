@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Search, Lock, CornerDownLeft, Loader2, FileCode } from "lucide-react";
+import { Search, Lock, CornerDownLeft, FileCode } from "lucide-react";
 import { Button, Input, Popover, PopoverContent, PopoverTrigger, cn } from "@opskat/ui";
+import { AsyncState, type AsyncStatus } from "@/components/common/AsyncState";
+import { errorMessage } from "@/lib/errorMessage";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { useTabStore } from "@/stores/tabStore";
 import { ListSnippets } from "../../../wailsjs/go/extension/Extension";
@@ -53,7 +55,9 @@ export function SnippetPopover({
 }: SnippetPopoverProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
+  // Starts as loading: the content only mounts on open, and the fetch is kicked off by the open effect.
+  const [status, setStatus] = useState<AsyncStatus>("loading");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [items, setItems] = useState<Snippet[]>([]);
   const [keyword, setKeyword] = useState("");
 
@@ -69,7 +73,8 @@ export function SnippetPopover({
 
   const fetchList = useCallback(async () => {
     const myId = ++reqIdRef.current;
-    setLoading(true);
+    setStatus("loading");
+    setLoadError(null);
     try {
       // Wails generated class uses camelCase — cast through unknown because the
       // generated constructor signature expects a source object with all fields.
@@ -84,10 +89,13 @@ export function SnippetPopover({
       if (myId !== reqIdRef.current) return; // superseded
       setItems(result ?? []);
       cachedKeyRef.current = cacheKey;
-    } catch {
-      if (myId === reqIdRef.current) setItems([]);
-    } finally {
-      if (myId === reqIdRef.current) setLoading(false);
+      setStatus("ready");
+    } catch (e) {
+      if (myId === reqIdRef.current) {
+        setItems([]);
+        setLoadError(errorMessage(e));
+        setStatus("error");
+      }
     }
   }, [category, cacheKey]);
 
@@ -152,20 +160,23 @@ export function SnippetPopover({
 
         {/* List */}
         <div className="max-h-[320px] overflow-auto" data-testid="snippet-popover-list">
-          {loading && items.length === 0 && (
-            <div className="flex items-center justify-center py-8">
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            </div>
-          )}
-          {!loading && filtered.length === 0 && (
-            <div className="flex flex-col items-center gap-2 py-8 px-4 text-center">
-              <FileCode className="h-6 w-6 text-muted-foreground/60" />
-              <p className="text-xs text-muted-foreground">{t("snippet.popover.empty")}</p>
-              <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={openSnippetsTab}>
-                {t("snippet.popover.openManager")}
-              </Button>
-            </div>
-          )}
+          <AsyncState
+            status={status === "loading" && items.length > 0 ? "ready" : status}
+            error={loadError}
+            onRetry={() => void fetchList()}
+            className="py-8"
+            empty={
+              filtered.length === 0 ? (
+                <div className="flex flex-col items-center gap-2 px-4">
+                  <FileCode className="h-6 w-6 text-muted-foreground/60" />
+                  <p className="text-xs text-muted-foreground">{t("snippet.popover.empty")}</p>
+                  <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={openSnippetsTab}>
+                    {t("snippet.popover.openManager")}
+                  </Button>
+                </div>
+              ) : undefined
+            }
+          />
           {filtered.map((s) => {
             const ro = isReadOnly(s);
             const preview = firstLine(s.Content || "");

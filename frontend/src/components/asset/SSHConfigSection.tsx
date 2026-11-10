@@ -45,29 +45,33 @@ import {
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets } from "./proxyConfig";
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { errorMessage } from "@/lib/errorMessage";
+import { AsyncState } from "@/components/common/AsyncState";
+import { useAsyncList, type ListLoad } from "./useAsyncList";
 
 const DEFAULT_GLOBAL_KEEPALIVE_SECONDS = 30;
 
 interface AgentSourceSelectProps {
   sources: system_models.AgentSourceSummary[];
-  loading: boolean;
+  load: ListLoad;
   sourceId: number;
   onSourceChange: (id: number) => void;
   testid: string;
 }
 
 /** 认证和转发共用同一份 SSH Agent 来源列表及选择控件。 */
-function AgentSourceSelect({ sources, loading, sourceId, onSourceChange, testid }: AgentSourceSelectProps) {
+function AgentSourceSelect({ sources, load, sourceId, onSourceChange, testid }: AgentSourceSelectProps) {
   const { t } = useTranslation();
-  if (loading) {
+  if (load.status !== "ready" || sources.length === 0) {
     return (
-      <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
-        <Loader2 className="h-3 w-3 animate-spin" />
-        {t("asset.agentSourceLoading")}
-      </div>
+      <AsyncState
+        status={load.status}
+        error={load.error}
+        onRetry={load.reload}
+        className="items-start p-0 text-left"
+        empty={<p className="text-xs">{t("asset.agentNoSources")}</p>}
+      />
     );
   }
-  if (sources.length === 0) return <p className="text-xs text-muted-foreground">{t("asset.agentNoSources")}</p>;
 
   return (
     <Select value={sourceId > 0 ? String(sourceId) : ""} onValueChange={(v) => onSourceChange(Number(v) || 0)}>
@@ -169,11 +173,18 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
     deps: [cred.value],
   });
 
-  const [managedKeys, setManagedKeys] = useState<credential_entity.Credential[]>([]);
-  const [localKeys, setLocalKeys] = useState<ssh_models.LocalSSHKeyInfo[]>([]);
+  const { items: managedKeys, load: managedKeysLoad } = useAsyncList<credential_entity.Credential>(() =>
+    ListCredentialsByType("ssh_key")
+  );
+  const {
+    items: localKeys,
+    setItems: setLocalKeys,
+    load: localKeysLoad,
+  } = useAsyncList<ssh_models.LocalSSHKeyInfo>(() => ListLocalSSHKeys());
   // SSH Agent 表单:来源列表 / 选中来源的身份摘要(有界,随来源变更重载并清除)。
-  const [agentSources, setAgentSources] = useState<system_models.AgentSourceSummary[]>([]);
-  const [agentSourceLoading, setAgentSourceLoading] = useState(true);
+  const { items: agentSources, load: agentSourcesLoad } = useAsyncList<system_models.AgentSourceSummary>(() =>
+    ListAgentSources()
+  );
   const [agentIdentities, setAgentIdentities] = useState<ssh_agent_svc.IdentitySummary[]>([]);
   // 当前 agentIdentities 所属来源 id;与选中来源不一致即视为加载中(来源变更时旧身份不展示)。
   const [agentIdentitySource, setAgentIdentitySource] = useState(0);
@@ -187,18 +198,9 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
   const [globalKeepAlive, setGlobalKeepAlive] = useState(DEFAULT_GLOBAL_KEEPALIVE_SECONDS);
   // 用户是否手动清空过保活输入：清空后回落跟随全局，不再被异步加载的全局值覆盖。
   const keepAliveClearedRef = useRef(false);
-  // 挂载即扫描,初始 true(避免在 effect 内同步 setState 触发级联渲染)。
-  const [scanningKeys, setScanningKeys] = useState(true);
 
-  // 自加载 ssh_key 凭据列表 + 扫描本地密钥(镜像旧壳 open 时的合并 load)。
+  // 全局保活默认值(ssh_key 凭据列表 / 本地密钥扫描 / agent 来源由 useAsyncList 各自加载)。
   useEffect(() => {
-    ListCredentialsByType("ssh_key")
-      .then((keys) => setManagedKeys(keys || []))
-      .catch(() => setManagedKeys([]));
-    ListLocalSSHKeys()
-      .then((keys) => setLocalKeys(keys || []))
-      .catch(() => setLocalKeys([]))
-      .finally(() => setScanningKeys(false));
     GetSSHConnectionSettings()
       .then((s) => {
         const seconds = s?.keepAliveIntervalSeconds;
@@ -217,13 +219,7 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
   // 排除自身,不能把自己选作跳板机 / SSH 隧道。
   const jumpHostExcludeIds = editAsset?.ID ? [editAsset.ID] : undefined;
 
-  // Agent 来源列表(挂载一次);新建表单绝不自动选择来源。初始 loading=true,仅在回调中解除。
-  useEffect(() => {
-    ListAgentSources()
-      .then((sources) => setAgentSources(sources || []))
-      .catch(() => setAgentSources([]))
-      .finally(() => setAgentSourceLoading(false));
-  }, []);
+  // Agent 来源列表由 agentSourcesLoad 加载;新建表单绝不自动选择来源。
 
   // 选择来源后加载其身份;编辑态对已存指纹做可用性核对(缺失 → 单独只读展示 + 禁止保存)。
   // 加载中 = agentIdentitySource 与选中来源不一致(来源变更即隐藏旧身份),不在 effect 内同步 setState。
@@ -326,7 +322,14 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
 
               {state.keySource === "managed" && (
                 <Field label={t("asset.selectKey")}>
-                  {managedKeys.length > 0 ? (
+                  {managedKeysLoad.status !== "ready" ? (
+                    <AsyncState
+                      status={managedKeysLoad.status}
+                      error={managedKeysLoad.error}
+                      onRetry={managedKeysLoad.reload}
+                      className="items-start p-0 text-left"
+                    />
+                  ) : managedKeys.length > 0 ? (
                     <Select
                       value={String(state.credentialId)}
                       onValueChange={(v) => {
@@ -362,11 +365,18 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
 
               {state.keySource === "file" && (
                 <Field label={t("asset.discoveredKeys")}>
-                  {scanningKeys ? (
+                  {localKeysLoad.status === "loading" ? (
                     <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
                       <Loader2 className="h-3 w-3 animate-spin" />
                       {t("asset.scanningKeys")}
                     </div>
+                  ) : localKeysLoad.status === "error" ? (
+                    <AsyncState
+                      status="error"
+                      error={localKeysLoad.error}
+                      onRetry={localKeysLoad.reload}
+                      className="items-start p-0 text-left"
+                    />
                   ) : localKeys.length > 0 ? (
                     <div className="grid gap-1.5">
                       {localKeys.map((k) => {
@@ -479,7 +489,7 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
               <Field label={t("asset.agentSource")} error={state.agentSourceId <= 0 ? error : undefined}>
                 <AgentSourceSelect
                   sources={agentSources}
-                  loading={agentSourceLoading}
+                  load={agentSourcesLoad}
                   sourceId={state.agentSourceId}
                   onSourceChange={(id) => {
                     // 修改来源清除尚未保存的密钥选择;身份随新来源重新加载。
@@ -637,7 +647,7 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
                 <Field label={t("asset.sshAgentForwardSource")} error={error}>
                   <AgentSourceSelect
                     sources={agentSources}
-                    loading={agentSourceLoading}
+                    load={agentSourcesLoad}
                     sourceId={s.agentForwardSourceId}
                     onSourceChange={(id) => patchState({ agentForwardSourceId: id })}
                     testid="ssh-agent-forward-source-trigger"

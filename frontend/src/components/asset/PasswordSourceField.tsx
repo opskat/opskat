@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { Pencil, Shield } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { Field, Segmented } from "@/components/asset/fields";
+import { AsyncState } from "@/components/common/AsyncState";
+import type { ListLoad } from "@/components/asset/useAsyncList";
 import { SecretInput } from "@/components/SecretInput";
 import { credential_entity } from "../../../wailsjs/go/models";
 import { GetAssetPassword } from "../../../wailsjs/go/system/System";
@@ -17,6 +19,8 @@ interface PasswordSourceFieldProps {
   credentialId: number;
   onCredentialIdChange: (id: number) => void;
   managedPasswords: credential_entity.Credential[];
+  /** Load state of `managedPasswords` (from `useAssetCredential`); omit only when the list is not fetched. */
+  managedPasswordsLoad?: ListLoad;
   /** Placeholder for inline password input when no existing password */
   placeholder?: string;
   /** Placeholder shown when an existing encrypted password is set */
@@ -45,6 +49,7 @@ export function PasswordSourceField({
   credentialId,
   onCredentialIdChange,
   managedPasswords,
+  managedPasswordsLoad,
   placeholder = "",
   hasExistingPassword = false,
   editAssetId,
@@ -115,7 +120,14 @@ export function PasswordSourceField({
         </Field>
       ) : (
         <Field label={selectSecretLabel || t("asset.selectPassword")}>
-          {managedPasswords.length > 0 ? (
+          {managedPasswordsLoad && managedPasswordsLoad.status !== "ready" ? (
+            <AsyncState
+              status={managedPasswordsLoad.status}
+              error={managedPasswordsLoad.error}
+              onRetry={managedPasswordsLoad.reload}
+              className="items-start p-0 text-left"
+            />
+          ) : managedPasswords.length > 0 ? (
             <Select
               value={String(credentialId)}
               onValueChange={(v) => {

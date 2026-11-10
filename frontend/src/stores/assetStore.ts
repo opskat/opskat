@@ -1,3 +1,4 @@
+import { errorMessage } from "@/lib/errorMessage";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { asset_entity, group_entity } from "../../wailsjs/go/models";
@@ -23,6 +24,8 @@ interface AssetState {
   collapsedGroupIds: number[];
   loading: boolean;
   initialized: boolean;
+  /** Reason the last asset/group load failed; cleared when `refresh` starts. */
+  loadError: string | null;
 
   fetchAssets: (assetType?: string, groupId?: number) => Promise<void>;
   fetchGroups: () => Promise<void>;
@@ -51,6 +54,7 @@ export const useAssetStore = create<AssetState>()(
       collapsedGroupIds: [],
       loading: false,
       initialized: false,
+      loadError: null,
 
       fetchAssets: async (assetType = "", groupId = 0) => {
         set({ loading: true });
@@ -68,14 +72,22 @@ export const useAssetStore = create<AssetState>()(
                   : state.collapsedGroupIds,
             };
           });
+        } catch (e) {
+          set({ loadError: errorMessage(e) });
+          throw e;
         } finally {
           set({ loading: false });
         }
       },
 
       fetchGroups: async () => {
-        const groups = await ListGroups();
-        set({ groups: groups || [] });
+        try {
+          const groups = await ListGroups();
+          set({ groups: groups || [] });
+        } catch (e) {
+          set({ loadError: errorMessage(e) });
+          throw e;
+        }
       },
 
       createAsset: async (asset) => {
@@ -135,6 +147,7 @@ export const useAssetStore = create<AssetState>()(
       isGroupCollapsed: (id) => get().collapsedGroupIds.includes(id),
 
       refresh: async () => {
+        set({ loadError: null });
         await Promise.all([get().fetchAssets(), get().fetchGroups()]);
       },
     }),

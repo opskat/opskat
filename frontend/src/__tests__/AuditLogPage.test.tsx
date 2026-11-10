@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuditLogPage } from "@/components/audit/AuditLogPage";
 import { ListAuditLogs, ListAuditSessions } from "../../wailsjs/go/system/System";
+import { GetSSHPoolConnections } from "../../wailsjs/go/ssh/SSH";
 
 describe("AuditLogPage result status", () => {
   beforeEach(() => {
@@ -120,7 +121,7 @@ describe("AuditLogPage result status", () => {
 
     const tool = await screen.findByText("reviewed-tool");
     const row = tool.closest("tr") as HTMLTableRowElement;
-    expect(within(row).getByText("✗ autopilot")).toBeInTheDocument();
+    expect(within(row).getByText("✗ audit.decisionSources.autopilot")).toBeInTheDocument();
 
     await user.click(within(row).getByRole("button"));
     expect(screen.getByTestId("review-notice")).toHaveTextContent("commandReview.withMode");
@@ -210,10 +211,63 @@ describe("AuditLogPage result status", () => {
     render(<AuditLogPage />);
 
     const reviewed = (await screen.findByText("assisted-to-human")).closest("tr") as HTMLTableRowElement;
-    expect(within(reviewed).getByText("✓ user")).toBeInTheDocument();
+    expect(within(reviewed).getByText("✓ audit.decisionSources.user")).toBeInTheDocument();
     expect(within(reviewed).getByTestId("review-mark")).toHaveAccessibleName("commandReview.withMode");
 
     const ruled = screen.getByText("rule-allowed").closest("tr") as HTMLTableRowElement;
     expect(within(ruled).queryByTestId("review-mark")).toBeNull();
+  });
+});
+
+describe("AuditLogPage load states", () => {
+  beforeEach(() => {
+    vi.mocked(ListAuditSessions).mockResolvedValue([]);
+  });
+
+  it("shows the failure reason with retry instead of the empty state when logs fail to load", async () => {
+    vi.mocked(ListAuditLogs).mockRejectedValueOnce(new Error("audit db locked"));
+    render(<AuditLogPage />);
+    expect(await screen.findByText(/audit db locked/)).toBeInTheDocument();
+    expect(screen.queryByText("audit.empty")).not.toBeInTheDocument();
+
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [], total: 0 } as never);
+    await userEvent.click(screen.getByTestId("async-state-retry"));
+    expect(await screen.findByText("audit.empty")).toBeInTheDocument();
+  });
+
+  it("shows loading, not the empty state, while logs are pending", async () => {
+    vi.mocked(ListAuditLogs).mockReturnValue(new Promise(() => {}));
+    render(<AuditLogPage />);
+    expect(await screen.findByTestId("async-state-loading")).toBeInTheDocument();
+    expect(screen.queryByText("audit.empty")).not.toBeInTheDocument();
+  });
+
+  it("shows the failure reason instead of the empty pool when the pool fails to load", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [], total: 0 } as never);
+    vi.mocked(GetSSHPoolConnections).mockRejectedValueOnce(new Error("pool down"));
+    render(<AuditLogPage />);
+    await userEvent.click(await screen.findByRole("tab", { name: /audit.tabPool/ }));
+    expect(await screen.findByText(/pool down/)).toBeInTheDocument();
+    expect(screen.queryByText("audit.poolEmpty")).not.toBeInTheDocument();
+  });
+
+  it("shows translated decision names instead of internal identifiers", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({
+      items: [
+        {
+          ID: 1,
+          ToolName: "exec",
+          AssetName: "a",
+          Command: "ls",
+          Success: 1,
+          Decision: "allow",
+          DecisionSource: "grant_allow",
+          Createtime: 1,
+        },
+      ],
+      total: 1,
+    } as never);
+    render(<AuditLogPage />);
+    expect(await screen.findByText("✓ audit.decisionSources.grant")).toBeInTheDocument();
   });
 });

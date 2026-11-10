@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Pencil, Copy, Trash2, Lock, Search, Loader2, Play } from "lucide-react";
+import { Plus, Pencil, Copy, Trash2, Lock, Search, Play } from "lucide-react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import {
@@ -20,6 +20,7 @@ import { snippet_entity } from "../../../wailsjs/go/models";
 import { SnippetFormDialog } from "./SnippetFormDialog";
 import { SnippetAssetDrawer } from "./SnippetAssetDrawer";
 import { isRunnableCategoryId } from "./snippetRun";
+import { AsyncState } from "@/components/common/AsyncState";
 import { errorMessage } from "@/lib/errorMessage";
 
 // Stable per-category badge styling. Order must be deterministic so a given
@@ -59,6 +60,7 @@ export function SnippetsPage() {
   const categories = useSnippetStore((s) => s.categories);
   const list = useSnippetStore((s) => s.list);
   const listLoading = useSnippetStore((s) => s.listLoading);
+  const listError = useSnippetStore((s) => s.listError);
   const filter = useSnippetStore((s) => s.filter);
   const loadCategories = useSnippetStore((s) => s.loadCategories);
   const loadList = useSnippetStore((s) => s.loadList);
@@ -75,9 +77,20 @@ export function SnippetsPage() {
   const [runTarget, setRunTarget] = useState<snippet_entity.Snippet | null>(null);
 
   // Load categories + initial list on mount.
+  const [firstLoadDone, setFirstLoadDone] = useState(false);
+  const [categoriesError, setCategoriesError] = useState<string | null>(null);
+  const loadAll = useCallback(
+    () =>
+      loadCategories()
+        // A list failure is recorded in the store (`listError`).
+        .then(() => loadList().catch(() => {}))
+        .catch((e) => setCategoriesError(errorMessage(e)))
+        .finally(() => setFirstLoadDone(true)),
+    [loadCategories, loadList]
+  );
   useEffect(() => {
-    void loadCategories().then(() => loadList());
-  }, [loadCategories, loadList]);
+    void loadAll();
+  }, [loadAll]);
 
   // Debounce search input → filter.keyword
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -174,7 +187,7 @@ export function SnippetsPage() {
           .map((id) => (categoryLabelById[id] ? categoryLabelById[id] : t("snippet.unknownCategory", { name: id })))
           .join(", ");
 
-  const isEmpty = list.length === 0 && !listLoading;
+  const loadError = categoriesError ?? listError;
   const hasActiveFilter = filter.categories.length > 0 || filter.keyword.trim() !== "";
 
   return (
@@ -288,17 +301,19 @@ export function SnippetsPage() {
             </tr>
           </thead>
           <tbody>
-            {listLoading && list.length === 0 && (
+            {list.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground">
-                  <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
-                </td>
-              </tr>
-            )}
-            {isEmpty && (
-              <tr>
-                <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground">
-                  {hasActiveFilter ? t("snippet.emptyStateFiltered") : t("snippet.emptyState")}
+                <td colSpan={5}>
+                  <AsyncState
+                    status={loadError ? "error" : listLoading || !firstLoadDone ? "loading" : "ready"}
+                    error={loadError}
+                    onRetry={() => {
+                      setCategoriesError(null);
+                      void loadAll();
+                    }}
+                    className="py-12"
+                    empty={hasActiveFilter ? t("snippet.emptyStateFiltered") : t("snippet.emptyState")}
+                  />
                 </td>
               </tr>
             )}

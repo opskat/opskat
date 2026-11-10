@@ -1,3 +1,4 @@
+import { AsyncState } from "@/components/common/AsyncState";
 import { useState, useEffect, useCallback, useRef, type CSSProperties, type DragEvent } from "react";
 import { toast } from "sonner";
 import { notifyCopied, notifySuccess } from "@/lib/notify";
@@ -88,6 +89,7 @@ export function CredentialManager() {
   const [credentials, setCredentials] = useState<credential_entity.Credential[]>([]);
   // 挂载即拉取,loading 初值为 true;同步 setLoading(true) 只保留在事件路径(fetchCredentials)
   const [loading, setLoading] = useState(true);
+  const [credentialsError, setCredentialsError] = useState<string | null>(null);
   const [generateOpen, setGenerateOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [createPasswordOpen, setCreatePasswordOpen] = useState(false);
@@ -100,6 +102,7 @@ export function CredentialManager() {
   // ---- SSH Agent 来源（与密码/SSH 密钥混排显示） ----
   const [agentSources, setAgentSources] = useState<system.AgentSourceSummary[]>([]);
   const [agentLoading, setAgentLoading] = useState(true);
+  const [agentSourcesError, setAgentSourcesError] = useState<string | null>(null);
   const [agentStatuses, setAgentStatuses] = useState<Record<number, AgentSourceRuntimeStatus>>({});
   const [agentCounts, setAgentCounts] = useState<Record<number, number>>({});
   const [expandedSource, setExpandedSource] = useState<number | null>(null);
@@ -116,13 +119,19 @@ export function CredentialManager() {
   const [deleteSourceUsage, setDeleteSourceUsage] = useState(0);
 
   const loadCredentials = useCallback(async () => {
+    setCredentialsError(null);
     try {
       const result = await ListCredentials();
       setCredentials(result || []);
+    } catch (e) {
+      setCredentialsError(errorMessage(e));
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const loadError = credentialsError ?? agentSourcesError;
+  const hasListData = credentials.length > 0 || agentSources.length > 0;
 
   const fetchCredentials = useCallback(() => {
     setLoading(true);
@@ -171,11 +180,14 @@ export function CredentialManager() {
 
   const loadAgentSources = useCallback(async () => {
     setAgentLoading(true);
+    setAgentSourcesError(null);
     try {
       const result = await ListAgentSources();
       const list = result || [];
       setAgentSources(list);
       for (const source of list) void probeAgentSource(source.id);
+    } catch (e) {
+      setAgentSourcesError(errorMessage(e));
     } finally {
       setAgentLoading(false);
     }
@@ -375,12 +387,22 @@ export function CredentialManager() {
         </div>
       </div>
 
-      {credentials.length === 0 && agentSources.length === 0 && !loading && !agentLoading ? (
-        <div className="text-center py-8 text-sm text-muted-foreground">
-          <Key className="h-8 w-8 mx-auto mb-2 opacity-30" />
-          {t("sshKey.empty")}
-        </div>
-      ) : (
+      <AsyncState
+        status={(loading || agentLoading) && !hasListData ? "loading" : loadError ? "error" : "ready"}
+        error={loadError}
+        onRetry={() => {
+          if (credentialsError) fetchCredentials();
+          if (agentSourcesError) void loadAgentSources();
+        }}
+        empty={
+          credentials.length === 0 && agentSources.length === 0 ? (
+            <div className="py-4">
+              <Key className="h-8 w-8 mx-auto mb-2 opacity-30" />
+              {t("sshKey.empty")}
+            </div>
+          ) : undefined
+        }
+      >
         <div className="space-y-2">
           {credentials.map((cred) => (
             <div key={cred.id} className="flex items-center justify-between p-3 rounded-lg border bg-card group">
@@ -514,7 +536,7 @@ export function CredentialManager() {
             />
           ))}
         </div>
-      )}
+      </AsyncState>
 
       {/* Dialogs */}
       <GenerateKeyDialog open={generateOpen} onOpenChange={setGenerateOpen} onSuccess={fetchCredentials} />

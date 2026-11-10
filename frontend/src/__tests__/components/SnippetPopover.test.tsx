@@ -159,4 +159,23 @@ describe("SnippetPopover", () => {
     expect(req.assetId).toBeUndefined();
     expect(req.includeGlobal).toBeUndefined();
   });
+
+  it("shows the failure reason with retry instead of the empty state when loading fails", async () => {
+    vi.mocked(ListSnippets).mockRejectedValueOnce(new Error("snippet db down"));
+    renderPopover();
+    fireEvent.click(screen.getByText("open"));
+    expect(await screen.findByText(/snippet db down/)).toBeInTheDocument();
+    expect(screen.queryByText("snippet.popover.empty")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("async-state-retry"));
+    expect(await screen.findByText("list files")).toBeInTheDocument();
+  });
+
+  it("shows loading, not the empty state, while the first fetch is pending", async () => {
+    vi.mocked(ListSnippets).mockReturnValue(new Promise(() => {}));
+    renderPopover();
+    fireEvent.click(screen.getByText("open"));
+    expect(await screen.findByTestId("async-state-loading")).toBeInTheDocument();
+    expect(screen.queryByText("snippet.popover.empty")).toBeNull();
+  });
 });

@@ -194,4 +194,22 @@ describe("SnippetsPage", () => {
       expect(checkboxes.length).toBe(3);
     });
   });
+
+  it("shows the failure reason with retry instead of the empty state when the list fails to load", async () => {
+    vi.mocked(ListSnippets).mockRejectedValueOnce(new Error("snippet db down"));
+    renderPage();
+    expect(await screen.findByText(/snippet db down/)).toBeInTheDocument();
+    expect(screen.queryByText("snippet.emptyState")).toBeNull();
+
+    vi.mocked(ListSnippets).mockResolvedValue([]);
+    fireEvent.click(screen.getByTestId("async-state-retry"));
+    expect(await screen.findByText("snippet.emptyState")).toBeInTheDocument();
+  });
+
+  it("shows the failure when categories fail to load", async () => {
+    vi.mocked(ListSnippetCategories).mockRejectedValueOnce(new Error("cat down"));
+    renderPage();
+    expect(await screen.findByText(/cat down/)).toBeInTheDocument();
+    expect(screen.queryByText("snippet.emptyState")).toBeNull();
+  });
 });

@@ -105,7 +105,7 @@ export function CommandPolicyCard({
                 title={t("asset.policyReset.confirmTitle")}
                 description={isGroup ? t("asset.policyReset.confirmClear") : t("asset.policyReset.confirmDefault")}
                 cancelText={t("action.cancel")}
-                confirmText={t("action.confirm")}
+                confirmText={isGroup ? t("asset.policyReset.clear") : t("asset.policyReset.default")}
                 onConfirm={() => {
                   setConfirmOpen(false);
                   onReset();

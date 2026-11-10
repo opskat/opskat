@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { errorMessage } from "@/lib/errorMessage";
 import { snippet_entity, snippet_svc } from "../../wailsjs/go/models";
 import { ListSnippetCategories } from "../../wailsjs/go/extension/Extension";
 import {
@@ -34,6 +35,8 @@ interface SnippetState {
   categoriesLoading: boolean;
   list: Snippet[];
   listLoading: boolean;
+  /** Reason the latest list request failed; cleared when a new one starts. */
+  listError: string | null;
   filter: SnippetFilter;
 
   // Command-palette state, independent of the page list/filter above.
@@ -61,6 +64,7 @@ export const useSnippetStore = create<SnippetState>()((set, get) => ({
   categoriesLoading: false,
   list: [],
   listLoading: false,
+  listError: null,
   all: [],
   runTarget: null,
   filter: { categories: [], keyword: "" },
@@ -79,7 +83,7 @@ export const useSnippetStore = create<SnippetState>()((set, get) => ({
   loadList: async () => {
     const myId = ++loadListReqId;
     const { filter } = get();
-    set({ listLoading: true });
+    set({ listLoading: true, listError: null });
     try {
       const req: snippet_svc.ListReq = {
         categories: filter.categories,
@@ -95,7 +99,7 @@ export const useSnippetStore = create<SnippetState>()((set, get) => ({
       }
       set({ list: items ?? [], listLoading: false });
     } catch (e) {
-      if (myId === loadListReqId) set({ listLoading: false });
+      if (myId === loadListReqId) set({ listLoading: false, listError: errorMessage(e) });
       throw e;
     }
   },
@@ -129,7 +133,10 @@ export const useSnippetStore = create<SnippetState>()((set, get) => ({
       return; // no-op — avoid a redundant ListSnippets round-trip.
     }
     set({ filter: next });
-    void get().loadList();
+    // Failure is recorded in `listError` and shown by the list with a retry.
+    get()
+      .loadList()
+      .catch(() => {});
   },
 
   create: async (req) => {
