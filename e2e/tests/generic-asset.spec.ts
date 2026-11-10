@@ -247,7 +247,7 @@ test("custom type editor: the first click after typing into a template input tak
   await expect(page.getByTestId("app-root")).toBeVisible();
 
   await page.getByTestId("nav-settings").click();
-  await page.getByRole("tab", { name: "Custom types" }).click();
+  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name: "Custom types" }).click();
   await page.getByRole("button", { name: "New type" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
