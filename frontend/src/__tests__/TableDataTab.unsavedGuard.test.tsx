@@ -170,7 +170,9 @@ describe("TableDataTab unsaved edits guard", () => {
     await waitFor(() => expect(vi.mocked(ExecuteSQL)).toHaveBeenCalledOnce());
     expect(String(vi.mocked(ExecuteSQL).mock.calls[0][1])).toMatch(/^UPDATE/);
     await waitFor(() => expect(requestedPages().at(-1)).toBe(1));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "query.previewAndCommit" })).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "query.previewAndCommit" })).not.toBeInTheDocument()
+    );
   });
 
   it("a failed submit stays on the page with the edit kept", async () => {

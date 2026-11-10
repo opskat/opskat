@@ -60,7 +60,7 @@ describe("PortForwardPage", () => {
     fireEvent.click(await screen.findByTitle("forward.edit"));
     fireEvent.click(screen.getByText("forward.save"));
     await waitFor(() => expect(UpdateForwardConfig).toHaveBeenCalled());
-    const rules = vi.mocked(UpdateForwardConfig).mock.calls[0][3] as Array<Record<string, unknown>>;
+    const rules: Parameters<typeof UpdateForwardConfig>[3] = vi.mocked(UpdateForwardConfig).mock.calls[0][3];
     expect(rules.map((r) => [r.type, r.localPort, r.remotePort])).toEqual([
       ["local", 8080, 5432],
       ["dynamic", 1080, 0],
