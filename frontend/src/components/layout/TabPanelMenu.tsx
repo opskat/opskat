@@ -22,6 +22,8 @@ export function TabPanelMenu({ mode, onOpenFilter }: TabPanelMenuProps) {
   const toggleVisible = useLayoutStore((s) => s.toggleVisible);
   const switchPanel = useLayoutStore((s) => s.switchPanel);
   const activeSidePanel = useLayoutStore((s) => s.activeSidePanel);
+  const toolbarHidden = useLayoutStore((s) => s.toolbarHidden);
+  const toggleToolbar = useLayoutStore((s) => s.toggleToolbar);
   const shortcuts = useShortcutStore((s) => s.shortcuts);
 
   const closeAll = () => {
@@ -42,6 +44,11 @@ export function TabPanelMenu({ mode, onOpenFilter }: TabPanelMenuProps) {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[220px]" onCloseAutoFocus={(e) => e.preventDefault()}>
+        <DropdownMenuItem onClick={toggleToolbar}>
+          <span className="flex-1">{toolbarHidden ? t("panel.showSidebar") : t("panel.hideSidebar")}</span>
+          <span className="text-xs text-muted-foreground ml-4">{formatBinding(shortcuts["panel.toolbar"])}</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         {mode === "top" ? (
           <DropdownMenuItem onClick={() => setLayout("left")}>{t("sideTabs.switchToLeft")}</DropdownMenuItem>
         ) : (

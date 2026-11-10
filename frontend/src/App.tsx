@@ -181,7 +181,8 @@ function App() {
     return () => window.removeEventListener("dblclick", handleDblClick);
   }, []);
 
-  const [sidebarHidden, setSidebarHidden] = useState(() => localStorage.getItem("sidebar_hidden") === "true");
+  const sidebarHidden = useLayoutStore((s) => s.toolbarHidden);
+  const toggleSidebarHidden = useLayoutStore((s) => s.toggleToolbar);
   const [assetTreeCollapsed, setAssetTreeCollapsed] = useState(
     () => localStorage.getItem("sidebar_collapsed") === "true"
   );
@@ -207,13 +208,6 @@ function App() {
   const toggleSidebar = useCallback(() => {
     setAssetTreeCollapsed((prev) => {
       localStorage.setItem("sidebar_collapsed", String(!prev));
-      return !prev;
-    });
-  }, []);
-
-  const toggleSidebarHidden = useCallback(() => {
-    setSidebarHidden((prev) => {
-      localStorage.setItem("sidebar_hidden", String(!prev));
       return !prev;
     });
   }, []);

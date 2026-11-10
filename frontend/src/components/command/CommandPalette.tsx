@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Server, MessageSquare, FileCode } from "lucide-react";
+import { Server, MessageSquare, FileCode, PanelLeft } from "lucide-react";
 import { toast } from "sonner";
 import { Input, ScrollArea, cn } from "@opskat/ui";
 import { getIconComponent, getIconColor } from "@/components/asset/IconPicker";
@@ -13,8 +13,9 @@ import { isRunnableCategoryId, runSnippetOnAsset } from "@/components/snippet/sn
 import { useAssetStore } from "@/stores/assetStore";
 import { useRecentAssetStore } from "@/stores/recentAssetStore";
 import { useSnippetStore } from "@/stores/snippetStore";
+import { useLayoutStore } from "@/stores/layoutStore";
 import { useTabStore, type Tab, type InfoTabMeta, type PageTabMeta } from "@/stores/tabStore";
-import { resolveTabLabel, getBuiltinPageMeta } from "@/components/layout/pageTabMeta";
+import { resolveTabLabel, getBuiltinPageMeta, builtinPageTabMeta } from "@/components/layout/pageTabMeta";
 import type { asset_entity, snippet_entity } from "../../../wailsjs/go/models";
 import { errorMessage } from "@/lib/errorMessage";
 
@@ -56,7 +57,16 @@ interface SnippetRow {
   snippet: snippet_entity.Snippet;
 }
 
-type Row = TabRow | AssetRow | SnippetRow;
+/** 页面跳转与界面动作：只在搜索时出现，不挤占空查询的最近/已打开列表。 */
+interface ActionRow {
+  kind: "action";
+  id: string;
+  label: string;
+  icon: IconMeta["component"];
+  run: () => void;
+}
+
+type Row = TabRow | AssetRow | SnippetRow | ActionRow;
 
 interface Section {
   label: string;
@@ -146,6 +156,7 @@ export function CommandPalette({ open, onClose, onConnectAsset }: CommandPalette
   const recentIds = useRecentAssetStore((s) => s.recentIds);
   const snippets = useSnippetStore((s) => s.all);
   const snippetCategories = useSnippetStore((s) => s.categories);
+  const toolbarHidden = useLayoutStore((s) => s.toolbarHidden);
 
   // Local state
   const [query, setQuery] = useState("");
@@ -250,9 +261,33 @@ export function CommandPalette({ open, onClose, onConnectAsset }: CommandPalette
       .slice(0, SNIPPETS_QUERY_LIMIT)
       .map(toSnippetRow);
 
+    const actionRows: ActionRow[] = [
+      ...Object.entries(builtinPageTabMeta).map(([pageId, meta]) => ({
+        kind: "action" as const,
+        id: `page-${pageId}`,
+        label: t(meta.labelKey),
+        icon: meta.icon,
+        run: () => {
+          const tabStore = useTabStore.getState();
+          if (tabStore.tabs.some((tb) => tb.id === pageId)) tabStore.activateTab(pageId);
+          else tabStore.openTab({ id: pageId, type: "page", label: pageId, meta: { type: "page", pageId } });
+        },
+      })),
+      {
+        kind: "action" as const,
+        id: "toggle-toolbar",
+        label: toolbarHidden ? t("panel.showSidebar") : t("panel.hideSidebar"),
+        icon: PanelLeft,
+        run: () => useLayoutStore.getState().toggleToolbar(),
+      },
+    ].filter((row) => pinyinMatch(row.label, query));
+
     const result: Section[] = [];
     if (openedRows.length > 0) {
       result.push({ label: t("commandPalette.section.opened"), rows: openedRows });
+    }
+    if (actionRows.length > 0) {
+      result.push({ label: t("commandPalette.section.actions"), rows: actionRows });
     }
     if (assetRows.length > 0) {
       result.push({ label: t("commandPalette.section.assets"), rows: assetRows });
@@ -261,7 +296,7 @@ export function CommandPalette({ open, onClose, onConnectAsset }: CommandPalette
       result.push({ label: t("commandPalette.section.snippets"), rows: snippetRows });
     }
     return result;
-  }, [query, tabs, assets, groups, recentIds, snippets, snippetCategories, t]);
+  }, [query, tabs, assets, groups, recentIds, snippets, snippetCategories, toolbarHidden, t]);
 
   const flatRows = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
 
@@ -322,6 +357,8 @@ export function CommandPalette({ open, onClose, onConnectAsset }: CommandPalette
       useTabStore.getState().activateTab(row.tab.id);
     } else if (row.kind === "asset") {
       openAssetDefault(row.asset, onConnectAsset);
+    } else if (row.kind === "action") {
+      row.run();
     } else {
       activateSnippet(row.snippet);
     }
@@ -436,6 +473,29 @@ export function CommandPalette({ open, onClose, onConnectAsset }: CommandPalette
                               {t(key)}
                             </span>
                           )}
+                        </button>
+                      );
+                    }
+
+                    if (row.kind === "action") {
+                      return (
+                        <button
+                          key={row.id}
+                          type="button"
+                          role="option"
+                          data-active-index={idx}
+                          aria-selected={isActive}
+                          className={cn(
+                            "flex w-full items-center gap-2.5 px-3 py-2 cursor-pointer select-none rounded-sm mx-1 text-left",
+                            isActive ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
+                          )}
+                          onClick={() => activateRow(row)}
+                          onMouseEnter={() => setActiveIndex(idx)}
+                        >
+                          {React.createElement(row.icon, { className: "h-4 w-4 shrink-0 text-muted-foreground" })}
+                          <span className="flex-1 min-w-0 truncate text-sm">
+                            <HighlightedText segments={highlightMatch(row.label, query)} />
+                          </span>
                         </button>
                       );
                     }
