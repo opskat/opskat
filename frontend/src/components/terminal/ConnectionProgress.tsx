@@ -53,6 +53,7 @@ export function ConnectionProgress({ connectionId, isTabActive, isPaneActive }: 
   const respondChallenge = useTerminalStore((s) => s.respondChallenge);
   const respondHostKeyVerify = useTerminalStore((s) => s.respondHostKeyVerify);
   const cancelConnect = useTerminalStore((s) => s.cancelConnect);
+  const closeConnectionPane = useTerminalStore((s) => s.closeConnectionPane);
 
   if (!connection) {
     return (
@@ -62,7 +63,9 @@ export function ConnectionProgress({ connectionId, isTabActive, isPaneActive }: 
     );
   }
 
-  const isError = connection.status === "error";
+  const isCancelled = connection.status === "cancelled";
+  // 失败与取消都停在可操作的结束态:显示原因、重新连接、关闭窗格。
+  const isError = connection.status === "error" || isCancelled;
   const isChallenge = connection.status === "auth_challenge";
   const isHostKeyVerify = connection.status === "host_key_verify";
   const steps = STEPS_BY_TRANSPORT[connection.transport];
@@ -166,7 +169,11 @@ export function ConnectionProgress({ connectionId, isTabActive, isPaneActive }: 
           {connection.status === "connecting" && connection.logs.length > 0 && (
             <p className="text-sm text-muted-foreground">{connection.logs[connection.logs.length - 1].message}</p>
           )}
-          {isError && <p className="text-sm text-destructive">{connection.error}</p>}
+          {isError && (
+            <p className="text-sm text-destructive">
+              {isCancelled ? t("ssh.connectProgress.cancelled") : connection.error}
+            </p>
+          )}
           {isChallenge && <p className="text-sm text-warning">{t("ssh.connectProgress.authChallenge")}</p>}
           {isHostKeyVerify && (
             <p className={`text-sm ${connection.hostKeyVerify?.isChanged ? "text-destructive" : "text-warning"}`}>
@@ -204,7 +211,7 @@ export function ConnectionProgress({ connectionId, isTabActive, isPaneActive }: 
             authFailed={connection.authFailed || false}
             error={connection.error}
             onRetry={(password) => retryConnect(connectionId, password)}
-            onClose={() => cancelConnect(connectionId)}
+            onClose={() => closeConnectionPane(connectionId)}
           />
         )}
 
@@ -328,7 +335,7 @@ function ErrorActions({
       <div className="flex gap-2">
         <Button size="sm" variant="outline" onClick={onClose} className="flex-1">
           <X className="h-3.5 w-3.5 mr-1" />
-          {t("action.close")}
+          {t("ssh.contextMenu.closePane")}
         </Button>
         <Button
           size="sm"
