@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TooltipProvider } from "@opskat/ui";
 import { AssetDetail } from "@/components/asset/AssetDetail";
@@ -77,7 +77,7 @@ describe("AssetDetail for generic assets", () => {
     expect(screen.queryByText("asset.policyTest")).toBeNull();
 
     await userEvent.click(screen.getByText("asset.policyReset.default"));
-    await userEvent.click(await screen.findByText("action.confirm"));
+    await userEvent.click(within(await screen.findByRole("alertdialog")).getByText("asset.policyReset.default"));
 
     await waitFor(() => expect(UpdateAsset).toHaveBeenCalled());
     expect(GetDefaultPolicy).not.toHaveBeenCalled();

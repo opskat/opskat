@@ -265,6 +265,7 @@ function FieldNode<S>({
           credentialId={cred.value.passwordCredentialId}
           onCredentialIdChange={cred.setPasswordCredentialId}
           managedPasswords={cred.managedPasswords}
+          managedPasswordsLoad={cred.managedPasswordsLoad}
           hasExistingPassword={!!cred.value.encryptedPassword}
           editAssetId={ctx?.editAsset?.ID}
           onUsernameChange={(v) => patch({ [field.usernameKey ?? "username"]: v } as unknown as Partial<S>)}

@@ -141,7 +141,7 @@ function GenericTypeForm({
 }: GenericTypeFormProps) {
   const { t } = useTranslation();
   const isHttp = ct.execMode === EXEC_MODE_HTTP;
-  const { managedPasswords } = useAssetCredential();
+  const { managedPasswords, managedPasswordsLoad } = useAssetCredential();
   const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [editorOpen, setEditorOpen] = useState(false);
 
@@ -229,6 +229,7 @@ function GenericTypeForm({
                 credentialId={s.credentialId}
                 onCredentialIdChange={(credentialId) => setSecret(f.name, { credentialId })}
                 managedPasswords={managedPasswords}
+                managedPasswordsLoad={managedPasswordsLoad}
                 placeholder={f.placeholder}
                 hasExistingPassword={!!s.storedCipher}
                 revealExisting={editAsset?.ID ? () => RevealGenericSecret(editAsset.ID, f.name) : undefined}

@@ -11,6 +11,7 @@ import { resolveTLSKey, tlsCertFields } from "./tlsCertConfig";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import { credential_entity } from "../../../wailsjs/go/models";
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ListLoad } from "./useAsyncList";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import {
@@ -427,6 +428,7 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
                 value={schemaRegistry}
                 onChange={setSchemaRegistry}
                 managedPasswords={cred.managedPasswords}
+                managedPasswordsLoad={cred.managedPasswordsLoad}
               />
             </>
           )}
@@ -467,6 +469,7 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
                   }
                   onRemove={() => setConnectClusters(connectClusters.filter((_, itemIndex) => itemIndex !== index))}
                   managedPasswords={cred.managedPasswords}
+                  managedPasswordsLoad={cred.managedPasswordsLoad}
                 />
               ))}
               <CheckedField error={companionErrors.connectEmpty}>
@@ -541,12 +544,14 @@ function KafkaCompanionAuthFields({
   value,
   onChange,
   managedPasswords,
+  managedPasswordsLoad,
 }: {
   /** bearer 缺 token 等认证错误(i18n key,空串 = 无错),画在凭据字段下。 */
   authError: string;
   value: KafkaCompanionAuthForm;
   onChange: (patch: Partial<KafkaCompanionAuthForm>) => void;
   managedPasswords: credential_entity.Credential[];
+  managedPasswordsLoad: ListLoad;
 }) {
   const { t } = useTranslation();
   const authEnabled = value.authType !== "none";
@@ -582,6 +587,7 @@ function KafkaCompanionAuthFields({
                 credentialId={value.credentialId}
                 onCredentialIdChange={(credentialId) => onChange({ credentialId })}
                 managedPasswords={managedPasswords}
+                managedPasswordsLoad={managedPasswordsLoad}
                 hasExistingPassword={!!value.encryptedPassword}
                 secretLabel={value.authType === "bearer" ? t("asset.kafkaBearerToken") : undefined}
                 selectSecretLabel={value.authType === "bearer" ? t("asset.kafkaBearerToken") : undefined}
@@ -631,6 +637,7 @@ function KafkaConnectClusterEditor({
   onChange,
   onRemove,
   managedPasswords,
+  managedPasswordsLoad,
 }: {
   index: number;
   /** 该集群各字段的错误;不参与保存的空集群没有。 */
@@ -639,6 +646,7 @@ function KafkaConnectClusterEditor({
   onChange: (patch: Partial<KafkaConnectClusterForm>) => void;
   onRemove: () => void;
   managedPasswords: credential_entity.Credential[];
+  managedPasswordsLoad: ListLoad;
 }) {
   const { t } = useTranslation();
 
@@ -679,6 +687,7 @@ function KafkaConnectClusterEditor({
         value={value}
         onChange={onChange}
         managedPasswords={managedPasswords}
+        managedPasswordsLoad={managedPasswordsLoad}
       />
     </div>
   );

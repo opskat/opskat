@@ -24,6 +24,7 @@ function renderField(overrides: Partial<React.ComponentProps<typeof PasswordSour
     credentialId: 0,
     onCredentialIdChange: vi.fn(),
     managedPasswords: [makeCred(1, "alice"), makeCred(2, ""), makeCred(3, "bob")],
+    managedPasswordsLoad: { status: "ready", error: null, reload: vi.fn() },
     onUsernameChange: vi.fn(),
     ...overrides,
   };

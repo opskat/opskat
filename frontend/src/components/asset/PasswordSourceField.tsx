@@ -19,8 +19,8 @@ interface PasswordSourceFieldProps {
   credentialId: number;
   onCredentialIdChange: (id: number) => void;
   managedPasswords: credential_entity.Credential[];
-  /** Load state of `managedPasswords` (from `useAssetCredential`); omit only when the list is not fetched. */
-  managedPasswordsLoad?: ListLoad;
+  /** Load state of `managedPasswords` (from `useAssetCredential`). */
+  managedPasswordsLoad: ListLoad;
   /** Placeholder for inline password input when no existing password */
   placeholder?: string;
   /** Placeholder shown when an existing encrypted password is set */
@@ -120,7 +120,7 @@ export function PasswordSourceField({
         </Field>
       ) : (
         <Field label={selectSecretLabel || t("asset.selectPassword")}>
-          {managedPasswordsLoad && managedPasswordsLoad.status !== "ready" ? (
+          {managedPasswordsLoad.status !== "ready" ? (
             <AsyncState
               status={managedPasswordsLoad.status}
               error={managedPasswordsLoad.error}
