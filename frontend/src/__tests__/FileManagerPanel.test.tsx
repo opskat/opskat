@@ -728,15 +728,15 @@ describe("FileManagerPanel", () => {
     expect(screen.queryByTestId("external-edit-compare-resize-top")).not.toBeInTheDocument();
     expect(within(workbench).getByText("externalEdit.compare.projectView")).toBeInTheDocument();
     expect(within(workbench).getByText("externalEdit.compare.status")).toBeInTheDocument();
-    expect(within(workbench).getByText("externalEdit.compare.remoteLeftLocalRight")).toBeInTheDocument();
+    expect(within(workbench).getByText("externalEdit.compare.localLeftRemoteRight")).toBeInTheDocument();
     expect(screen.getByTestId("external-edit-compare-diff-editor")).toHaveTextContent("remote");
     expect(screen.getByTestId("external-edit-compare-diff-editor")).toHaveTextContent("local");
     expect(codeDiffViewerMock).toHaveBeenCalledWith(
       expect.objectContaining({
         activeBlockIndex: 0,
-        modified: "local\n",
+        modified: "remote\n",
         navigationToken: expect.any(Number),
-        original: "remote\n",
+        original: "local\n",
       })
     );
     await waitFor(() => expect(screen.getByTestId("external-edit-compare-diff-count")).toHaveTextContent("1 / 2"));
@@ -749,7 +749,7 @@ describe("FileManagerPanel", () => {
     expect(screen.getByTestId("external-edit-compare-diff-editor")).toHaveTextContent(
       "externalEdit.compare.localDraft"
     );
-    expect(screen.getByText("externalEdit.compare.helper")).toBeInTheDocument();
+    expect(screen.getByText("externalEdit.compare.localLeftHelper")).toBeInTheDocument();
   });
 
   it("handles remote-missing recreate only from the unified pending dialog", async () => {
@@ -854,7 +854,13 @@ describe("FileManagerPanel", () => {
       within(pendingDialog).getByRole("button", { name: /继续修改|externalEdit\.actions\.continueEdit/ })
     );
     await user.click(within(pendingDialog).getByRole("button", { name: "externalEdit.actions.reread" }));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "externalEdit.actions.reread" })
+    );
     await user.click(within(pendingDialog).getByRole("button", { name: "externalEdit.actions.overwrite" }));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "externalEdit.actions.overwrite" })
+    );
 
     expect(continuePendingSession).toHaveBeenCalledWith("recovery", "recovery");
     expect(resolveConflict).toHaveBeenCalledWith("recovery", "reread");
@@ -1398,6 +1404,9 @@ describe("FileManagerPanel", () => {
 
     await user.click(await screen.findByTestId("external-edit-pending-entry"));
     await user.click(await screen.findByRole("button", { name: "externalEdit.actions.reread" }));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", { name: "externalEdit.actions.reread" })
+    );
 
     expect(await screen.findByText("externalEdit.error.safeActionFailed")).toBeInTheDocument();
     expect(screen.queryByText(/SecretEditor/)).not.toBeInTheDocument();
