@@ -37,6 +37,8 @@ export interface FileConflictItem {
   incoming: FileConflictSide;
   /** 选「保留两者」时新项落地的名字；不提供则该项不能保留两者。 */
   keepBothName?: string;
+  /** 目标就是来源本身（原地复制）：不能覆盖，只能跳过或保留两者。 */
+  noOverwrite?: boolean;
 }
 
 export interface FileConflictRequest {
@@ -52,6 +54,12 @@ interface FileConflictDialogProps {
 
 function canKeepBoth(kind: FileConflictKind, item: FileConflictItem): boolean {
   return kind === "transfer" && !!item.keepBothName;
+}
+
+function canDecide(kind: FileConflictKind, item: FileConflictItem, decision: FileConflictDecision): boolean {
+  if (decision === "keepBoth") return canKeepBoth(kind, item);
+  if (decision === "overwrite") return !item.noOverwrite;
+  return true;
 }
 
 function SideSummary({ label, side }: { label: string; side: FileConflictSide }) {
@@ -87,8 +95,8 @@ function FileConflictBody({ request, onProgress, onResolve }: FileConflictBodyPr
     const next = [...decisions, decision];
     let cursor = index + 1;
     if (applyToRest) {
-      // 「保留两者」只能套用到给出了新名字的项，遇到不能套用的停下来单独问。
-      while (cursor < items.length && (decision !== "keepBoth" || canKeepBoth(kind, items[cursor]))) {
+      // 「保留两者」只能套用到给出了新名字的项、「覆盖」不能套用到原地复制的项，遇到不能套用的停下来单独问。
+      while (cursor < items.length && canDecide(kind, items[cursor], decision)) {
         next.push(decision);
         cursor++;
       }
@@ -153,9 +161,11 @@ function FileConflictBody({ request, onProgress, onResolve }: FileConflictBodyPr
             )}
           </>
         )}
-        <Button variant="destructive" onClick={() => decide("overwrite")}>
-          {t("fileConflict.overwrite")}
-        </Button>
+        {canDecide(kind, item, "overwrite") && (
+          <Button variant="destructive" onClick={() => decide("overwrite")}>
+            {t("fileConflict.overwrite")}
+          </Button>
+        )}
       </DialogFooter>
     </DialogContent>
   );

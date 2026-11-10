@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MongoDBCollectionBrowser } from "../MongoDBCollectionBrowser";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore } from "@/stores/tabStore";
-import { ListMongoDatabases } from "../../../../wailsjs/go/query/Query";
+import { ListMongoCollections, ListMongoDatabases } from "../../../../wailsjs/go/query/Query";
 
 const TAB = "query-7";
 
@@ -50,6 +50,21 @@ describe("MongoDBCollectionBrowser load states", () => {
     vi.mocked(ListMongoDatabases).mockResolvedValueOnce(JSON.stringify(["admin"]));
     fireEvent.click(screen.getByRole("button", { name: "action.retry" }));
     expect(await screen.findByText("admin")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  it("shows a failed collection listing under its database, and retry reloads that database", async () => {
+    seed(["shop"]);
+    vi.mocked(ListMongoCollections).mockRejectedValue(new Error("not authorized on shop"));
+    render(<MongoDBCollectionBrowser tabId={TAB} assetId={7} />);
+
+    fireEvent.click(screen.getByText("shop"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("not authorized on shop");
+
+    vi.mocked(ListMongoCollections).mockResolvedValue(JSON.stringify(["orders"]));
+    fireEvent.click(screen.getByRole("button", { name: "action.retry" }));
+    expect(await screen.findByText("orders")).toBeInTheDocument();
+    expect(ListMongoCollections).toHaveBeenLastCalledWith(7, "shop");
     await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 

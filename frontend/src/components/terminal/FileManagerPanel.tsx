@@ -262,7 +262,7 @@ export function FileManagerPanel({
       const destinations = await resolveTargets(
         localPaths.map((localPath) => ({
           targetPath: joinRemotePath(remoteDir, getLocalBaseName(localPath)),
-          incoming: {},
+          localPath,
         }))
       );
       destinations.forEach((destination, index) => {
@@ -1186,7 +1186,7 @@ export function FileManagerPanel({
               size="sm"
               variant="outline"
               onClick={() => {
-                openSettingsTab(t("nav.settings"));
+                openSettingsTab(t("nav.settings"), "external-edit");
                 setBuiltInBlock(null);
               }}
             >

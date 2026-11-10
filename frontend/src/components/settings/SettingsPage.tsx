@@ -13,6 +13,7 @@ import {
   PencilLine,
   Blocks,
   Globe,
+  Bug,
   type LucideIcon,
 } from "lucide-react";
 import { ShortcutSettings } from "@/components/settings/ShortcutSettings";
@@ -24,6 +25,7 @@ import { BackupSection } from "@/components/settings/BackupSection";
 import { AppearanceSection, TerminalSection } from "@/components/settings/AppearanceSection";
 import { ConnectionSection } from "@/components/settings/ConnectionSection";
 import { UpdateSection } from "@/components/settings/UpdateSection";
+import { DebugSection } from "@/components/settings/DebugSection";
 import { SystemStatusSection } from "@/components/settings/SystemStatusSection";
 import { ExtensionSection } from "@/components/settings/ExtensionSection";
 import { NetworkSection } from "@/components/settings/NetworkSection";
@@ -53,7 +55,7 @@ export function SettingsPage() {
       id: "general",
       label: t("settings.group.general"),
       items: [
-        { id: "appearance", tabs: ["appearance"], icon: Palette, label: t("nav.appearance") },
+        { id: "appearance", tabs: ["appearance"], icon: Palette, label: t("settings.nav.appearance") },
         { id: "shortcuts", tabs: ["shortcuts"], icon: Keyboard, label: t("shortcut.title") },
       ],
     },
@@ -62,7 +64,7 @@ export function SettingsPage() {
       label: t("settings.group.connection"),
       items: [
         { id: "terminal", tabs: ["terminal"], icon: MonitorDot, label: t("terminal.title") },
-        { id: "network", tabs: ["network"], icon: Globe, label: t("network.title") },
+        { id: "network", tabs: ["network"], icon: Globe, label: t("settings.nav.network") },
         { id: "external-edit", tabs: ["external-edit"], icon: PencilLine, label: t("externalEdit.settings.tab") },
       ],
     },
@@ -96,8 +98,9 @@ export function SettingsPage() {
       id: "about",
       label: t("settings.group.about"),
       items: [
-        { id: "about", tabs: ["about"], icon: Info, label: t("appUpdate.title") },
+        { id: "about", tabs: ["about"], icon: Info, label: t("settings.nav.update") },
         { id: "status", tabs: ["status"], icon: Activity, label: t("systemStatus.title") },
+        { id: "debug", tabs: ["debug"], icon: Bug, label: t("settings.nav.debugLogs") },
       ],
     },
   ];
@@ -171,6 +174,7 @@ export function SettingsPage() {
             {activeTab === "custom-types" && <CustomTypeSection />}
             {activeTab === "about" && <UpdateSection />}
             {activeTab === "status" && <SystemStatusSection />}
+            {activeTab === "debug" && <DebugSection />}
             {activeTab === "extensions" && <ExtensionSection />}
           </div>
         </div>

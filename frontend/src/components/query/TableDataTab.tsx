@@ -1129,7 +1129,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
   const hasNext = totalPages != null ? page < totalPages - 1 : rows.length === pageSize;
   const hasPrev = page > 0;
   const tableRows = useMemo(() => [...rows, ...newRows], [newRows, rows]);
-  const pendingEditCount = edits.size + newRows.length;
+  // 与离开拦截的修改摘要同一口径:已保存行每个改动的单元格算一处,新增行整行算一处。
+  const pendingEditCount = unsavedSummary.length;
   const deletableRowCount = deletableRowIdxs.filter((idx) => tableRows[idx] != null).length;
   // 详情面板跟随"当前行":选中单元格所在行,或唯一被整行选中的那行。
   const detailRowIdx = selectedRowIdx ?? (selectedRowIdxs.length === 1 ? selectedRowIdxs[0] : null);

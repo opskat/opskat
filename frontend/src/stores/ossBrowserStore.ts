@@ -33,7 +33,8 @@ export interface OssBrowserTabState {
   listing: OssListing | null;
   selection: Set<string>;
   loading: { buckets: boolean; listing: boolean; page: boolean };
-  error: string | null;
+  /** Why the bucket list failed to load; only loadBuckets sets / clears it. Other operations reject to their caller. */
+  bucketsError: string | null;
   /** Why the current prefix's object listing failed; only navigateToPrefix sets / clears it. */
   listingError: string | null;
   viewMode: "list" | "grid";
@@ -74,7 +75,7 @@ function emptyTabState(assetId: number): OssBrowserTabState {
     listing: null,
     selection: new Set(),
     loading: { buckets: false, listing: false, page: false },
-    error: null,
+    bucketsError: null,
     listingError: null,
     viewMode: "list",
     focusedKey: null,
@@ -117,7 +118,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
             ...(s.tabs[tabId] ?? emptyTabState(assetId)),
             assetId,
             loading: { ...(s.tabs[tabId]?.loading ?? emptyTabState(assetId).loading), buckets: true },
-            error: null,
+            bucketsError: null,
           },
         },
       }));
@@ -125,7 +126,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
         const buckets = await OSSListBuckets(assetId);
         patch(tabId, (t) => ({ ...t, buckets: buckets ?? [], loading: { ...t.loading, buckets: false } }));
       } catch (err) {
-        patch(tabId, (t) => ({ ...t, loading: { ...t.loading, buckets: false }, error: errorMessage(err) }));
+        patch(tabId, (t) => ({ ...t, loading: { ...t.loading, buckets: false }, bucketsError: errorMessage(err) }));
         throw err;
       }
       if (defaultBucket && get().tabs[tabId]?.currentBucket === "") await get().selectBucket(tabId, defaultBucket);
@@ -194,24 +195,19 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
         return { ...t, expanded };
       });
       if (wasExpanded || t0.tree[prefix]?.loaded) return; // collapse, or already lazily loaded
-      try {
-        const res = await listInto(tabId, prefix, "");
-        patch(tabId, (t) => ({
-          ...t,
-          tree: {
-            ...t.tree,
-            [prefix]: {
-              childPrefixes: res.prefixes ?? [],
-              loaded: true,
-              cursor: res.nextContinuationToken ?? "",
-              truncated: !!res.isTruncated,
-            },
+      const res = await listInto(tabId, prefix, "");
+      patch(tabId, (t) => ({
+        ...t,
+        tree: {
+          ...t.tree,
+          [prefix]: {
+            childPrefixes: res.prefixes ?? [],
+            loaded: true,
+            cursor: res.nextContinuationToken ?? "",
+            truncated: !!res.isTruncated,
           },
-        }));
-      } catch (err) {
-        patch(tabId, (t) => ({ ...t, error: errorMessage(err) }));
-        throw err;
-      }
+        },
+      }));
     },
 
     loadNextPage: async (tabId) => {
@@ -235,7 +231,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
           loading: { ...t.loading, page: false },
         }));
       } catch (err) {
-        patch(tabId, (t) => ({ ...t, loading: { ...t.loading, page: false }, error: errorMessage(err) }));
+        patch(tabId, (t) => ({ ...t, loading: { ...t.loading, page: false } }));
         throw err;
       }
     },
@@ -255,15 +251,10 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
       const t0 = get().tabs[tabId];
       if (!t0 || t0.selection.size === 0) return;
       const keys = Array.from(t0.selection);
-      try {
-        if (keys.length === 1) {
-          await OSSRemoveObject({ assetId: t0.assetId, bucket: t0.currentBucket, key: keys[0] });
-        } else {
-          await OSSRemoveObjects({ assetId: t0.assetId, bucket: t0.currentBucket, keys });
-        }
-      } catch (err) {
-        patch(tabId, (t) => ({ ...t, error: errorMessage(err) }));
-        throw err;
+      if (keys.length === 1) {
+        await OSSRemoveObject({ assetId: t0.assetId, bucket: t0.currentBucket, key: keys[0] });
+      } else {
+        await OSSRemoveObjects({ assetId: t0.assetId, bucket: t0.currentBucket, keys });
       }
       get().clearSelection(tabId);
       await get().refresh(tabId);
@@ -303,12 +294,7 @@ export const useOssBrowserStore = create<OssBrowserState>((set, get) => {
     deleteObject: async (tabId, key) => {
       const t0 = get().tabs[tabId];
       if (!t0) return;
-      try {
-        await OSSRemoveObject({ assetId: t0.assetId, bucket: t0.currentBucket, key });
-      } catch (err) {
-        patch(tabId, (t) => ({ ...t, error: errorMessage(err) }));
-        throw err;
-      }
+      await OSSRemoveObject({ assetId: t0.assetId, bucket: t0.currentBucket, key });
       patch(tabId, (t) => (t.focusedKey === key ? { ...t, focusedKey: null } : t));
       await get().refresh(tabId);
     },

@@ -412,3 +412,24 @@ describe("OpsctlApprovalDialog 批量审批折叠（kind=batch，D17）", () => 
     expect(screen.getByText("systemctl restart svc-10")).toBeVisible();
   });
 });
+
+describe("OpsctlApprovalDialog 按钮文案与 AI 审批块一致（决策 3）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("grant 的主按钮是「允许」而不是「批准」", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+    fireGrantApproval(handlers, [{ type: "exec", asset_id: 1, asset_name: "web-1", command: "ls *" }]);
+    expect(screen.getByTestId("opsctl-approval-allow")).toHaveTextContent("ai.approvalAllow");
+  });
+
+  it("批量审批是「全部拒绝 / 全部允许」", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+    fireBatchApproval(handlers, batchItems(2));
+    expect(screen.getByTestId("opsctl-approval-allow")).toHaveTextContent("ai.approvalAllowAll");
+    expect(screen.getByTestId("opsctl-approval-deny")).toHaveTextContent("ai.approvalDenyAll");
+  });
+});

@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { Search, ChevronDown, Plus, Settings2 } from "lucide-react";
 import { cn, Popover, PopoverContent, PopoverTrigger, Input, Button } from "@opskat/ui";
 import { useCustomTypeList, useCustomTypeStore } from "@/stores/customTypeStore";
-import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { openSettingsTab } from "@/stores/tabStore";
 import { CustomTypeEditorDialog } from "@/components/settings/CustomTypeEditorDialog";
 import {
@@ -79,8 +78,7 @@ export function AssetTypePicker({ value, variant, onChange, onLeave, disabled }:
   const openManage = () => {
     setOpen(false);
     const proceed = () => {
-      useSettingsUiStore.getState().setActiveTab("custom-types");
-      openSettingsTab(t("nav.settings"));
+      openSettingsTab(t("nav.settings"), "custom-types");
     };
     if (onLeave) onLeave(proceed);
     else proceed();

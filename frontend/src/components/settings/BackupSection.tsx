@@ -214,35 +214,50 @@ export function BackupSection() {
     })();
   }, [loadGists]);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const cfg = await GetWebDAVConfig();
-        if (!cfg) return;
-        setWebDAVURL(cfg.url || "");
-        const known: ReadonlyArray<"none" | "basic" | "bearer"> = ["none", "basic", "bearer"];
-        const incoming = cfg.authType ?? "";
-        setWebDAVAuthType(
-          known.includes(incoming as "none" | "basic" | "bearer") ? (incoming as "none" | "basic" | "bearer") : "basic"
-        );
-        setWebDAVUsername(cfg.username || "");
-        setWebDAVPassword(cfg.password || "");
-        setWebDAVToken(cfg.token || "");
-        setWebDAVConfigured(!!cfg.configured);
-        setWebDAVExportDefaults({
-          configured: !!cfg.exportDefaultsConfigured,
-          password: cfg.exportPassword || "",
-          includeCredentials: !!cfg.exportIncludeCredentials,
-          includeForwards: cfg.exportDefaultsConfigured ? !!cfg.exportIncludeForwards : true,
-          includePolicyGroups: cfg.exportDefaultsConfigured ? !!cfg.exportIncludePolicyGroups : true,
-          includeShortcuts: !!cfg.exportIncludeShortcuts,
-          includeThemes: !!cfg.exportIncludeThemes,
-        });
-      } catch {
-        /* not configured */
-      }
-    })();
+  // 未配置时后端照常返回(configured=false);抛错是真失败(如密码解密失败),要显示出来,不能当成未配置。
+  const [webdavConfigLoad, setWebDAVConfigLoad] = useState<{ status: AsyncStatus; error: string | null }>({
+    status: "loading",
+    error: null,
+  });
+  const loadWebDAVConfig = useCallback(async () => {
+    try {
+      const cfg = await GetWebDAVConfig();
+      setWebDAVURL(cfg.url || "");
+      const known: ReadonlyArray<"none" | "basic" | "bearer"> = ["none", "basic", "bearer"];
+      const incoming = cfg.authType ?? "";
+      setWebDAVAuthType(
+        known.includes(incoming as "none" | "basic" | "bearer") ? (incoming as "none" | "basic" | "bearer") : "basic"
+      );
+      setWebDAVUsername(cfg.username || "");
+      setWebDAVPassword(cfg.password || "");
+      setWebDAVToken(cfg.token || "");
+      setWebDAVConfigured(!!cfg.configured);
+      setWebDAVExportDefaults({
+        configured: !!cfg.exportDefaultsConfigured,
+        password: cfg.exportPassword || "",
+        includeCredentials: !!cfg.exportIncludeCredentials,
+        includeForwards: cfg.exportDefaultsConfigured ? !!cfg.exportIncludeForwards : true,
+        includePolicyGroups: cfg.exportDefaultsConfigured ? !!cfg.exportIncludePolicyGroups : true,
+        includeShortcuts: !!cfg.exportIncludeShortcuts,
+        includeThemes: !!cfg.exportIncludeThemes,
+      });
+      setWebDAVConfigLoad({ status: "ready", error: null });
+    } catch (e: unknown) {
+      setWebDAVConfigLoad({ status: "error", error: errorMessage(e) });
+    }
   }, []);
+
+  useEffect(() => {
+    // 加载体的 setState 均在 await 之后,经 async 边界调用避免 effect 内同步 setState
+    void (async () => {
+      await loadWebDAVConfig();
+    })();
+  }, [loadWebDAVConfig]);
+
+  const retryWebDAVConfig = () => {
+    setWebDAVConfigLoad({ status: "loading", error: null });
+    void loadWebDAVConfig();
+  };
 
   const loadWebDAVBackups = useCallback(async () => {
     if (!webdavConfigured) return;
@@ -590,117 +605,122 @@ export function BackupSection() {
           <CardDescription>{t("backup.webdavDesc")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3">
-            <div className="grid gap-1.5">
-              <Label>{t("backup.webdavURL")}</Label>
-              <Input
-                value={webdavURL}
-                onChange={(e) => setWebDAVURL(e.target.value)}
-                placeholder={t("backup.webdavURLPlaceholder")}
-              />
-              <p className="text-xs text-muted-foreground">{t("backup.webdavDefaultDirectory", { dir: "opskat" })}</p>
-            </div>
-            <div className="grid gap-1.5">
-              <Label>{t("backup.webdavAuthType")}</Label>
-              <Select value={webdavAuthType} onValueChange={(v) => setWebDAVAuthType(v as "none" | "basic" | "bearer")}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">{t("backup.webdavAuthNone")}</SelectItem>
-                  <SelectItem value="basic">{t("backup.webdavAuthBasic")}</SelectItem>
-                  <SelectItem value="bearer">{t("backup.webdavAuthBearer")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {webdavAuthType === "basic" && (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="grid gap-1.5">
-                  <Label>{t("backup.webdavUsername")}</Label>
-                  <Input
-                    value={webdavUsername}
-                    onChange={(e) => setWebDAVUsername(e.target.value)}
-                    placeholder={t("backup.webdavUsernamePlaceholder")}
-                  />
-                </div>
-                <div className="grid gap-1.5">
-                  <Label>{t("backup.webdavPassword")}</Label>
-                  <PasswordInput value={webdavPassword} onChange={(e) => setWebDAVPassword(e.target.value)} />
-                </div>
-              </div>
-            )}
-            {webdavAuthType === "bearer" && (
+          <AsyncState status={webdavConfigLoad.status} error={webdavConfigLoad.error} onRetry={retryWebDAVConfig}>
+            <div className="grid gap-3">
               <div className="grid gap-1.5">
-                <Label>{t("backup.webdavToken")}</Label>
-                <PasswordInput value={webdavToken} onChange={(e) => setWebDAVToken(e.target.value)} />
+                <Label>{t("backup.webdavURL")}</Label>
+                <Input
+                  value={webdavURL}
+                  onChange={(e) => setWebDAVURL(e.target.value)}
+                  placeholder={t("backup.webdavURLPlaceholder")}
+                />
+                <p className="text-xs text-muted-foreground">{t("backup.webdavDefaultDirectory", { dir: "opskat" })}</p>
               </div>
-            )}
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={handleWebDAVSave} disabled={webdavSaving} variant="outline" className="gap-1">
-                {webdavSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                {t("backup.webdavSave")}
-              </Button>
-              <Button
-                onClick={handleWebDAVTest}
-                disabled={webdavTesting || !webdavURL.trim()}
-                variant="outline"
-                className="gap-1"
-              >
-                {webdavTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                {t("backup.webdavTest")}
-              </Button>
-              {webdavConfigured && (
-                <Button onClick={handleWebDAVClear} variant="ghost" className="gap-1 text-muted-foreground">
-                  <Trash2 className="h-4 w-4" />
-                  {t("backup.webdavClear")}
-                </Button>
+              <div className="grid gap-1.5">
+                <Label>{t("backup.webdavAuthType")}</Label>
+                <Select
+                  value={webdavAuthType}
+                  onValueChange={(v) => setWebDAVAuthType(v as "none" | "basic" | "bearer")}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">{t("backup.webdavAuthNone")}</SelectItem>
+                    <SelectItem value="basic">{t("backup.webdavAuthBasic")}</SelectItem>
+                    <SelectItem value="bearer">{t("backup.webdavAuthBearer")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {webdavAuthType === "basic" && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-1.5">
+                    <Label>{t("backup.webdavUsername")}</Label>
+                    <Input
+                      value={webdavUsername}
+                      onChange={(e) => setWebDAVUsername(e.target.value)}
+                      placeholder={t("backup.webdavUsernamePlaceholder")}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label>{t("backup.webdavPassword")}</Label>
+                    <PasswordInput value={webdavPassword} onChange={(e) => setWebDAVPassword(e.target.value)} />
+                  </div>
+                </div>
               )}
+              {webdavAuthType === "bearer" && (
+                <div className="grid gap-1.5">
+                  <Label>{t("backup.webdavToken")}</Label>
+                  <PasswordInput value={webdavToken} onChange={(e) => setWebDAVToken(e.target.value)} />
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={handleWebDAVSave} disabled={webdavSaving} variant="outline" className="gap-1">
+                  {webdavSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  {t("backup.webdavSave")}
+                </Button>
+                <Button
+                  onClick={handleWebDAVTest}
+                  disabled={webdavTesting || !webdavURL.trim()}
+                  variant="outline"
+                  className="gap-1"
+                >
+                  {webdavTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  {t("backup.webdavTest")}
+                </Button>
+                {webdavConfigured && (
+                  <Button onClick={handleWebDAVClear} variant="ghost" className="gap-1 text-muted-foreground">
+                    <Trash2 className="h-4 w-4" />
+                    {t("backup.webdavClear")}
+                  </Button>
+                )}
+              </div>
             </div>
-          </div>
 
-          {webdavConfigured && (
-            <>
-              <AsyncState status={webdavLoad.status} error={webdavLoad.error} onRetry={retryWebDAVBackups}>
-                <div className="grid gap-4">
-                  <div className="grid gap-2">
-                    <Label>{t("backup.webdavSelect")}</Label>
+            {webdavConfigured && (
+              <>
+                <AsyncState status={webdavLoad.status} error={webdavLoad.error} onRetry={retryWebDAVBackups}>
+                  <div className="grid gap-4">
+                    <div className="grid gap-2">
+                      <Label>{t("backup.webdavSelect")}</Label>
+                      <div className="flex gap-2">
+                        <Select value={selectedWebDAVBackup} onValueChange={setSelectedWebDAVBackup}>
+                          <SelectTrigger className="flex-1">
+                            <SelectValue placeholder={t("backup.webdavNoBackup")} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {webdavBackups.map((backup) => (
+                              <SelectItem key={backup.name} value={backup.name}>
+                                {t("backup.webdavBackupItem", { name: backup.name, size: backup.size })}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button onClick={retryWebDAVBackups} variant="outline" size="icon">
+                          <RefreshCw className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
                     <div className="flex gap-2">
-                      <Select value={selectedWebDAVBackup} onValueChange={setSelectedWebDAVBackup}>
-                        <SelectTrigger className="flex-1">
-                          <SelectValue placeholder={t("backup.webdavNoBackup")} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {webdavBackups.map((backup) => (
-                            <SelectItem key={backup.name} value={backup.name}>
-                              {t("backup.webdavBackupItem", { name: backup.name, size: backup.size })}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Button onClick={loadWebDAVBackups} variant="outline" size="icon">
-                        <RefreshCw className="h-4 w-4" />
+                      <Button onClick={handleWebDAVPush} disabled={webdavPushing} variant="outline" className="gap-1">
+                        <Upload className="h-4 w-4" />
+                        {webdavPushing ? t("backup.webdavPushing") : t("backup.webdavPush")}
+                      </Button>
+                      <Button
+                        onClick={handleWebDAVPull}
+                        disabled={!selectedWebDAVBackup}
+                        variant="outline"
+                        className="gap-1"
+                      >
+                        <Download className="h-4 w-4" />
+                        {t("backup.webdavPull")}
                       </Button>
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <Button onClick={handleWebDAVPush} disabled={webdavPushing} variant="outline" className="gap-1">
-                      <Upload className="h-4 w-4" />
-                      {webdavPushing ? t("backup.webdavPushing") : t("backup.webdavPush")}
-                    </Button>
-                    <Button
-                      onClick={handleWebDAVPull}
-                      disabled={!selectedWebDAVBackup}
-                      variant="outline"
-                      className="gap-1"
-                    >
-                      <Download className="h-4 w-4" />
-                      {t("backup.webdavPull")}
-                    </Button>
-                  </div>
-                </div>
-              </AsyncState>
-            </>
-          )}
+                </AsyncState>
+              </>
+            )}
+          </AsyncState>
         </CardContent>
       </Card>
 

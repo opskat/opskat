@@ -106,7 +106,11 @@ export function KafkaPanel({ tabId }: KafkaPanelProps) {
           <div className="text-sm font-semibold">{activeLabel}</div>
         </div>
 
-        <ErrorNotice message={current.error} className="mx-4 mt-3 shrink-0" />
+        <ErrorNotice
+          message={current.error}
+          onRetry={() => void refreshActiveView(tabId)}
+          className="mx-4 mt-3 shrink-0"
+        />
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {current.activeView === "overview" && <OverviewView state={current} />}

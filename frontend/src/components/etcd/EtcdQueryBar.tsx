@@ -137,7 +137,7 @@ export function EtcdQueryBar({ assetId, onResult, onDestructive }: EtcdQueryBarP
           <button
             key={tmpl}
             type="button"
-            className="rounded border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent"
+            className="rounded border bg-background px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent"
             onClick={() => setCmd(tmpl)}
           >
             {tmpl}
@@ -151,7 +151,7 @@ export function EtcdQueryBar({ assetId, onResult, onDestructive }: EtcdQueryBarP
             <button
               key={h}
               type="button"
-              className="rounded border bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent"
+              className="rounded border bg-background px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent"
               onClick={() => setCmd(h)}
             >
               {h}

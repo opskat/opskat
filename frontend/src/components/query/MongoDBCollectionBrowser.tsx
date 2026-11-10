@@ -72,19 +72,22 @@ export function MongoDBCollectionBrowser({ tabId, assetId }: MongoDBCollectionBr
   if (!mongoState) return null;
 
   const { expandedDbs } = mongoState;
+  const collectionErrors = mongoState.collectionErrors ?? {};
+
+  const loadCollections = (db: string) => {
+    setLoadingCollections((prev) => new Set(prev).add(db));
+    loadMongoCollections(tabId, db).finally(() => {
+      setLoadingCollections((prev) => {
+        const next = new Set(prev);
+        next.delete(db);
+        return next;
+      });
+    });
+  };
 
   const handleToggle = (db: string) => {
     const willExpand = !expandedDbs.includes(db);
-    if (willExpand && !mongoState.collections[db]) {
-      setLoadingCollections((prev) => new Set(prev).add(db));
-      loadMongoCollections(tabId, db).finally(() => {
-        setLoadingCollections((prev) => {
-          const next = new Set(prev);
-          next.delete(db);
-          return next;
-        });
-      });
-    }
+    if (willExpand && !mongoState.collections[db]) loadCollections(db);
     toggleMongoDbExpand(tabId, db);
   };
 
@@ -149,7 +152,7 @@ export function MongoDBCollectionBrowser({ tabId, assetId }: MongoDBCollectionBr
         ) : undefined
       }
     >
-      {/* A failed collection load leaves the tree usable, so the reason sits above it. */}
+      {/* A failed refresh of the database list keeps the previous list usable, so the reason sits above it. */}
       {mongoState.error && hasDatabases && !loadingDbs && (
         <AsyncState status="error" error={mongoState.error} onRetry={handleLoad} />
       )}
@@ -195,11 +198,22 @@ export function MongoDBCollectionBrowser({ tabId, assetId }: MongoDBCollectionBr
                   {/* Collections */}
                   {isExpanded && (
                     <div className="ml-3">
-                      {loadingCollections.has(db) || (!dbCollections && !mongoState.error) ? (
+                      {loadingCollections.has(db) ? (
                         <div className="flex items-center gap-1.5 px-2 py-1">
                           <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
                         </div>
-                      ) : !dbCollections ? null : dbCollections.length === 0 ? (
+                      ) : collectionErrors[db] ? (
+                        <AsyncState
+                          status="error"
+                          error={collectionErrors[db]}
+                          onRetry={() => loadCollections(db)}
+                          className="items-start px-2 py-1 text-left"
+                        />
+                      ) : !dbCollections ? (
+                        <div className="flex items-center gap-1.5 px-2 py-1">
+                          <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                        </div>
+                      ) : dbCollections.length === 0 ? (
                         <div className="px-2 py-1 text-xs text-muted-foreground italic">
                           {filterLower && !dbMatch ? t("query.noMatch") : t("query.mongo.noCollections")}
                         </div>

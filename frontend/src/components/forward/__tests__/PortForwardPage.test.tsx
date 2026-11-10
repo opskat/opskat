@@ -53,6 +53,7 @@ describe("PortForwardPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockList([cfg()]);
+    vi.mocked(StartForwardConfig).mockResolvedValue(undefined as never);
   });
 
   it("keeps dynamic rules when saving an edited config", async () => {
@@ -117,6 +118,61 @@ describe("PortForwardPage", () => {
     render(<PortForwardPage />);
     fireEvent.click(await screen.findByTitle("forward.start"));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("ssh down")));
+  });
+
+  it("shows each rule's cause when start succeeds but rules fail to listen", async () => {
+    render(<PortForwardPage />);
+    const start = await screen.findByTitle("forward.start");
+    const started = cfg({ status: "partial" });
+    started.rules[0] = { ...started.rules[0], status: "error", error: "bind: address already in use" } as never;
+    started.rules[1] = { ...started.rules[1], status: "running" } as never;
+    mockList([started]);
+    fireEvent.click(start);
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("bind: address already in use"))
+    );
+    expect(vi.mocked(toast.error).mock.calls[0][0]).toContain("8080");
+  });
+
+  it("does not report anything when every rule starts", async () => {
+    render(<PortForwardPage />);
+    const start = await screen.findByTitle("forward.start");
+    const started = cfg({ status: "running" });
+    started.rules = started.rules.map((r) => ({ ...r, status: "running" }));
+    mockList([started]);
+    fireEvent.click(start);
+    await waitFor(() => expect(StartForwardConfig).toHaveBeenCalled());
+    expect(await screen.findByText("forward.running")).toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("keeps the list on screen while it reloads after an action", async () => {
+    render(<PortForwardPage />);
+    const start = await screen.findByTitle("forward.start");
+    vi.mocked(ListForwardConfigs).mockReturnValue(new Promise(() => {}) as never);
+    fireEvent.click(start);
+    await waitFor(() => expect(ListForwardConfigs).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("dev")).toBeInTheDocument();
+  });
+
+  it("keeps an inline rule error on its own rule after another rule is removed", async () => {
+    render(<PortForwardPage />);
+    fireEvent.click(await screen.findByText("forward.create"));
+    fireEvent.change(screen.getByPlaceholderText("forward.namePlaceholder"), { target: { value: "x" } });
+    fireEvent.click(screen.getAllByTestId("asset-select").slice(-1)[0]);
+    fireEvent.click(screen.getByText("forward.addRule"));
+    const ports = () => screen.getAllByPlaceholderText("forward.port");
+    // rule 0 valid, rule 1 has a bad local port
+    fireEvent.change(ports()[0], { target: { value: "8080" } });
+    fireEvent.change(ports()[1], { target: { value: "5432" } });
+    fireEvent.change(ports()[2], { target: { value: "70000" } });
+    fireEvent.click(screen.getByText("forward.save"));
+    expect(await screen.findByText("forward.ruleError.localPort")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByTitle("forward.removeRule")[0]);
+    // the remaining rule is the invalid one and still shows its error
+    expect(ports()[0]).toHaveValue("70000");
+    expect(screen.getByText("forward.ruleError.localPort")).toBeInTheDocument();
   });
 
   it("shows the cause when delete fails", async () => {

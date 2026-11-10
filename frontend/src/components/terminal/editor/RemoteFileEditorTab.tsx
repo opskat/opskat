@@ -1,7 +1,7 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { AlertTriangle, CircleHelp, ExternalLink, FileDiff, Loader2, Save } from "lucide-react";
+import { AlertTriangle, CircleHelp, ExternalLink, FileDiff, GitMerge, Loader2, Save } from "lucide-react";
 import type * as MonacoNS from "monaco-editor";
 import type { OnMount } from "@monaco-editor/react";
 import {
@@ -151,6 +151,7 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
   const decorationsRef = useRef<MonacoNS.editor.IEditorDecorationsCollection | null>(null);
   const [mountVersion, setMountVersion] = useState(0);
   const [confirmOverwrite, setConfirmOverwrite] = useState(false);
+  const [confirmAcceptRemote, setConfirmAcceptRemote] = useState(false);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [confirmHandoff, setConfirmHandoff] = useState(false);
   // 拉起外部编辑器要下载本地副本、起进程，是可以等上几秒的一趟 IPC。这期间还能敲字的话，
@@ -592,13 +593,14 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
           <span className="text-muted-foreground">{t("externalEdit.builtIn.localChangesKept")}</span>
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <Button onClick={() => void handleMerge()} size="xs" variant="outline">
+              <GitMerge className="mr-1 h-3 w-3" />
               {t("externalEdit.actions.merge")}
             </Button>
             <Button onClick={() => void handleCompare()} size="xs" variant="outline">
               {t("externalEdit.actions.compare")}
             </Button>
-            <Button onClick={() => void handleReread()} size="xs" variant="outline">
-              {t("externalEdit.actions.reread")}
+            <Button onClick={() => setConfirmAcceptRemote(true)} size="xs" variant="outline">
+              {t("externalEdit.actions.acceptRemote")}
             </Button>
             <Button onClick={() => setConfirmOverwrite(true)} size="xs" variant="outline">
               {t("externalEdit.actions.overwrite")}
@@ -714,6 +716,22 @@ export function RemoteFileEditorTab({ meta }: RemoteFileEditorTabProps) {
         }}
         open={confirmOverwrite}
         title={t("externalEdit.builtIn.overwriteConfirmTitle")}
+      />
+
+      <ConfirmDialog
+        cancelText={t("action.cancel")}
+        confirmText={t("externalEdit.actions.acceptRemote")}
+        confirmTestId="remote-file-editor-accept-remote-confirm"
+        description={t("externalEdit.pending.acceptRemoteConfirmDesc")}
+        onConfirm={() => {
+          setConfirmAcceptRemote(false);
+          void handleReread();
+        }}
+        onOpenChange={(open) => {
+          if (!open) setConfirmAcceptRemote(false);
+        }}
+        open={confirmAcceptRemote}
+        title={t("externalEdit.pending.acceptRemoteConfirmTitle")}
       />
 
       <AlertDialog

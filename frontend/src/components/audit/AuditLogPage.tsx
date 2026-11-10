@@ -76,6 +76,16 @@ const DECISION_SOURCES: Record<string, { id: string; className: string }> = {
   assisted_allow: { id: "assisted", className: "bg-success/15 text-success" },
   autopilot_allow: { id: "autopilot", className: "bg-success/15 text-success" },
   autopilot_deny: { id: "autopilot", className: "bg-destructive/15 text-destructive" },
+  exec_unsupported_type: { id: "execUnsupportedType", className: "bg-destructive/15 text-destructive" },
+  exec_gate_blocked: { id: "execGateBlocked", className: "bg-destructive/15 text-destructive" },
+  exec_precheck_failed: { id: "execPrecheckFailed", className: "bg-destructive/15 text-destructive" },
+  exec_canonicalize_error: { id: "execCanonicalizeError", className: "bg-destructive/15 text-destructive" },
+  exec_type_mismatch: { id: "execTypeMismatch", className: "bg-destructive/15 text-destructive" },
+  exec_resolve_failed: { id: "execResolveFailed", className: "bg-destructive/15 text-destructive" },
+  exec_invalid_input: { id: "execInvalidInput", className: "bg-destructive/15 text-destructive" },
+  batch_complete: { id: "batchComplete", className: "bg-success/15 text-success" },
+  batch_partial_failure: { id: "batchPartialFailure", className: "bg-destructive/15 text-destructive" },
+  batch_failed: { id: "batchFailed", className: "bg-destructive/15 text-destructive" },
 };
 
 function decisionSourceBadge(source: string, t: TFunction): { label: string; className: string } {
@@ -446,7 +456,7 @@ export function AuditLogPage() {
                   <tr>
                     <td colSpan={7}>
                       <AsyncState
-                        status={logsError ? "error" : loading ? "loading" : "ready"}
+                        status={loading ? "loading" : logsError ? "error" : "ready"}
                         error={logsError}
                         onRetry={() => void fetchLogs()}
                         className="py-12"
@@ -552,7 +562,10 @@ export function AuditLogPage() {
                     <AsyncState
                       status={poolStatus}
                       error={poolError}
-                      onRetry={() => void fetchPool()}
+                      onRetry={() => {
+                        setPoolStatus("loading");
+                        void fetchPool();
+                      }}
                       className="py-12"
                       empty={t("audit.poolEmpty")}
                     />

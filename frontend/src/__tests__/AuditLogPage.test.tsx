@@ -235,6 +235,30 @@ describe("AuditLogPage load states", () => {
     expect(await screen.findByText("audit.empty")).toBeInTheDocument();
   });
 
+  it("shows loading while a logs retry is in flight", async () => {
+    vi.mocked(ListAuditLogs).mockRejectedValueOnce(new Error("audit db locked"));
+    render(<AuditLogPage />);
+    await screen.findByText(/audit db locked/);
+
+    vi.mocked(ListAuditLogs).mockReturnValue(new Promise(() => {}));
+    await userEvent.click(screen.getByTestId("async-state-retry"));
+    expect(screen.getByTestId("async-state-loading")).toBeInTheDocument();
+    expect(screen.queryByText(/audit db locked/)).not.toBeInTheDocument();
+  });
+
+  it("shows loading while a pool retry is in flight", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [], total: 0 } as never);
+    vi.mocked(GetSSHPoolConnections).mockRejectedValueOnce(new Error("pool down"));
+    render(<AuditLogPage />);
+    await userEvent.click(await screen.findByRole("tab", { name: /audit.tabPool/ }));
+    await screen.findByText(/pool down/);
+
+    vi.mocked(GetSSHPoolConnections).mockReturnValue(new Promise(() => {}));
+    await userEvent.click(screen.getByTestId("async-state-retry"));
+    expect(screen.getByTestId("async-state-loading")).toBeInTheDocument();
+    expect(screen.queryByText(/pool down/)).not.toBeInTheDocument();
+  });
+
   it("shows loading, not the empty state, while logs are pending", async () => {
     vi.mocked(ListAuditLogs).mockReturnValue(new Promise(() => {}));
     render(<AuditLogPage />);
@@ -269,5 +293,31 @@ describe("AuditLogPage load states", () => {
     } as never);
     render(<AuditLogPage />);
     expect(await screen.findByText("✓ audit.decisionSources.grant")).toBeInTheDocument();
+  });
+
+  it("translates short-circuit and batch decision sources too", async () => {
+    const row = (id: number, decision: string, source: string) => ({
+      ID: id,
+      ToolName: `tool-${id}`,
+      AssetName: "a",
+      Command: "ls",
+      Success: 1,
+      Decision: decision,
+      DecisionSource: source,
+      Createtime: id,
+    });
+    vi.mocked(ListAuditLogs).mockResolvedValue({
+      items: [
+        row(1, "deny", "exec_gate_blocked"),
+        row(2, "allow", "batch_complete"),
+        row(3, "deny", "batch_partial_failure"),
+      ],
+      total: 3,
+    } as never);
+    render(<AuditLogPage />);
+    const rowOf = async (tool: string) => (await screen.findByText(tool)).closest("tr") as HTMLTableRowElement;
+    expect(within(await rowOf("tool-1")).getByText("✗ audit.decisionSources.execGateBlocked")).toBeInTheDocument();
+    expect(within(await rowOf("tool-2")).getByText("✓ audit.decisionSources.batchComplete")).toBeInTheDocument();
+    expect(within(await rowOf("tool-3")).getByText("✗ audit.decisionSources.batchPartialFailure")).toBeInTheDocument();
   });
 });

@@ -38,6 +38,7 @@ import {
   type VNCServerKeyCheck,
 } from "@/lib/vncClient";
 import { errorMessage } from "@/lib/errorMessage";
+import { useVNCStore } from "@/stores/vncStore";
 
 interface VNCPanelProps {
   tabId: string;
@@ -142,6 +143,13 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
   useEffect(() => {
     tRef.current = t;
   }, [t]);
+
+  // Publish the connected state so closing this tab counts as disconnecting a session.
+  useEffect(() => {
+    const { setTabConnected } = useVNCStore.getState();
+    setTabConnected(tabId, status === "connected");
+    return () => setTabConnected(tabId, false);
+  }, [tabId, status]);
 
   useEffect(() => {
     if (!session || !vncContainerRef.current) return;

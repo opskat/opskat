@@ -9,26 +9,32 @@ import {
   type FileConflictKind,
   type FileConflictSide,
 } from "@/components/common/FileConflictDialog";
+import { localConflictSides } from "@/components/common/localConflictSides";
 import { errorMessage } from "@/lib/errorMessage";
 
 export interface OssWriteTarget {
   /** 想写入的对象 key。 */
   key: string;
-  /** 将要写入的这一项的元数据，取不到时留空。 */
-  incoming: FileConflictSide;
+  /** 将要写入的这一项的元数据，取不到时留空。与 localPath 二选一。 */
+  incoming?: FileConflictSide;
+  /** 上传的本地来源：发生冲突时读取它的大小与修改时间作为 incoming。 */
+  localPath?: string;
 }
 
 export function ossObjectSide(object: Pick<oss_svc.ObjectItem, "size" | "lastModified">): FileConflictSide {
   return { size: object.size, modTime: object.lastModified * 1000 };
 }
 
-/** 「保留两者」的候选名：沿用 SFTP 的 _copy / _copy2 / ... 规则，只改 key 的最后一段。 */
+/**
+ * 「保留两者」的候选名：沿用 SFTP 的 _copy / _copy2 / ... 规则（Go `path.Ext` 取扩展名，
+ * 点文件整体算扩展名），只改 key 的最后一段。
+ */
 export function keepBothKey(key: string, attempt: number): string {
   const slash = key.lastIndexOf("/") + 1;
   const base = key.slice(slash);
   const dot = base.lastIndexOf(".");
-  const ext = dot > 0 ? base.slice(dot) : "";
-  const stem = ext ? base.slice(0, dot) : base;
+  const ext = dot >= 0 ? base.slice(dot) : "";
+  const stem = base.slice(0, base.length - ext.length);
   return `${key.slice(0, slash)}${stem}${attempt === 0 ? "_copy" : `_copy${attempt + 1}`}${ext}`;
 }
 
@@ -80,13 +86,24 @@ export function useOssTargetResolver(assetId: number, bucket: string) {
             item: {
               targetPath: target.key,
               existing: ossObjectSide(existing),
-              incoming: target.incoming,
+              incoming: target.incoming ?? {},
               keepBothName: keepBoth?.split("/").pop(),
             },
           });
         } catch (e) {
           toast.error(t("fileConflict.checkFailed", { path: target.key, error: errorMessage(e) }));
         }
+      }
+
+      const local = conflicts.filter((conflict) => targets[conflict.index].localPath);
+      try {
+        const sides = await localConflictSides(local.map((conflict) => targets[conflict.index].localPath!));
+        local.forEach((conflict, i) => {
+          conflict.item.incoming = sides[i];
+        });
+      } catch (e) {
+        toast.error(errorMessage(e));
+        return targets.map(() => null);
       }
 
       const decisions = await resolveConflicts(

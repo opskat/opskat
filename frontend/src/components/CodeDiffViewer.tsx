@@ -19,6 +19,11 @@ export interface CodeDiffViewerProps {
   navigationToken?: number;
   onDiffStatsChange?: (stats: { total: number; blocks: TextDiffBlock[] }) => void;
   testId?: string;
+  /**
+   * 按侧着色而不是按增删着色：左侧（original）是本地、右侧（modified）是远端时，
+   * 本地的改动不该被画成红色的「删除」。左侧用 success 色、右侧用 info 色，与合并窗一致。
+   */
+  toneBySide?: boolean;
 }
 
 const DEFAULT_OPTIONS: MonacoNS.editor.IDiffEditorConstructionOptions = {
@@ -46,6 +51,12 @@ const DEFAULT_OPTIONS: MonacoNS.editor.IDiffEditorConstructionOptions = {
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
 };
 
+/** 按侧着色时不显示 Monaco 的 +/- 标记：左侧本地的「-」会被读成删除。 */
+const TONE_BY_SIDE_OPTIONS: MonacoNS.editor.IDiffEditorConstructionOptions = {
+  ...DEFAULT_OPTIONS,
+  renderIndicators: false,
+};
+
 function lineRangeDecorationClass(kind: TextDiffBlock["kind"], active: boolean, side: "original" | "modified") {
   if (active) return "external-edit-compare-line-current";
   if (kind === "insert") return side === "modified" ? "external-edit-compare-line-insert" : "";
@@ -60,21 +71,42 @@ function lineMarkerDecorationClass(kind: TextDiffBlock["kind"], active: boolean,
   return "external-edit-compare-gutter-modify";
 }
 
+const SIDE_TONE = {
+  original: {
+    line: "external-edit-compare-line-local",
+    gutter: "external-edit-compare-gutter-local",
+    ruler: "#16a34a",
+  },
+  modified: {
+    line: "external-edit-compare-line-remote",
+    gutter: "external-edit-compare-gutter-remote",
+    ruler: "#2563eb",
+  },
+} as const;
+
 function makeEditorDecorations(
   monaco: typeof MonacoNS,
   blocks: TextDiffBlock[],
   activeBlockIndex: number,
-  side: "original" | "modified"
+  side: "original" | "modified",
+  toneBySide: boolean
 ): MonacoNS.editor.IModelDeltaDecoration[] {
   return blocks.flatMap((block, index) => {
     const startLine = side === "original" ? block.originalStartLine : block.modifiedStartLine;
     const endLine = side === "original" ? block.originalEndLine : block.modifiedEndLine;
     if (endLine < startLine || startLine < 1) return [];
     const isActive = index === activeBlockIndex;
-    const className = lineRangeDecorationClass(block.kind, isActive, side);
-    const glyphClassName = lineMarkerDecorationClass(block.kind, isActive, side);
+    const tone = toneBySide && !isActive ? SIDE_TONE[side] : undefined;
+    const className = tone ? tone.line : lineRangeDecorationClass(block.kind, isActive, side);
+    const glyphClassName = tone ? tone.gutter : lineMarkerDecorationClass(block.kind, isActive, side);
     if (!className && !glyphClassName) return [];
-    const color = block.kind === "insert" ? "#16a34a" : block.kind === "delete" ? "#dc2626" : "#d97706";
+    const color = toneBySide
+      ? SIDE_TONE[side].ruler
+      : block.kind === "insert"
+        ? "#16a34a"
+        : block.kind === "delete"
+          ? "#dc2626"
+          : "#d97706";
     return [
       {
         range: new monaco.Range(startLine, 1, endLine, 1),
@@ -105,6 +137,7 @@ export function CodeDiffViewer({
   navigationToken = 0,
   onDiffStatsChange,
   testId,
+  toneBySide = false,
 }: CodeDiffViewerProps) {
   const { t } = useTranslation();
   const resolvedTheme = useResolvedTheme();
@@ -127,13 +160,13 @@ export function CodeDiffViewer({
     if (!diffEditor || !monaco) return;
     const originalEditor = diffEditor.getOriginalEditor();
     const modifiedEditor = diffEditor.getModifiedEditor();
-    const originalDecorations = makeEditorDecorations(monaco, diffBlocks, activeBlockIndex, "original");
-    const modifiedDecorations = makeEditorDecorations(monaco, diffBlocks, activeBlockIndex, "modified");
+    const originalDecorations = makeEditorDecorations(monaco, diffBlocks, activeBlockIndex, "original", toneBySide);
+    const modifiedDecorations = makeEditorDecorations(monaco, diffBlocks, activeBlockIndex, "modified", toneBySide);
     originalDecorationsRef.current?.clear();
     modifiedDecorationsRef.current?.clear();
     originalDecorationsRef.current = originalEditor.createDecorationsCollection(originalDecorations);
     modifiedDecorationsRef.current = modifiedEditor.createDecorationsCollection(modifiedDecorations);
-  }, [activeBlockIndex, diffBlocks]);
+  }, [activeBlockIndex, diffBlocks, toneBySide]);
 
   useEffect(() => {
     applyDecorations();
@@ -238,7 +271,7 @@ export function CodeDiffViewer({
 
   return (
     <div
-      className={`relative flex h-full w-full flex-col overflow-hidden rounded border bg-background shadow-inner ${className ?? ""}`}
+      className={`relative flex h-full w-full flex-col overflow-hidden rounded border bg-background shadow-inner ${toneBySide ? "external-edit-compare-tone-by-side" : ""} ${className ?? ""}`}
     >
       {header}
       <DiffEditor
@@ -247,7 +280,7 @@ export function CodeDiffViewer({
         original={original}
         modified={modified}
         theme={resolvedTheme === "dark" ? "opskat-dark" : "opskat-light"}
-        options={DEFAULT_OPTIONS}
+        options={toneBySide ? TONE_BY_SIDE_OPTIONS : DEFAULT_OPTIONS}
         onMount={handleMount}
         wrapperProps={testId ? { "data-testid": testId } : undefined}
       />

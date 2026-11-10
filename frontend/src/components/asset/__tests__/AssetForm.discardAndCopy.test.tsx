@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AssetForm } from "@/components/asset/AssetForm";
 import { asset_entity } from "../../../../wailsjs/go/models";
-import { CreateAsset, ListAssets } from "../../../../wailsjs/go/system/System";
+import { CreateAsset, GetSSHConnectionSettings, ListAssets } from "../../../../wailsjs/go/system/System";
 
 const mocks = vi.hoisted(() => ({ openSettingsTab: vi.fn() }));
 
@@ -16,6 +16,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(CreateAsset).mockResolvedValue(undefined as never);
   vi.mocked(ListAssets).mockResolvedValue([] as never);
+  vi.mocked(GetSSHConnectionSettings).mockResolvedValue(undefined as never);
 });
 
 async function typeName(value: string) {
@@ -68,6 +69,36 @@ describe("AssetForm discards edits only after confirmation", () => {
     await userEvent.click(screen.getByRole("button", { name: "action.cancel" }));
     expect(await screen.findByText("asset.discardTitle")).toBeInTheDocument();
     expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["redis", "redis-host-input"],
+    ["vnc", "vnc-host-input"],
+  ])("treats a changed %s config field as a change", async (type, hostTestId) => {
+    const onOpenChange = vi.fn();
+    const asset = new asset_entity.Asset({
+      ID: 9,
+      Name: "cache-01",
+      Type: type,
+      Config: JSON.stringify({ host: "10.0.0.1", port: type === "redis" ? 6379 : 5900 }),
+    });
+    render(<AssetForm open onOpenChange={onOpenChange} editAsset={asset} />);
+    await userEvent.type(await screen.findByTestId(hostTestId), "0");
+    await userEvent.keyboard("{Escape}");
+    expect(await screen.findByText("asset.discardTitle")).toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("does not count the global SSH keep-alive default as a change", async () => {
+    vi.mocked(GetSSHConnectionSettings).mockResolvedValue({ keepAliveIntervalSeconds: 60 } as never);
+    const onOpenChange = vi.fn();
+    render(<AssetForm open onOpenChange={onOpenChange} />);
+    await screen.findByTestId("ssh-host-input");
+    await waitFor(() => expect(GetSSHConnectionSettings).toHaveBeenCalled());
+    await act(async () => {});
+    await userEvent.keyboard("{Escape}");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.queryByText("asset.discardTitle")).toBeNull();
   });
 
   it("confirms before 'manage custom types' leaves the form, and only then navigates", async () => {
@@ -156,6 +187,24 @@ describe("AssetForm keeps common fields across a type switch", () => {
     expect(screen.getByTestId("rdp-port-input")).toHaveValue(2222);
     expect(screen.getByTestId("rdp-username-input")).toHaveValue("ops");
     expect(screen.getByTestId("asset-form-name-input")).toHaveValue("jump-01");
+  });
+
+  it("carries host and username from a redis form to the new type", async () => {
+    render(<AssetForm open onOpenChange={vi.fn()} />);
+    await switchTo("asset-type-option-redis");
+    await userEvent.type(await screen.findByTestId("redis-host-input"), "10.0.0.9");
+    await switchTo("asset-type-option-ssh");
+    expect(await screen.findByTestId("ssh-host-input")).toHaveValue("10.0.0.9");
+  });
+
+  it("carries host and username from a vnc form to the new type", async () => {
+    render(<AssetForm open onOpenChange={vi.fn()} />);
+    await switchTo("asset-type-option-vnc");
+    await userEvent.type(await screen.findByTestId("vnc-host-input"), "10.0.0.8");
+    await userEvent.type(screen.getByTestId("vnc-username-input"), "viewer");
+    await switchTo("asset-type-option-ssh");
+    expect(await screen.findByTestId("ssh-host-input")).toHaveValue("10.0.0.8");
+    expect(screen.getByTestId("ssh-username-input")).toHaveValue("viewer");
   });
 
   it("does not drag the old type's default port along", async () => {

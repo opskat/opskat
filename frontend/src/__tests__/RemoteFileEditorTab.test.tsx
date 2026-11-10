@@ -501,7 +501,7 @@ describe("RemoteFileEditorTab", () => {
     expect(useTabStore.getState().unsavedTabIds).not.toContain("editor-sess-1");
   });
 
-  it("stops on a remote-drift conflict and offers merge, diff, reread and a confirmed overwrite", async () => {
+  it("stops on a remote-drift conflict and offers merge, diff, accept-remote and a confirmed overwrite", async () => {
     saveSessionTextMock.mockResolvedValue({
       status: "conflict_remote_changed",
       message: "远程文件已有新版本",
@@ -518,7 +518,8 @@ describe("RemoteFileEditorTab", () => {
     expect(banner).toHaveTextContent("externalEdit.conflict.remoteChangedTitle");
     expect(screen.getByText("externalEdit.actions.merge")).toBeInTheDocument();
     expect(screen.getByText("externalEdit.actions.compare")).toBeInTheDocument();
-    expect(screen.getByText("externalEdit.actions.reread")).toBeInTheDocument();
+    // 与待处理对话框里的同一动作同名
+    expect(screen.getByText("externalEdit.actions.acceptRemote")).toBeInTheDocument();
     // 本地改动仍在编辑器里，远端没有被写入
     expect(screen.getByTestId("remote-file-editor-content")).toHaveTextContent("listen 8080;");
 
@@ -577,7 +578,7 @@ describe("RemoteFileEditorTab", () => {
     expect(await screen.findByTestId("external-edit-compare-workbench")).toBeInTheDocument();
   });
 
-  it("adopts the rebuilt session and the remote text after a reread", async () => {
+  it("adopts the rebuilt session and the remote text after a confirmed accept-remote", async () => {
     saveSessionTextMock.mockResolvedValue({
       status: "conflict_remote_changed",
       session: makeSession({ state: "conflict" }),
@@ -591,8 +592,12 @@ describe("RemoteFileEditorTab", () => {
     await pressSave();
 
     readSessionTextMock.mockResolvedValue("remote-new\n");
+    fireEvent.click(await screen.findByText("externalEdit.actions.acceptRemote"));
+    // 丢弃本地修改之前先确认，与待处理对话框一致
+    expect(screen.getByText("externalEdit.pending.acceptRemoteConfirmDesc")).toBeInTheDocument();
+    expect(resolveConflictMock).not.toHaveBeenCalled();
     await act(async () => {
-      fireEvent.click(await screen.findByText("externalEdit.actions.reread"));
+      fireEvent.click(screen.getByTestId("remote-file-editor-accept-remote-confirm"));
     });
 
     expect(resolveConflictMock).toHaveBeenCalledWith("sess-1", "reread");
@@ -764,7 +769,7 @@ describe("RemoteFileEditorTab", () => {
 
     await waitFor(() => expect(refreshSessionMock).toHaveBeenCalledWith("sess-1"));
     expect(await screen.findByTestId("remote-file-editor-conflict")).toBeInTheDocument();
-    for (const exit of ["merge", "compare", "reread", "overwrite"]) {
+    for (const exit of ["merge", "compare", "acceptRemote", "overwrite"]) {
       expect(screen.getByText(`externalEdit.actions.${exit}`)).toBeInTheDocument();
     }
     // 结论已经拿到：不再是「未确认」，而本地改动原样留在编辑器里。

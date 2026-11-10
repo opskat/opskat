@@ -33,7 +33,7 @@ import { useAssetStore } from "@/stores/assetStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { getAssetType, pageTabPrefix } from "@/lib/assetTypes";
-import { useTabStore } from "@/stores/tabStore";
+import { openSettingsTab, useTabStore } from "@/stores/tabStore";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { bootstrapExtensions } from "@/extension/init";
 import { openAssetConnection } from "@/lib/openAsset";
@@ -138,20 +138,7 @@ function App() {
       toastFn(message, {
         action: {
           label: t("systemStatus.showDetail"),
-          onClick: () => {
-            const tabStore = useTabStore.getState();
-            const existing = tabStore.tabs.find((tab) => tab.id === "settings");
-            if (existing) {
-              tabStore.activateTab("settings");
-            } else {
-              tabStore.openTab({
-                id: "settings",
-                type: "page",
-                label: "settings",
-                meta: { type: "page", pageId: "settings" },
-              });
-            }
-          },
+          onClick: () => openSettingsTab(t("nav.settings"), "status"),
         },
       });
     });

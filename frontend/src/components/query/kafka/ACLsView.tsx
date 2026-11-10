@@ -41,6 +41,7 @@ export function ACLsView({ tabId, state }: { tabId: string; state: KafkaTabState
   const { t } = useTranslation();
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<KafkaACL | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const setACLFilters = useKafkaStore((s) => s.setACLFilters);
   const loadACLs = useKafkaStore((s) => s.loadACLs);
   const deleteACL = useKafkaStore((s) => s.deleteACL);
@@ -103,11 +104,12 @@ export function ACLsView({ tabId, state }: { tabId: string; state: KafkaTabState
           {t("query.kafkaCreateACL")}
         </Button>
       </div>
+      <ErrorNotice message={actionError} className="mx-4 mt-2 shrink-0" />
       <div className="min-h-0 flex-1 overflow-auto">
         {state.loadingACLs && !state.acls.length ? (
           <LoadingBlock />
         ) : state.acls.length === 0 ? (
-          <EmptyState text={t("query.kafkaNoACLs")} />
+          <EmptyState text={t("query.kafkaNoACLs")} failed={!!state.error} />
         ) : (
           <ACLTable acls={state.acls} onDelete={setDeleteTarget} />
         )}
@@ -128,10 +130,16 @@ export function ACLsView({ tabId, state }: { tabId: string; state: KafkaTabState
         })}
         cancelText={t("action.cancel")}
         confirmText={t("action.delete")}
-        onConfirm={async () => {
+        onConfirm={() => {
           if (!deleteTarget) return;
-          await deleteACL(tabId, deleteTarget);
+          const target = deleteTarget;
           setDeleteTarget(null);
+          setActionError(null);
+          void runKafkaAction(
+            () => deleteACL(tabId, target),
+            t("query.kafkaACLDeleted", { principal: target.principal }),
+            setActionError
+          );
         }}
       />
     </div>
@@ -199,6 +207,7 @@ function CreateACLDialog({
   const { t } = useTranslation();
   const createACL = useKafkaStore((s) => s.createACL);
   const state = useKafkaStore((s) => s.states[tabId]);
+  const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<KafkaACLMutationRequest>({
     resourceType: "topic",
     resourceName: "",
@@ -219,6 +228,7 @@ function CreateACLDialog({
     (!resourceNameRequired || form.resourceName?.trim());
 
   const submit = async () => {
+    setError(null);
     const ok = await runKafkaAction(
       () =>
         createACL(tabId, {
@@ -227,7 +237,8 @@ function CreateACLDialog({
           principal: form.principal.trim(),
           host: form.host?.trim() || "*",
         }),
-      t("query.kafkaACLCreated", { principal: form.principal.trim() })
+      t("query.kafkaACLCreated", { principal: form.principal.trim() }),
+      setError
     );
     if (!ok) return;
     setForm({
@@ -294,7 +305,7 @@ function CreateACLDialog({
               items={ACL_MUTATION_PERMISSIONS}
             />
           </div>
-          <ErrorNotice message={state?.error} />
+          <ErrorNotice message={error} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

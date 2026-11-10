@@ -25,7 +25,7 @@ import {
   type KafkaTabState,
   useKafkaStore,
 } from "@/stores/kafkaStore";
-import { EmptyState, LoadingBlock, Metric, StatusPill } from "./shared";
+import { EmptyState, ErrorNotice, LoadingBlock, Metric, StatusPill } from "./shared";
 import { formatConnectorConfig, parseConnectorConfigObject, formatConnectorTaskSummary, runKafkaAction } from "./utils";
 import { errorMessage } from "@/lib/errorMessage";
 
@@ -79,14 +79,14 @@ export function KafkaConnectView({ tabId, state }: { tabId: string; state: Kafka
         </span>
       </div>
       {!state.connectClusters.length && !state.loadingConnectClusters ? (
-        <EmptyState text={t("query.kafkaNoConnectClusters")} />
+        <EmptyState text={t("query.kafkaNoConnectClusters")} failed={!!state.error} />
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-[minmax(340px,0.8fr)_minmax(480px,1.2fr)]">
           <div className="min-h-0 overflow-auto border-r">
             {state.loadingConnectors && !state.connectors.length ? (
               <LoadingBlock />
             ) : state.connectors.length === 0 ? (
-              <EmptyState text={t("query.kafkaNoConnectors")} />
+              <EmptyState text={t("query.kafkaNoConnectors")} failed={!!state.error} />
             ) : (
               <ConnectorTable
                 connectors={state.connectors}
@@ -153,6 +153,7 @@ function ConnectorDetailPanel({ tabId, state }: { tabId: string; state: KafkaTab
   const [updateOpen, setUpdateOpen] = useState(false);
   const [restartOpen, setRestartOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const pauseConnector = useKafkaStore((s) => s.pauseConnector);
   const resumeConnector = useKafkaStore((s) => s.resumeConnector);
   const deleteConnector = useKafkaStore((s) => s.deleteConnector);
@@ -160,7 +161,7 @@ function ConnectorDetailPanel({ tabId, state }: { tabId: string; state: KafkaTab
   if (state.loadingConnectorDetail) return <LoadingBlock />;
   if (!state.selectedConnector) return <EmptyState text={t("query.kafkaSelectConnector")} />;
   const detail = state.connectorDetail;
-  if (!detail) return <EmptyState text={t("query.kafkaNoConnectorDetail")} />;
+  if (!detail) return <EmptyState text={t("query.kafkaNoConnectorDetail")} failed={!!state.error} />;
 
   const connectorState = detail.status?.connector?.state;
   const tasks = detail.status?.tasks || [];
@@ -179,12 +180,14 @@ function ConnectorDetailPanel({ tabId, state }: { tabId: string; state: KafkaTab
           variant="outline"
           size="sm"
           className="h-7"
-          onClick={() =>
+          onClick={() => {
+            setActionError(null);
             void runKafkaAction(
               () => pauseConnector(tabId, detail.name),
-              t("query.kafkaConnectorPaused", { name: detail.name })
-            )
-          }
+              t("query.kafkaConnectorPaused", { name: detail.name }),
+              setActionError
+            );
+          }}
         >
           {t("query.kafkaPauseConnector")}
         </Button>
@@ -192,12 +195,14 @@ function ConnectorDetailPanel({ tabId, state }: { tabId: string; state: KafkaTab
           variant="outline"
           size="sm"
           className="h-7"
-          onClick={() =>
+          onClick={() => {
+            setActionError(null);
             void runKafkaAction(
               () => resumeConnector(tabId, detail.name),
-              t("query.kafkaConnectorResumed", { name: detail.name })
-            )
-          }
+              t("query.kafkaConnectorResumed", { name: detail.name }),
+              setActionError
+            );
+          }}
         >
           {t("query.kafkaResumeConnector")}
         </Button>
@@ -213,6 +218,7 @@ function ConnectorDetailPanel({ tabId, state }: { tabId: string; state: KafkaTab
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
+      <ErrorNotice message={actionError} />
       <div className="grid grid-cols-3 gap-2">
         <Metric label={t("query.kafkaConnectCluster")} value={state.selectedConnectCluster || "-"} />
         <Metric label={t("query.kafkaConnectorTasks")} value={tasks.length || detail.tasks?.length || 0} />
@@ -235,9 +241,14 @@ function ConnectorDetailPanel({ tabId, state }: { tabId: string; state: KafkaTab
         description={t("query.kafkaDeleteConnectorConfirmDesc", { name: detail.name })}
         cancelText={t("action.cancel")}
         confirmText={t("action.delete")}
-        onConfirm={async () => {
-          await deleteConnector(tabId, detail.name);
+        onConfirm={() => {
           setDeleteOpen(false);
+          setActionError(null);
+          void runKafkaAction(
+            () => deleteConnector(tabId, detail.name),
+            t("query.kafkaConnectorDeleted", { name: detail.name }),
+            setActionError
+          );
         }}
       />
     </div>
@@ -389,17 +400,17 @@ function ConnectorConfigDialog({
       name: name.trim(),
       config: parsedConfig,
     };
-    try {
-      if (mode === "create") {
-        await createConnector(tabId, req);
-      } else {
-        await updateConnectorConfig(tabId, req);
+    const ok = await runKafkaAction(
+      () => (mode === "create" ? createConnector(tabId, req) : updateConnectorConfig(tabId, req)),
+      mode === "create"
+        ? t("query.kafkaConnectorCreated", { name: req.name })
+        : t("query.kafkaConnectorUpdated", { name: req.name }),
+      (message) => {
+        setConfirmOpen(false);
+        updateForm({ formError: message });
       }
-      handleOpenChange(false);
-    } catch (err) {
-      setConfirmOpen(false);
-      updateForm({ formError: errorMessage(err) });
-    }
+    );
+    if (ok) handleOpenChange(false);
   };
 
   return (
@@ -475,10 +486,16 @@ function RestartConnectorDialog({
   const state = useKafkaStore((s) => s.states[tabId]);
   const [includeTasks, setIncludeTasks] = useState(false);
   const [onlyFailed, setOnlyFailed] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const submit = async () => {
-    await restartConnector(tabId, name, includeTasks, onlyFailed);
-    onOpenChange(false);
+    setError(null);
+    const ok = await runKafkaAction(
+      () => restartConnector(tabId, name, includeTasks, onlyFailed),
+      t("query.kafkaConnectorRestarted", { name }),
+      setError
+    );
+    if (ok) onOpenChange(false);
   };
 
   return (
@@ -508,6 +525,7 @@ function RestartConnectorDialog({
             />
             {t("query.kafkaRestartConnectorOnlyFailed")}
           </label>
+          <ErrorNotice message={error} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

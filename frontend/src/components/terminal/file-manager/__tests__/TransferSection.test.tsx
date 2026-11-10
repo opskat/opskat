@@ -49,6 +49,15 @@ describe("TransferSection", () => {
     expect(screen.getByText("1.0 KB/s")).toBeInTheDocument();
   });
 
+  it("finished, failed and cancelled rows keep the transferred/total size but drop the speed", () => {
+    for (const status of ["done", "error", "cancelled"] as const) {
+      const { unmount } = renderOne({ status, error: status === "error" ? "boom" : undefined });
+      expect(screen.getByText("2.0 KB/4.0 KB")).toBeInTheDocument();
+      expect(screen.queryByText("1.0 KB/s")).toBeNull();
+      unmount();
+    }
+  });
+
   it("active rows have a text cancel button that cancels the transfer", () => {
     const cancelTransfer = vi.fn();
     useSFTPStore.setState({ cancelTransfer });

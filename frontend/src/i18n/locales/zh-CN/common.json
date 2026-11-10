@@ -193,6 +193,7 @@
     "selectAsset": "选择资产",
     "rules": "转发规则",
     "addRule": "添加规则",
+    "removeRule": "删除规则",
     "port": "端口",
     "empty": "暂无转发配置，点击右上角新建",
     "running": "运行中",
@@ -1285,7 +1286,14 @@
     "nav": {
       "ai": "服务商与命令审核",
       "importBackup": "导入与备份",
+      "appearance": "外观与语言",
+      "network": "网络代理",
+      "update": "更新",
+      "debugLogs": "调试与日志",
       "label": "设置分区"
+    },
+    "debugLogs": {
+      "desc": "开启详细日志、打开日志目录或反馈问题"
     }
   },
   "backup": {
@@ -1980,6 +1988,7 @@
       "closeDirtyTitle": "放弃未提交的合并稿？",
       "closeDirtyDesc": "关闭合并窗口不会删除冲突记录，但当前未保存的最终稿编辑会丢失。",
       "closeDirtyConfirm": "放弃并关闭",
+      "blockRow": "第 {{index}} 处差异",
       "takeBlockUnlocated": "这处差异前后的内容已在最终稿里手动改过，无法自动替换，请直接编辑最终稿。",
       "takeLocal": "采用本地",
       "takeLocalHint": "把最终稿里第 {{index}} 处差异换成本地内容",
@@ -2161,7 +2170,6 @@
     "batchDescription": "以下 {{count}} 条操作需要您的批准",
     "batchCollapsedSummary": "已折叠 {{count}} 条审批项，点击展开逐条查看",
     "alwaysAllow": "始终允许",
-    "approve": "批准",
     "scopeAll": "所有资产",
     "genericHttp": "HTTP 请求",
     "genericCommand": "命令",
@@ -2220,7 +2228,17 @@
       "autopilot": "自动驾驶",
       "grant": "授权",
       "policy": "策略",
-      "user": "手动审批"
+      "user": "手动审批",
+      "execUnsupportedType": "该类型不支持执行",
+      "execGateBlocked": "未加载用法说明",
+      "execPrecheckFailed": "前置条件不满足",
+      "execCanonicalizeError": "命令无效",
+      "execTypeMismatch": "类型不符",
+      "execResolveFailed": "资产不存在或不唯一",
+      "execInvalidInput": "参数无效",
+      "batchComplete": "批量全部成功",
+      "batchPartialFailure": "批量部分失败",
+      "batchFailed": "批量全部失败"
     },
     "decisions": {
       "allow": "已放行",
@@ -2903,6 +2921,8 @@
     "filterTables": "搜索表...",
     "filterCollections": "搜索集合...",
     "noMatch": "无匹配",
+    "noDatabases": "暂无数据库",
+    "noKeys": "暂无 Key",
     "expandEdit": {
       "title": "展开编辑",
       "menu": "展开编辑",
@@ -3393,6 +3413,20 @@
     "kafkaConnectorResumed": "已恢复 Connector {{name}}",
     "kafkaMessageSent": "消息已发送到 {{topic}}",
     "kafkaTopicCreated": "已创建 Topic {{name}}",
+    "kafkaTopicDeleted": "已删除 Topic {{name}}",
+    "kafkaTopicConfigUpdated": "已更新 Topic {{topic}} 的配置",
+    "kafkaPartitionsIncreased": "Topic {{topic}} 的分区数已增加到 {{count}}",
+    "kafkaRecordsDeleted": "已删除 Topic {{topic}} 中的消息",
+    "kafkaOffsetReset": "已重置消费组 {{group}} 的位点",
+    "kafkaConsumerGroupDeleted": "已删除消费组 {{group}}",
+    "kafkaACLDeleted": "已删除 {{principal}} 的 ACL",
+    "kafkaSchemaRegistered": "已在 {{subject}} 下注册 Schema",
+    "kafkaSchemaVersionDeleted": "已删除 {{subject}} 的版本 {{version}}",
+    "kafkaSubjectDeleted": "已删除 Subject {{subject}}",
+    "kafkaConnectorCreated": "已创建 Connector {{name}}",
+    "kafkaConnectorUpdated": "已更新 Connector {{name}} 的配置",
+    "kafkaConnectorRestarted": "已重启 Connector {{name}}",
+    "kafkaConnectorDeleted": "已删除 Connector {{name}}",
     "mongo": {
       "noCollections": "暂无集合",
       "noDatabases": "暂无数据库"
@@ -3805,7 +3839,6 @@
     "tree": {
       "filterPlaceholder": "过滤 key",
       "truncated": "仅列出前 {{limit}} 条。可在「查询」页用 key 前缀缩小范围。",
-      "loadFailed": "加载 keyspace 失败",
       "refresh": "刷新 keyspace",
       "empty": "暂无 key",
       "title": "键空间"

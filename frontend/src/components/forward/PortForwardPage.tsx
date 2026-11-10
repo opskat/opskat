@@ -42,8 +42,9 @@ import {
 } from "../../../wailsjs/go/ssh/SSH";
 import { ssh as ssh_models, forward_entity } from "../../../wailsjs/go/models";
 
-// 编辑中的规则（无 id）
+// 编辑中的规则（无 id）；key 只在弹窗内标识这一行，删掉别的行后行内错误仍跟着它
 interface EditRule {
+  key: number;
   type: string;
   localHost: string;
   localPort: string;
@@ -51,7 +52,11 @@ interface EditRule {
   remotePort: string;
 }
 
+let nextRuleKey = 0;
+const newRuleKey = () => ++nextRuleKey;
+
 const emptyRule = (): EditRule => ({
+  key: newRuleKey(),
   type: "local",
   localHost: "127.0.0.1",
   localPort: "",
@@ -76,6 +81,7 @@ export function PortForwardPage() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // 按 EditRule.key 记的行内错误
   const [ruleErrors, setRuleErrors] = useState<Record<number, string>>({});
   const [pendingIds, setPendingIds] = useState<Set<number>>(new Set());
 
@@ -108,22 +114,45 @@ export function PortForwardPage() {
   const [editAssetId, setEditAssetId] = useState(0);
   const [editRules, setEditRules] = useState<EditRule[]>([emptyRule()]);
 
-  // 加载配置列表:setState 全在 promise 回调中,effect 可直接调用(loading 初值即为 true)
+  // 加载配置列表:setState 全在 promise 回调中,effect 可直接调用(loading 初值即为 true)。
+  // 操作后的重新拉取也走这里:列表留在原处,只有首次加载与失败后重试才显示加载块。
   const loadConfigs = useCallback(() => {
     return ListForwardConfigs()
       .then((list) => {
         setConfigs(list || []);
         setLoadError(null);
+        return list || [];
       })
-      .catch((e) => setLoadError(errMsg(e)))
+      .catch((e) => {
+        setLoadError(errMsg(e));
+        return null;
+      })
       .finally(() => setLoading(false));
   }, []);
 
-  // 手动/操作后刷新(事件路径):同步置 loading 后拉取
-  const refresh = useCallback(() => {
+  const retryLoad = () => {
     setLoading(true);
-    return loadConfigs();
-  }, [loadConfigs]);
+    void loadConfigs();
+  };
+
+  const ruleLabel = (
+    rule: Pick<forward_entity.ForwardRule, "type" | "localHost" | "localPort" | "remoteHost" | "remotePort">
+  ) => {
+    const prefix = t(`forward.type.${rule.type}`);
+    return rule.type === "dynamic"
+      ? `${prefix}  ${rule.localHost}:${rule.localPort}`
+      : `${prefix}  ${rule.localHost}:${rule.localPort} \u2192 ${rule.remoteHost}:${rule.remotePort}`;
+  };
+
+  // 启动接口在单条规则监听失败时仍返回成功,失败原因记在规则上:启动后把它们逐条报出来。
+  const startAndReport = async (id: number) => {
+    await StartForwardConfig(id);
+    const list = await loadConfigs();
+    const failed = list?.find((c) => c.id === id)?.rules.filter((r) => r.status === "error") ?? [];
+    if (failed.length > 0) {
+      toast.error(`${t("forward.startFailed")}: ${failed.map((r) => `${ruleLabel(r)}: ${r.error}`).join("; ")}`);
+    }
+  };
 
   useEffect(() => {
     void loadConfigs();
@@ -146,6 +175,7 @@ export function PortForwardPage() {
       cfg.rules.length > 0
         ? cfg.rules.map((r) => ({
             type: r.type,
+            key: newRuleKey(),
             localHost: r.localHost,
             localPort: String(r.localPort),
             remoteHost: r.remoteHost,
@@ -160,9 +190,9 @@ export function PortForwardPage() {
   const handleSave = async () => {
     if (saving || !editName || !editAssetId) return;
     const errors: Record<number, string> = {};
-    editRules.forEach((r, i) => {
+    editRules.forEach((r) => {
       const err = validateRule(r);
-      if (err) errors[i] = err;
+      if (err) errors[r.key] = err;
     });
     setRuleErrors(errors);
     if (Object.keys(errors).length > 0) return;
@@ -191,7 +221,7 @@ export function PortForwardPage() {
     }
     setDialogOpen(false);
     notifySuccess(t("forward.saved"));
-    void refresh();
+    void loadConfigs();
   };
 
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null);
@@ -205,19 +235,15 @@ export function PortForwardPage() {
       return;
     }
     setDeleteTarget(null);
-    void refresh();
+    void loadConfigs();
   };
 
-  const handleStart = (id: number) =>
-    withPending(id, "forward.startFailed", async () => {
-      await StartForwardConfig(id);
-      await refresh();
-    });
+  const handleStart = (id: number) => withPending(id, "forward.startFailed", () => startAndReport(id));
 
   const handleStop = (id: number) =>
     withPending(id, "forward.stopFailed", async () => {
       await StopForwardConfig(id);
-      await refresh();
+      await loadConfigs();
     });
 
   const handleAssetChange = (cfg: ssh_models.ForwardConfigWithStatus, assetId: number) =>
@@ -235,15 +261,16 @@ export function PortForwardPage() {
       );
       await UpdateForwardConfig(cfg.id, cfg.name, assetId, rules);
       if (wasRunning) {
-        await StartForwardConfig(cfg.id);
+        await startAndReport(cfg.id);
+      } else {
+        await loadConfigs();
       }
-      await refresh();
     });
 
-  const updateRule = (idx: number, field: keyof EditRule, value: string) => {
-    setEditRules((prev) => prev.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
+  const updateRule = (key: number, field: Exclude<keyof EditRule, "key">, value: string) => {
+    setEditRules((prev) => prev.map((r) => (r.key === key ? { ...r, [field]: value } : r)));
     setRuleErrors((prev) => {
-      const { [idx]: _drop, ...rest } = prev;
+      const { [key]: _drop, ...rest } = prev;
       return rest;
     });
   };
@@ -288,7 +315,7 @@ export function PortForwardPage() {
         <AsyncState
           status={loading ? "loading" : loadError ? "error" : "ready"}
           error={loadError}
-          onRetry={() => void refresh()}
+          onRetry={retryLoad}
           empty={configs.length === 0 ? t("forward.empty") : undefined}
           className="py-12"
         >
@@ -370,11 +397,7 @@ export function PortForwardPage() {
                   {/* 规则列表 */}
                   <div className="space-y-1">
                     {cfg.rules.map((rule) => {
-                      const prefix = t(`forward.type.${rule.type}`);
-                      const label =
-                        rule.type === "dynamic"
-                          ? `${prefix}  ${rule.localHost}:${rule.localPort}`
-                          : `${prefix}  ${rule.localHost}:${rule.localPort} \u2192 ${rule.remoteHost}:${rule.remotePort}`;
+                      const label = ruleLabel(rule);
                       return (
                         <div key={rule.id} className="flex items-center gap-2 text-xs font-mono text-muted-foreground">
                           {rule.status === "running" ? (
@@ -400,7 +423,7 @@ export function PortForwardPage() {
 
       {/* 新建/编辑弹窗 */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editId ? t("forward.edit") : t("forward.create")}</DialogTitle>
           </DialogHeader>
@@ -436,11 +459,11 @@ export function PortForwardPage() {
                   {t("forward.addRule")}
                 </Button>
               </div>
-              {editRules.map((rule, i) => (
-                <div key={i} className="space-y-0.5">
-                  <div className="flex items-center gap-1.5 text-xs">
-                    <Select value={rule.type} onValueChange={(v) => updateRule(i, "type", v)}>
-                      <SelectTrigger className="h-7 w-32 text-xs">
+              {editRules.map((rule) => (
+                <div key={rule.key} className="space-y-0.5">
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                    <Select value={rule.type} onValueChange={(v) => updateRule(rule.key, "type", v)}>
+                      <SelectTrigger className="h-7 w-auto shrink-0 text-xs">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -452,14 +475,14 @@ export function PortForwardPage() {
                     <Input
                       className="h-7 text-xs w-24"
                       value={rule.localHost}
-                      onChange={(e) => updateRule(i, "localHost", e.target.value)}
+                      onChange={(e) => updateRule(rule.key, "localHost", e.target.value)}
                       placeholder="127.0.0.1"
                     />
                     <span>:</span>
                     <Input
                       className="h-7 text-xs w-16"
                       value={rule.localPort}
-                      onChange={(e) => updateRule(i, "localPort", e.target.value)}
+                      onChange={(e) => updateRule(rule.key, "localPort", e.target.value)}
                       placeholder={t("forward.port")}
                     />
                     {rule.type !== "dynamic" && (
@@ -468,14 +491,14 @@ export function PortForwardPage() {
                         <Input
                           className="h-7 text-xs w-24"
                           value={rule.remoteHost}
-                          onChange={(e) => updateRule(i, "remoteHost", e.target.value)}
+                          onChange={(e) => updateRule(rule.key, "remoteHost", e.target.value)}
                           placeholder="127.0.0.1"
                         />
                         <span>:</span>
                         <Input
                           className="h-7 text-xs w-16"
                           value={rule.remotePort}
-                          onChange={(e) => updateRule(i, "remotePort", e.target.value)}
+                          onChange={(e) => updateRule(rule.key, "remotePort", e.target.value)}
                           placeholder={t("forward.port")}
                         />
                       </>
@@ -484,15 +507,16 @@ export function PortForwardPage() {
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        onClick={() => setEditRules(editRules.filter((_, j) => j !== i))}
+                        title={t("forward.removeRule")}
+                        onClick={() => setEditRules(editRules.filter((r) => r.key !== rule.key))}
                       >
                         <Trash2 className="h-3 w-3" />
                       </Button>
                     )}
                   </div>
-                  {ruleErrors[i] && (
+                  {ruleErrors[rule.key] && (
                     <p role="alert" className="text-xs text-destructive">
-                      {t(ruleErrors[i])}
+                      {t(ruleErrors[rule.key])}
                     </p>
                   )}
                 </div>

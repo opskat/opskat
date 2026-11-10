@@ -20,7 +20,7 @@ function Harness() {
 beforeEach(() => {
   vi.mocked(registerFileDropTarget).mockClear();
   useOssTransferStore.setState({ tabs: {} });
-  resolveKeys.mockReset().mockImplementation(async (keys: string[]) => keys);
+  resolveKeys.mockReset().mockImplementation(async (targets: { key: string }[]) => targets.map((target) => target.key));
 });
 
 describe("useOssFileDrop", () => {
@@ -32,7 +32,10 @@ describe("useOssFileDrop", () => {
     const target = vi.mocked(registerFileDropTarget).mock.calls[0][0];
     target.onDrop(["/a/one.txt", "/b/two.txt"]);
     await vi.waitFor(() => expect(startUploadPath).toHaveBeenCalledTimes(2));
-    expect(resolveKeys).toHaveBeenCalledWith(["docs/one.txt", "docs/two.txt"]);
+    expect(resolveKeys).toHaveBeenCalledWith([
+      { key: "docs/one.txt", localPath: "/a/one.txt" },
+      { key: "docs/two.txt", localPath: "/b/two.txt" },
+    ]);
     expect(startUploadPath).toHaveBeenCalledWith("q", 7, "b", "docs/", "/a/one.txt", "docs/one.txt");
     expect(startUploadPath).toHaveBeenCalledWith("q", 7, "b", "docs/", "/b/two.txt", "docs/two.txt");
   });

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { useRecentAssetStore } from "./recentAssetStore";
+import { useSettingsUiStore, type SettingsTab } from "./settingsUiStore";
 
 // === Tab Types ===
 
@@ -413,8 +414,12 @@ function bulkCloseTabs(state: TabStoreState, candidates: Tab[], fallbackActiveId
 
 // === Tab openers ===
 
-/** 设置页只有一个 tab；重复调用由 openTab 的同 id 去重直接聚焦。 */
-export function openSettingsTab(label: string) {
+/**
+ * 设置页只有一个 tab；重复调用由 openTab 的同 id 去重直接聚焦。
+ * 给了 item 时落到该设置项，否则保持上次停留的项。
+ */
+export function openSettingsTab(label: string, item?: SettingsTab) {
+  if (item) useSettingsUiStore.getState().setActiveTab(item);
   useTabStore.getState().openTab({ id: "settings", type: "page", label, meta: { type: "page", pageId: "settings" } });
 }
 

@@ -139,6 +139,7 @@ export function ExternalEditCompareWorkbench({ compareResult, onDismiss }: Compa
             navigationToken={navigationToken}
             original={compareResult.localContent || ""}
             testId="external-edit-compare-diff-editor"
+            toneBySide
             onDiffStatsChange={({ total }) => {
               setWorkbenchState((current) => {
                 const base = getCurrentCompareState(current, compareResult);

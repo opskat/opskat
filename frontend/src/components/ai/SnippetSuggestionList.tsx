@@ -136,7 +136,7 @@ export function SnippetSuggestionList({ items, totalAvailable, command, ref }: S
           <span className="flex-1 min-w-0">
             <span className="block truncate text-foreground font-medium">{item.name}</span>
             {item.preview && (
-              <span className="block truncate text-muted-foreground font-mono text-[11px]" title={item.preview}>
+              <span className="block truncate text-muted-foreground font-mono text-xs" title={item.preview}>
                 {item.preview}
               </span>
             )}

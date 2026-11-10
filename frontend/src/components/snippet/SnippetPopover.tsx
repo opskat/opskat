@@ -210,7 +210,7 @@ export function SnippetPopover({
                     )}
                   </div>
                   {preview && (
-                    <div className="mt-0.5 font-mono text-[11px] text-muted-foreground truncate" title={preview}>
+                    <div className="mt-0.5 font-mono text-xs text-muted-foreground truncate" title={preview}>
                       {preview}
                     </div>
                   )}

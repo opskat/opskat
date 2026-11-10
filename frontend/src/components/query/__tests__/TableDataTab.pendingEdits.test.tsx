@@ -113,6 +113,19 @@ describe("TableDataTab pending edits", () => {
     await waitFor(() => expect(cell("0:name")?.textContent).toBe("ada"));
   });
 
+  it("counts a new row with filled cells as one change", async () => {
+    const user = await renderLoaded();
+    await user.click(screen.getByTitle("query.addRow"));
+    await waitFor(() => expect(cell("3:name")).toBeTruthy());
+    editCell("3:id", "4");
+    editCell("3:name", "dee");
+
+    await user.click(await screen.findByRole("button", { name: "query.discardAll" }));
+
+    await waitFor(() => expect(cell("3:name")).toBeFalsy());
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
   it("discards a single pending edit without asking", async () => {
     const user = await renderLoaded();
     editCell("0:name", "ally");

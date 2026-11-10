@@ -139,7 +139,7 @@ function TypeBadge({ type, command }: { type: string; command: string }) {
 function ScopeBadge({ item }: { item: ApprovalItemData }) {
   const { t } = useTranslation();
   const cls =
-    "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground bg-muted";
+    "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-xs font-medium text-muted-foreground bg-muted";
   if (item.asset_id > 0) {
     return (
       <span className={cls}>
@@ -574,7 +574,7 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
                 disabled={responding}
                 onClick={onAnswer(() => void respond("deny"))}
               >
-                {t("opsctlApproval.deny")}
+                {current.kind === "batch" ? t("ai.approvalDenyAll") : t("opsctlApproval.deny")}
               </Button>
               {current.kind === "single" &&
                 current.sessionID &&
@@ -603,10 +603,12 @@ export function OpsctlApprovalDialog({ suspended = false }: { suspended?: boolea
                 onClick={onAnswer(() => void respond("allow"))}
               >
                 {current.kind === "grant"
-                  ? t("opsctlApproval.approve")
-                  : current.kind === "single"
-                    ? t("ai.approvalAllowOnce")
-                    : t("opsctlApproval.allow")}
+                  ? t("ai.approvalAllow")
+                  : current.kind === "batch"
+                    ? t("ai.approvalAllowAll")
+                    : current.kind === "single"
+                      ? t("ai.approvalAllowOnce")
+                      : t("opsctlApproval.allow")}
               </Button>
             </DialogFooter>
           </>

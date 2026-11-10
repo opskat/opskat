@@ -1119,16 +1119,22 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       })
       .catch((err: unknown) => {
         console.error("Split connection failed:", err);
-        set((state) => {
-          const d = state.tabData[tabId];
-          if (!d) return state;
-
-          const newTree = removeNode(d.splitTree, pendingId);
-          if (!newTree) return state;
-
-          return {
-            tabData: { ...state.tabData, [tabId]: { ...d, splitTree: newTree } },
-          };
+        // 标签已在等待期间关闭:没有窗格可留。
+        const tab = useTabStore.getState().tabs.find((t) => t.id === tabId);
+        if (!tab || !get().tabData[tabId]) return;
+        // 新窗格留在失败态:显示原因,「重新连接」在原处对同一资产发起连接,「关闭窗格」移除它。
+        const meta = tab.meta as TerminalTabMeta;
+        const message = errorMessage(err);
+        replaceSlotWithConnection(tabId, pendingId, {
+          ...newConnectionEntry(`failed-${++failedAttemptSeq}`, {
+            assetId: meta.assetId,
+            assetName: meta.assetName,
+            transport: activeTransport,
+            password: "",
+          }),
+          status: "error",
+          error: message,
+          logs: [{ message, timestamp: Date.now(), type: "error" }],
         });
       });
   },
@@ -1137,17 +1143,18 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const data = get().tabData[tabId];
     if (!data) return;
 
-    const pane = data.panes[sessionId];
-    unregisterSessionSyncListener(sessionId);
-    if (pane?.connected) {
-      TRANSPORTS[pane.transport].disconnect(sessionId);
-    }
-
-    // If only one pane (counting connecting/failed panes), close entire tab
+    // Last pane (counting connecting/failed panes): closing it closes the tab. tabStore may ask first
+    // (in-flight transfers), and its close hook disconnects every pane — so nothing is torn down here.
     const newTree = removeNode(data.splitTree, sessionId);
     if (!newTree) {
       useTabStore.getState().closeTab(tabId);
       return;
+    }
+
+    const pane = data.panes[sessionId];
+    unregisterSessionSyncListener(sessionId);
+    if (pane?.connected) {
+      TRANSPORTS[pane.transport].disconnect(sessionId);
     }
 
     const newActivePaneId = data.activePaneId === sessionId ? getLeafIds(newTree)[0] : data.activePaneId;

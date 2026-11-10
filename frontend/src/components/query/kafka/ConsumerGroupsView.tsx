@@ -23,8 +23,8 @@ import {
   type KafkaTabState,
   useKafkaStore,
 } from "@/stores/kafkaStore";
-import { EmptyState, LoadingBlock, Metric, StatusPill } from "./shared";
-import { parseIntegerArray, parseRequiredNumber } from "./utils";
+import { EmptyState, ErrorNotice, LoadingBlock, Metric, StatusPill } from "./shared";
+import { parseIntegerArray, parseRequiredNumber, runKafkaAction } from "./utils";
 
 export function ConsumerGroupsView({ tabId, state }: { tabId: string; state: KafkaTabState }) {
   const { t } = useTranslation();
@@ -35,7 +35,7 @@ export function ConsumerGroupsView({ tabId, state }: { tabId: string; state: Kaf
         {state.loadingGroups && !state.consumerGroups.length ? (
           <LoadingBlock />
         ) : state.consumerGroups.length === 0 ? (
-          <EmptyState text={t("query.kafkaNoConsumerGroups")} />
+          <EmptyState text={t("query.kafkaNoConsumerGroups")} failed={!!state.error} />
         ) : (
           <ConsumerGroupTable
             groups={state.consumerGroups}
@@ -93,11 +93,12 @@ function ConsumerGroupDetailPanel({ tabId, state }: { tabId: string; state: Kafk
   const { t } = useTranslation();
   const [resetOpen, setResetOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const deleteConsumerGroup = useKafkaStore((s) => s.deleteConsumerGroup);
   if (state.loadingGroupDetail) return <LoadingBlock />;
   if (!state.selectedGroup) return <EmptyState text={t("query.kafkaSelectConsumerGroup")} />;
   const detail = state.groupDetail;
-  if (!detail) return <EmptyState text={t("query.kafkaNoConsumerGroupDetail")} />;
+  if (!detail) return <EmptyState text={t("query.kafkaNoConsumerGroupDetail")} failed={!!state.error} />;
   return (
     <div className="space-y-4 p-4">
       <div className="flex items-center gap-2">
@@ -117,6 +118,7 @@ function ConsumerGroupDetailPanel({ tabId, state }: { tabId: string; state: Kafk
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
+      <ErrorNotice message={actionError} />
       <div className="grid grid-cols-3 gap-2">
         <Metric label={t("query.kafkaMembers")} value={detail.members?.length || 0} />
         <Metric label={t("query.kafkaTotalLag")} value={detail.totalLag || 0} />
@@ -134,7 +136,14 @@ function ConsumerGroupDetailPanel({ tabId, state }: { tabId: string; state: Kafk
         description={t("query.kafkaDeleteConsumerGroupConfirmDesc", { group: detail.group })}
         cancelText={t("action.cancel")}
         confirmText={t("action.delete")}
-        onConfirm={() => deleteConsumerGroup(tabId, detail.group)}
+        onConfirm={() => {
+          setActionError(null);
+          void runKafkaAction(
+            () => deleteConsumerGroup(tabId, detail.group),
+            t("query.kafkaConsumerGroupDeleted", { group: detail.group }),
+            setActionError
+          );
+        }}
       />
     </div>
   );
@@ -158,19 +167,26 @@ function ResetConsumerGroupOffsetDialog({
   const [mode, setMode] = useState<KafkaOffsetResetMode>("latest");
   const [offset, setOffset] = useState("");
   const [timestampMillis, setTimestampMillis] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const resetConsumerGroupOffset = useKafkaStore((s) => s.resetConsumerGroupOffset);
   const state = useKafkaStore((s) => s.states[tabId]);
 
   const confirm = async () => {
-    await resetConsumerGroupOffset(tabId, {
-      group,
-      topic: topic.trim(),
-      partitions: parseIntegerArray(partitions),
-      mode,
-      offset: mode === "offset" ? parseRequiredNumber(offset) : undefined,
-      timestampMillis: mode === "timestamp" ? parseRequiredNumber(timestampMillis) : undefined,
-    });
-    onOpenChange(false);
+    setError(null);
+    const ok = await runKafkaAction(
+      () =>
+        resetConsumerGroupOffset(tabId, {
+          group,
+          topic: topic.trim(),
+          partitions: parseIntegerArray(partitions),
+          mode,
+          offset: mode === "offset" ? parseRequiredNumber(offset) : undefined,
+          timestampMillis: mode === "timestamp" ? parseRequiredNumber(timestampMillis) : undefined,
+        }),
+      t("query.kafkaOffsetReset", { group }),
+      setError
+    );
+    if (ok) onOpenChange(false);
   };
 
   const modeValue = mode === "timestamp" ? timestampMillis : offset;
@@ -219,6 +235,7 @@ function ResetConsumerGroupOffsetDialog({
               placeholder={mode === "timestamp" ? t("query.kafkaTimestampMillis") : t("query.kafkaOffset")}
             />
           </div>
+          <ErrorNotice message={error} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

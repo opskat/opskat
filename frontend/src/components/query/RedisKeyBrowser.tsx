@@ -16,7 +16,6 @@ import {
   Loader2,
   Search,
   Key,
-  AlertCircle,
   AlertTriangle,
   Copy,
   Trash2,
@@ -34,6 +33,7 @@ import { notifyCopied } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import { Button, Input, ConfirmDialog, computeContextMenuPosition } from "@opskat/ui";
 import { PanelSidebar, SidebarRefreshButton } from "@/components/common/PanelSidebar";
+import { AsyncState } from "@/components/common/AsyncState";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import {
@@ -644,12 +644,14 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
         </div>
       )}
 
-      {/* Error message */}
-      {state.error && (
-        <div className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/10 px-2 py-2 text-xs text-destructive">
-          <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
-          <span className="break-all">{state.error}</span>
-        </div>
+      {/* 加载失败:原因 + 重试。已扫到的 key 仍列在下面。 */}
+      {state.error && !state.loadingKeys && (
+        <AsyncState
+          status="error"
+          error={state.error}
+          onRetry={handleRefresh}
+          className="items-start border-b px-2 py-2 text-left"
+        />
       )}
 
       {/* Virtualized key list / tree */}
@@ -775,10 +777,19 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
           })}
         </div>
 
-        {state.loadingKeys && (
-          <div className="flex items-center justify-center py-3">
-            <Loader2 className="size-4 animate-spin text-muted-foreground" />
-          </div>
+        {redisKeys.length === 0 ? (
+          // 首屏:扫描中转圈;扫描成功且确实没有 key(游标走完)才显示空态;失败由上方的错误块说明。
+          state.loadingKeys ? (
+            <AsyncState status="loading" />
+          ) : state.error ? null : (
+            <AsyncState status="ready" empty={state.hasMore ? undefined : t("query.noKeys")} />
+          )
+        ) : (
+          state.loadingKeys && (
+            <div className="flex items-center justify-center py-3">
+              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+            </div>
+          )
         )}
       </div>
 

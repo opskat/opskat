@@ -162,7 +162,10 @@ export interface MongoDBTabState {
   activeDatabase: string | null;
   innerTabs: MongoInnerTab[];
   activeInnerTabId: string | null;
+  /** Why the database list failed to load; only loadMongoDatabases sets / clears it. */
   error: string | null;
+  /** Why a database's collection list failed to load (db -> reason); loadMongoCollections sets / clears it. Not persisted. */
+  collectionErrors?: Record<string, string>;
 }
 
 interface QueryState {
@@ -560,7 +563,7 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     set((s) => ({
       dbStates: {
         ...s.dbStates,
-        [tabId]: { ...s.dbStates[tabId], loadingDbs: true },
+        [tabId]: { ...s.dbStates[tabId], loadingDbs: true, error: null },
       },
     }));
 
@@ -1482,17 +1485,18 @@ export const useQueryStore = create<QueryState>((set, get) => ({
         },
       }));
 
-      // Also refresh collections for already-loaded databases that still exist,
-      // otherwise the top-level refresh button leaves stale collection lists.
-      const loaded = Object.keys(get().mongoStates[tabId]?.collections ?? {});
+      // Also refresh collections for already-loaded or expanded databases that still exist,
+      // otherwise the top-level refresh button leaves stale (or never-loaded) collection lists.
+      const current = get().mongoStates[tabId];
+      const toRefresh = new Set([...Object.keys(current?.collections ?? {}), ...(current?.expandedDbs ?? [])]);
       await Promise.all(
-        loaded.filter((db) => databases.includes(db)).map((db) => get().loadMongoCollections(tabId, db))
+        [...toRefresh].filter((db) => databases.includes(db)).map((db) => get().loadMongoCollections(tabId, db))
       );
     } catch (err) {
       set((s) => ({
         mongoStates: {
           ...s.mongoStates,
-          [tabId]: { ...s.mongoStates[tabId], error: s.mongoStates[tabId]?.error || errorMessage(err) },
+          [tabId]: { ...s.mongoStates[tabId], error: errorMessage(err) },
         },
       }));
     }
@@ -1505,20 +1509,28 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     try {
       const result = await ListMongoCollections(tab.assetId, database);
       const collections: string[] = JSON.parse(result);
+      set((s) => {
+        const collectionErrors = { ...s.mongoStates[tabId].collectionErrors };
+        delete collectionErrors[database];
+        return {
+          mongoStates: {
+            ...s.mongoStates,
+            [tabId]: {
+              ...s.mongoStates[tabId],
+              collections: { ...s.mongoStates[tabId].collections, [database]: collections },
+              collectionErrors,
+            },
+          },
+        };
+      });
+    } catch (err) {
       set((s) => ({
         mongoStates: {
           ...s.mongoStates,
           [tabId]: {
             ...s.mongoStates[tabId],
-            collections: { ...s.mongoStates[tabId].collections, [database]: collections },
+            collectionErrors: { ...s.mongoStates[tabId].collectionErrors, [database]: errorMessage(err) },
           },
-        },
-      }));
-    } catch (err) {
-      set((s) => ({
-        mongoStates: {
-          ...s.mongoStates,
-          [tabId]: { ...s.mongoStates[tabId], error: s.mongoStates[tabId]?.error || errorMessage(err) },
         },
       }));
     }

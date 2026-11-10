@@ -136,8 +136,7 @@ export function PermissionModeCard({ value, subject, parentGroupId, onChange }: 
               <button
                 type="button"
                 onClick={() => {
-                  useSettingsUiStore.getState().setActiveTab("ai");
-                  openSettingsTab(t("nav.settings"));
+                  openSettingsTab(t("nav.settings"), "ai");
                 }}
                 className="ml-1 font-medium underline-offset-2 hover:underline"
               >

@@ -442,7 +442,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
 
               <button
                 type="button"
-                onClick={() => openSettingsTab(t("nav.settings"))}
+                onClick={() => openSettingsTab(t("nav.settings"), "shortcuts")}
                 className="text-xs text-muted-foreground/70 transition-colors hover:text-foreground"
               >
                 {t("app.shortcuts.all")} →

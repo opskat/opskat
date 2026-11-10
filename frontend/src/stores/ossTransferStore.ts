@@ -53,7 +53,8 @@ interface OssTransferTabState {
   transfers: Record<string, OssTransfer>;
 }
 
-export type ResolveKeys = (keys: string[]) => Promise<(string | null)[]>;
+/** 上传前的同名检查：每项是想写入的 key 与它的本地来源路径。 */
+export type ResolveKeys = (targets: { key: string; localPath: string }[]) => Promise<(string | null)[]>;
 
 interface OssTransferState {
   tabs: Record<string, OssTransferTabState>;
@@ -185,7 +186,7 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
 
     startUploadPaths: async (tabId, assetId, bucket, prefix, localPaths, resolveKeys) => {
       if (!localPaths.length) return;
-      const keys = await resolveKeys(localPaths.map((p) => prefix + basename(p)));
+      const keys = await resolveKeys(localPaths.map((localPath) => ({ key: prefix + basename(localPath), localPath })));
       for (const [i, localPath] of localPaths.entries()) {
         const key = keys[i];
         if (key !== null) await get().startUploadPath(tabId, assetId, bucket, prefix, localPath, key);

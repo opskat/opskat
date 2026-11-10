@@ -416,6 +416,7 @@ export interface KafkaTabState {
   loadingConnectors: boolean;
   loadingConnectorDetail: boolean;
   connectAdminLoading: boolean;
+  /** Reason the last load failed (shown in the page header with Retry). Admin actions rethrow instead; callers show their failure where the action happened. */
   error: string | null;
 }
 
@@ -778,12 +779,12 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
         replicationFactor: req.replicationFactor,
         configs: req.configs,
       });
-      set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false, error: null } } }));
+      set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false } } }));
       await Promise.all([get().loadTopics(tabId), get().loadOverview(tabId)]);
       await get().loadTopicDetail(tabId, req.topic);
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false } },
       }));
       throw err;
     }
@@ -805,14 +806,13 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
             topicDetail: undefined,
             messageBrowser: { ...s.states[tabId].messageBrowser, response: undefined },
             topicAdminLoading: false,
-            error: null,
           },
         },
       }));
       await Promise.all([get().loadTopics(tabId), get().loadOverview(tabId)]);
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false } },
       }));
       throw err;
     }
@@ -825,11 +825,11 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: true } } }));
     try {
       await KafkaAlterTopicConfig(new kafka_svc.AlterTopicConfigRequest({ assetId, topic, configs }));
-      set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false, error: null } } }));
+      set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false } } }));
       await get().loadTopicDetail(tabId, topic);
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false } },
       }));
       throw err;
     }
@@ -842,11 +842,11 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: true } } }));
     try {
       await KafkaIncreasePartitions({ assetId, topic, partitions });
-      set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false, error: null } } }));
+      set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false } } }));
       await Promise.all([get().loadTopics(tabId), get().loadTopicDetail(tabId, topic), get().loadOverview(tabId)]);
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false } },
       }));
       throw err;
     }
@@ -866,13 +866,12 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
             ...s.states[tabId],
             messageBrowser: { ...s.states[tabId].messageBrowser, response: undefined },
             topicAdminLoading: false,
-            error: null,
           },
         },
       }));
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], topicAdminLoading: false } },
       }));
       throw err;
     }
@@ -885,11 +884,11 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], groupAdminLoading: true } } }));
     try {
       await KafkaResetConsumerGroupOffset({ assetId, ...req });
-      set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], groupAdminLoading: false, error: null } } }));
+      set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], groupAdminLoading: false } } }));
       await get().loadConsumerGroupDetail(tabId, req.group);
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], groupAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], groupAdminLoading: false } },
       }));
       throw err;
     }
@@ -910,14 +909,13 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
             selectedGroup: undefined,
             groupDetail: undefined,
             groupAdminLoading: false,
-            error: null,
           },
         },
       }));
       await get().loadConsumerGroups(tabId);
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], groupAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], groupAdminLoading: false } },
       }));
       throw err;
     }
@@ -969,11 +967,11 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], aclAdminLoading: true } } }));
     try {
       await KafkaCreateACL({ assetId, ...req });
-      set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], aclAdminLoading: false, error: null } } }));
+      set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], aclAdminLoading: false } } }));
       await get().loadACLs(tabId);
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], aclAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], aclAdminLoading: false } },
       }));
       throw err;
     }
@@ -995,11 +993,11 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
         operation: acl.operation,
         permission: acl.permission,
       });
-      set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], aclAdminLoading: false, error: null } } }));
+      set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], aclAdminLoading: false } } }));
       await get().loadACLs(tabId);
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], aclAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], aclAdminLoading: false } },
       }));
       throw err;
     }
@@ -1104,12 +1102,12 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
         new kafka_svc.CheckSchemaCompatibilityRequest({ assetId, ...req })
       )) as KafkaSchemaCompatibilityResponse;
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: false, error: null } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: false } },
       }));
       return result;
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: false } },
       }));
       throw err;
     }
@@ -1123,13 +1121,13 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     try {
       await KafkaRegisterSchema(new kafka_svc.RegisterSchemaRequest({ assetId, ...req }));
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: false, error: null } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: false } },
       }));
       await get().loadSchemaSubjects(tabId);
       await get().loadSchemaVersions(tabId, req.subject);
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: false } },
       }));
       throw err;
     }
@@ -1151,7 +1149,6 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
             schemaVersions: undefined,
             schemaDetail: undefined,
             schemaAdminLoading: false,
-            error: null,
           },
         },
       }));
@@ -1161,7 +1158,7 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
       }
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], schemaAdminLoading: false } },
       }));
       throw err;
     }
@@ -1274,13 +1271,13 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     try {
       await KafkaCreateConnector({ assetId, ...req, cluster });
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false, error: null } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false } },
       }));
       await get().loadConnectors(tabId, cluster);
       await get().loadConnectorDetail(tabId, req.name);
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false } },
       }));
       throw err;
     }
@@ -1295,12 +1292,12 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
     try {
       await KafkaUpdateConnectorConfig({ assetId, ...req, cluster });
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false, error: null } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false } },
       }));
       await get().loadConnectorDetail(tabId, req.name);
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false } },
       }));
       throw err;
     }
@@ -1352,14 +1349,13 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
             selectedConnector: undefined,
             connectorDetail: undefined,
             connectAdminLoading: false,
-            error: null,
           },
         },
       }));
       await get().loadConnectors(tabId, cluster);
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false } },
       }));
       throw err;
     }
@@ -1439,14 +1435,13 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
             ...s.states[tabId],
             producingMessage: false,
             produceMessage: { ...s.states[tabId].produceMessage, value: "" },
-            error: null,
           },
         },
       }));
       await get().browseMessages(tabId);
     } catch (err) {
       set((s) => ({
-        states: { ...s.states, [tabId]: { ...s.states[tabId], producingMessage: false, error: errorMessage(err) } },
+        states: { ...s.states, [tabId]: { ...s.states[tabId], producingMessage: false } },
       }));
       throw err;
     }
@@ -1534,11 +1529,11 @@ async function mutateConnectorState(
   set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: true } } }));
   try {
     await fn(assetId, cluster);
-    set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false, error: null } } }));
+    set((s) => ({ states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false } } }));
     await get().loadConnectorDetail(tabId, name);
   } catch (err) {
     set((s) => ({
-      states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false, error: errorMessage(err) } },
+      states: { ...s.states, [tabId]: { ...s.states[tabId], connectAdminLoading: false } },
     }));
     throw err;
   }

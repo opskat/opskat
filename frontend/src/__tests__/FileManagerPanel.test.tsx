@@ -27,6 +27,7 @@ import {
   SFTPUploadFile,
 } from "../../wailsjs/go/ssh/SSH";
 import { OnFileDrop } from "../../wailsjs/runtime/runtime";
+import { StatLocalPaths } from "../../wailsjs/go/system/System";
 import { sftp_svc } from "../../wailsjs/go/models";
 import { profiled } from "./renderCount";
 import { formatBytes, formatDate, planChainRender } from "../components/terminal/file-manager/utils";
@@ -2486,6 +2487,12 @@ describe("FileManagerPanel", () => {
   describe("same-name conflicts", () => {
     const panel = () => <FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />;
 
+    beforeEach(() => {
+      vi.mocked(StatLocalPaths).mockImplementation(async (paths) =>
+        paths.map((path) => ({ path, isDir: false, size: 0, modTime: 0, error: "not found" }))
+      );
+    });
+
     async function uploadViaButton(localPath: string) {
       const user = userEvent.setup();
       vi.mocked(SFTPSelectUploadFile).mockResolvedValue(localPath);
@@ -2507,6 +2514,24 @@ describe("FileManagerPanel", () => {
       expect(within(dialog).getByText("2.0 KB")).toBeInTheDocument();
       expect(SFTPStatTargets).toHaveBeenCalledWith("s1", ["/srv/app/report.txt"]);
       expect(SFTPUploadFile).not.toHaveBeenCalled();
+    });
+
+    it("shows the local file's size and modified time as the incoming side of an upload conflict", async () => {
+      mockTargetStats({ "/srv/app/report.txt": existingFile("/srv/app/report.txt", "/srv/app/report_copy.txt") });
+      const localModTime = 1_710_000_000_000;
+      vi.mocked(StatLocalPaths).mockResolvedValue([
+        { path: "/home/me/report.txt", isDir: false, size: 5120, modTime: localModTime },
+      ]);
+      render(panel());
+      await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+
+      await uploadViaButton("/home/me/report.txt");
+
+      const dialog = await screen.findByTestId("file-conflict-dialog");
+      expect(StatLocalPaths).toHaveBeenCalledWith(["/home/me/report.txt"]);
+      expect(within(dialog).getByText("5.0 KB")).toBeInTheDocument();
+      expect(within(dialog).getByText(new Date(localModTime).toLocaleString())).toBeInTheDocument();
+      expect(within(dialog).queryByText("fileConflict.unknown")).toBeNull();
     });
 
     it("skips the upload when the user chooses skip", async () => {
@@ -2731,17 +2756,33 @@ describe("FileManagerPanel", () => {
       expect(req.items).toEqual([{ sessionId: "s1", path: "/srv/app/app.log", isDir: false, targetName: "app.log" }]);
     });
 
-    it("duplicates in place under the _copy name without asking", async () => {
+    it("asks before duplicating in place and offers only skip or keep both", async () => {
       await copyFromTab1("app.log");
       mockTargetStats({ "/srv/app/app.log": existingFile("/srv/app/app.log", "/srv/app/app_copy.log") });
 
       fireEvent.keyDown(window, { key: "v", ctrlKey: true });
 
+      const dialog = await screen.findByTestId("file-conflict-dialog");
+      expect(within(dialog).getByText("fileConflict.keepBothHint")).toBeInTheDocument();
+      expect(within(dialog).queryByRole("button", { name: "fileConflict.overwrite" })).toBeNull();
+      expect(SFTPPaste).not.toHaveBeenCalled();
+      fireEvent.click(within(dialog).getByRole("button", { name: "fileConflict.keepBoth" }));
+
       await waitFor(() => expect(SFTPPaste).toHaveBeenCalledTimes(1));
-      expect(screen.queryByTestId("file-conflict-dialog")).toBeNull();
       expect(vi.mocked(SFTPPaste).mock.calls[0][0].items).toEqual([
         { sessionId: "s1", path: "/srv/app/app.log", isDir: false, targetName: "app_copy.log" },
       ]);
+    });
+
+    it("does not paste anything when an in-place duplicate is skipped", async () => {
+      await copyFromTab1("app.log");
+      mockTargetStats({ "/srv/app/app.log": existingFile("/srv/app/app.log", "/srv/app/app_copy.log") });
+
+      fireEvent.keyDown(window, { key: "v", ctrlKey: true });
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.skip" }));
+
+      await waitFor(() => expect(screen.queryByTestId("file-conflict-dialog")).toBeNull());
+      expect(SFTPPaste).not.toHaveBeenCalled();
     });
   });
 });

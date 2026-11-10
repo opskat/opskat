@@ -223,6 +223,8 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
       buildConfig: (ctx) => baseHandleRef.current!.buildConfig(ctx),
       buildTestConfig: (ctx) => baseHandleRef.current!.buildTestConfig!(ctx),
       startTest: () => startTemporaryTest(state),
+      commonFields: () => baseHandleRef.current!.commonFields!(),
+      isDirty: () => baseHandleRef.current!.isDirty!(),
     }),
     [state, startTemporaryTest]
   );

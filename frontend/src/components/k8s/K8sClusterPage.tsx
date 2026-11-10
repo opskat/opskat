@@ -450,6 +450,16 @@ export function K8sClusterPage({ asset }: Props) {
     [namespaceResources, loadingNamespaces, fetchNamespaceResources, setLoadingNamespaces]
   );
 
+  // 失败后的重试:清掉该命名空间的错误再拉取。
+  const retryNamespace = (ns: string) => {
+    setNamespaceErrors((prev) => {
+      const next = { ...prev };
+      delete next[ns];
+      return next;
+    });
+    loadNamespaceResources(ns);
+  };
+
   const toggleNamespace = (ns: string) => {
     setExpandedNamespaces((prev) => {
       const next = new Set(prev);
@@ -1317,26 +1327,13 @@ export function K8sClusterPage({ asset }: Props) {
               </div>
               {expandedNamespaces.has(ns.name) && (
                 <div className="ml-3">
-                  {loadingNamespaces.has(ns.name) && (
-                    <div className="flex items-center gap-1.5 pl-8 pr-2 py-1 text-xs text-muted-foreground">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      {t("asset.k8sLoadingNamespace")}
-                    </div>
-                  )}
-                  {namespaceErrors[ns.name] && (
-                    <div
-                      className="flex items-start gap-1 pl-8 pr-2 py-1 text-xs text-destructive cursor-pointer"
-                      title={namespaceErrors[ns.name]}
-                      onClick={() => {
-                        const next = { ...namespaceErrors };
-                        delete next[ns.name];
-                        setNamespaceErrors(next);
-                        loadNamespaceResources(ns.name);
-                      }}
-                    >
-                      <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                      <span>{t("asset.k8sNamespaceResourceError")}</span>
-                    </div>
+                  {(loadingNamespaces.has(ns.name) || namespaceErrors[ns.name]) && (
+                    <AsyncState
+                      status={loadingNamespaces.has(ns.name) ? "loading" : "error"}
+                      error={namespaceErrors[ns.name]}
+                      onRetry={() => retryNamespace(ns.name)}
+                      className="items-start py-1 pl-8 pr-2 text-left"
+                    />
                   )}
                   {namespaceResources[ns.name] &&
                     (() => {
@@ -2151,12 +2148,7 @@ export function K8sClusterPage({ asset }: Props) {
                 ) : namespaceErrors[activeNs.name] ? (
                   <div
                     className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive cursor-pointer"
-                    onClick={() => {
-                      const next = { ...namespaceErrors };
-                      delete next[activeNs.name];
-                      setNamespaceErrors(next);
-                      loadNamespaceResources(activeNs.name);
-                    }}
+                    onClick={() => retryNamespace(activeNs.name)}
                   >
                     <div className="flex items-center gap-2">
                       <AlertCircle className="h-4 w-4" />

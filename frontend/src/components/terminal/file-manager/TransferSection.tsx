@@ -82,28 +82,32 @@ function TransferRow({ transfer }: { transfer: SFTPTransfer }) {
       </div>
 
       {active && (
-        <>
-          <div className="h-1 rounded-full bg-muted overflow-hidden">
-            <div
-              className="h-full rounded-full bg-primary transition-all duration-300"
-              style={{ width: `${percent}%` }}
-            />
-          </div>
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <span className="truncate">
-              {formatBytes(transfer.bytesDone)}/{formatBytes(transfer.bytesTotal)}
-            </span>
-            <span className="shrink-0">{formatSpeed(transfer.speed)}</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto h-5 shrink-0 px-1.5 text-xs"
-              onClick={() => cancelTransfer(transfer.transferId)}
-            >
-              {t("sftp.cancelTransfer")}
-            </Button>
-          </div>
-        </>
+        <div className="h-1 rounded-full bg-muted overflow-hidden">
+          <div
+            className="h-full rounded-full bg-primary transition-all duration-300"
+            style={{ width: `${percent}%` }}
+          />
+        </div>
+      )}
+      {(active || transfer.bytesTotal > 0) && (
+        <div className={`flex items-center gap-2 text-muted-foreground ${active ? "" : "pl-[18px]"}`}>
+          <span className="truncate">
+            {formatBytes(transfer.bytesDone)}/{formatBytes(transfer.bytesTotal)}
+          </span>
+          {active && (
+            <>
+              <span className="shrink-0">{formatSpeed(transfer.speed)}</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto h-5 shrink-0 px-1.5 text-xs"
+                onClick={() => cancelTransfer(transfer.transferId)}
+              >
+                {t("sftp.cancelTransfer")}
+              </Button>
+            </>
+          )}
+        </div>
       )}
 
       {transfer.status === "error" && transfer.error && (

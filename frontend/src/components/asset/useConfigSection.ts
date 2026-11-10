@@ -1,6 +1,7 @@
 import {
   createContext,
   use,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useRef,
@@ -86,6 +87,9 @@ export interface UseConfigSectionResult<S> {
   state: S;
   setState: Dispatch<SetStateAction<S>>;
   patch: (p: Partial<S>) => void;
+  /** 非用户发起的更新(异步到达的默认值、编辑态解密回填):同时作用于 state 与「有改动」的基线,
+   *  这样只打开不改的表单关闭时不会被当成有改动。 */
+  settle: (update: (s: S) => S) => void;
 }
 
 function sameValidity(a: SectionValidity | null, b: SectionValidity): boolean {
@@ -115,13 +119,17 @@ export function useConfigSection<S>(opts: UseConfigSectionOptions<S>): UseConfig
   } = opts;
 
   const carried = use(AssetFormCarryContext);
-  const [initial] = useState<S>(() => {
+  const [initial, setInitial] = useState<S>(() => {
     const base = init(editAsset);
     return editAsset ? base : applyCommonFields(base, carried);
   });
   const [state, setState] = useState<S>(initial);
   const [initialExtra] = useState(() => JSON.stringify(dirtyExtra));
   const patch = (p: Partial<S>) => setState((s) => ({ ...s, ...p }));
+  const settle = useCallback((update: (s: S) => S) => {
+    setState(update);
+    setInitial(update);
+  }, []);
 
   // 校验上报:浅比较守卫,仅在结果变化时推给壳,避免每次 keystroke 触发多余渲染。
   const lastValidity = useRef<SectionValidity | null>(null);
@@ -158,8 +166,8 @@ export function useConfigSection<S>(opts: UseConfigSectionOptions<S>): UseConfig
     }),
     // build/buildTest 捕获的额外身份由调用方经 deps 提供(如 cred.value)。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state, ...deps]
+    [state, initial, ...deps]
   );
 
-  return { state, setState, patch };
+  return { state, setState, patch, settle };
 }

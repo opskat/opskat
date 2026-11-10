@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { CancelSSHConnect, ConnectSSHAsync } from "../../../wailsjs/go/ssh/SSH";
+import { CancelSSHConnect, ConnectSSHAsync, SplitSSH } from "../../../wailsjs/go/ssh/SSH";
 import { EventsOn } from "../../../wailsjs/runtime/runtime";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { useTabStore, type Tab } from "../tabStore";
@@ -360,5 +360,43 @@ describe("关闭正在重连的标签", () => {
 
     expect(CancelSSHConnect).toHaveBeenCalledWith("conn-2");
     expect(useTerminalStore.getState().connections).toEqual({});
+  });
+});
+
+describe("分屏失败", () => {
+  it("新窗格停在失败态并显示原因,可在原处重新连接", async () => {
+    useTabStore.setState({ tabs: [terminalTab("s1")], activeTabId: "s1" });
+    useTerminalStore.setState({
+      tabData: {
+        s1: {
+          splitTree: { type: "terminal", sessionId: "s1" },
+          activePaneId: "s1",
+          panes: { s1: { sessionId: "s1", transport: "ssh", connected: true, connectedAt: 1 } },
+          directoryFollowMode: "off",
+        },
+      },
+    });
+    vi.mocked(SplitSSH).mockRejectedValueOnce(new Error("ssh: open channel: administratively prohibited"));
+
+    useTerminalStore.getState().splitPane("s1", "vertical");
+    await flush();
+
+    const failedId = onlyConnectingId("s1");
+    const conn = useTerminalStore.getState().connections[failedId];
+    expect(conn.status).toBe("error");
+    expect(conn.error).toContain("administratively prohibited");
+    expectNoOrphanConnectingNodes();
+
+    vi.mocked(ConnectSSHAsync).mockResolvedValueOnce("conn-9");
+    useTerminalStore.getState().retryConnect(failedId);
+    await flush();
+    emit("ssh:connect:conn-9", { type: "connected", sessionId: "s2" });
+
+    const data = useTerminalStore.getState().tabData.s1;
+    expect(data.splitTree).toMatchObject({
+      type: "split",
+      first: { type: "terminal", sessionId: "s1" },
+      second: { type: "terminal", sessionId: "s2" },
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import {
   OSSCopyObject,
   OSSCreateFolder,
@@ -8,8 +8,10 @@ import {
   OSSListBuckets,
   OSSListObjects,
   OSSPickUploadFiles,
+  OSSRemoveObject,
   OSSUploadObjectPath,
 } from "../../../../wailsjs/go/oss/OSS";
+import { StatLocalPaths } from "../../../../wailsjs/go/system/System";
 import { OSSBrowserPanel } from "../OSSBrowserPanel";
 import { useTabStore } from "@/stores/tabStore";
 import { useOssBrowserStore } from "@/stores/ossBrowserStore";
@@ -59,6 +61,24 @@ describe("OSSBrowserPanel", () => {
     fireEvent.click(within(sidebar).getByTestId("async-state-retry"));
     expect(await within(sidebar).findByTestId("oss-bucket-b1")).toBeInTheDocument();
     expect(OSSListBuckets).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the loaded bucket list when a later object operation fails", async () => {
+    vi.mocked(OSSListBuckets).mockResolvedValueOnce([{ name: "b1", creationDate: 0 }] as never);
+    render(<OSSBrowserPanel tabId={TAB} />);
+    const sidebar = await screen.findByTestId("oss-sidebar");
+    expect(await within(sidebar).findByTestId("oss-bucket-b1")).toBeInTheDocument();
+
+    vi.mocked(OSSRemoveObject).mockRejectedValueOnce(new Error("AccessDenied on delete"));
+    await act(async () => {
+      await useOssBrowserStore
+        .getState()
+        .deleteObject(TAB, "a.txt")
+        .catch(() => undefined);
+    });
+
+    expect(within(sidebar).getByTestId("oss-bucket-b1")).toBeInTheDocument();
+    expect(within(sidebar).queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("loads buckets on mount and renders them in the tree", async () => {
@@ -116,7 +136,7 @@ describe("OSSBrowserPanel", () => {
             listing: null,
             selection: new Set(),
             loading: { buckets: false, listing: false, page: false },
-            error: null,
+            bucketsError: null,
             listingError: null,
             viewMode,
             focusedKey: null,
@@ -453,7 +473,20 @@ describe("OSSBrowserPanel", () => {
       vi.mocked(OSSUploadObjectPath)
         .mockReset()
         .mockResolvedValue("" as never);
+      vi.mocked(StatLocalPaths)
+        .mockReset()
+        .mockResolvedValue([{ path: "/local/b.txt", isDir: false, size: 3072, modTime: 1_710_000_000_000 }]);
     }
+
+    it("toolbar upload conflict shows the local file's size and modified time", async () => {
+      await openUploadWithExisting(["docs/b.txt"]);
+      fireEvent.click(screen.getByTestId("oss-upload"));
+      const dialog = await screen.findByTestId("file-conflict-dialog");
+      expect(StatLocalPaths).toHaveBeenCalledWith(["/local/b.txt"]);
+      expect(within(dialog).getByText("3.0 KB")).toBeInTheDocument();
+      expect(within(dialog).getByText(new Date(1_710_000_000_000).toLocaleString())).toBeInTheDocument();
+      expect(within(dialog).queryByText("fileConflict.unknown")).toBeNull();
+    });
 
     it("toolbar upload onto an existing key asks first and skip uploads nothing", async () => {
       await openUploadWithExisting(["docs/b.txt"]);

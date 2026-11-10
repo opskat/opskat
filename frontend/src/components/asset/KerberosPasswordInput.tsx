@@ -7,16 +7,20 @@ import type { KerberosFormFields } from "@/components/asset/kerberosConfig";
 export function KerberosPasswordInput({
   state,
   patch,
+  error,
 }: {
   state: KerberosFormFields;
   patch: (p: Partial<KerberosFormFields>) => void;
+  /** 保存被拒时要画在口令下的错误文案。 */
+  error?: string;
 }) {
   const { t } = useTranslation();
   return (
-    <Field label={t("asset.krbPassword")} required={!state.encryptedKrbPassword}>
+    <Field label={t("asset.krbPassword")} required={!state.encryptedKrbPassword} error={error}>
       <Input
         type="password"
         data-testid="krb-password"
+        aria-invalid={error ? true : undefined}
         autoComplete="new-password"
         value={state.krbPassword}
         placeholder={state.encryptedKrbPassword ? t("asset.passwordUnchanged") : undefined}

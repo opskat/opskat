@@ -276,6 +276,8 @@ export function RedisConfigSection({ editAsset, ctx, onValidityChange, ref }: Co
       buildConfig: (ctx) => baseHandleRef.current!.buildConfig(ctx),
       buildTestConfig: (ctx) => baseHandleRef.current!.buildTestConfig!(ctx),
       startTest: () => startTest(),
+      commonFields: () => baseHandleRef.current!.commonFields!(),
+      isDirty: () => baseHandleRef.current!.isDirty!(),
     }),
     [startTest]
   );

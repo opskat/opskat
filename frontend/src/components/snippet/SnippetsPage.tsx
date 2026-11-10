@@ -301,7 +301,8 @@ export function SnippetsPage() {
             </tr>
           </thead>
           <tbody>
-            {list.length === 0 && (
+            {/* 失败时只显示原因与重试:旧列表属于上一次的筛选条件,留着会被当成这次的结果。 */}
+            {(list.length === 0 || loadError) && (
               <tr>
                 <td colSpan={5}>
                   <AsyncState
@@ -317,122 +318,123 @@ export function SnippetsPage() {
                 </td>
               </tr>
             )}
-            {list.map((s) => {
-              const readOnly = isReadOnly(s);
-              return (
-                <tr key={s.ID} className="border-b hover:bg-muted/50 transition-colors">
-                  <td className="px-4 py-2">
-                    {isOrphanCategory(s.Category) ? (
-                      <span
-                        className="inline-block px-1.5 py-0.5 rounded text-[11px] font-mono bg-muted text-muted-foreground"
-                        title={t("snippet.unknownCategoryTooltip")}
-                      >
-                        {t("snippet.unknownCategory", { name: s.Category })}
-                      </span>
-                    ) : (
-                      <span
-                        className={cn(
-                          "inline-block px-1.5 py-0.5 rounded text-[11px] font-mono",
-                          categoryBadgeClass(s.Category, orderedCategoryIds)
-                        )}
-                      >
-                        {categoryLabelById[s.Category] ?? s.Category}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2">
-                    <div className="flex items-center gap-1.5">
-                      {readOnly && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Lock className="h-3 w-3 text-muted-foreground" data-testid="readonly-lock" />
-                          </TooltipTrigger>
-                          <TooltipContent>{t("snippet.readOnlyTooltip")}</TooltipContent>
-                        </Tooltip>
-                      )}
-                      <span className="font-medium">{s.Name}</span>
-                      {s.Description && (
-                        <span className="text-xs text-muted-foreground truncate max-w-xs" title={s.Description}>
-                          — {s.Description}
+            {!loadError &&
+              list.map((s) => {
+                const readOnly = isReadOnly(s);
+                return (
+                  <tr key={s.ID} className="border-b hover:bg-muted/50 transition-colors">
+                    <td className="px-4 py-2">
+                      {isOrphanCategory(s.Category) ? (
+                        <span
+                          className="inline-block px-1.5 py-0.5 rounded text-[11px] font-mono bg-muted text-muted-foreground"
+                          title={t("snippet.unknownCategoryTooltip")}
+                        >
+                          {t("snippet.unknownCategory", { name: s.Category })}
+                        </span>
+                      ) : (
+                        <span
+                          className={cn(
+                            "inline-block px-1.5 py-0.5 rounded text-[11px] font-mono",
+                            categoryBadgeClass(s.Category, orderedCategoryIds)
+                          )}
+                        >
+                          {categoryLabelById[s.Category] ?? s.Category}
                         </span>
                       )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">
-                    {formatUpdated(s.UpdatedAt)}
-                  </td>
-                  <td className="px-4 py-2 text-xs font-mono text-muted-foreground">{s.Source || "user"}</td>
-                  <td className="px-4 py-2">
-                    <div className="flex items-center justify-end gap-1">
-                      {isRunnableCategoryId(s.Category, categories) && (
+                    </td>
+                    <td className="px-4 py-2">
+                      <div className="flex items-center gap-1.5">
+                        {readOnly && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Lock className="h-3 w-3 text-muted-foreground" data-testid="readonly-lock" />
+                            </TooltipTrigger>
+                            <TooltipContent>{t("snippet.readOnlyTooltip")}</TooltipContent>
+                          </Tooltip>
+                        )}
+                        <span className="font-medium">{s.Name}</span>
+                        {s.Description && (
+                          <span className="text-xs text-muted-foreground truncate max-w-xs" title={s.Description}>
+                            — {s.Description}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                      {formatUpdated(s.UpdatedAt)}
+                    </td>
+                    <td className="px-4 py-2 text-xs font-mono text-muted-foreground">{s.Source || "user"}</td>
+                    <td className="px-4 py-2">
+                      <div className="flex items-center justify-end gap-1">
+                        {isRunnableCategoryId(s.Category, categories) && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                aria-label={t("snippet.actions.run")}
+                                onClick={() => setRunTarget(s)}
+                              >
+                                <Play className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{t("snippet.actions.run")}</TooltipContent>
+                          </Tooltip>
+                        )}
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
                               variant="ghost"
                               size="icon"
                               className="h-7 w-7"
-                              aria-label={t("snippet.actions.run")}
-                              onClick={() => setRunTarget(s)}
+                              disabled={readOnly}
+                              aria-label={t("snippet.actions.edit")}
+                              onClick={() => onClickEdit(s)}
                             >
-                              <Play className="h-3.5 w-3.5" />
+                              <Pencil className="h-3.5 w-3.5" />
                             </Button>
                           </TooltipTrigger>
-                          <TooltipContent>{t("snippet.actions.run")}</TooltipContent>
+                          <TooltipContent>
+                            {readOnly ? t("snippet.readOnlyTooltip") : t("snippet.actions.edit")}
+                          </TooltipContent>
                         </Tooltip>
-                      )}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            disabled={readOnly}
-                            aria-label={t("snippet.actions.edit")}
-                            onClick={() => onClickEdit(s)}
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {readOnly ? t("snippet.readOnlyTooltip") : t("snippet.actions.edit")}
-                        </TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            aria-label={t("snippet.actions.duplicate")}
-                            onClick={() => onClickDuplicate(s)}
-                          >
-                            <Copy className="h-3.5 w-3.5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>{t("snippet.actions.duplicate")}</TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-destructive hover:text-destructive"
-                            disabled={readOnly}
-                            aria-label={t("snippet.actions.delete")}
-                            onClick={() => setConfirmTarget(s)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {readOnly ? t("snippet.readOnlyTooltip") : t("snippet.actions.delete")}
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              aria-label={t("snippet.actions.duplicate")}
+                              onClick={() => onClickDuplicate(s)}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t("snippet.actions.duplicate")}</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-destructive hover:text-destructive"
+                              disabled={readOnly}
+                              aria-label={t("snippet.actions.delete")}
+                              onClick={() => setConfirmTarget(s)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {readOnly ? t("snippet.readOnlyTooltip") : t("snippet.actions.delete")}
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
           </tbody>
         </table>
       </div>

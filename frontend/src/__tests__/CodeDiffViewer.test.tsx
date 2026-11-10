@@ -3,6 +3,8 @@ import { render, waitFor } from "@testing-library/react";
 import { buildTextDiffBlocks } from "../lib/textDiffBlocks";
 
 const diffEditorMock = vi.fn();
+const originalDecorationsMock = vi.fn((..._args: unknown[]) => ({ clear: vi.fn() }));
+const modifiedDecorationsMock = vi.fn((..._args: unknown[]) => ({ clear: vi.fn() }));
 
 vi.mock("@/lib/monaco-setup", () => ({
   setupMonaco: vi.fn(),
@@ -17,12 +19,12 @@ vi.mock("@monaco-editor/react", () => ({
     onMount?.(
       {
         getOriginalEditor: () => ({
-          createDecorationsCollection: vi.fn(() => ({ clear: vi.fn() })),
+          createDecorationsCollection: originalDecorationsMock,
           revealLineInCenter: vi.fn(),
           setPosition: vi.fn(),
         }),
         getModifiedEditor: () => ({
-          createDecorationsCollection: vi.fn(() => ({ clear: vi.fn() })),
+          createDecorationsCollection: modifiedDecorationsMock,
           revealLineInCenter: vi.fn(),
           setPosition: vi.fn(),
         }),
@@ -101,6 +103,35 @@ describe("CodeDiffViewer", () => {
     const calls = diffEditorMock.mock.calls as Array<[Record<string, unknown>]>;
     const props = calls.at(-1)?.[0] as { wrapperProps?: Record<string, string> };
     expect(props.wrapperProps).toEqual({ "data-testid": "diff-editor" });
+  });
+
+  it("colours changes by side when asked, so a left-hand local side is never painted as deletions", async () => {
+    const { CodeDiffViewer } = await import("../components/CodeDiffViewer");
+    originalDecorationsMock.mockClear();
+    modifiedDecorationsMock.mockClear();
+    // 第 2 行只在左侧（delete），第 4 行两侧不同（modify），第 6 行只在右侧（insert），第 2 块是当前块。
+    render(
+      <CodeDiffViewer
+        activeBlockIndex={1}
+        original={"a\nlocal-only\nb\nleft\nc\n"}
+        modified={"a\nb\nright\nc\nremote-only\n"}
+        toneBySide
+      />
+    );
+    await waitFor(() => expect(originalDecorationsMock).toHaveBeenCalled());
+    await waitFor(() => expect(modifiedDecorationsMock).toHaveBeenCalled());
+
+    const classes = (mock: typeof originalDecorationsMock) =>
+      (mock.mock.calls.at(-1)?.[0] as { options: { className: string; glyphMarginClassName: string } }[]).map(
+        (decoration) => [decoration.options.className, decoration.options.glyphMarginClassName]
+      );
+    const left = classes(originalDecorationsMock);
+    const right = classes(modifiedDecorationsMock);
+    expect(left.flat().some((name) => /delete|insert/.test(name))).toBe(false);
+    expect(right.flat().some((name) => /delete|insert/.test(name))).toBe(false);
+    expect(left).toContainEqual(["external-edit-compare-line-local", "external-edit-compare-gutter-local"]);
+    expect(right).toContainEqual(["external-edit-compare-line-remote", "external-edit-compare-gutter-remote"]);
+    expect(left).toContainEqual(["external-edit-compare-line-current", "external-edit-compare-gutter-current"]);
   });
 
   it("normalizes insert/delete/modify blocks for external edit navigation", () => {

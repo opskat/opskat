@@ -19,6 +19,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: v
 // SettingsPage's other sections are not under test (and need their own backends).
 vi.mock("../../../components/settings/ShortcutSettings", () => ({ ShortcutSettings: () => null }));
 vi.mock("../../../components/settings/AISettingsSection", () => ({ AISettingsSection: () => null }));
+vi.mock("../../../components/settings/CommandReviewSection", () => ({ CommandReviewSection: () => null }));
 vi.mock("../../../components/settings/ImportSection", () => ({ ImportSection: () => null }));
 vi.mock("../../../components/settings/BackupSection", () => ({ BackupSection: () => null }));
 vi.mock("../../../components/settings/AppearanceSection", () => ({

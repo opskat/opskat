@@ -217,6 +217,40 @@ describe("ExternalEditMergeWorkbench", () => {
     expect(finalPane()).toBe("a\nlocal-1\nb\nremote-2\nc\n");
   });
 
+  it("offers take-local and take-remote on every difference block without stepping to it first", () => {
+    const mergeResult = {
+      ...defaultMergeResult,
+      localContent: "a\nlocal-1\nb\nlocal-2\nc\nlocal-3\nd\n",
+      remoteContent: "a\nremote-1\nb\nremote-2\nc\nremote-3\nd\n",
+      finalContent: "a\nlocal-1\nb\nlocal-2\nc\nlocal-3\nd\n",
+    };
+    render(
+      <ExternalEditMergeWorkbench
+        mergeResult={mergeResult}
+        savingSessionId={null}
+        onClose={vi.fn()}
+        onError={vi.fn()}
+      />
+    );
+
+    const rows = screen.getAllByTestId(/^external-edit-merge-block-\d+$/);
+    expect(rows).toHaveLength(3);
+    const finalPane = () => screen.getByTestId("external-edit-merge-final").textContent;
+
+    // 直接在第 3 块上采用远端：不需要先「下一处」两次
+    fireEvent.click(within(rows[2]).getByRole("button", { name: "externalEdit.merge.takeRemoteHint" }));
+    expect(finalPane()).toBe("a\nlocal-1\nb\nlocal-2\nc\nremote-3\nd\n");
+    expect(screen.getByTestId("external-edit-merge-conflict-count")).toHaveTextContent("1 / 3");
+
+    fireEvent.click(within(rows[1]).getByRole("button", { name: "externalEdit.merge.takeRemoteHint" }));
+    fireEvent.click(within(rows[2]).getByRole("button", { name: "externalEdit.merge.takeLocalHint" }));
+    expect(finalPane()).toBe("a\nlocal-1\nb\nremote-2\nc\nlocal-3\nd\n");
+
+    // 点块本身跳到该块
+    fireEvent.click(within(rows[1]).getByRole("button", { name: "externalEdit.merge.blockRow" }));
+    expect(screen.getByTestId("external-edit-merge-conflict-count")).toHaveTextContent("2 / 3");
+  });
+
   it("saves the final draft built from the taken blocks", async () => {
     const applyMerge = vi.fn(async () => ({ status: "saved" }));
     useExternalEditStore.setState({ applyMerge });

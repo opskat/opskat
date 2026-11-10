@@ -167,7 +167,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
           <summary
             data-testid="ai-approval-batch-summary"
             data-count={items.length}
-            className="cursor-pointer select-none text-[11px] text-warning"
+            className="cursor-pointer select-none text-xs text-warning"
           >
             {t("ai.approvalBatchCollapsedSummary", { count: items.length })}
             {batchDetail && <span className="text-muted-foreground"> · {batchDetail}</span>}
@@ -459,7 +459,7 @@ function ScopeBadge({
 }) {
   const { t } = useTranslation();
   const cls =
-    "inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-5 px-1.5 text-[11px] font-semibold text-warning bg-background";
+    "inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-5 px-1.5 text-xs font-semibold text-warning bg-background";
   if (item.asset_id > 0) {
     return (
       <span className={cls}>

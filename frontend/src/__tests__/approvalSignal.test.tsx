@@ -98,4 +98,15 @@ describe("waiting approval signal", () => {
     act(() => setConv({ 7: pending }));
     expect(toastWarning).not.toHaveBeenCalled();
   });
+
+  it("collapsing the panel while a session is still waiting shows the prompt", () => {
+    const { rerender } = renderHook(({ collapsed }) => useApprovalNotice(collapsed, vi.fn()), {
+      initialProps: { collapsed: false },
+    });
+    act(() => setConv({ 7: pending }));
+    expect(toastWarning).not.toHaveBeenCalled();
+    rerender({ collapsed: true });
+    expect(toastWarning).toHaveBeenCalledTimes(1);
+    expect(toastWarning.mock.calls[0][0]).toContain("Deploy fix");
+  });
 });

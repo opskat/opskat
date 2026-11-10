@@ -111,7 +111,7 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
   );
   const cred = useAssetCredential(editAsset, passwordCredentialConfig);
 
-  const { state, setState, patch } = useConfigSection<SSHFormState>({
+  const { state, patch, settle } = useConfigSection<SSHFormState>({
     ref,
     editAsset,
     onValidityChange,
@@ -208,14 +208,14 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
         if (!seconds || seconds <= 0) return;
         setGlobalKeepAlive(seconds);
         if (editAsset) return;
-        setState((prev) =>
+        settle((prev) =>
           prev.keepAliveIntervalSeconds === DEFAULT_GLOBAL_KEEPALIVE_SECONDS && !keepAliveClearedRef.current
             ? { ...prev, keepAliveIntervalSeconds: seconds }
             : prev
         );
       })
       .catch(() => {});
-  }, [editAsset, setState]);
+  }, [editAsset, settle]);
 
   // 排除自身,不能把自己选作跳板机 / SSH 隧道。
   const jumpHostExcludeIds = editAsset?.ID ? [editAsset.ID] : undefined;

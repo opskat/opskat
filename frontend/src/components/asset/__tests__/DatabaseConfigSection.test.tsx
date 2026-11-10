@@ -399,6 +399,39 @@ describe("DatabaseConfigSection Kerberos 字段组(kerberos)", () => {
     expect(screen.queryByTestId("krb-auth-kerberos")).toBeNull();
     expect((await ref.current!.buildConfig(ctx)).configJSON).not.toContain("krb_");
   });
+
+  function renderKrbForSave(overrides: Record<string, string>) {
+    const config = JSON.stringify({ ...JSON.parse(KRB), ...overrides });
+    return renderForSave(
+      <DatabaseConfigSection
+        editAsset={new asset_entity.Asset({ ID: 6, Type: "database", Config: config })}
+        ctx={ctx}
+        onValidityChange={vi.fn()}
+      />
+    );
+  }
+
+  it.each([
+    ["a principal without @REALM", { krb_principal: "app" }, "krb-principal", "asset.formKrbPrincipal"],
+    ["a KDC list with no address", { krb_kdc: "," }, "krb-kdc", "asset.formKrbKDC"],
+    ["no Kerberos password", { krb_password: "" }, "krb-password", "asset.formKrbCredential"],
+  ])("rejected save shows %s under its field", async (_, overrides, testId, reason) => {
+    const { rejectSave, reportShown } = renderKrbForSave(overrides);
+    const input = await screen.findByTestId(testId);
+    rejectSave();
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    expect(reportShown).toHaveBeenCalled();
+  });
+
+  it("rejected save shows a missing keytab path under the keytab field", async () => {
+    const { rejectSave, reportShown } = renderKrbForSave({});
+    await userEvent.setup().click(await screen.findByTestId("krb-credential-keytab"));
+    rejectSave();
+    expect(screen.getByTestId("krb-keytab-file")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("asset.formKrbCredential")).toBeInTheDocument();
+    expect(reportShown).toHaveBeenCalled();
+  });
 });
 
 describe("DatabaseConfigSection on a rejected save", () => {

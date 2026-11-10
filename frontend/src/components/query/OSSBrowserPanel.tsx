@@ -6,7 +6,7 @@ import { Trash2 } from "lucide-react";
 import { useResizeHandle, ConfirmDialog, Button } from "@opskat/ui";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { useOssBrowserStore } from "@/stores/ossBrowserStore";
-import { useOssTransferStore } from "@/stores/ossTransferStore";
+import { useOssTransferStore, type ResolveKeys } from "@/stores/ossTransferStore";
 import { useAssetStore } from "@/stores/assetStore";
 import { flattenPrefixTree } from "@/lib/ossPrefixTree";
 import { formatBytes } from "@/lib/formatBytes";
@@ -152,10 +152,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     }
   };
 
-  const resolveKeys = useCallback(
-    (keys: string[]) => resolveTargets(keys.map((key) => ({ key, incoming: {} }))),
-    [resolveTargets]
-  );
+  const resolveKeys: ResolveKeys = resolveTargets;
 
   const contentRef = useRef<HTMLDivElement>(null);
   const isDragOver = useOssFileDrop({
@@ -228,7 +225,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
             buckets={state?.buckets ?? null}
             currentBucket={state?.currentBucket ?? ""}
             rows={rows}
-            error={state?.error}
+            error={state?.bucketsError}
             onRetryBuckets={reloadBuckets}
             onSelectBucket={onSelectBucket}
             onToggleExpand={onExpand}

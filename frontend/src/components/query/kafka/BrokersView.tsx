@@ -21,7 +21,7 @@ export function BrokersView({ tabId, state }: { tabId: string; state: KafkaTabSt
   };
 
   if (state.loadingBrokers && !state.brokers.length) return <LoadingBlock />;
-  if (!state.brokers.length) return <EmptyState text={t("query.kafkaNoBrokers")} />;
+  if (!state.brokers.length) return <EmptyState text={t("query.kafkaNoBrokers")} failed={!!state.error} />;
 
   const showDetail = state.selectedBroker !== undefined;
 

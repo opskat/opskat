@@ -193,6 +193,7 @@
     "selectAsset": "Select Asset",
     "rules": "Forward Rules",
     "addRule": "Add Rule",
+    "removeRule": "Remove rule",
     "port": "Port",
     "empty": "No forward configs yet. Click the button above to create one.",
     "running": "Running",
@@ -1285,7 +1286,14 @@
     "nav": {
       "ai": "Providers and command review",
       "importBackup": "Import and backup",
+      "appearance": "Appearance and language",
+      "network": "Network proxy",
+      "update": "Updates",
+      "debugLogs": "Debugging and logs",
       "label": "Settings sections"
+    },
+    "debugLogs": {
+      "desc": "Turn on detailed logging, open the logs folder, or report a bug"
     }
   },
   "backup": {
@@ -1980,6 +1988,7 @@
       "closeDirtyTitle": "Discard unsaved merge draft?",
       "closeDirtyDesc": "Closing keeps the conflict record, but the unsaved final draft edits in this dialog will be lost.",
       "closeDirtyConfirm": "Discard and Close",
+      "blockRow": "Difference {{index}}",
       "takeBlockUnlocated": "The lines around this difference were edited in the final draft, so it can't be replaced automatically. Edit the final draft directly.",
       "takeLocal": "Use local",
       "takeLocalHint": "Replace difference {{index}} in the final draft with the local version",
@@ -2161,7 +2170,6 @@
     "batchDescription": "The following {{count}} operations require your approval",
     "batchCollapsedSummary": "{{count}} approval items collapsed — click to expand and review each one",
     "alwaysAllow": "Always Allow",
-    "approve": "Approve",
     "scopeAll": "All Assets",
     "genericHttp": "HTTP request",
     "genericCommand": "Command",
@@ -2220,7 +2228,17 @@
       "autopilot": "Autopilot",
       "grant": "Grant",
       "policy": "Policy",
-      "user": "You"
+      "user": "You",
+      "execUnsupportedType": "Type can't run commands",
+      "execGateBlocked": "Usage guide not loaded",
+      "execPrecheckFailed": "Precondition not met",
+      "execCanonicalizeError": "Invalid command",
+      "execTypeMismatch": "Type mismatch",
+      "execResolveFailed": "Asset not found or ambiguous",
+      "execInvalidInput": "Invalid input",
+      "batchComplete": "Batch succeeded",
+      "batchPartialFailure": "Batch partly failed",
+      "batchFailed": "Batch failed"
     },
     "decisions": {
       "allow": "Allowed",
@@ -2903,6 +2921,8 @@
     "filterTables": "Filter tables...",
     "filterCollections": "Filter collections...",
     "noMatch": "No match",
+    "noDatabases": "No databases",
+    "noKeys": "No keys",
     "expandEdit": {
       "title": "Expanded editor",
       "menu": "Expand to Edit",
@@ -3393,6 +3413,20 @@
     "kafkaConnectorResumed": "Connector {{name}} resumed",
     "kafkaMessageSent": "Message sent to {{topic}}",
     "kafkaTopicCreated": "Topic {{name}} created",
+    "kafkaTopicDeleted": "Topic {{name}} deleted",
+    "kafkaTopicConfigUpdated": "Configuration of topic {{topic}} updated",
+    "kafkaPartitionsIncreased": "Topic {{topic}} now has {{count}} partitions",
+    "kafkaRecordsDeleted": "Records deleted from topic {{topic}}",
+    "kafkaOffsetReset": "Offsets of consumer group {{group}} reset",
+    "kafkaConsumerGroupDeleted": "Consumer group {{group}} deleted",
+    "kafkaACLDeleted": "ACL for {{principal}} deleted",
+    "kafkaSchemaRegistered": "Schema registered under {{subject}}",
+    "kafkaSchemaVersionDeleted": "Version {{version}} of {{subject}} deleted",
+    "kafkaSubjectDeleted": "Subject {{subject}} deleted",
+    "kafkaConnectorCreated": "Connector {{name}} created",
+    "kafkaConnectorUpdated": "Configuration of connector {{name}} updated",
+    "kafkaConnectorRestarted": "Connector {{name}} restarted",
+    "kafkaConnectorDeleted": "Connector {{name}} deleted",
     "mongo": {
       "noCollections": "No collections",
       "noDatabases": "No databases"
@@ -3805,7 +3839,6 @@
     "tree": {
       "filterPlaceholder": "Filter key",
       "truncated": "Only the first {{limit}} entries are listed. Use the Query tab with a key prefix to narrow it down.",
-      "loadFailed": "Failed to load keyspace",
       "refresh": "Refresh keyspace",
       "empty": "No keys",
       "title": "Keyspace"

@@ -142,6 +142,23 @@ describe("settings load states", () => {
       expect(screen.queryByRole("alert")).toBeNull();
       expect(ListWebDAVBackups).toHaveBeenCalledTimes(2);
     });
+
+    it("webdav config failure is shown with retry instead of an unconfigured form", async () => {
+      vi.mocked(GetGitHubToken).mockResolvedValue("");
+      vi.mocked(GetWebDAVConfig)
+        .mockRejectedValueOnce(new Error("解密 WebDAV 密码失败: bad key"))
+        .mockResolvedValueOnce(system.WebDAVStoredConfig.createFrom({ url: "https://dav", configured: true }));
+      await renderAwait(<BackupSection />);
+      expect(screen.getByRole("alert")).toHaveTextContent("解密 WebDAV 密码失败: bad key");
+      expect(screen.queryByDisplayValue("https://dav")).toBeNull();
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("async-state-retry"));
+      });
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.getByDisplayValue("https://dav")).toBeInTheDocument();
+      expect(GetWebDAVConfig).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("opsctl status failure is shown instead of 'not installed', and retry recovers", async () => {

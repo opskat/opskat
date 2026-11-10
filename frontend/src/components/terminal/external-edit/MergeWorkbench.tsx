@@ -134,13 +134,19 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
     []
   );
 
-  const takeActiveBlock = (side: "local" | "remote") => {
-    // 按钮在没有差异块时禁用，activeBlockIndex 总落在 conflictBlocks 内
+  const selectBlock = (index: number) => {
+    setWorkbenchState((current) => {
+      const base = getCurrentMergeState(current, mergeResult);
+      return { ...base, activeBlockIndex: index, navigationToken: base.navigationToken + 1 };
+    });
+  };
+
+  const takeBlock = (index: number, side: "local" | "remote") => {
     const next = takeMergeBlock({
       final: finalContent,
       local: mergeResult.localContent || "",
       remote: mergeResult.remoteContent || "",
-      block: conflictBlocks[activeBlockIndex],
+      block: conflictBlocks[index],
       side,
     });
     if (next === null) {
@@ -155,24 +161,69 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
     }));
   };
 
+  const takeButtonClass = (side: "local" | "remote") =>
+    cn(
+      "bg-transparent",
+      side === "local"
+        ? "border-success/40 text-success hover:bg-success/10 hover:text-success"
+        : "border-info/40 text-info hover:bg-info/10 hover:text-info"
+    );
+  const takeHint = (side: "local" | "remote", index: number) =>
+    t(side === "local" ? "externalEdit.merge.takeLocalHint" : "externalEdit.merge.takeRemoteHint", {
+      index: index + 1,
+    });
+
+  // 窗格头部的按钮作用于当前块；按钮在没有差异块时禁用，activeBlockIndex 总落在 conflictBlocks 内
   const takeBlockButton = (side: "local" | "remote") => (
     <Button
       variant="outline"
       size="xs"
-      className={cn(
-        "bg-transparent",
-        side === "local"
-          ? "border-success/40 text-success hover:bg-success/10 hover:text-success"
-          : "border-info/40 text-info hover:bg-info/10 hover:text-info"
-      )}
+      className={takeButtonClass(side)}
       disabled={conflictTotal === 0}
-      title={t(side === "local" ? "externalEdit.merge.takeLocalHint" : "externalEdit.merge.takeRemoteHint", {
-        index: activeBlockIndex + 1,
-      })}
-      onClick={() => takeActiveBlock(side)}
+      title={takeHint(side, activeBlockIndex)}
+      onClick={() => takeBlock(activeBlockIndex, side)}
     >
       {t(side === "local" ? "externalEdit.merge.takeLocal" : "externalEdit.merge.takeRemote")}
     </Button>
+  );
+
+  // 侧栏逐块列出差异：每一块都能直接采用本地或远端，不必先用上一处/下一处走到它
+  const blockList = conflictTotal > 0 && (
+    <ol className="mt-4 space-y-1.5" data-testid="external-edit-merge-block-list">
+      {conflictBlocks.map((block, index) => (
+        <li
+          key={block.id}
+          className={cn(
+            "rounded-md border px-2 py-1.5",
+            index === activeBlockIndex ? "border-warning/50 bg-warning/10" : "border-border"
+          )}
+          data-testid={`external-edit-merge-block-${index}`}
+        >
+          <button
+            type="button"
+            className="w-full text-left text-xs font-medium text-foreground hover:underline"
+            onClick={() => selectBlock(index)}
+          >
+            {t("externalEdit.merge.blockRow", { index: index + 1 })}
+          </button>
+          <div className="mt-1 flex gap-1.5">
+            {(["local", "remote"] as const).map((side) => (
+              <Button
+                key={side}
+                variant="outline"
+                size="xs"
+                className={takeButtonClass(side)}
+                aria-label={takeHint(side, index)}
+                title={takeHint(side, index)}
+                onClick={() => takeBlock(index, side)}
+              >
+                {t(side === "local" ? "externalEdit.merge.takeLocal" : "externalEdit.merge.takeRemote")}
+              </Button>
+            ))}
+          </div>
+        </li>
+      ))}
+    </ol>
   );
 
   const handleApply = async () => {
@@ -204,6 +255,7 @@ export function ExternalEditMergeWorkbench({ mergeResult, savingSessionId, onClo
         mode="merge"
         remotePath={mergeResult.remotePath}
         sidebarLabel={t("externalEdit.merge.changelist")}
+        sidebarContent={blockList}
         status={t("externalEdit.merge.status")}
         testId="external-edit-merge-workbench"
         title={t("externalEdit.merge.title")}

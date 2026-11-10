@@ -38,7 +38,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const keepKeys = async (keys: string[]) => keys;
+const keepKeys = async (targets: { key: string }[]) => targets.map((target) => target.key);
 
 /** 选中 ids.length 个本地文件并上传，后端依次返回 ids 作为 transferId。 */
 async function upload(ids: string[], tab = TAB, assetId = 9, prefix = "docs/") {
@@ -71,7 +71,10 @@ describe("ossTransferStore", () => {
     vi.mocked(OSSUploadObjectPath).mockResolvedValue("oss-1" as never);
     const resolveKeys = vi.fn(async () => [null, "docs/b_copy.txt"]);
     await useOssTransferStore.getState().startUpload(TAB, 9, "b", "docs/", resolveKeys);
-    expect(resolveKeys).toHaveBeenCalledWith(["docs/a.txt", "docs/b.txt"]);
+    expect(resolveKeys).toHaveBeenCalledWith([
+      { key: "docs/a.txt", localPath: "/x/a.txt" },
+      { key: "docs/b.txt", localPath: "/x/b.txt" },
+    ]);
     expect(OSSUploadObjectPath).toHaveBeenCalledTimes(1);
     expect(OSSUploadObjectPath).toHaveBeenCalledWith(9, "b", "docs/b_copy.txt", "/x/b.txt");
   });

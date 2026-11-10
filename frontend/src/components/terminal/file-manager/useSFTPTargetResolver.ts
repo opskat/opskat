@@ -8,15 +8,18 @@ import {
   type FileConflictKind,
   type FileConflictSide,
 } from "@/components/common/FileConflictDialog";
+import { localConflictSides } from "@/components/common/localConflictSides";
 import { errorMessage } from "@/lib/errorMessage";
 import { getPathBaseName } from "./utils";
 
 export interface SFTPWriteTarget {
   /** 想写入的远端完整路径。 */
   targetPath: string;
-  /** 将要写入的这一项的元数据（modTime 为 Unix 毫秒），取不到时留空。 */
-  incoming: FileConflictSide;
-  /** 目标就是源本身（原地复制）：不问用户，直接用 _copy 名字。 */
+  /** 将要写入的这一项的元数据（modTime 为 Unix 毫秒），取不到时留空。与 localPath 二选一。 */
+  incoming?: FileConflictSide;
+  /** 上传的本地来源：发生冲突时读取它的大小与修改时间作为 incoming。 */
+  localPath?: string;
+  /** 目标就是源本身（原地复制）：仍然询问，但只能跳过或保留两者 —— 覆盖自身没有意义。 */
   duplicateInPlace?: boolean;
 }
 
@@ -60,20 +63,28 @@ export function useSFTPTargetResolver(sessionId: string) {
           result[index] = target.targetPath;
           return;
         }
-        if (target.duplicateInPlace) {
-          result[index] = stat.keepBothPath ?? null;
-          return;
-        }
         conflicts.push({
           index,
           item: {
             targetPath: stat.path,
             existing: sftpEntrySide(stat),
-            incoming: target.incoming,
+            incoming: target.duplicateInPlace ? sftpEntrySide(stat) : (target.incoming ?? {}),
             keepBothName: stat.keepBothPath ? getPathBaseName(stat.keepBothPath) : undefined,
+            noOverwrite: target.duplicateInPlace,
           },
         });
       });
+
+      const local = conflicts.filter((conflict) => targets[conflict.index].localPath);
+      try {
+        const sides = await localConflictSides(local.map((conflict) => targets[conflict.index].localPath!));
+        local.forEach((conflict, i) => {
+          conflict.item.incoming = sides[i];
+        });
+      } catch (e) {
+        toast.error(errorMessage(e));
+        return targets.map(() => null);
+      }
 
       const decisions = await resolveConflicts(
         conflicts.map((conflict) => conflict.item),
