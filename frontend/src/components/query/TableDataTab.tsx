@@ -1207,7 +1207,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
           primaryKeys.length === 0 &&
           columns.length > 0 && (
             <span
-              className="flex items-center gap-1 text-[11px] text-warning shrink-0"
+              className="flex items-center gap-1 text-xs text-warning shrink-0"
               title={t("query.noPrimaryKeyTooltip")}
             >
               <TriangleAlert className="h-3.5 w-3.5" />

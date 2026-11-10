@@ -109,7 +109,7 @@ export function OSSObjectGrid({
             <span className="w-full truncate text-xs" title={o.key}>
               {prefixLeafName(o.key)}
             </span>
-            <span className="text-[10px] text-muted-foreground">{formatBytes(o.size)}</span>
+            <span className="text-[11px] text-muted-foreground">{formatBytes(o.size)}</span>
           </button>
         ))}
       </div>

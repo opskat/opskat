@@ -78,11 +78,11 @@ export function CommandPolicyCard({
         <Shield className="h-4 w-4 text-muted-foreground" />
         <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>
         <div className="ml-auto flex items-center gap-2">
-          {saving && <span className="text-[10px] text-muted-foreground">{t("settings.saved")}...</span>}
+          {saving && <span className="text-xs text-muted-foreground">{t("settings.saved")}...</span>}
           <Button
             variant="ghost"
             size="sm"
-            className="h-6 px-2 text-[10px] gap-1 text-muted-foreground hover:text-foreground"
+            className="h-6 px-2 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
             onClick={() => setManagerOpen(true)}
           >
             <Settings2 className="h-3 w-3" />
@@ -93,7 +93,7 @@ export function CommandPolicyCard({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 px-2 text-[10px] gap-1 text-muted-foreground hover:text-foreground"
+                className="h-6 px-2 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
                 onClick={() => setConfirmOpen(true)}
               >
                 <RotateCcw className="h-3 w-3" />

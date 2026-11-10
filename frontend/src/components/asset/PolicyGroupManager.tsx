@@ -363,7 +363,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
           {/* Built-in groups */}
           {builtinGroups.length > 0 && (
             <div>
-              <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
+              <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
                 {t("asset.policyGroup.builtinSection")}
               </div>
               <div className="space-y-1">
@@ -384,13 +384,13 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
                     <div className="flex-1 min-w-0">
                       <div className="text-xs font-medium truncate">{displayName(g)}</div>
                       {displayDesc(g) && (
-                        <div className="text-[10px] text-muted-foreground truncate">{displayDesc(g)}</div>
+                        <div className="text-[11px] text-muted-foreground truncate">{displayDesc(g)}</div>
                       )}
                     </div>
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-6 px-2 text-[10px] gap-1"
+                      className="h-6 px-2 text-[11px] gap-1"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleCopy(g.id);
@@ -408,7 +408,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
           {/* Extension groups */}
           {extensionGroups.length > 0 && (
             <div>
-              <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
+              <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
                 {t("asset.policyGroup.extensionSection")}
               </div>
               <div className="space-y-1">
@@ -429,13 +429,13 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
                     <div className="flex-1 min-w-0">
                       <div className="text-xs font-medium truncate">{displayName(g)}</div>
                       {displayDesc(g) && (
-                        <div className="text-[10px] text-muted-foreground truncate">{displayDesc(g)}</div>
+                        <div className="text-[11px] text-muted-foreground truncate">{displayDesc(g)}</div>
                       )}
                     </div>
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-6 px-2 text-[10px] gap-1"
+                      className="h-6 px-2 text-[11px] gap-1"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleCopy(g.id);
@@ -453,10 +453,10 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
           {/* Custom groups */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+              <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
                 {t("asset.policyGroup.customSection")}
               </div>
-              <Button variant="outline" size="sm" className="h-6 px-2 text-[10px] gap-1" onClick={handleCreate}>
+              <Button variant="outline" size="sm" className="h-6 px-2 text-[11px] gap-1" onClick={handleCreate}>
                 <Plus className="h-3 w-3" />
                 {t("asset.policyGroup.create")}
               </Button>
@@ -475,7 +475,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
                 >
                   <div className="flex-1 min-w-0">
                     <div className="text-xs font-medium truncate">{g.name}</div>
-                    {g.description && <div className="text-[10px] text-muted-foreground truncate">{g.description}</div>}
+                    {g.description && <div className="text-[11px] text-muted-foreground truncate">{g.description}</div>}
                   </div>
                   <Button
                     variant="ghost"

@@ -25,7 +25,7 @@ export function Metric({ label, value }: { label: string; value: string | number
 export function StatusPill({ value }: { value?: string }) {
   if (!value) return <span className="text-muted-foreground">-</span>;
   return (
-    <span className="inline-flex rounded border bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+    <span className="inline-flex rounded border bg-muted px-1.5 py-0.5 text-[11px] font-medium uppercase text-muted-foreground">
       {value}
     </span>
   );

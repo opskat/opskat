@@ -153,7 +153,7 @@ export function ConnectionProgress({ connectionId, isTabActive, isPaneActive }: 
             return (
               <div key={step.key} className="flex-1 last:flex-none last:w-9 text-center">
                 <span
-                  className={`text-[11px] leading-tight ${
+                  className={`text-xs leading-tight ${
                     isCurrent || isDone ? "text-foreground" : "text-muted-foreground/50"
                   }`}
                 >

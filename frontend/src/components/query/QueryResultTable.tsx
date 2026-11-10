@@ -2814,7 +2814,7 @@ function ColumnValuePanel({ col, entries, selected, onChange }: ColumnValuePanel
           <span className="text-xs font-semibold truncate" title={col}>
             {col}
           </span>
-          <span className="text-[10px] text-muted-foreground shrink-0 tabular-nums">
+          <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums">
             {t("query.distinctValues", { count: entries.length })}
           </span>
         </div>
@@ -2864,7 +2864,7 @@ function ColumnValuePanel({ col, entries, selected, onChange }: ColumnValuePanel
                   onChange={() => toggleOne(entry.key)}
                 />
                 <span className="flex-1 min-w-0 truncate">{label}</span>
-                <span className="text-[10px] text-muted-foreground group-hover:text-accent-foreground/70 shrink-0 tabular-nums">
+                <span className="text-[11px] text-muted-foreground group-hover:text-accent-foreground/70 shrink-0 tabular-nums">
                   {entry.count}
                 </span>
               </label>
@@ -2874,7 +2874,7 @@ function ColumnValuePanel({ col, entries, selected, onChange }: ColumnValuePanel
       </div>
 
       {/* Footer: select all / clear + active count hint */}
-      <div className="px-3 py-1.5 border-t border-border text-[10px] shrink-0 flex items-center justify-between gap-2">
+      <div className="px-3 py-1.5 border-t border-border text-[11px] shrink-0 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <button
             type="button"

@@ -137,7 +137,7 @@ export function ExternalEditPendingDialog({
                             {fileName}
                           </span>
                           {autoSavePhases?.[session.documentKey] && (
-                            <span className="shrink-0 rounded bg-info/15 px-1.5 py-0.5 text-[10px] font-medium text-info">
+                            <span className="shrink-0 rounded bg-info/15 px-1.5 py-0.5 text-[11px] font-medium text-info">
                               {t("externalEdit.saving")}
                             </span>
                           )}

@@ -54,7 +54,7 @@ export function PathToolbar({
           <Button
             variant={followEnabled ? "secondary" : "ghost"}
             size="xs"
-            className="px-1.5 text-[10px] font-medium"
+            className="px-1.5 text-[11px] font-medium"
             title={t("sftp.sync.followToggle")}
             aria-label={t("sftp.sync.followShort")}
             disabled={!paneConnected}

@@ -423,7 +423,7 @@ export function TableDataStatusBar({
         ) : failed ? (
           <span className="text-xs text-destructive">{t("query.loadFailed")}</span>
         ) : sqlSummary ? (
-          <span className="block truncate font-mono text-[11px] text-foreground" title={sqlSummary}>
+          <span className="block truncate font-mono text-xs text-foreground" title={sqlSummary}>
             {sqlSummary}
           </span>
         ) : (

@@ -64,7 +64,7 @@ export function TypeInput({ value, onChange, descriptor, cellId, invalid }: Type
         >
           {groups.map((group) => (
             <div key={group.label} role="group" aria-label={declaredLabel(t, group.label)}>
-              <div className="px-3 pt-1.5 pb-0.5 text-[10px] text-muted-foreground">
+              <div className="px-3 pt-1.5 pb-0.5 text-[11px] text-muted-foreground">
                 {declaredLabel(t, group.label)}
               </div>
               {group.types.map((type) => (
@@ -88,7 +88,7 @@ export function TypeInput({ value, onChange, descriptor, cellId, invalid }: Type
             </div>
           ))}
         </div>
-        <div className="border-t border-border px-2 py-1 text-[10px] text-muted-foreground">
+        <div className="border-t border-border px-2 py-1 text-[11px] text-muted-foreground">
           {t("query.designer.typeSuggestionsHint", { driver: descriptor?.name })}
         </div>
       </PopoverContent>

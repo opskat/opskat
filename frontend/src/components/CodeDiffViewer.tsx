@@ -191,7 +191,7 @@ export function CodeDiffViewer({
         {originalTitle || ""}
       </div>
       {badge ? (
-        <div className="rounded-full border border-border bg-background px-2 py-1 text-[10px] font-medium text-muted-foreground">
+        <div className="rounded-full border border-border bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground">
           {badge}
         </div>
       ) : (
@@ -212,7 +212,7 @@ export function CodeDiffViewer({
         {header}
         <div className="relative flex h-full w-full flex-col items-center justify-center gap-2 p-4 text-xs text-muted-foreground">
           <div className="text-destructive">{t("externalEdit.compare.loadFailed")}</div>
-          <div className="font-mono text-[11px] opacity-70 max-w-full truncate">{message}</div>
+          <div className="font-mono text-xs opacity-70 max-w-full truncate">{message}</div>
           <button
             type="button"
             onClick={handleRetryLoad}

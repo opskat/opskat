@@ -13,7 +13,7 @@ export function RemoteStatusPill({ status, label, testid }: { status: RemoteStat
     <span
       data-testid={testid}
       className={cn(
-        "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-0.5 text-[11px] font-medium",
+        "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-0.5 text-xs font-medium",
         STATUS_PILL[status]
       )}
     >

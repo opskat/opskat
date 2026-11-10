@@ -242,7 +242,7 @@ export function SnippetsPage() {
                       />
                       <span
                         className={cn(
-                          "inline-block px-1.5 py-0.5 rounded text-[10px] font-mono",
+                          "inline-block px-1.5 py-0.5 rounded text-[11px] font-mono",
                           categoryBadgeClass(c.id, orderedCategoryIds)
                         )}
                       >
@@ -268,10 +268,10 @@ export function SnippetsPage() {
                             onChange={() => toggleCategoryFilter(id)}
                             className="h-3.5 w-3.5"
                           />
-                          <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted text-muted-foreground">
+                          <span className="inline-block px-1.5 py-0.5 rounded text-[11px] font-mono bg-muted text-muted-foreground">
                             {t("snippet.unknownCategory", { name: id })}
                           </span>
-                          <span className="text-[10px] text-muted-foreground">{t("snippet.orphanedSuffix")}</span>
+                          <span className="text-[11px] text-muted-foreground">{t("snippet.orphanedSuffix")}</span>
                         </label>
                       );
                     })}
@@ -324,7 +324,7 @@ export function SnippetsPage() {
                   <td className="px-4 py-2">
                     {isOrphanCategory(s.Category) ? (
                       <span
-                        className="inline-block px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted text-muted-foreground"
+                        className="inline-block px-1.5 py-0.5 rounded text-[11px] font-mono bg-muted text-muted-foreground"
                         title={t("snippet.unknownCategoryTooltip")}
                       >
                         {t("snippet.unknownCategory", { name: s.Category })}
@@ -332,7 +332,7 @@ export function SnippetsPage() {
                     ) : (
                       <span
                         className={cn(
-                          "inline-block px-1.5 py-0.5 rounded text-[10px] font-mono",
+                          "inline-block px-1.5 py-0.5 rounded text-[11px] font-mono",
                           categoryBadgeClass(s.Category, orderedCategoryIds)
                         )}
                       >

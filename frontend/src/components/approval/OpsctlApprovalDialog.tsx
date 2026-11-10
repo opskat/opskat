@@ -128,7 +128,7 @@ function TypeBadge({ type, command }: { type: string; command: string }) {
   return (
     <span
       data-testid="approval-type-badge"
-      className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground bg-muted"
+      className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground bg-muted"
     >
       <Icon className="h-3 w-3" />
       {op ? t(op.labelKey) : type.toUpperCase()}
@@ -139,7 +139,7 @@ function TypeBadge({ type, command }: { type: string; command: string }) {
 function ScopeBadge({ item }: { item: ApprovalItemData }) {
   const { t } = useTranslation();
   const cls =
-    "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground bg-muted";
+    "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground bg-muted";
   if (item.asset_id > 0) {
     return (
       <span className={cls}>

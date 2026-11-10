@@ -224,7 +224,7 @@ export function SideAssistantTabBar({
                       {titleText}
                     </span>
                     {(status || isBlank) && (
-                      <span className="block truncate text-[10px] leading-4 text-muted-foreground/80">
+                      <span className="block truncate text-[11px] leading-4 text-muted-foreground/80">
                         {isBlank ? t("ai.sidebar.newChat") : t(`ai.sidebar.status.${status}`)}
                       </span>
                     )}

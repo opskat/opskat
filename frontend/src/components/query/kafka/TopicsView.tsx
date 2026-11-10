@@ -663,7 +663,7 @@ function MessageTable({ records }: { records: KafkaRecord[] }) {
             <td className="px-3 py-2 text-right font-mono">{record.partition}</td>
             <td className="px-3 py-2 text-right font-mono">
               <div>{record.offset}</div>
-              <div className="mt-1 text-[10px] text-muted-foreground">{record.timestamp}</div>
+              <div className="mt-1 text-[11px] text-muted-foreground">{record.timestamp}</div>
             </td>
             <td className="max-w-[180px] px-3 py-2">
               <PayloadPreview
@@ -721,10 +721,10 @@ function PayloadPreview({
   const { t } = useTranslation();
   return (
     <div className="min-w-0">
-      <div className="mb-1 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
+      <div className="mb-1 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
         <span>{encoding}</span>
         <span>{bytes}B</span>
-        {truncated && <span className="rounded border px-1 text-[9px]">{t("query.kafkaTruncated")}</span>}
+        {truncated && <span className="rounded border px-1 text-[11px]">{t("query.kafkaTruncated")}</span>}
       </div>
       <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-[11px] leading-relaxed">
         {value || "-"}

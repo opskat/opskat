@@ -117,7 +117,7 @@ export function ExternalEditIdeaEditorPane({ actions, badge, children, tone, tit
           {actions}
           <span
             className={cn(
-              "rounded px-2 py-0.5 text-[10px] uppercase tracking-wide",
+              "rounded px-2 py-0.5 text-[11px] uppercase tracking-wide",
               tone === "final" ? "bg-warning/20 text-warning" : "bg-muted text-muted-foreground"
             )}
           >

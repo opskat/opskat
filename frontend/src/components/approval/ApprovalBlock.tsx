@@ -94,7 +94,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
       </div>
       {hasPinnedDetail(item) && (
         // 这一条自己的说明（通用资产的目标地址 / 程序名）批准时必须看到，与单条审批一样常驻。
-        <div className="text-[11px] text-muted-foreground/80">
+        <div className="text-xs text-muted-foreground/80">
           <div className="select-none">{t(detailSummaryKey(item))}</div>
           <DetailPre text={item.detail} structured={!!item.action} />
         </div>
@@ -154,7 +154,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
             <span className="text-[11px] text-muted-foreground bg-muted rounded px-1 py-0.5">{block.agentRole}</span>
           )}
         </div>
-        <span className="inline-flex items-center rounded-full bg-warning/15 h-5 px-2 text-[11px] font-semibold text-warning">
+        <span className="inline-flex items-center rounded-full bg-warning/15 h-5 px-2 text-xs font-semibold text-warning">
           {t("ai.approvalPending")}
         </span>
       </div>
@@ -195,7 +195,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   action={item.action}
                   resource={item.resource}
                   resources={item.resources}
-                  className="text-[11px]"
+                  className="text-xs"
                   labelClassName="text-warning"
                 />
                 {item.review && <ReviewNotice review={item.review} className="text-xs" />}
@@ -203,7 +203,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   <Textarea
                     value={editedCommands[i] || ""}
                     onChange={(e) => setEditedCommands((prev) => ({ ...prev, [i]: e.target.value }))}
-                    className="font-mono text-[11px] min-h-[32px] resize-y bg-background border-border"
+                    className="font-mono text-xs min-h-[32px] resize-y bg-background border-border"
                     rows={Math.max(1, (editedCommands[i] || "").split("\n").length)}
                   />
                 ) : (
@@ -220,12 +220,12 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   (kind === "delete" || hasPinnedDetail(item) ? (
                     // 删除不可逆：警告不能藏在一次点击之后，常驻展示而不是 <details> 折叠。
                     // 这一条自己的说明（通用资产的目标地址 / 程序名）批准时必须看到，同样常驻。
-                    <div className="text-[11px] text-muted-foreground/80">
+                    <div className="text-xs text-muted-foreground/80">
                       <div className="select-none">{t(detailSummaryKey(item))}</div>
                       <DetailPre text={item.detail} structured={!!item.action} />
                     </div>
                   ) : (
-                    <details className="text-[11px] text-muted-foreground/80">
+                    <details className="text-xs text-muted-foreground/80">
                       <summary className="cursor-pointer select-none">{t(detailSummaryKey(item))}</summary>
                       <DetailPre text={item.detail} structured={!!item.action} />
                     </details>
@@ -239,8 +239,8 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
       {/* Reason (grant only, before buttons) */}
       {kind === "grant" && block.approvalDescription && (
         <div className="flex gap-1.5">
-          <span className="text-[11px] font-medium text-warning shrink-0">{t("ai.approvalReasonLabel")}</span>
-          <span className="select-text text-[11px] text-muted-foreground">{block.approvalDescription}</span>
+          <span className="text-xs font-medium text-warning shrink-0">{t("ai.approvalReasonLabel")}</span>
+          <span className="select-text text-xs text-muted-foreground">{block.approvalDescription}</span>
         </div>
       )}
 
@@ -250,8 +250,8 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
           items={items}
           values={rememberValues}
           onChange={(i, value) => setEditedCommands((prev) => ({ ...prev, [i]: value }))}
-          textClassName="text-[11px]"
-          inputClassName="text-[11px] h-8 bg-background border-border"
+          textClassName="text-xs"
+          inputClassName="text-xs h-8 bg-background border-border"
         />
       )}
       {kind === "local_tool" && rememberMode && (
@@ -260,7 +260,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
           <Textarea
             value={editedCommands[0] || ""}
             onChange={(e) => setEditedCommands((prev) => ({ ...prev, 0: e.target.value }))}
-            className="font-mono text-[11px] min-h-[60px] resize-y bg-background border-border"
+            className="font-mono text-xs min-h-[60px] resize-y bg-background border-border"
             rows={Math.max(2, (editedCommands[0] || "").split("\n").length)}
             placeholder={t("opsctlApproval.patternPlaceholder")}
           />

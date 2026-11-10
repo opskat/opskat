@@ -72,13 +72,13 @@ export function ColumnProperties({ column, descriptor, onChange, onRevert, creat
                 {t("query.designer.autoIncrement")}
               </label>
               {column.original ? (
-                <p className="text-[10px] leading-4 text-muted-foreground">
+                <p className="text-[11px] leading-4 text-muted-foreground">
                   {t("query.designer.autoIncrementExisting")}
                 </p>
               ) : (
                 descriptor.autoIncrementNewTablesOnly &&
                 !creating && (
-                  <p className="text-[10px] leading-4 text-muted-foreground">
+                  <p className="text-[11px] leading-4 text-muted-foreground">
                     {t("query.designer.autoIncrementNewTablesOnly")}
                   </p>
                 )
@@ -154,7 +154,7 @@ function ExplicitDefaultEditor({
         disabled={kind === "none" || kind === "null"}
         onChange={(e) => onChange({ kind: kind === "expression" ? "expression" : "value", text: e.target.value })}
       />
-      <p className="text-[10px] leading-4 text-muted-foreground">{t("query.designer.defaultHint.explicit")}</p>
+      <p className="text-[11px] leading-4 text-muted-foreground">{t("query.designer.defaultHint.explicit")}</p>
     </>
   );
 }
@@ -178,7 +178,7 @@ function LegacyDefaultEditor({
         placeholder={t("query.designer.defaultKind.none")}
         onChange={(e) => onChange(e.target.value === "" ? { kind: "none" } : { kind: "text", text: e.target.value })}
       />
-      <p className="text-[10px] leading-4 text-muted-foreground">{t("query.designer.defaultHint.legacy")}</p>
+      <p className="text-[11px] leading-4 text-muted-foreground">{t("query.designer.defaultHint.legacy")}</p>
     </>
   );
 }

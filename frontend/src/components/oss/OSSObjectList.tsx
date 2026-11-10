@@ -169,7 +169,7 @@ export function OSSObjectList({
               <td className="px-2 py-1 text-muted-foreground">{formatBytes(o.size)}</td>
               <td className="px-2 py-1">
                 {o.storageClass ? (
-                  <span className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  <span className="inline-flex items-center rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
                     {o.storageClass}
                   </span>
                 ) : (

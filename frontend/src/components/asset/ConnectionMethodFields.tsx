@@ -481,7 +481,7 @@ function ProxyChainLayerFields({
   const invalid = "border-destructive focus-visible:ring-destructive/40";
   const errText = (msg: string) =>
     msg ? (
-      <span className="mt-1 flex items-center gap-1 text-[11px] text-destructive">
+      <span className="mt-1 flex items-center gap-1 text-xs text-destructive">
         <CircleAlert className="h-3 w-3" />
         {msg}
       </span>

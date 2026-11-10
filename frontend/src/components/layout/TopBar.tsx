@@ -76,7 +76,7 @@ export function TopBar({
             >
               <Search className="h-4 w-4 shrink-0" />
               <span className="flex-1 truncate text-left">{t("topBar.searchPlaceholder")}</span>
-              <kbd className="hidden shrink-0 rounded bg-muted px-1 py-0.5 font-mono text-[10px] sm:inline-block">
+              <kbd className="hidden shrink-0 rounded bg-muted px-1 py-0.5 font-mono text-[11px] sm:inline-block">
                 {platform === "darwin" ? "⌘P" : "Ctrl+P"}
               </kbd>
             </button>
@@ -151,7 +151,7 @@ export function TopBar({
                     data-testid="ai-panel-approval-badge"
                     role="status"
                     aria-label={t("topBar.pendingApprovals", { count: approvalCount })}
-                    className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-warning px-1 text-[10px] font-medium leading-none text-warning-foreground"
+                    className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-warning px-1 text-[11px] font-medium leading-none text-warning-foreground"
                   >
                     {approvalCount}
                   </span>

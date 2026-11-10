@@ -329,7 +329,7 @@ export function ExternalEditSection() {
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="truncate font-medium">{editor.name || editor.id}</div>
                         {defaultEditorId === editor.id && (
-                          <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                          <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                             {t("externalEdit.settings.defaultBadge")}
                           </span>
                         )}

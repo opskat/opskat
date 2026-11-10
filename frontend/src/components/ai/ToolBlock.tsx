@@ -87,7 +87,7 @@ export const ToolBlock = memo(function ToolBlock({ block }: ToolBlockProps) {
         )}
         <span className="font-medium text-foreground/80">{block.toolName}</span>
         {block.toolInput && (
-          <code className="min-w-0 truncate text-muted-foreground font-mono text-[10px] ml-0.5">{block.toolInput}</code>
+          <code className="min-w-0 truncate text-muted-foreground font-mono text-xs ml-0.5">{block.toolInput}</code>
         )}
         <span className="ml-auto shrink-0">
           {isError && <XCircle aria-label={t("toolBlock.failed")} className="h-3.5 w-3.5 text-destructive/70" />}
@@ -104,10 +104,10 @@ export const ToolBlock = memo(function ToolBlock({ block }: ToolBlockProps) {
         <div className="border-t border-border/40 max-h-96 overflow-auto">
           {hasInput && (
             <div className="px-3 py-2">
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground/60 mb-1">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground/60 mb-1">
                 {t("toolBlock.arguments")}
               </div>
-              <pre className="select-text whitespace-pre-wrap break-all font-mono text-[11px] text-foreground/70 leading-relaxed">
+              <pre className="select-text whitespace-pre-wrap break-all font-mono text-xs text-foreground/70 leading-relaxed">
                 {formatToolInput(block.toolInput)}
               </pre>
             </div>
@@ -115,13 +115,13 @@ export const ToolBlock = memo(function ToolBlock({ block }: ToolBlockProps) {
           {hasOutput && (
             <div className={`px-3 py-2 ${hasInput ? "border-t border-border/40" : ""}`}>
               {hasInput && (
-                <div className="text-[10px] uppercase tracking-wide text-muted-foreground/60 mb-1">
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground/60 mb-1">
                   {t("toolBlock.output")}
                 </div>
               )}
               <pre
                 data-testid="ai-tool-output"
-                className="select-text whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground leading-relaxed"
+                className="select-text whitespace-pre-wrap break-all font-mono text-xs text-muted-foreground leading-relaxed"
               >
                 {block.content}
               </pre>

@@ -23,7 +23,7 @@ export function ServerStatusGPUSection({ gpus, driverVersion, cudaVersion }: Ser
         <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
           <CircuitBoard className="size-3.5" aria-hidden />
           {t("terminal.serverStatus.gpuAccelerators")}
-          <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary">
+          <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">
             {t(gpus.length === 1 ? "terminal.serverStatus.gpuCountOne" : "terminal.serverStatus.gpuCountMany", {
               count: gpus.length,
             })}
@@ -89,7 +89,7 @@ function GPUCard({ gpu, gpuKey }: { gpu: ServerStatusGPU; gpuKey: string }) {
             {gpu.pciBusId && <span>PCI {gpu.pciBusId}</span>}
           </div>
           {(gpu.driver || gpu.driverVersion || runtime) && (
-            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
               {gpu.driver && (
                 <span className="inline-flex items-center gap-1">
                   {t("terminal.serverStatus.driver")}
@@ -114,7 +114,7 @@ function GPUCard({ gpu, gpuKey }: { gpu: ServerStatusGPU; gpuKey: string }) {
       </div>
 
       {!hasTelemetry && (
-        <div className="mt-3 flex items-start gap-2 rounded-lg bg-warning/15 px-3 py-2 text-[11px] text-warning">
+        <div className="mt-3 flex items-start gap-2 rounded-lg bg-warning/15 px-3 py-2 text-xs text-warning">
           <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden />
           <span>{t("terminal.serverStatus.telemetryUnavailable")}</span>
         </div>
@@ -207,7 +207,7 @@ function TemperatureMetric({ value }: { value?: number }) {
 
   return (
     <div className="min-w-0">
-      <dt className="flex items-center gap-1 text-[10px] text-muted-foreground">
+      <dt className="flex items-center gap-1 text-[11px] text-muted-foreground">
         <Thermometer className="size-3" aria-hidden />
         {t("terminal.serverStatus.temperature")}
       </dt>
@@ -221,7 +221,7 @@ function TemperatureMetric({ value }: { value?: number }) {
       >
         {formatTemperature(temperature)}
         {level && (
-          <span className="inline-flex items-center gap-0.5 text-[10px] font-medium">
+          <span className="inline-flex items-center gap-0.5 text-[11px] font-medium">
             <TriangleAlert className="size-3" aria-hidden />
             {t(`terminal.serverStatus.${level}`)}
           </span>
@@ -234,7 +234,7 @@ function TemperatureMetric({ value }: { value?: number }) {
 function SecondaryMetric({ icon: Icon, label, value }: { icon: typeof Zap; label: string; value: string }) {
   return (
     <div className="min-w-0">
-      <dt className="flex items-center gap-1 text-[10px] text-muted-foreground">
+      <dt className="flex items-center gap-1 text-[11px] text-muted-foreground">
         <Icon className="size-3" aria-hidden />
         <span className="truncate" title={label}>
           {label}

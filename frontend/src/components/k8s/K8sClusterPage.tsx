@@ -1276,10 +1276,10 @@ export function K8sClusterPage({ asset }: Props) {
             className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs cursor-pointer hover:bg-muted/50"
             onClick={() => setExpandedNodes(!expandedNodes)}
           >
-            <span className="text-[10px] w-3">{expandedNodes ? "\u25BC" : "\u25B6"}</span>
+            <span className="text-[11px] w-3">{expandedNodes ? "\u25BC" : "\u25B6"}</span>
             <Box className="h-3.5 w-3.5" />
             {t("asset.k8sNodes")}
-            <span className="ml-auto text-[10px] text-muted-foreground">{info.nodes.length}</span>
+            <span className="ml-auto text-[11px] text-muted-foreground">{info.nodes.length}</span>
           </div>
           {expandedNodes &&
             info.nodes.map((node) => (
@@ -1302,7 +1302,7 @@ export function K8sClusterPage({ asset }: Props) {
           <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs text-muted-foreground/70 mt-1">
             <Layers className="h-3.5 w-3.5" />
             {t("asset.k8sNamespaces")}
-            <span className="ml-auto text-[10px]">{info.namespaces.length}</span>
+            <span className="ml-auto text-[11px]">{info.namespaces.length}</span>
           </div>
           {info.namespaces.map((ns) => (
             <div key={ns.name}>
@@ -1310,7 +1310,7 @@ export function K8sClusterPage({ asset }: Props) {
                 className="flex items-center gap-1.5 pl-6 pr-2 py-1.5 rounded-md text-xs cursor-pointer hover:bg-muted/50"
                 onClick={() => toggleNamespace(ns.name)}
               >
-                <span className="text-[10px] w-3 translate-x-[-2px]">
+                <span className="text-[11px] w-3 translate-x-[-2px]">
                   {expandedNamespaces.has(ns.name) ? "\u25BC" : "\u25B6"}
                 </span>
                 <span className="truncate">{ns.name}</span>
@@ -1380,7 +1380,7 @@ export function K8sClusterPage({ asset }: Props) {
                                       )}
                                       <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
                                       <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                      <span className="ml-auto text-[11px] text-muted-foreground">{displayCount}</span>
                                     </div>
                                     {deploymentsExpanded && (
                                       <div className="ml-3">
@@ -1439,7 +1439,7 @@ export function K8sClusterPage({ asset }: Props) {
                                                 )}
                                                 <span className="w-1.5 h-1.5 rounded-full bg-info shrink-0" />
                                                 <span className="truncate">{deployment.name}</span>
-                                                <span className="ml-auto text-[10px] text-muted-foreground">
+                                                <span className="ml-auto text-[11px] text-muted-foreground">
                                                   {deployment.ready}
                                                 </span>
                                                 <button
@@ -1564,7 +1564,7 @@ export function K8sClusterPage({ asset }: Props) {
                                       )}
                                       <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
                                       <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                      <span className="ml-auto text-[11px] text-muted-foreground">{displayCount}</span>
                                     </div>
                                     {podsExpanded && (
                                       <div className="ml-3">
@@ -1663,7 +1663,7 @@ export function K8sClusterPage({ asset }: Props) {
                                       )}
                                       <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
                                       <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                      <span className="ml-auto text-[11px] text-muted-foreground">{displayCount}</span>
                                     </div>
                                     {servicesExpanded && (
                                       <div className="ml-3">
@@ -1715,7 +1715,7 @@ export function K8sClusterPage({ asset }: Props) {
                                           >
                                             <Container className="h-3 w-3 shrink-0 text-muted-foreground" />
                                             <span className="truncate">{svc.name}</span>
-                                            <span className="ml-auto text-[10px] text-muted-foreground">
+                                            <span className="ml-auto text-[11px] text-muted-foreground">
                                               {svc.type}
                                             </span>
                                             <button
@@ -1757,7 +1757,7 @@ export function K8sClusterPage({ asset }: Props) {
                                       )}
                                       <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
                                       <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                      <span className="ml-auto text-[11px] text-muted-foreground">{displayCount}</span>
                                     </div>
                                     {configMapsExpanded && (
                                       <div className="ml-3">
@@ -1848,7 +1848,7 @@ export function K8sClusterPage({ asset }: Props) {
                                       )}
                                       <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
                                       <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                      <span className="ml-auto text-[11px] text-muted-foreground">{displayCount}</span>
                                     </div>
                                     {secretsExpanded && (
                                       <div className="ml-3">
@@ -1900,7 +1900,7 @@ export function K8sClusterPage({ asset }: Props) {
                                           >
                                             <Key className="h-3 w-3 shrink-0 text-muted-foreground" />
                                             <span className="truncate">{s.name}</span>
-                                            <span className="ml-auto text-[10px] text-muted-foreground">{s.type}</span>
+                                            <span className="ml-auto text-[11px] text-muted-foreground">{s.type}</span>
                                             <button
                                               className="ml-0.5 inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
                                               onClick={(e) => {
@@ -1928,7 +1928,7 @@ export function K8sClusterPage({ asset }: Props) {
                                 >
                                   <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
                                   <span className="truncate">{t(rt.labelKey)}</span>
-                                  <span className="ml-auto text-[10px] text-muted-foreground">{count}</span>
+                                  <span className="ml-auto text-[11px] text-muted-foreground">{count}</span>
                                 </div>
                               );
                             }

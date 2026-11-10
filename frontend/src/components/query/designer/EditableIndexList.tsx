@@ -181,19 +181,19 @@ function EditableIndexRow({
         <>
           <IndexColumnChips index={definition} struck={deleted} />
           {original?.readOnlyReason && !deleted && (
-            <span className="ml-1 truncate text-[10px] text-muted-foreground" title={original.readOnlyReason}>
+            <span className="ml-1 truncate text-xs text-muted-foreground" title={original.readOnlyReason}>
               {original.readOnlyReason}
             </span>
           )}
           {droppedWith.length > 0 && (
-            <span className="ml-1 truncate text-[10px] text-destructive">
+            <span className="ml-1 truncate text-xs text-destructive">
               {t("query.designer.indexDroppedWith", {
                 columns: droppedWith.join(t("query.designer.listSeparator")),
               })}
             </span>
           )}
           {status === "modified" && original && (
-            <span className="ml-1 truncate text-[10px] text-warning">
+            <span className="ml-1 truncate text-xs text-warning">
               {t("query.designer.indexWas", { name: original.name, columns: originalColumns })}
             </span>
           )}

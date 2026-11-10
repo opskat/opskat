@@ -26,7 +26,7 @@ export function CapabilityBar({ descriptor }: { descriptor: DriverDescriptor | u
   return (
     <div
       data-testid="designer-capability"
-      className="flex shrink-0 items-start gap-2 border-b border-border bg-info/10 px-3 py-1.5 text-[11px] text-info"
+      className="flex shrink-0 items-start gap-2 border-b border-border bg-info/10 px-3 py-1.5 text-xs text-info"
     >
       <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
       <span>{text}</span>
@@ -68,7 +68,7 @@ export function IssueList({ issues, onSelect }: IssueListProps) {
     <div
       data-testid="designer-issues"
       className={cn(
-        "max-h-32 shrink-0 overflow-y-auto border-t px-3 py-1.5 text-[11px]",
+        "max-h-32 shrink-0 overflow-y-auto border-t px-3 py-1.5 text-xs",
         errors.length > 0 ? "border-destructive/30 bg-destructive/5" : "border-warning/30 bg-warning/5"
       )}
     >

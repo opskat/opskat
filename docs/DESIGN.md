@@ -135,6 +135,17 @@ OpsKat ships **no webfonts** — the type system is the platform's own fonts, de
 
 > **No `@font-face`, no bundled webfont.** The mono families are **family *references*** — if `JetBrains Mono` / `Fira Code` aren't installed on the OS, the stack falls back to `Menlo` / `monospace`. (An unused `nunito-*.woff2` sits in [`assets/fonts/`](../frontend/src/assets/fonts/) but is not referenced — don't treat it as wired-up.) The in-pane code editor and terminal are Monaco / xterm, which carry their own font config. If a brand font ever becomes a real requirement, self-host it (woff2, local `@font-face`, never a CDN) and update this table. The `@tailwindcss/typography` plugin is loaded for prose blocks (e.g. AI markdown).
 
+### Type size floor
+
+Text is never smaller than **11px**. `no-restricted-syntax` in `frontend/eslint.config.js` rejects any arbitrary size below it (`text-[8px]`, `text-[9px]`, `text-[10px]`, `text-[10.5px]` …) in `src/` and `packages/ui/src`, with no exemption list (guard test: `frontend/src/__tests__/eslint-harness.test.ts`). Pick by what the text says, not by what fits:
+
+| Size | Use |
+| --- | --- |
+| `text-xs` (12px) | Anything the user must read to decide or recover: error / failure reasons, commands and SQL, target asset names / hosts / paths, status words |
+| `text-[11px]` | Auxiliary information only: timestamps, counts, shortcut hints, secondary metadata, field hints |
+
+Raising a size inside a fixed-height container (toolbar `h-6` / `h-7`, table row, badge, narrow column) means checking it still fits — adjust padding / line-height minimally, or keep `11px` when the text is genuinely auxiliary. A raw pixel size is only acceptable where a canvas / Monaco / xterm API takes a number (the same places §3.1 allows raw colors); Tailwind classes are never exempt.
+
 ### Radius
 
 `--radius: 0.5rem` (8px) is the base; five steps are derived via `calc` in `@theme inline`:
@@ -431,6 +442,7 @@ When building a new tab, pane, or dialog, run this checklist to stay consistent:
 - [ ] **Surface type:** is it a tab (`terminal` / `query` / `ai` / `page` / `info`)? Open it via `tabStore.openTab(...)`, not by mounting it directly (§7).
 - [ ] **Shell:** live inside the existing frame (Sidebar rail → tab area → MainPanel); don't add new window chrome. Resizable regions reuse the `SplitPane` drag pattern + `border-panel-divider`/`bg-border` divider (§7).
 - [ ] **Color** entirely from tokens (`bg-card` / `text-foreground` / `border-border` / `text-primary` / `bg-primary` …), no literals, verified on both themes (Constraints 1–2, §3–4).
+- [ ] **Type size** at least `11px`; error reasons, commands, target names and status words `text-xs` (§5).
 - [ ] **Components** reuse first — `@opskat/ui` primitives + the shared composites (`AssetSelect` / `GroupSelect` / `ConfirmDialog` / `PasswordSourceField` / `IconPicker` …); variants via CVA, classes via `cn()`, icons via `lucide-react` + `brand-icons` (Constraint 6, §6, §8).
 - [ ] **Asset-type logic** goes through the `assetTypes` registry (`getAssetType` / `getIconComponent`), never a `switch` on a type string (§8).
 - [ ] **State:** loading / empty / error / success / in-progress all covered, never silent; spinners are `Loader2 + animate-spin`; success via `notify`, errors via `toast.error` (§6.4, §10).

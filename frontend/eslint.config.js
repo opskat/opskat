@@ -28,6 +28,15 @@ const paletteRestrictions = [
   { selector: `TemplateElement[value.raw=/${paletteClassPattern}/]`, message: paletteMessage },
 ];
 
+// DESIGN.md §5：任意字号不得小于 11px（text-[8px]/[9px]/[10px]/[10.5px]…）；用 text-xs（12px）或 text-[11px]。
+const smallTextPattern = "(^|[^-\\w])text-\\[([0-9]|10)(\\.[0-9]+)?px\\]([^-\\w]|$)";
+const smallTextMessage =
+  "字号不得小于 11px：正文/错误原因/命令/资产名用 text-xs（12px），时间戳、计数等辅助信息最小 text-[11px]（docs/DESIGN.md §5）。";
+const smallTextRestrictions = [
+  { selector: `Literal[value=/${smallTextPattern}/]`, message: smallTextMessage },
+  { selector: `TemplateElement[value.raw=/${smallTextPattern}/]`, message: smallTextMessage },
+];
+
 // 数据库驱动差异在后端驱动注册表里，前端从驱动描述读取（src/lib/dbDrivers/，docs/references/adding-a-database-driver.md）：
 // 共享代码不得拿驱动名做比较。驱动名取自内置驱动的 id 与别名。
 const driverNames = "mysql|postgresql|postgres|mssql|sqlserver|sqlite|sqlite3";
@@ -95,6 +104,7 @@ export default tseslint.config(
         "error",
         ...react19Restrictions,
         ...paletteRestrictions,
+        ...smallTextRestrictions,
         ...driverRestrictions,
         ...caughtErrorRestrictions,
       ],
@@ -104,11 +114,11 @@ export default tseslint.config(
     // 驱动描述的实现处与测试夹具：可以按驱动名比较（其余禁令保留）。
     files: ["src/lib/dbDrivers/**/*.{ts,tsx}", "src/**/__tests__/**/*.{ts,tsx}", "src/**/*.test.{ts,tsx}"],
     rules: {
-      "no-restricted-syntax": ["error", ...react19Restrictions, ...paletteRestrictions],
+      "no-restricted-syntax": ["error", ...react19Restrictions, ...paletteRestrictions, ...smallTextRestrictions],
     },
   },
   {
-    // 守护测试自身必须包含违规 fixture 字符串，palette 禁令对它豁免（React 19 禁令保留）。
+    // 守护测试自身必须包含违规 fixture 字符串，palette / 小字号禁令对它豁免（React 19 禁令保留）。
     files: ["src/__tests__/eslint-harness.test.ts"],
     rules: {
       "no-restricted-syntax": ["error", ...react19Restrictions],

@@ -231,7 +231,7 @@ function RedisFooterSelector({ value, options, disabled, onChange, menuTestId, f
               );
             })}
             {footnote ? (
-              <div className="border-t px-2 pb-1 pt-1.5 text-[10px] leading-4 text-muted-foreground">{footnote}</div>
+              <div className="border-t px-2 pb-1 pt-1.5 text-[11px] leading-4 text-muted-foreground">{footnote}</div>
             ) : null}
           </div>,
           document.body
@@ -614,7 +614,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
             data-scanned={state.scannedMasters ?? 0}
             data-total={state.totalMasters}
             data-partial={scanCoveragePartial ? "true" : "false"}
-            className={cn("shrink-0 font-mono text-[10px]", scanCoveragePartial && "text-warning")}
+            className={cn("shrink-0 font-mono text-[11px]", scanCoveragePartial && "text-warning")}
           >
             {t("query.redisScannedMasters", { scanned: state.scannedMasters ?? 0, total: state.totalMasters })}
           </span>
@@ -739,7 +739,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
                     <span className="truncate font-mono">{row.name}</span>
                   </button>
                   {isFolder && (
-                    <span className="ml-auto shrink-0 text-muted-foreground text-[10px]">
+                    <span className="ml-auto shrink-0 text-muted-foreground text-[11px]">
                       {row.keyCount}
                       {treeCountsIncomplete ? "+" : ""}
                     </span>

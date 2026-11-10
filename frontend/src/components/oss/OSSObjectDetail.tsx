@@ -99,7 +99,7 @@ export function OSSObjectDetail({
         </div>
 
         <div className="mb-2 mt-3 flex items-center gap-2">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             {t("oss.detail.metadataSection")}
           </span>
           <div className="h-px flex-1 bg-border" />

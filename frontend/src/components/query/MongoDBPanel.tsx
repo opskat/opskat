@@ -594,7 +594,7 @@ function MongoQueryContent({ tabId, assetId, innerTab }: MongoQueryContentProps)
           </Select>
 
           {/* Parsed preview */}
-          <div className="flex-1 min-w-0 text-[11px] text-muted-foreground font-mono truncate">
+          <div className="flex-1 min-w-0 text-xs text-muted-foreground font-mono truncate">
             {parsePreview
               ? t("query.mongoshParsedAs", {
                   op: parsePreview.operation,

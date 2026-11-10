@@ -89,7 +89,7 @@ export function ProxyChainDetailSection({
         <span className="flex items-center gap-2">
           <Route className="h-3.5 w-3.5" />
           {t("asset.proxyChainTitle")}
-          <span className="rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-medium normal-case tracking-normal text-muted-foreground">
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium normal-case tracking-normal text-muted-foreground">
             {t("asset.proxyChainHops", { count: layers.length })}
           </span>
         </span>
@@ -109,7 +109,7 @@ export function ProxyChainDetailSection({
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className={cn("rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold", meta.text)}>
+                  <span className={cn("rounded bg-muted px-1.5 py-0.5 text-[11px] font-semibold", meta.text)}>
                     {layerTypeShortLabel(layer.type)}
                   </span>
                   <span className="truncate text-[12.5px] font-medium">{line.name}</span>

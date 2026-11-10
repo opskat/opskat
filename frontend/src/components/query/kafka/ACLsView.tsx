@@ -157,7 +157,7 @@ function ACLTable({ acls, onDelete }: { acls: KafkaACL[]; onDelete: (acl: KafkaA
           <tr key={aclKey(acl)} className="border-t">
             <td className="max-w-[360px] px-3 py-2">
               <div className="truncate font-mono text-xs">{acl.resourceName || "-"}</div>
-              <div className="mt-0.5 flex flex-wrap gap-1 text-[10px] uppercase text-muted-foreground">
+              <div className="mt-0.5 flex flex-wrap gap-1 text-[11px] uppercase text-muted-foreground">
                 <span>{acl.resourceType}</span>
                 <span>{acl.patternType}</span>
               </div>

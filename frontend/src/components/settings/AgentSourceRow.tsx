@@ -166,7 +166,7 @@ function AgentIdentityRow({
             <span className="shrink-0 text-primary">{t("agentSource.usage", { count: identity.usages })}</span>
           )}
         </div>
-        <div className="truncate font-mono text-[10px] text-muted-foreground select-text" title={identity.fingerprint}>
+        <div className="truncate font-mono text-[11px] text-muted-foreground select-text" title={identity.fingerprint}>
           {identity.fingerprint}
         </div>
       </div>

@@ -129,7 +129,7 @@ export function AssetTypePicker({ value, variant, onChange, onLeave, disabled }:
               {SelectedIcon && <SelectedIcon className="h-4 w-4 shrink-0" />}
               <span className="truncate">{selected ? resolveLabel(selected) : value}</span>
               {selected?.group === "custom" && (
-                <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
                   {t("assetType.customBadge")}
                 </span>
               )}

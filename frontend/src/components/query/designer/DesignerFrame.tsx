@@ -76,7 +76,7 @@ export function DesignerFrame({
                   <Icon className="h-3.5 w-3.5" aria-hidden />
                   {label}
                   {count !== undefined && (
-                    <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground tabular-nums">
+                    <span className="rounded bg-muted px-1 text-[11px] text-muted-foreground tabular-nums">
                       {count}
                     </span>
                   )}

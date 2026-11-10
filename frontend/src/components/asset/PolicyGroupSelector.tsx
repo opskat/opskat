@@ -144,7 +144,7 @@ export function PolicyGroupSelector({ policyType, selectedIds, onChange, refresh
                     )}
                     <div className="flex-1 text-left">
                       <div className="font-medium">{displayName(g)}</div>
-                      {displayDesc(g) && <div className="text-[10px] text-muted-foreground">{displayDesc(g)}</div>}
+                      {displayDesc(g) && <div className="text-[11px] text-muted-foreground">{displayDesc(g)}</div>}
                     </div>
                   </button>
                 ))}
