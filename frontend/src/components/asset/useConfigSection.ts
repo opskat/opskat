@@ -1,4 +1,14 @@
-import { useEffect, useImperativeHandle, useRef, useState, type Dispatch, type Ref, type SetStateAction } from "react";
+import {
+  createContext,
+  use,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type Dispatch,
+  type Ref,
+  type SetStateAction,
+} from "react";
 import type { asset_entity } from "../../../wailsjs/go/models";
 import type {
   AssetConfigBuildResult,
@@ -7,6 +17,35 @@ import type {
   AssetTestConfig,
   SectionValidity,
 } from "@/lib/assetTypes/formContract";
+
+/**
+ * 资产表单点「保存」被拒时的错误展示约定(壳提供,配置区块里的字段/页签消费)。
+ * 校验在点击时发生:attempt 为 0 时什么都不标;每被拒一次加一,字段据此把错误画在自己下面,
+ * 页签据此加标记并切到第一个出错的页签。把错误画到了字段上的组件调用 reportShown,
+ * 壳据此知道这次不必再用 toast 报区块的原因。
+ */
+export interface AssetFormErrors {
+  attempt: number;
+  reportShown: () => void;
+}
+
+/** 资产表单之外(如自定义类型编辑器复用 ConfigTabs)没有保存尝试:不标任何错误。 */
+export const AssetFormErrorsContext = createContext<AssetFormErrors>({ attempt: 0, reportShown: () => {} });
+
+/** 第几次保存被拒;0 = 还没有。 */
+export function useSaveAttempt(): number {
+  return use(AssetFormErrorsContext).attempt;
+}
+
+/** 该处有错误且保存已被拒过时返回 true(调用方据此画错误),并向壳报告错误已显示。 */
+export function useShownError(hasError: boolean): boolean {
+  const { attempt, reportShown } = use(AssetFormErrorsContext);
+  const shown = attempt > 0 && hasError;
+  useEffect(() => {
+    if (shown) reportShown();
+  }, [shown, attempt, reportShown]);
+  return shown;
+}
 
 export interface UseConfigSectionOptions<S> {
   ref: Ref<AssetFormHandle> | undefined;

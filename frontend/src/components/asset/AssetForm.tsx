@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } fr
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { useTranslation } from "react-i18next";
-import { AlertCircle, Loader2, PlugZap, XCircle } from "lucide-react";
+import { Loader2, PlugZap, XCircle } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +14,7 @@ import {
   Input,
 } from "@opskat/ui";
 import { Field } from "@/components/asset/fields";
+import { AssetFormErrorsContext, type AssetFormErrors } from "@/components/asset/useConfigSection";
 import { DescriptionBar } from "@/components/asset/DescriptionBar";
 import { IconPicker } from "@/components/asset/IconPicker";
 import { GroupSelect } from "@/components/asset/GroupSelect";
@@ -125,6 +126,22 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     (value: SectionValidity) => setSectionValidity({ key: sectionKey, value }),
     [sectionKey]
   );
+  // 点「保存」被拒的次数(校验在点击时发生)。区块按 sectionKey 重挂载,换了区块就从头算,
+  // 新区块不会一挂上就满屏报错;名称字段是壳自己的,只要被拒过就一直标着。
+  const [rejected, setRejected] = useState({ key: sectionKey, count: 0 });
+  const sectionAttempt = rejected.key === sectionKey ? rejected.count : 0;
+  // 这次被拒时区块给的原因,以及区块有没有把错误画到字段上;没画就由壳 toast 这个原因。
+  const rejectedReasonRef = useRef("");
+  const sectionErrorShownRef = useRef(false);
+  const formErrors: AssetFormErrors = useMemo(
+    () => ({
+      attempt: sectionAttempt,
+      reportShown: () => {
+        sectionErrorShownRef.current = true;
+      },
+    }),
+    [sectionAttempt]
+  );
   const ctx: AssetFormContext = useMemo(() => ({ isEdit: !!editAsset, encryptPassword: EncryptPassword }), [editAsset]);
 
   // 复位测试状态：open 切换时一律清掉上一次表单的 testing 残留（渲染期对比），
@@ -159,6 +176,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   }>({ open: false });
   if (open !== prevSync.open || editAsset !== prevSync.editAsset || defaultGroupId !== prevSync.defaultGroupId) {
     setPrevSync({ open, editAsset, defaultGroupId });
+    setRejected({ key: sectionKey, count: 0 });
     if (open) {
       if (editAsset) {
         const editType = (editAsset.Type || "ssh") as AssetType;
@@ -292,6 +310,13 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
     // 用户决定保存：放弃任何正在进行的测试，避免和保存竞争或弹出过期的 toast。
     cancelActiveTest();
 
+    if (!name.trim() || !validity.canSave) {
+      rejectedReasonRef.current = validity.canSave ? "" : (validity.saveDisabledReason ?? "");
+      sectionErrorShownRef.current = false;
+      setRejected((r) => ({ key: sectionKey, count: r.key === sectionKey ? r.count + 1 : 1 }));
+      return;
+    }
+
     // 所有资产类型都经注册表的 ConfigSection 序列化配置——扩展类型的 section 由
     // extension/assetTypes.ts 从它的 configSchema 生成，加密 password 字段也在那里。
     if (!sectionRef.current) return;
@@ -322,10 +347,18 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   const isTestConnectionDisabled = testing || !validity.canTest;
 
-  // 未注册的类型（资产所属扩展已卸载）没有配置区块可挂载，因此 validity 停在初始的
-  // canSave:false，保存按钮自然是禁用的——不必再为它写一条分支。
-  const saveDisabledReason = !name.trim() ? "asset.formMissingName" : (validity.saveDisabledReason ?? "");
-  const saveDisabled = saving || !!saveDisabledReason || !validity.canSave;
+  // 保存按钮不因校验禁用(点击时校验);只有区块还没上报过校验结果时无从校验,才禁用。
+  // 未注册的类型（资产所属扩展已卸载）没有配置区块可挂载，永远不会上报，保存按钮因此保持禁用。
+  const sectionReported = sectionValidity.key === sectionKey;
+  const saveDisabled = saving || !sectionReported;
+  const nameError = rejected.count > 0 && !name.trim() ? t("asset.formMissingName") : undefined;
+
+  // 被拒的这次提交里,区块的原因没能落到任何字段上:用 toast 报出来。子组件的上报 effect 先于这里执行。
+  useEffect(() => {
+    if (sectionAttempt > 0 && !sectionErrorShownRef.current && rejectedReasonRef.current) {
+      toast.error(t(rejectedReasonRef.current));
+    }
+  }, [sectionAttempt, t]);
 
   const testConnectionButton = !isTestableAssetType ? null : testing ? (
     <Button
@@ -396,9 +429,10 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
               <Field label={t("asset.icon")} className="w-14 shrink-0">
                 <IconPicker value={icon} onChange={setIcon} type="asset" compact />
               </Field>
-              <Field label={t("asset.name")} className="min-w-0 flex-1">
+              <Field label={t("asset.name")} error={nameError} className="min-w-0 flex-1">
                 <Input
                   data-testid="asset-form-name-input"
+                  aria-invalid={!!nameError || undefined}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder={
@@ -426,15 +460,17 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
             {/* 每种类型的配置区块都来自注册表（内置手写、扩展由 configSchema 生成） */}
             {sectionDef?.ConfigSection && (
               <AssetTypeSectionSuspense>
-                <sectionDef.ConfigSection
-                  key={sectionKey}
-                  ref={sectionRef}
-                  editAsset={editAsset ?? undefined}
-                  ctx={ctx}
-                  onValidityChange={reportValidity}
-                  onIconChange={setIcon}
-                  variant={typeVariant}
-                />
+                <AssetFormErrorsContext value={formErrors}>
+                  <sectionDef.ConfigSection
+                    key={sectionKey}
+                    ref={sectionRef}
+                    editAsset={editAsset ?? undefined}
+                    ctx={ctx}
+                    onValidityChange={reportValidity}
+                    onIconChange={setIcon}
+                    variant={typeVariant}
+                  />
+                </AssetFormErrorsContext>
               </AssetTypeSectionSuspense>
             )}
 
@@ -443,15 +479,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
           </div>
         </div>
         <DialogFooter className="border-t bg-background px-6 py-4 sm:items-center sm:justify-between">
-          <div className="flex min-w-0 flex-1 flex-col gap-1">
-            {testConnectionButton}
-            {saveDisabledReason && (
-              <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                {t(saveDisabledReason)}
-              </p>
-            )}
-          </div>
+          <div className="flex min-w-0 flex-1 flex-col gap-1">{testConnectionButton}</div>
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <Button
               variant="ghost"

@@ -24,15 +24,17 @@ export function FieldLabel({
   );
 }
 
-/** 标签 + 控件的竖直字段容器(label 与控件间距 7px)。 */
+/** 标签 + 控件的竖直字段容器(label 与控件间距 7px)。error 画在控件下;控件自己负责 aria-invalid。 */
 export function Field({
   label,
   required,
+  error,
   className,
   children,
 }: {
   label?: ReactNode;
   required?: boolean;
+  error?: ReactNode;
   className?: string;
   children: ReactNode;
 }) {
@@ -40,6 +42,7 @@ export function Field({
     <div className={cn("flex flex-col gap-[7px]", className)}>
       {label !== undefined && <FieldLabel required={required}>{label}</FieldLabel>}
       {children}
+      {error && <p className="text-xs text-destructive">{error}</p>}
     </div>
   );
 }

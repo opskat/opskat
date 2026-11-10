@@ -34,6 +34,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import { SecretInput } from "@/components/SecretInput";
 import { Field, Segmented } from "@/components/asset/fields";
+import { useSaveAttempt, useShownError } from "@/components/asset/useConfigSection";
 import {
   httpTunnelProxyLayer,
   proxyChainLayerErrors,
@@ -139,6 +140,15 @@ export function ConnectionMethodFields({
     for (const e of errors) map.set(e.id, [...(map.get(e.id) || []), e]);
     return map;
   }, [errors]);
+
+  // 各层的错误本来就实时画在层上;保存被拒时展开第一个出错的层,让字段下的错误露出来。
+  useShownError(isChainMode && errors.length > 0);
+  const attempt = useSaveAttempt();
+  const [seenAttempt, setSeenAttempt] = useState(0);
+  if (attempt !== seenAttempt) {
+    setSeenAttempt(attempt);
+    if (isChainMode && errors[0]) setSelectedLayerId(errors[0].id);
+  }
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 

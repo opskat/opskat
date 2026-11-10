@@ -6,8 +6,9 @@ import type { UseAssetCredential } from "@/components/asset/useAssetCredential";
 import type { asset_entity } from "../../../wailsjs/go/models";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
-import type { ConnectionFormFields } from "@/components/asset/proxyConfig";
+import { proxyChainLayerErrors, type ConnectionFormFields } from "@/components/asset/proxyConfig";
 import type { ConfigGroup } from "@/components/asset/ConfigTabs";
+import { useShownError } from "@/components/asset/useConfigSection";
 
 /** password/tunnel 字段渲染所需的共享上下文。 */
 export interface FieldRenderCtx {
@@ -79,6 +80,28 @@ interface FieldsProps<S> {
   ctx?: FieldRenderCtx;
 }
 
+/** 必填的文本/多行字段留空;其余种类不在这里判定。 */
+function missingRequired<S>(field: FieldDesc<S>, state: S): boolean {
+  if ((field.kind === "text" || field.kind === "textarea") && field.required) {
+    return String(state[field.key] ?? "").trim() === "";
+  }
+  return false;
+}
+
+/** 一组字段里有没有会在保存被拒时画在字段下的错误(不可见的字段不算)。 */
+function fieldsHaveError<S>(fields: FieldDesc<S>[], state: S): boolean {
+  return fields.some((f) => {
+    if (f.visibleWhen && !f.visibleWhen(state)) return false;
+    if (f.kind === "row") return fieldsHaveError(f.fields, state);
+    if (f.kind === "tunnel") {
+      // 与 ConnectionMethodFields 同一判定:只有代理链方式才显示(也才校验)各层的错误。
+      const conn = state as unknown as ConnectionFormFields;
+      return conn.connectionType !== "direct" && proxyChainLayerErrors(conn.proxyChainLayers ?? []).length > 0;
+    }
+    return missingRequired(f, state);
+  });
+}
+
 /** 把字段描述符数组渲染成竖直列(复刻各 section 的 `flex flex-col gap-4`)。 */
 export function Fields<S>({ fields, state, patch, ctx }: FieldsProps<S>) {
   return (
@@ -102,14 +125,18 @@ function FieldNode<S>({
   ctx?: FieldRenderCtx;
 }) {
   const { t } = useTranslation();
-  if (field.visibleWhen && !field.visibleWhen(state)) return null;
+  const visible = !field.visibleWhen || field.visibleWhen(state);
+  const showRequired = useShownError(visible && missingRequired(field, state));
+  if (!visible) return null;
+  const requiredError = showRequired ? t("asset.generic.required") : undefined;
 
   switch (field.kind) {
     case "text":
       return (
-        <Field label={t(field.label)} required={field.required} className={field.width}>
+        <Field label={t(field.label)} required={field.required} error={requiredError} className={field.width}>
           <Input
             data-testid={field.testid}
+            aria-invalid={showRequired || undefined}
             value={String(state[field.key] ?? "")}
             placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}
             onChange={(e) => patch({ [field.key]: e.target.value } as Partial<S>)}
@@ -190,9 +217,10 @@ function FieldNode<S>({
 
     case "textarea":
       return (
-        <Field label={t(field.label)} required={field.required}>
+        <Field label={t(field.label)} required={field.required} error={requiredError}>
           <Textarea
             data-testid={field.testid}
+            aria-invalid={showRequired || undefined}
             value={String(state[field.key] ?? "")}
             rows={field.rows}
             placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}
@@ -265,6 +293,7 @@ export function buildConfigGroups<S>(
     key: g.key,
     label: g.label,
     badge: g.badge,
+    error: "fields" in g && fieldsHaveError(g.fields, args.state),
     render:
       "render" in g
         ? g.render

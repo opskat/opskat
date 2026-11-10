@@ -262,15 +262,21 @@ describe("AssetForm generic assets", () => {
     expect(screen.queryByTestId("asset-test-connection")).toBeNull();
   });
 
-  it("disables save while a required field is empty", async () => {
+  it("refuses to save while a required field is empty", async () => {
     render(<AssetForm open onOpenChange={vi.fn()} />);
     await userEvent.type(screen.getByTestId("asset-form-name-input"), "grafana-prod");
     await userEvent.click(screen.getByTestId("asset-type-picker"));
     await userEvent.click(await screen.findByTestId("asset-type-option-generic:grafana"));
     const host = await screen.findByTestId("generic-field-host");
-    await waitFor(() => expect(screen.getByTestId("asset-form-submit")).toBeDisabled());
+    const submit = screen.getByTestId("asset-form-submit");
+    await waitFor(() => expect(submit).toBeEnabled());
+    await userEvent.click(submit);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("asset.generic.missingRequired"));
+    expect(CreateAsset).not.toHaveBeenCalled();
+
     await userEvent.type(host, "g.example.com");
-    await waitFor(() => expect(screen.getByTestId("asset-form-submit")).toBeEnabled());
+    await userEvent.click(submit);
+    await waitFor(() => expect(CreateAsset).toHaveBeenCalledTimes(1));
   });
 
   it("choosing an icon-less custom type and saving submits icon '' not 'boxes'", async () => {
@@ -304,6 +310,106 @@ describe("AssetForm generic assets", () => {
     await waitFor(() => expect(UpdateAsset).toHaveBeenCalled());
     const savedAsset = vi.mocked(UpdateAsset).mock.calls[0][0];
     expect(savedAsset.Icon).toBe("");
+  });
+});
+
+// 规格 13：保存按钮一直可点，点击时才校验；错误落在字段下、所在页签带标记并切过去；
+// 保存失败留在对话框里，输入原样保留。
+describe("AssetForm validates on save", () => {
+  const rdpAsset = (config: Record<string, unknown>, name = "win-01") =>
+    new asset_entity.Asset({ ID: 5, Name: name, Type: "rdp", Config: JSON.stringify(config) });
+
+  beforeEach(() => {
+    vi.mocked(UpdateAsset).mockResolvedValue(undefined as never);
+    vi.mocked(ListAssets).mockResolvedValue([] as never);
+  });
+
+  it("keeps save enabled and shows a missing name under the name field", async () => {
+    const onOpenChange = vi.fn();
+    render(<AssetForm open editAsset={rdpAsset({ host: "10.0.0.5", port: 3389 }, "")} onOpenChange={onOpenChange} />);
+    await screen.findByTestId("rdp-host-input");
+    const submit = screen.getByTestId("asset-form-submit");
+    await waitFor(() => expect(submit).toBeEnabled());
+    // 校验在点击时发生，点击前不报错。
+    expect(screen.queryByText("asset.formMissingName")).toBeNull();
+
+    await userEvent.click(submit);
+
+    expect(await screen.findByText("asset.formMissingName")).toBeInTheDocument();
+    expect(screen.getByTestId("asset-form-name-input")).toHaveAttribute("aria-invalid", "true");
+    expect(UpdateAsset).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+
+    // 改好之后错误消失，再点保存就能存下。
+    await userEvent.type(screen.getByTestId("asset-form-name-input"), "win-01");
+    expect(screen.queryByText("asset.formMissingName")).toBeNull();
+    await userEvent.click(submit);
+    await waitFor(() => expect(UpdateAsset).toHaveBeenCalledTimes(1));
+  });
+
+  it("marks the failing field and its tab and switches to that tab", async () => {
+    render(<AssetForm open editAsset={rdpAsset({ host: "", port: 3389 })} onOpenChange={vi.fn()} />);
+    await screen.findByTestId("rdp-host-input");
+    await userEvent.click(screen.getByTestId("config-tab-advanced"));
+    expect(screen.queryByTestId("rdp-host-input")).toBeNull();
+    expect(screen.queryByTestId("config-tab-error-connection")).toBeNull();
+
+    const submit = screen.getByTestId("asset-form-submit");
+    await waitFor(() => expect(submit).toBeEnabled());
+    await userEvent.click(submit);
+
+    await waitFor(() => expect(screen.getByTestId("config-tab-connection")).toHaveAttribute("aria-selected", "true"));
+    expect(screen.getByTestId("config-tab-error-connection")).toBeInTheDocument();
+    expect(screen.queryByTestId("config-tab-error-advanced")).toBeNull();
+    const host = screen.getByTestId("rdp-host-input");
+    expect(host).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("asset.generic.required")).toBeInTheDocument();
+    // 错误已经落在字段上，不再另弹一条同义的 toast。
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(UpdateAsset).not.toHaveBeenCalled();
+
+    await userEvent.type(host, "10.0.0.5");
+    expect(host).not.toHaveAttribute("aria-invalid");
+    expect(screen.queryByTestId("config-tab-error-connection")).toBeNull();
+    await userEvent.click(submit);
+    await waitFor(() => expect(UpdateAsset).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows the section's reason when no field can carry the error", async () => {
+    const serialAsset = new asset_entity.Asset({
+      ID: 9,
+      Name: "serial",
+      Type: "serial",
+      Config: JSON.stringify({ port_path: "", baud_rate: 115200 }),
+    });
+    render(<AssetForm open editAsset={serialAsset} onOpenChange={vi.fn()} />);
+    const submit = await screen.findByTestId("asset-form-submit");
+    await waitFor(() => expect(submit).toBeEnabled());
+
+    await userEvent.click(submit);
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("asset.formMissingSerialPort"));
+    expect(UpdateAsset).not.toHaveBeenCalled();
+  });
+
+  it("keeps the dialog open with every input when saving fails", async () => {
+    vi.mocked(UpdateAsset).mockRejectedValue(new Error("name already taken"));
+    const onOpenChange = vi.fn();
+    render(<AssetForm open editAsset={rdpAsset({ host: "10.0.0.5", port: 3389 })} onOpenChange={onOpenChange} />);
+    const host = await screen.findByTestId("rdp-host-input");
+    const name = screen.getByTestId("asset-form-name-input");
+    await userEvent.clear(name);
+    await userEvent.type(name, "win-renamed");
+    await userEvent.clear(host);
+    await userEvent.type(host, "10.0.0.9");
+
+    await userEvent.click(screen.getByTestId("asset-form-submit"));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("name already taken")));
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(screen.getByTestId("asset-form-name-input")).toHaveValue("win-renamed");
+    expect(screen.getByTestId("rdp-host-input")).toHaveValue("10.0.0.9");
+    expect(screen.getByTestId("asset-form-submit")).toBeEnabled();
   });
 });
 
