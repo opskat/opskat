@@ -1,6 +1,9 @@
 import { useTranslation } from "react-i18next";
 import { ScrollArea, Button } from "@opskat/ui";
-import { Upload, Download, Loader2, CheckCircle2, XCircle, Ban, RotateCw, X } from "lucide-react";
+import { Upload, Download, RotateCw, X } from "lucide-react";
+import { toast } from "sonner";
+import { TRANSFER_STATUS } from "@/components/common/transferStatus";
+import { errorMessage } from "@/lib/errorMessage";
 import { formatBytes, formatSpeed } from "@/lib/formatBytes";
 import { useOssTransferStore, type OssTransfer } from "@/stores/ossTransferStore";
 
@@ -35,38 +38,8 @@ export function OSSTransferDock({ transfers, onCancel, onClear, onClearCompleted
         {transfers.map((tr) => {
           const percent = tr.bytesTotal ? Math.round((tr.bytesDone / tr.bytesTotal) * 100) : 0;
           const DirIcon = tr.direction === "upload" ? Upload : Download;
-          const StatusIcon =
-            tr.status === "active"
-              ? Loader2
-              : tr.status === "done"
-                ? CheckCircle2
-                : tr.status === "cancelled"
-                  ? Ban
-                  : XCircle;
           const active = tr.status === "active";
-          const statusLabel = t(
-            tr.status === "active"
-              ? "oss.transfer.statusActive"
-              : tr.status === "done"
-                ? "oss.transfer.statusDone"
-                : "oss.transfer.statusFailed"
-          );
-          const stateText = t(
-            tr.status === "active"
-              ? "sftp.transferring"
-              : tr.status === "done"
-                ? "sftp.completed"
-                : tr.status === "cancelled"
-                  ? "sftp.cancelled"
-                  : "sftp.failed"
-          );
-          const statusClass = active
-            ? "animate-spin text-info"
-            : tr.status === "done"
-              ? "text-success"
-              : tr.status === "cancelled"
-                ? "text-muted-foreground"
-                : "text-destructive";
+          const { icon: StatusIcon, iconClass, labelKey } = TRANSFER_STATUS[tr.status];
           const canRetry = tr.status === "error" || tr.status === "cancelled";
           return (
             <div key={tr.transferId} className="px-3 py-1 text-xs" data-testid={`oss-transfer-row-${tr.transferId}`}>
@@ -99,7 +72,7 @@ export function OSSTransferDock({ transfers, onCancel, onClear, onClearCompleted
                   {formatBytes(tr.bytesDone)}/{formatBytes(tr.bytesTotal)}
                 </span>
                 <StatusIcon
-                  className={`size-3 shrink-0 ${statusClass}`}
+                  className={`size-3 shrink-0 ${iconClass}`}
                   aria-hidden
                   data-testid={`oss-transfer-status-${tr.transferId}`}
                 />
@@ -107,15 +80,14 @@ export function OSSTransferDock({ transfers, onCancel, onClear, onClearCompleted
                   className={`w-24 shrink-0 truncate ${tr.status === "error" ? "text-destructive" : "text-muted-foreground"}`}
                   data-testid={`oss-transfer-state-${tr.transferId}`}
                 >
-                  {stateText}
+                  {t(labelKey)}
                 </span>
-                <span className="sr-only">{statusLabel}</span>
                 {canRetry && (
                   <Button
                     size="sm"
                     variant="ghost"
                     className="h-5 shrink-0 gap-1 px-1.5 text-xs"
-                    onClick={() => void retryTransfer(tr.tabId, tr.transferId)}
+                    onClick={() => retryTransfer(tr.tabId, tr.transferId).catch((e) => toast.error(errorMessage(e)))}
                     data-testid={`oss-transfer-retry-${tr.transferId}`}
                   >
                     <RotateCw className="size-3" aria-hidden />

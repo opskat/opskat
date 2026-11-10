@@ -1,21 +1,7 @@
-import { memo, useState, type ComponentType } from "react";
+import { memo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  ShieldAlert,
-  Terminal,
-  Database,
-  Server,
-  Globe,
-  FolderOpen,
-  FileEdit,
-  FilePlus,
-  FileUp,
-  Usb,
-  Trash2,
-  Boxes,
-} from "lucide-react";
+import { ShieldAlert, Server, Globe, FolderOpen } from "lucide-react";
 import { Button, Textarea } from "@opskat/ui";
-import { S3Icon } from "@/components/asset/brand-icons";
 import { RespondAIApproval } from "../../../wailsjs/go/ai/AI";
 import { permission } from "../../../wailsjs/go/models";
 import type { ContentBlock } from "@/stores/aiStore";
@@ -26,7 +12,7 @@ import { ReviewNotice } from "./ReviewNotice";
 import { TruncatedText } from "./TruncatedText";
 import { RememberPatternEditor } from "./RememberPatternEditor";
 import { hasRememberPatternErrors, rememberPrefill } from "./rememberPattern";
-import { approvalTypePresentation, hasPinnedDetail } from "./approvalTypePresentation";
+import { approvalBadge, approvalTypePresentation, hasPinnedDetail } from "./approvalTypePresentation";
 
 interface ApprovalBlockProps {
   block: ContentBlock;
@@ -401,34 +387,9 @@ function scopeName(item: { asset_id: number; asset_name: string; group_id?: numb
   return "";
 }
 
-// lucide 图标是 ForwardRefExoticComponent，S3Icon（brand-icons.tsx）是普通的 React.FC 包装
-// @iconify/react；这张表两种都装，因此按调用点唯一用到的形状（接收 className 的组件）来
-// 收窄类型，而不是逼 S3Icon 伪装成 lucide 的 ref-forwarding 形状。
-type IconComponent = ComponentType<{ className?: string }>;
-
 function TypeBadge({ type, command, compact }: { type: string; command: string; compact?: boolean }) {
   const { t } = useTranslation();
-  // 登记了操作类型的审批类型(通用资产:HTTP 请求 / 命令 / 取值)徽标显示操作而不是类型名。
-  const op = approvalTypePresentation(type).op?.(command);
-  const icons: Record<string, IconComponent> = {
-    exec: Terminal,
-    serial: Usb,
-    sql: Database,
-    redis: Server,
-    mongo: Database,
-    kafka: Database,
-    grant: Globe,
-    cp: FileUp,
-    local_bash: Terminal,
-    local_write: FilePlus,
-    local_edit: FileEdit,
-    delete: Trash2,
-    etcd: Database,
-    k8s: Boxes,
-    oss: S3Icon,
-  };
-  const Icon = op?.icon ?? icons[type] ?? Terminal;
-  const labelKey = op?.labelKey ?? approvalTypePresentation(type).labelKey;
+  const { icon: Icon, labelKey } = approvalBadge(type, command);
   const label = labelKey ? t(labelKey) : type;
   if (compact) {
     return (

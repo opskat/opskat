@@ -96,7 +96,7 @@ export function KafkaConnectView({ tabId, state }: { tabId: string; state: Kafka
             )}
           </div>
           <div className="min-h-0 overflow-auto">
-            <ConnectorDetailPanel tabId={tabId} state={state} />
+            <ConnectorDetailPanel key={state.selectedConnector} tabId={tabId} state={state} />
           </div>
         </div>
       )}

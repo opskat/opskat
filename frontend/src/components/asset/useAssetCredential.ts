@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useAsyncList, type ListLoad } from "./useAsyncList";
+import { useAsyncList, type ListLoad } from "@/hooks/useAsyncList";
 import { ListCredentialsByType } from "../../../wailsjs/go/system/System";
 import { asset_entity, credential_entity } from "../../../wailsjs/go/models";
 import {

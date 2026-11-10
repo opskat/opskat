@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ExternalEditCompareWorkbench } from "../CompareWorkbench";
 
@@ -30,17 +30,16 @@ describe("ExternalEditCompareWorkbench", () => {
     );
   });
 
-  it("labels the left column as local and the right column as remote, in that order", () => {
+  it("labels the left column as local and the right column as remote", () => {
     render(<ExternalEditCompareWorkbench compareResult={compareResult} onDismiss={vi.fn()} />);
 
-    const header = screen.getByTestId("external-edit-compare-side-labels");
-    const labels = within(header)
-      .getAllByText(/^externalEdit\.side\.(local|remote)$/)
-      .map((node) => node.textContent);
-    expect(labels).toEqual(["externalEdit.side.local", "externalEdit.side.remote"]);
-    expect(within(header).getByText("externalEdit.side.local").className).toContain("text-success");
-    expect(within(header).getByText("externalEdit.side.remote").className).toContain("text-info");
+    expect(codeDiffViewerMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        originalTitle: "externalEdit.side.local",
+        modifiedTitle: "externalEdit.side.remote",
+        toneBySide: true,
+      })
+    );
     expect(screen.getByText("externalEdit.compare.localLeftRemoteRight")).toBeInTheDocument();
-    expect(screen.queryByText("externalEdit.compare.remoteLeftLocalRight")).not.toBeInTheDocument();
   });
 });

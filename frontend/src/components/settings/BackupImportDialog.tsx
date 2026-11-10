@@ -61,10 +61,9 @@ async function applyImportResult(result: backup_svc.ImportResult) {
       const themes = JSON.parse(result.custom_themes);
       const store = useTerminalThemeStore.getState();
       for (const theme of themes) {
-        if (theme?.id) {
-          store.removeCustomTheme(theme.id);
-        }
-        store.addCustomTheme(theme);
+        // 已有同 id 的主题就原地更新:先删再加会把正在使用的主题切回默认。
+        if (store.customThemes.some((existing) => existing.id === theme.id)) store.updateCustomTheme(theme);
+        else store.addCustomTheme(theme);
       }
     } catch {
       // ignore parse errors

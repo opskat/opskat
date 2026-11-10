@@ -10,6 +10,7 @@ import {
 } from "../../wailsjs/go/oss/OSS";
 import { useOssTransferStore } from "./ossTransferStore";
 import { useOssBrowserStore } from "./ossBrowserStore";
+import { toast } from "sonner";
 
 const TAB = "query-9";
 
@@ -64,6 +65,18 @@ describe("ossTransferStore", () => {
   it("startUpload with no picked files (dialog cancel) adds no rows", async () => {
     await upload([]);
     expect(useOssTransferStore.getState().tabs[TAB]?.transfers ?? {}).toEqual({});
+  });
+
+  it("keeps uploading the rest of a batch when one file fails to start, and reports it", async () => {
+    const toastError = vi.spyOn(toast, "error").mockImplementation(() => "");
+    vi.mocked(OSSUploadObjectPath)
+      .mockRejectedValueOnce(new Error("local file is gone"))
+      .mockResolvedValueOnce("oss-2" as never);
+    await useOssTransferStore.getState().startUploadPaths(TAB, 9, "b", "docs/", ["/x/a.txt", "/x/b.txt"], keepKeys);
+    expect(OSSUploadObjectPath).toHaveBeenCalledWith(9, "b", "docs/b.txt", "/x/b.txt");
+    expect(Object.keys(useOssTransferStore.getState().tabs[TAB].transfers)).toEqual(["oss-2"]);
+    expect(toastError).toHaveBeenCalledWith(expect.any(String), { description: "local file is gone" });
+    toastError.mockRestore();
   });
 
   it("startUpload uploads each picked file to the key the resolver returns", async () => {

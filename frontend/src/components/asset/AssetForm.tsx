@@ -239,6 +239,8 @@ export function AssetForm({ open, onOpenChange, editAsset, copy = false, default
     // 旧区块里用户填过的主机/端口/用户名带去新区块;新旧都没有的字段保留之前带着的值。
     const common = sectionRef.current?.commonFields?.();
     if (common) setCarried((prev) => ({ ...prev, ...common }));
+    // 新挂上的区块从头算被拒次数:换回之前被拒过的类型时不能一挂上就满屏报错。
+    setRejected({ key: `${newType}:${variant ?? ""}`, count: 0 });
     setAssetType(newType);
     setTypeVariant(variant);
     if (!iconTouched) setIcon(defaultIcon ?? formIconFor(newType));

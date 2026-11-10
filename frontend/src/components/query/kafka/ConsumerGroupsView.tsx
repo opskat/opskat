@@ -45,7 +45,7 @@ export function ConsumerGroupsView({ tabId, state }: { tabId: string; state: Kaf
         )}
       </div>
       <div className="min-h-0 overflow-auto">
-        <ConsumerGroupDetailPanel tabId={tabId} state={state} />
+        <ConsumerGroupDetailPanel key={state.selectedGroup} tabId={tabId} state={state} />
       </div>
     </div>
   );

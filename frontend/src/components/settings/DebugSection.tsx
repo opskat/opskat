@@ -13,11 +13,17 @@ import { REPOSITORY_URL } from "./UpdateSection";
 export function DebugSection() {
   const { t } = useTranslation();
   const [debugMode, setDebugModeState] = useState(false);
+  // 读到当前值之前开关不可用:读取失败时不能让用户对着一个猜出来的「关」去切换。
+  const [debugModeLoaded, setDebugModeLoaded] = useState(false);
 
   useEffect(() => {
-    GetDebugMode()
-      .then(setDebugModeState)
-      .catch(() => {});
+    GetDebugMode().then(
+      (enabled) => {
+        setDebugModeState(enabled);
+        setDebugModeLoaded(true);
+      },
+      (e: unknown) => toast.error(errorMessage(e))
+    );
   }, []);
 
   const handleDebugModeChange = async (enabled: boolean) => {
@@ -64,7 +70,7 @@ export function DebugSection() {
             <div>{t("appUpdate.debugMode")}</div>
             <div className="text-xs text-muted-foreground">{t("appUpdate.debugModeDesc")}</div>
           </div>
-          <Switch checked={debugMode} onCheckedChange={handleDebugModeChange} />
+          <Switch checked={debugMode} disabled={!debugModeLoaded} onCheckedChange={handleDebugModeChange} />
         </div>
         <div className="flex gap-2 flex-wrap">
           <Button onClick={handleReportBug} size="sm" variant="outline" title={t("appUpdate.reportBugDesc")}>

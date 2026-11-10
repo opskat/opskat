@@ -470,7 +470,7 @@ describe("AssetTree load states", () => {
       collapsedGroupIds: [],
       loading: false,
       initialized: false,
-      loadError: null,
+      loadErrors: { assets: null, groups: null },
     });
   });
 

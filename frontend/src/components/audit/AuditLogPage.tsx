@@ -465,53 +465,55 @@ export function AuditLogPage() {
                     </td>
                   </tr>
                 )}
-                {logs.map((log) => {
-                  const badge = decisionSourceBadge(log.DecisionSource, t);
-                  const review = log.Review ? parseReviewInfo(log.Review) : null;
-                  return (
-                    <tr key={log.ID} className="border-b hover:bg-muted/50 transition-colors">
-                      <td className="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">
-                        {formatTime(log.Createtime)}
-                      </td>
-                      <td className="px-4 py-2 font-mono text-xs">{log.ToolName}</td>
-                      <td className="px-4 py-2">{log.AssetName || "-"}</td>
-                      <td className="px-4 py-2 font-mono text-xs max-w-48 truncate" title={log.Command}>
-                        {truncate(log.Command)}
-                      </td>
-                      <td className="px-4 py-2">
-                        {log.DecisionSource ? (
-                          <span
-                            className={`inline-block px-1.5 py-0.5 text-xs rounded font-mono ${badge.className}`}
-                            title={
-                              log.MatchedPattern ? `${t("audit.matchedPattern")}: ${log.MatchedPattern}` : undefined
-                            }
-                          >
-                            {log.Decision === "allow" ? "\u2713" : "\u2717"} {badge.label}
-                          </span>
-                        ) : (
-                          "-"
-                        )}
-                        {review && (
-                          <span className="ml-1">
-                            <ReviewMark review={review} />
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2 text-center">
-                        {log.Success === 1 ? (
-                          <CheckCircle2 aria-label={t("audit.success")} className="h-4 w-4 text-success mx-auto" />
-                        ) : (
-                          <XCircle aria-label={t("audit.failed")} className="h-4 w-4 text-destructive mx-auto" />
-                        )}
-                      </td>
-                      <td className="px-4 py-2">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDetailLog(log)}>
-                          <Info className="h-3.5 w-3.5" />
-                        </Button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {/* 加载失败时不再列出上一次的结果:换了筛选 / 页码后它们会被误当成这次的结果。 */}
+                {!logsError &&
+                  logs.map((log) => {
+                    const badge = decisionSourceBadge(log.DecisionSource, t);
+                    const review = log.Review ? parseReviewInfo(log.Review) : null;
+                    return (
+                      <tr key={log.ID} className="border-b hover:bg-muted/50 transition-colors">
+                        <td className="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                          {formatTime(log.Createtime)}
+                        </td>
+                        <td className="px-4 py-2 font-mono text-xs">{log.ToolName}</td>
+                        <td className="px-4 py-2">{log.AssetName || "-"}</td>
+                        <td className="px-4 py-2 font-mono text-xs max-w-48 truncate" title={log.Command}>
+                          {truncate(log.Command)}
+                        </td>
+                        <td className="px-4 py-2">
+                          {log.DecisionSource ? (
+                            <span
+                              className={`inline-block px-1.5 py-0.5 text-xs rounded font-mono ${badge.className}`}
+                              title={
+                                log.MatchedPattern ? `${t("audit.matchedPattern")}: ${log.MatchedPattern}` : undefined
+                              }
+                            >
+                              {log.Decision === "allow" ? "\u2713" : "\u2717"} {badge.label}
+                            </span>
+                          ) : (
+                            "-"
+                          )}
+                          {review && (
+                            <span className="ml-1">
+                              <ReviewMark review={review} />
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-center">
+                          {log.Success === 1 ? (
+                            <CheckCircle2 aria-label={t("audit.success")} className="h-4 w-4 text-success mx-auto" />
+                          ) : (
+                            <XCircle aria-label={t("audit.failed")} className="h-4 w-4 text-destructive mx-auto" />
+                          )}
+                        </td>
+                        <td className="px-4 py-2">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDetailLog(log)}>
+                            <Info className="h-3.5 w-3.5" />
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>
@@ -572,21 +574,22 @@ export function AuditLogPage() {
                   </td>
                 </tr>
               )}
-              {poolEntries.map((entry) => (
-                <tr key={entry.asset_id} className="border-b hover:bg-muted/50 transition-colors">
-                  <td className="px-4 py-2 font-mono">{entry.asset_id}</td>
-                  <td className="px-4 py-2">
-                    <span
-                      className={`inline-block px-1.5 py-0.5 text-xs rounded font-mono ${
-                        entry.ref_count > 0 ? "bg-success/15 text-success" : "bg-muted"
-                      }`}
-                    >
-                      {entry.ref_count}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2 text-xs text-muted-foreground">{formatTime(entry.last_used)}</td>
-                </tr>
-              ))}
+              {poolStatus !== "error" &&
+                poolEntries.map((entry) => (
+                  <tr key={entry.asset_id} className="border-b hover:bg-muted/50 transition-colors">
+                    <td className="px-4 py-2 font-mono">{entry.asset_id}</td>
+                    <td className="px-4 py-2">
+                      <span
+                        className={`inline-block px-1.5 py-0.5 text-xs rounded font-mono ${
+                          entry.ref_count > 0 ? "bg-success/15 text-success" : "bg-muted"
+                        }`}
+                      >
+                        {entry.ref_count}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2 text-xs text-muted-foreground">{formatTime(entry.last_used)}</td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>

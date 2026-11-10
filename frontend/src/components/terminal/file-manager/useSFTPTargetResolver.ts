@@ -2,13 +2,8 @@ import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { SFTPStatTargets } from "../../../../wailsjs/go/ssh/SSH";
-import {
-  useFileConflictResolver,
-  type FileConflictItem,
-  type FileConflictKind,
-  type FileConflictSide,
-} from "@/components/common/FileConflictDialog";
-import { localConflictSides } from "@/components/common/localConflictSides";
+import { type FileConflictKind, type FileConflictSide } from "@/components/common/FileConflictDialog";
+import { useWriteTargetSettler, type PendingWriteConflict } from "@/components/common/useWriteTargetSettler";
 import { errorMessage } from "@/lib/errorMessage";
 import { getPathBaseName } from "./utils";
 
@@ -35,7 +30,7 @@ export function sftpEntrySide(entry: { isDir: boolean; size: number; modTime: nu
  */
 export function useSFTPTargetResolver(sessionId: string) {
   const { t } = useTranslation();
-  const { resolveConflicts, conflictDialog } = useFileConflictResolver();
+  const { settle, conflictDialog } = useWriteTargetSettler();
 
   const resolveTargets = useCallback(
     async (targets: SFTPWriteTarget[], kind: FileConflictKind = "transfer"): Promise<(string | null)[]> => {
@@ -51,8 +46,8 @@ export function useSFTPTargetResolver(sessionId: string) {
         return targets.map(() => null);
       }
 
-      const result: (string | null)[] = targets.map(() => null);
-      const conflicts: { index: number; item: FileConflictItem }[] = [];
+      const free: (string | null)[] = targets.map(() => null);
+      const conflicts: PendingWriteConflict[] = [];
       stats.forEach((stat, index) => {
         const target = targets[index];
         if (stat.error) {
@@ -60,11 +55,13 @@ export function useSFTPTargetResolver(sessionId: string) {
           return;
         }
         if (!stat.exists) {
-          result[index] = target.targetPath;
+          free[index] = target.targetPath;
           return;
         }
         conflicts.push({
           index,
+          keepBoth: stat.keepBothPath || undefined,
+          localPath: target.localPath,
           item: {
             targetPath: stat.path,
             existing: sftpEntrySide(stat),
@@ -75,30 +72,14 @@ export function useSFTPTargetResolver(sessionId: string) {
         });
       });
 
-      const local = conflicts.filter((conflict) => targets[conflict.index].localPath);
-      try {
-        const sides = await localConflictSides(local.map((conflict) => targets[conflict.index].localPath!));
-        local.forEach((conflict, i) => {
-          conflict.item.incoming = sides[i];
-        });
-      } catch (e) {
-        toast.error(errorMessage(e));
-        return targets.map(() => null);
-      }
-
-      const decisions = await resolveConflicts(
-        conflicts.map((conflict) => conflict.item),
+      return settle(
+        targets.map((target) => target.targetPath),
+        free,
+        conflicts,
         kind
       );
-      decisions.forEach((decision, i) => {
-        const { index } = conflicts[i];
-        const stat = stats[index];
-        if (decision === "overwrite") result[index] = targets[index].targetPath;
-        if (decision === "keepBoth") result[index] = stat.keepBothPath ?? null;
-      });
-      return result;
     },
-    [resolveConflicts, sessionId, t]
+    [sessionId, settle, t]
   );
 
   return { resolveTargets, conflictDialog };

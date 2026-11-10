@@ -108,6 +108,33 @@ describe("ExternalEditPendingDialog discard confirmations", () => {
     expect(onAcceptRemote).toHaveBeenCalledWith(conflictSession);
   });
 
+  it("does not act on a decision that changed while its confirmation was open", async () => {
+    const user = userEvent.setup();
+    const onOverwrite = vi.fn();
+    const props = {
+      open: true,
+      onOpenChange: vi.fn(),
+      savingSessionId: null,
+      mergePrepareErrors: {},
+      continueEditLabel: "externalEdit.actions.continueEdit",
+      onOpenErrorDetail: vi.fn(),
+      onMerge: vi.fn(),
+      onAcceptRemote: vi.fn(),
+      onOverwrite,
+      onContinueEdit: vi.fn(),
+    };
+    const { rerender } = render(<ExternalEditPendingDialog {...props} pendingItems={[conflictItem]} />);
+
+    await user.click(screen.getByRole("button", { name: "externalEdit.actions.overwrite" }));
+    const confirm = await screen.findByRole("alertdialog");
+    // 确认框打开期间，这条冲突在别处被处理掉了（例如内置编辑器里已接收远程）。
+    rerender(<ExternalEditPendingDialog {...props} pendingItems={[]} />);
+    const stillOpen = screen.queryByRole("alertdialog");
+    if (stillOpen) await user.click(within(confirm).getByRole("button", { name: "externalEdit.actions.overwrite" }));
+
+    expect(onOverwrite).not.toHaveBeenCalled();
+  });
+
   it("does nothing when the confirmation is cancelled", async () => {
     const user = userEvent.setup();
     const { onOverwrite, onAcceptRemote } = renderDialog([conflictItem]);

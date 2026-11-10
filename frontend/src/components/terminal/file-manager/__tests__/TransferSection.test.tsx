@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { toast } from "sonner";
 import { TransferSection } from "../TransferSection";
 import { useSFTPStore, type SFTPTransfer } from "@/stores/sftpStore";
 import { OpenDirectory } from "../../../../../wailsjs/go/system/System";
@@ -73,6 +74,20 @@ describe("TransferSection", () => {
     expect(screen.getByText("permission denied")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "sftp.retry" }));
     expect(retryTransfer).toHaveBeenCalledWith("t1");
+  });
+
+  it("reports a retry that cannot be started", async () => {
+    const toastError = vi.spyOn(toast, "error").mockImplementation(() => "");
+    useSFTPStore.setState({ retryTransfer: vi.fn().mockRejectedValue(new Error("session closed")) });
+    renderOne({ status: "error", error: "permission denied" });
+    fireEvent.click(screen.getByRole("button", { name: "sftp.retry" }));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("session closed"));
+    toastError.mockRestore();
+  });
+
+  it("names an upload that failed before reporting any progress", () => {
+    renderOne({ status: "error", error: "permission denied", currentFile: "" });
+    expect(screen.getByText("a.txt")).toBeInTheDocument();
   });
 
   it("does not offer retry for transfers that cannot be retried", () => {

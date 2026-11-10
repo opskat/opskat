@@ -173,7 +173,10 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
     };
   }, [open, discoverTabs]);
 
+  // 只采用最新一次请求的结果：切页签后上一个页签的回包晚到时丢弃，不盖掉当前页签的列表。
+  const latestFetchRef = useRef(0);
   const fetchGroups = useCallback(async () => {
+    const request = ++latestFetchRef.current;
     try {
       const items = await ListPolicyGroups(activeTab);
       // 先加载扩展 i18n，再 setGroups 触发渲染
@@ -181,9 +184,11 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
       for (const name of extNames) {
         await loadExtensionLocales(name);
       }
+      if (request !== latestFetchRef.current) return;
       setGroups(items || []);
       setGroupsResult({ tab: activeTab, error: null });
     } catch (e) {
+      if (request !== latestFetchRef.current) return;
       setGroups([]);
       setGroupsResult({ tab: activeTab, error: errorMessage(e) });
     }

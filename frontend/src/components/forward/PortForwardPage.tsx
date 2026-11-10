@@ -40,6 +40,7 @@ import {
   StartForwardConfig,
   StopForwardConfig,
 } from "../../../wailsjs/go/ssh/SSH";
+import { errorMessage } from "@/lib/errorMessage";
 import { ssh as ssh_models, forward_entity } from "../../../wailsjs/go/models";
 
 // 编辑中的规则（无 id）；key 只在弹窗内标识这一行，删掉别的行后行内错误仍跟着它
@@ -63,8 +64,6 @@ const emptyRule = (): EditRule => ({
   remoteHost: "127.0.0.1",
   remotePort: "",
 });
-
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 const isPort = (v: string) => /^\d+$/.test(v.trim()) && Number(v) >= 1 && Number(v) <= 65535;
 
@@ -95,7 +94,7 @@ export function PortForwardPage() {
       try {
         await fn();
       } catch (e) {
-        toast.error(`${t(failKey)}: ${errMsg(e)}`);
+        toast.error(`${t(failKey)}: ${errorMessage(e)}`);
       } finally {
         setPendingIds((prev) => {
           const next = new Set(prev);
@@ -124,7 +123,7 @@ export function PortForwardPage() {
         return list || [];
       })
       .catch((e) => {
-        setLoadError(errMsg(e));
+        setLoadError(errorMessage(e));
         return null;
       })
       .finally(() => setLoading(false));
@@ -214,7 +213,7 @@ export function PortForwardPage() {
         await CreateForwardConfig(editName, editAssetId, rules);
       }
     } catch (e) {
-      toast.error(`${t("forward.saveFailed")}: ${errMsg(e)}`);
+      toast.error(`${t("forward.saveFailed")}: ${errorMessage(e)}`);
       return;
     } finally {
       setSaving(false);
@@ -231,7 +230,7 @@ export function PortForwardPage() {
     try {
       await DeleteForwardConfig(deleteTarget.id);
     } catch (e) {
-      toast.error(`${t("forward.deleteFailed")}: ${errMsg(e)}`);
+      toast.error(`${t("forward.deleteFailed")}: ${errorMessage(e)}`);
       return;
     }
     setDeleteTarget(null);

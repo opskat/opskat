@@ -1266,8 +1266,7 @@ export function K8sClusterPage({ asset }: Props) {
     <div className="flex h-full w-full">
       <PanelSidebar
         panelType="k8s"
-        storageKey="k8s_sidebar_width"
-        title={asset.Name}
+        title={<span className="normal-case">{asset.Name}</span>}
         actions={<SidebarRefreshButton onClick={refreshInfo} loading={refreshing} />}
       >
         <div className="min-h-0 flex-1 overflow-y-auto p-2">

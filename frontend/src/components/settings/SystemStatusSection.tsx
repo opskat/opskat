@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AsyncState } from "@/components/common/AsyncState";
-import { useAsyncList } from "@/components/asset/useAsyncList";
+import { useAsyncList } from "@/hooks/useAsyncList";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@opskat/ui";
 import { CircleCheck, Info, TriangleAlert, OctagonX, ChevronDown, ChevronRight } from "lucide-react";

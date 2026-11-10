@@ -45,11 +45,10 @@ describe("toolbarHidden in layoutStore", () => {
 
 describe("toolbar shortcut", () => {
   it("defaults to mod+shift+B and toggles the toolbar", () => {
-    expect(DEFAULT_SHORTCUTS["panel.toolbar"]).toMatchObject({ code: "KeyB", mod: true, shift: true });
     renderHook(() =>
       useKeyboardShortcuts({ onToggleAIPanel: vi.fn(), onToggleSidebar: vi.fn(), onToggleCommandPalette: vi.fn() })
     );
-    press(DEFAULT_SHORTCUTS["panel.toolbar"]);
+    press({ code: "KeyB", mod: true, shift: true, ctrl: false, alt: false });
     expect(useLayoutStore.getState().toolbarHidden).toBe(true);
   });
 });

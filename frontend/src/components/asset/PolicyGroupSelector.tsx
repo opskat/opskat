@@ -41,7 +41,9 @@ export function PolicyGroupSelector({ policyType, selectedIds, onChange, refresh
   const status: AsyncStatus = result?.key !== queryKey ? "loading" : result.error ? "error" : "ready";
 
   // policyType / refreshKey（外部触发刷新）变化时重新拉取
+  // 只采用最新一次请求的结果：先发的请求后回来时丢弃，不让它盖掉新结果、也不让状态停在加载中。
   useEffect(() => {
+    let cancelled = false;
     const fetchGroups = async () => {
       try {
         const items = await ListPolicyGroups(policyTypeMap[policyType] || policyType);
@@ -50,14 +52,19 @@ export function PolicyGroupSelector({ policyType, selectedIds, onChange, refresh
         for (const name of extNames) {
           await loadExtensionLocales(name);
         }
+        if (cancelled) return;
         setGroups(items || []);
         setResult({ key: queryKey, error: null });
       } catch (e) {
+        if (cancelled) return;
         setGroups([]);
         setResult({ key: queryKey, error: errorMessage(e) });
       }
     };
     void fetchGroups();
+    return () => {
+      cancelled = true;
+    };
   }, [policyType, queryKey, retryCount]);
   const retry = () => {
     setResult(null);

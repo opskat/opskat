@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { toast } from "sonner";
 import { OSSTransferDock } from "../OSSTransferDock";
 import { useOssTransferStore, type OssTransfer } from "@/stores/ossTransferStore";
 
@@ -83,7 +84,6 @@ describe("OSSTransferDock", () => {
     );
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "25");
     expect(screen.getByTestId("oss-transfer-action-t1")).toHaveAttribute("aria-label", "oss.transfer.cancel");
-    expect(screen.getByTestId("oss-transfer-status-t1")).toHaveClass("text-info");
   });
 
   it("disables clear completed when every transfer is still active", () => {
@@ -131,6 +131,34 @@ describe("OSSTransferDock", () => {
     expect(screen.getByText("AccessDenied: no permission")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("oss-transfer-retry-t1"));
     expect(retry).toHaveBeenCalledWith("q", "t1");
+  });
+
+  it("announces a cancelled row as cancelled only", () => {
+    render(
+      <OSSTransferDock
+        transfers={[tx({ status: "cancelled" })]}
+        onCancel={vi.fn()}
+        onClear={vi.fn()}
+        onClearCompleted={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("oss-transfer-row-t1")).not.toHaveTextContent(/failed/i);
+  });
+
+  it("reports a retry that cannot be started", async () => {
+    const toastError = vi.spyOn(toast, "error").mockImplementation(() => "");
+    useOssTransferStore.setState({ retry: vi.fn().mockRejectedValue(new Error("bucket gone")) });
+    render(
+      <OSSTransferDock
+        transfers={[tx({ status: "error", error: "boom" })]}
+        onCancel={vi.fn()}
+        onClear={vi.fn()}
+        onClearCompleted={vi.fn()}
+      />
+    );
+    fireEvent.click(screen.getByTestId("oss-transfer-retry-t1"));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith("bucket gone"));
+    toastError.mockRestore();
   });
 
   it("offers retry for cancelled rows but not for done or active ones", () => {

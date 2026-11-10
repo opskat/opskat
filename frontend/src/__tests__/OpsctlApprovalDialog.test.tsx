@@ -215,7 +215,7 @@ describe("OpsctlApprovalDialog", () => {
 
     fireSingleApproval(handlers, { type: "oss", session_id: "session-1" });
 
-    const badge = screen.getByText("OSS").closest("span");
+    const badge = screen.getByTestId("approval-type-badge");
     expect(badge).not.toBeNull();
     const svg = badge!.querySelector("svg");
     expect(svg).not.toBeNull();
@@ -353,6 +353,13 @@ describe("OpsctlApprovalDialog 批量审批折叠（kind=batch，D17）", () => 
 
     expect(screen.queryByTestId("opsctl-approval-batch-summary")).not.toBeInTheDocument();
     expect(screen.getAllByDisplayValue(/cat \/var\/log\/app-/)).toHaveLength(12);
+  });
+
+  it("labels the approval type with the same translated name as the AI approval block", () => {
+    const handlers = captureHandlers();
+    render(<OpsctlApprovalDialog />);
+    fireSingleApproval(handlers, { type: "sql", asset_name: "db", command: "select 1" });
+    expect(screen.getByTestId("approval-type-badge")).toHaveTextContent("ai.approvalType.sql");
   });
 
   it.each([

@@ -382,7 +382,7 @@ export function makeExtensionConfigSection(opts: Options) {
       };
     }, [editID, storedConfig, settle, t]);
 
-    // 未就绪时不渲染表单：原因已经由壳在保存按钮旁显示（saveDisabledReason），失败另有 toast。
+    // 未就绪时不渲染表单：原因经 saveDisabledReason 交给壳，点保存被拒时由壳报出；失败另有 toast。
     if (!opts.schema?.properties || state.status !== "ready") return null;
     // 与内置类型同一套标签：只声明了 schema 字段的类型只有一组，ConfigTabs 退化成无标签面板。
     const groups: ConfigGroup[] = [

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AsyncState } from "@/components/common/AsyncState";
-import { useAsyncList } from "@/components/asset/useAsyncList";
+import { useAsyncList } from "@/hooks/useAsyncList";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
@@ -107,9 +107,12 @@ export function ExtensionSection() {
   const [cleanData, setCleanData] = useState(false);
   const [detailTarget, setDetailTarget] = useState<ExtInfo | null>(null);
 
-  const { items: extensions, load } = useAsyncList<ExtInfo>(() => ListInstalledExtensions(i18n.language));
-  // 操作之后重新拉取：失败时落到可重试的错误块，不会冒充空列表。
-  const loadExtensions = load.reload;
+  // 操作之后在后台重新拉取（列表留在原处）：失败时落到可重试的错误块，不会冒充空列表。
+  const {
+    items: extensions,
+    load,
+    refresh: loadExtensions,
+  } = useAsyncList<ExtInfo>(() => ListInstalledExtensions(i18n.language));
 
   const handleReload = async () => {
     setReloading(true);

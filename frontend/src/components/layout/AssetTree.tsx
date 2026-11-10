@@ -65,7 +65,7 @@ import { notifyCopied } from "@/lib/notify";
 import { getAssetType } from "@/lib/assetTypes";
 import { useAssetTypeOptions, matchSelectedTypes } from "@/lib/assetTypes/options";
 import { AssetTypeFilterButton } from "@/components/asset/AssetTypeFilterButton";
-import { useAssetStore } from "@/stores/assetStore";
+import { selectLoadError, useAssetStore } from "@/stores/assetStore";
 import { formatBinding, useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useActiveAssetIds } from "@/hooks/useActiveAssetIds";
@@ -246,7 +246,7 @@ export function AssetTree({
   const deleteGroup = useAssetStore((s) => s.deleteGroup);
   const refresh = useAssetStore((s) => s.refresh);
   const initialized = useAssetStore((s) => s.initialized);
-  const loadError = useAssetStore((s) => s.loadError);
+  const loadError = useAssetStore(selectLoadError);
   const connectingAssetIds = useTerminalStore((s) => s.connectingAssetIds);
   const activeAssetIds = useActiveAssetIds();
   const [filter, setFilter] = useState("");

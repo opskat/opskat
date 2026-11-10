@@ -62,6 +62,31 @@ describe("Kafka non-destructive actions run without a confirm", () => {
     expect(notifySuccess).not.toHaveBeenCalled();
   });
 
+  it("does not carry one connector's action failure over to the next selected connector", async () => {
+    mockActions({ pauseConnector: vi.fn().mockRejectedValue(new Error("c1 is gone")) });
+    const view = render(<KafkaConnectView tabId={TAB} state={connectorState()} />);
+    await userEvent.click(screen.getByRole("button", { name: "query.kafkaPauseConnector" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("c1 is gone");
+
+    view.rerender(
+      <KafkaConnectView
+        tabId={TAB}
+        state={freshState({
+          connectClusters: [{ name: "cl" }],
+          selectedConnector: "c2",
+          connectorDetail: {
+            name: "c2",
+            config: {},
+            tasks: [],
+            status: { connector: { state: "RUNNING" }, tasks: [] },
+          },
+        } as never)}
+      />
+    );
+
+    expect(screen.queryByText(/c1 is gone/)).not.toBeInTheDocument();
+  });
+
   it("still confirms deleting a connector, with a verb button", async () => {
     const deleteConnector = vi.fn().mockResolvedValue(undefined);
     mockActions({ deleteConnector });

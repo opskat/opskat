@@ -255,6 +255,17 @@ describe("AssetForm generic assets", () => {
     expect(notifySuccess).toHaveBeenCalledWith("asset.testConnectionSuccessDetail");
   });
 
+  it("keeps save disabled while the custom type's fields are still loading", async () => {
+    vi.mocked(GetCustomType).mockImplementation(() => new Promise(() => {}));
+    render(<AssetForm open onOpenChange={vi.fn()} />);
+    await userEvent.type(screen.getByTestId("asset-form-name-input"), "grafana-prod");
+    await userEvent.click(screen.getByTestId("asset-type-picker"));
+    await userEvent.click(await screen.findByTestId("asset-type-option-generic:grafana"));
+    await waitFor(() => expect(GetCustomType).toHaveBeenCalled());
+
+    expect(screen.getByTestId("asset-form-submit")).toBeDisabled();
+  });
+
   it("offers no test connection for command types", async () => {
     render(<AssetForm open onOpenChange={vi.fn()} />);
     await userEvent.click(screen.getByTestId("asset-type-picker"));

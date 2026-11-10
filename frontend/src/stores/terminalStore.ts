@@ -611,7 +611,8 @@ function attachSession(connectionId: string, sessionId: string) {
     tabData[nextTabId] = {
       ...d,
       splitTree: replaceNode(d.splitTree, connectionId, { type: "terminal", sessionId }),
-      activePaneId: sessionId,
+      // 只接管这个连接节点自己的焦点:后台窗格重连成功不抢走用户正在用的窗格。
+      activePaneId: d.activePaneId === connectionId ? sessionId : d.activePaneId,
       panes: {
         ...d.panes,
         [sessionId]: { sessionId, transport: conn.transport, connected: true, connectedAt: Date.now() },

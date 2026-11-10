@@ -1,8 +1,12 @@
 import { useTranslation } from "react-i18next";
-import { Ban, CheckCircle2, Download, FolderOpen, Loader2, RotateCw, Upload, X, XCircle } from "lucide-react";
+import { Download, FolderOpen, RotateCw, Upload, X } from "lucide-react";
+import { toast } from "sonner";
 import { Button, ScrollArea } from "@opskat/ui";
 import { type SFTPTransfer, useSFTPStore } from "@/stores/sftpStore";
+import { TRANSFER_STATUS } from "@/components/common/transferStatus";
+import { errorMessage } from "@/lib/errorMessage";
 import { formatBytes, formatSpeed } from "@/lib/formatBytes";
+import { pathBaseName } from "@/lib/pathBaseName";
 import { OpenDirectory } from "../../../../wailsjs/go/system/System";
 
 interface TransferSectionProps {
@@ -18,13 +22,6 @@ function containingFolder(transfer: SFTPTransfer): string | null {
   return i > 0 ? transfer.localPath.slice(0, i) : null;
 }
 
-const STATE_KEY = {
-  active: "sftp.transferring",
-  done: "sftp.completed",
-  error: "sftp.failed",
-  cancelled: "sftp.cancelled",
-} as const;
-
 function TransferRow({ transfer }: { transfer: SFTPTransfer }) {
   const { t } = useTranslation();
   const cancelTransfer = useSFTPStore((s) => s.cancelTransfer);
@@ -33,23 +30,11 @@ function TransferRow({ transfer }: { transfer: SFTPTransfer }) {
 
   const active = transfer.status === "active";
   const percent = transfer.bytesTotal > 0 ? Math.round((transfer.bytesDone / transfer.bytesTotal) * 100) : 0;
-  const fileName = transfer.currentFile ? transfer.currentFile.split("/").pop() || transfer.currentFile : "";
+  // 还没收到进度就失败的行没有 currentFile：用发起时的远端路径命名。
+  const fileName = pathBaseName(transfer.currentFile || transfer.retry?.remotePath || "");
   const folder = containingFolder(transfer);
   const canRetry = (transfer.status === "error" || transfer.status === "cancelled") && !!transfer.retry;
-  const StatusIcon = active
-    ? Loader2
-    : transfer.status === "done"
-      ? CheckCircle2
-      : transfer.status === "cancelled"
-        ? Ban
-        : XCircle;
-  const iconClass = active
-    ? "animate-spin text-primary"
-    : transfer.status === "done"
-      ? "text-success"
-      : transfer.status === "cancelled"
-        ? "text-muted-foreground"
-        : "text-destructive";
+  const { icon: StatusIcon, iconClass, labelKey } = TRANSFER_STATUS[transfer.status];
   const DirIcon = transfer.direction === "upload" ? Upload : Download;
 
   return (
@@ -64,7 +49,7 @@ function TransferRow({ transfer }: { transfer: SFTPTransfer }) {
           className={`shrink-0 ${transfer.status === "error" ? "text-destructive" : "text-muted-foreground"}`}
           data-testid={`sftp-transfer-state-${transfer.transferId}`}
         >
-          {t(STATE_KEY[transfer.status])}
+          {t(labelKey)}
           {active && transfer.bytesTotal > 0 ? ` ${percent}%` : ""}
         </span>
         {!active && (
@@ -121,7 +106,7 @@ function TransferRow({ transfer }: { transfer: SFTPTransfer }) {
               variant="ghost"
               size="sm"
               className="h-5 gap-1 px-1.5 text-xs"
-              onClick={() => void retryTransfer(transfer.transferId)}
+              onClick={() => retryTransfer(transfer.transferId).catch((e) => toast.error(errorMessage(e)))}
             >
               <RotateCw className="h-3 w-3" aria-hidden />
               {t("sftp.retry")}
@@ -132,7 +117,7 @@ function TransferRow({ transfer }: { transfer: SFTPTransfer }) {
               variant="ghost"
               size="sm"
               className="h-5 gap-1 px-1.5 text-xs"
-              onClick={() => void OpenDirectory(folder)}
+              onClick={() => OpenDirectory(folder).catch((e) => toast.error(errorMessage(e)))}
             >
               <FolderOpen className="h-3 w-3" aria-hidden />
               {t("sftp.showInFolder")}

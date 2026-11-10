@@ -84,6 +84,13 @@ const SIDE_TONE = {
   },
 } as const;
 
+/** 表头两侧标题：按侧着色时左侧本地用 success、右侧远端用 info，与行着色一致。 */
+const SIDE_TITLE_CLASS = {
+  plain: "bg-background font-medium text-muted-foreground",
+  original: "border border-success/30 bg-success/5 font-semibold text-success",
+  modified: "border border-info/30 bg-info/5 font-semibold text-info",
+} as const;
+
 function makeEditorDecorations(
   monaco: typeof MonacoNS,
   blocks: TextDiffBlock[],
@@ -220,7 +227,7 @@ export function CodeDiffViewer({
   const showHeader = originalTitle || modifiedTitle || badge;
   const header = showHeader ? (
     <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 border-b bg-muted/30 px-4 py-2 text-xs">
-      <div className="min-w-0 truncate rounded bg-background px-2 py-1 font-medium text-muted-foreground">
+      <div className={`min-w-0 truncate rounded px-2 py-1 ${SIDE_TITLE_CLASS[toneBySide ? "original" : "plain"]}`}>
         {originalTitle || ""}
       </div>
       {badge ? (
@@ -230,7 +237,9 @@ export function CodeDiffViewer({
       ) : (
         <div />
       )}
-      <div className="min-w-0 truncate rounded bg-background px-2 py-1 text-right font-medium text-muted-foreground">
+      <div
+        className={`min-w-0 truncate rounded px-2 py-1 text-right ${SIDE_TITLE_CLASS[toneBySide ? "modified" : "plain"]}`}
+      >
         {modifiedTitle || ""}
       </div>
     </div>

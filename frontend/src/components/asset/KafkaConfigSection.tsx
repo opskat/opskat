@@ -11,7 +11,7 @@ import { resolveTLSKey, tlsCertFields } from "./tlsCertConfig";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import { credential_entity } from "../../../wailsjs/go/models";
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
-import type { ListLoad } from "./useAsyncList";
+import type { ListLoad } from "@/hooks/useAsyncList";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import {

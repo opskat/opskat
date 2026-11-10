@@ -67,8 +67,11 @@ export interface UseConfigSectionOptions<S> {
   ref: Ref<AssetFormHandle> | undefined;
   editAsset?: asset_entity.Asset;
   onValidityChange: (v: SectionValidity) => void;
-  /** parse(editAsset) 或 {...DEFAULTS}。 */
+  /** parse(editAsset) 或 {...DEFAULTS}。也是「有改动」判断的基线。 */
   init: (editAsset?: asset_entity.Asset) => S;
+  /** 用户此前填过、带进本区块的值(如编辑类型后重建的通用资产表单):只进 state 不进基线,
+   *  这样带来的输入仍算作未保存的改动。 */
+  seed?: (initial: S) => S;
   /** 纯函数,仅依赖 state;每次 state 变算一遍,变化时才上报。 */
   validate: (state: S) => SectionValidity;
   build: (state: S, ctx: AssetFormContext) => Promise<AssetConfigBuildResult>;
@@ -110,6 +113,7 @@ export function useConfigSection<S>(opts: UseConfigSectionOptions<S>): UseConfig
     editAsset,
     onValidityChange,
     init,
+    seed,
     validate,
     build,
     buildTest,
@@ -119,11 +123,12 @@ export function useConfigSection<S>(opts: UseConfigSectionOptions<S>): UseConfig
   } = opts;
 
   const carried = use(AssetFormCarryContext);
-  const [initial, setInitial] = useState<S>(() => {
-    const base = init(editAsset);
-    return editAsset ? base : applyCommonFields(base, carried);
+  const [initial, setInitial] = useState<S>(() => init(editAsset));
+  // 换类型带过来的通用字段与 seed 都是用户之前的输入:只进 state,不进基线。
+  const [state, setState] = useState<S>(() => {
+    const seeded = seed ? seed(initial) : initial;
+    return editAsset ? seeded : applyCommonFields(seeded, carried);
   });
-  const [state, setState] = useState<S>(initial);
   const [initialExtra] = useState(() => JSON.stringify(dirtyExtra));
   const patch = (p: Partial<S>) => setState((s) => ({ ...s, ...p }));
   const settle = useCallback((update: (s: S) => S) => {
@@ -154,11 +159,14 @@ export function useConfigSection<S>(opts: UseConfigSectionOptions<S>): UseConfig
         const defaults = init(undefined) as Record<string, unknown>;
         const out: CommonFields = {};
         for (const key of COMMON_KEYS) {
+          // 本区块没有的字段:不表态,之前区块带着的值继续往下带。
+          if (!(key in current)) continue;
           const value = current[key];
-          if (typeof value !== "string" && typeof value !== "number") continue;
-          // 还是本类型的默认值(含空)就是没填过,不带走——否则会盖掉新类型自己的默认端口/用户名。
-          if (value === "" || value === defaults[key]) continue;
-          Object.assign(out, { [key]: value });
+          // 还是本类型的默认值(含空)就是没填过或被清掉了:显式给 undefined,让壳丢掉之前带着的值——
+          // 否则会盖掉新类型自己的默认端口/用户名,或把用户清掉的值又带回来。
+          const unset =
+            (typeof value !== "string" && typeof value !== "number") || value === "" || value === defaults[key];
+          Object.assign(out, { [key]: unset ? undefined : value });
         }
         return out;
       },
@@ -166,7 +174,7 @@ export function useConfigSection<S>(opts: UseConfigSectionOptions<S>): UseConfig
     }),
     // build/buildTest 捕获的额外身份由调用方经 deps 提供(如 cred.value)。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [state, initial, ...deps]
+    [state, initial, ...deps, ...dirtyExtra]
   );
 
   return { state, setState, patch, settle };

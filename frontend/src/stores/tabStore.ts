@@ -415,6 +415,14 @@ function bulkCloseTabs(state: TabStoreState, candidates: Tab[], fallbackActiveId
 // === Tab openers ===
 
 /**
+ * 内置页面(设置 / 转发 / 密钥 / 审计 / 片段)各只有一个 tab,id 就是页面 id;已开着时 openTab 的
+ * 同 id 去重直接聚焦。标签文字由 resolveTabLabel 按页面翻译,label 只是占位。
+ */
+export function openPageTab(pageId: string) {
+  useTabStore.getState().openTab({ id: pageId, type: "page", label: pageId, meta: { type: "page", pageId } });
+}
+
+/**
  * 设置页只有一个 tab；重复调用由 openTab 的同 id 去重直接聚焦。
  * 给了 item 时落到该设置项，否则保持上次停留的项。
  */

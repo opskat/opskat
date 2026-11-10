@@ -346,6 +346,10 @@ describe("分屏里按会话重连", () => {
       first: { type: "terminal", sessionId: "s1" },
       second: { type: "connecting", connectionId: "conn-2" },
     });
+
+    // 后台窗格连上后不抢走用户正在用的窗格的焦点。
+    emit("ssh:connect:conn-2", { type: "connected", sessionId: "s3" });
+    expect(useTerminalStore.getState().tabData.s1.activePaneId).toBe("s1");
   });
 });
 

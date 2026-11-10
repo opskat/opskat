@@ -14,7 +14,7 @@ import { useAssetStore } from "@/stores/assetStore";
 import { useRecentAssetStore } from "@/stores/recentAssetStore";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { useLayoutStore } from "@/stores/layoutStore";
-import { useTabStore, type Tab, type InfoTabMeta, type PageTabMeta } from "@/stores/tabStore";
+import { openPageTab, useTabStore, type Tab, type InfoTabMeta, type PageTabMeta } from "@/stores/tabStore";
 import { resolveTabLabel, getBuiltinPageMeta, builtinPageTabMeta } from "@/components/layout/pageTabMeta";
 import type { asset_entity, snippet_entity } from "../../../wailsjs/go/models";
 import { errorMessage } from "@/lib/errorMessage";
@@ -267,11 +267,7 @@ export function CommandPalette({ open, onClose, onConnectAsset }: CommandPalette
         id: `page-${pageId}`,
         label: t(meta.labelKey),
         icon: meta.icon,
-        run: () => {
-          const tabStore = useTabStore.getState();
-          if (tabStore.tabs.some((tb) => tb.id === pageId)) tabStore.activateTab(pageId);
-          else tabStore.openTab({ id: pageId, type: "page", label: pageId, meta: { type: "page", pageId } });
-        },
+        run: () => openPageTab(pageId),
       })),
       {
         kind: "action" as const,

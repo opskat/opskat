@@ -46,7 +46,7 @@ import { proxyChainValidationKey, resolveSaveProxyChainSecrets } from "./proxyCo
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { errorMessage } from "@/lib/errorMessage";
 import { AsyncState } from "@/components/common/AsyncState";
-import { useAsyncList, type ListLoad } from "./useAsyncList";
+import { useAsyncList, type ListLoad } from "@/hooks/useAsyncList";
 
 const DEFAULT_GLOBAL_KEEPALIVE_SECONDS = 30;
 

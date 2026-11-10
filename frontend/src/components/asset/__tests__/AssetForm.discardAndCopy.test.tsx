@@ -207,6 +207,45 @@ describe("AssetForm keeps common fields across a type switch", () => {
     expect(screen.getByTestId("ssh-username-input")).toHaveValue("viewer");
   });
 
+  it("still asks before discarding a host that was carried back to the original type", async () => {
+    const onOpenChange = vi.fn();
+    render(<AssetForm open onOpenChange={onOpenChange} />);
+    await userEvent.type(await screen.findByTestId("ssh-host-input"), "10.0.0.7");
+    await switchTo("asset-type-option-rdp");
+    await screen.findByTestId("rdp-host-input");
+    await switchTo("asset-type-option-ssh");
+    expect(await screen.findByTestId("ssh-host-input")).toHaveValue("10.0.0.7");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(await screen.findByText("asset.discardTitle")).toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("does not show a rejected save's errors on a fresh section after switching back", async () => {
+    render(<AssetForm open onOpenChange={vi.fn()} />);
+    await typeName("jump-01");
+    const submit = await screen.findByTestId("asset-form-submit");
+    await waitFor(() => expect(submit).toBeEnabled());
+    await userEvent.click(submit);
+    await waitFor(() => expect(screen.getByTestId("ssh-host-input")).toHaveAttribute("aria-invalid", "true"));
+
+    await switchTo("asset-type-option-redis");
+    await screen.findByTestId("redis-host-input");
+    await switchTo("asset-type-option-ssh");
+
+    expect(await screen.findByTestId("ssh-host-input")).not.toHaveAttribute("aria-invalid");
+  });
+
+  it("does not bring back a host the user cleared in a later type", async () => {
+    render(<AssetForm open onOpenChange={vi.fn()} />);
+    await userEvent.type(await screen.findByTestId("ssh-host-input"), "10.0.0.7");
+    await switchTo("asset-type-option-redis");
+    await userEvent.clear(await screen.findByTestId("redis-host-input"));
+    await switchTo("asset-type-option-vnc");
+    expect(await screen.findByTestId("vnc-host-input")).toHaveValue("");
+  });
+
   it("does not drag the old type's default port along", async () => {
     render(<AssetForm open onOpenChange={vi.fn()} />);
     await userEvent.type(await screen.findByTestId("ssh-host-input"), "10.0.0.7");

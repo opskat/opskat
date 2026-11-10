@@ -59,7 +59,7 @@ export function SchemaRegistryView({ tabId, state }: { tabId: string; state: Kaf
           )}
         </div>
         <div className="min-h-0 overflow-auto">
-          <SchemaDetailPanel tabId={tabId} state={state} />
+          <SchemaDetailPanel key={state.selectedSchemaSubject} tabId={tabId} state={state} />
         </div>
       </div>
       <RegisterSchemaDialog tabId={tabId} open={registerOpen} onOpenChange={setRegisterOpen} />

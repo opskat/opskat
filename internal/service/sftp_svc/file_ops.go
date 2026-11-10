@@ -143,7 +143,7 @@ func statTarget(client interface {
 	stat.IsDir = info.IsDir()
 	stat.Size = info.Size()
 	stat.ModTime = info.ModTime().Unix()
-	keepBoth, err := uniqueRemotePath(client, p)
+	keepBoth, err := keepBothPath(client, p)
 	if err != nil {
 		stat.Error = err.Error()
 		return stat
@@ -385,16 +385,12 @@ func sameRemotePath(a, b string) bool {
 	return pathpkg.Clean(a) == pathpkg.Clean(b)
 }
 
-func uniqueRemotePath(client interface {
+// keepBothPath returns the first free _copy / _copy2 / ... sibling of an existing path.
+// Only a not-exist answer counts as free: a candidate whose check fails may well be an
+// existing file, and offering it would turn "keep both" into a silent overwrite.
+func keepBothPath(client interface {
 	Stat(string) (os.FileInfo, error)
 }, desired string) (string, error) {
-	if _, err := client.Stat(desired); err != nil {
-		if os.IsNotExist(err) {
-			return desired, nil
-		}
-		// Many SFTP servers return generic errors for missing paths; try the desired name first.
-		return desired, nil
-	}
 	dir := pathpkg.Dir(desired)
 	base := pathpkg.Base(desired)
 	ext := pathpkg.Ext(base)
@@ -405,9 +401,12 @@ func uniqueRemotePath(client interface {
 			suffix = fmt.Sprintf("_copy%d", i+1)
 		}
 		candidate := pathpkg.Join(dir, stem+suffix+ext)
-		if _, err := client.Stat(candidate); err != nil {
-			// Stat 失败视为"名字可用"：SFTP 服务端常返回通用错误而非 ENOENT。
-			return candidate, nil //nolint:nilerr
+		_, err := client.Stat(candidate)
+		if os.IsNotExist(err) {
+			return candidate, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("check %s: %w", candidate, err)
 		}
 	}
 	return "", fmt.Errorf("cannot find available copy name for %s", desired)

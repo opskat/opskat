@@ -50,12 +50,7 @@ export function GenericConfigSection({ ref, editAsset, variant, onValidityChange
   const summary = types.find((ct) => ct.slug === slug);
   const [fetched, setFetched] = useState<{ ct?: custom_type_entity.CustomType; error?: string; reloadKey: number }>();
 
-  // 类型结构未就绪前壳不能保存 / 测试(切换类型时壳里还留着上一个 section 的有效性)。
-  useEffect(() => {
-    onValidityChange({ canTest: false, canSave: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  // 类型结构就绪、表单挂上之前不上报校验结果:壳据此让保存保持禁用(无从校验),而不是可点却没反应。
   const typeId = summary?.id;
   useEffect(() => {
     if (typeId === undefined) return;
@@ -149,10 +144,8 @@ function GenericTypeForm({
     ref,
     editAsset,
     onValidityChange,
-    init: () => {
-      const fresh = initGenericState(ct, editConfig, editAsset?.sshTunnelId || 0);
-      return carried ? carryGenericState(ct, fresh, carried) : fresh;
-    },
+    init: () => initGenericState(ct, editConfig, editAsset?.sshTunnelId || 0),
+    seed: carried ? (fresh) => carryGenericState(ct, fresh, carried) : undefined,
     validate: (s) => {
       const missing = genericMissingFields(ct, s);
       const chainError = isHttp ? proxyChainValidationKey(s.proxyChainLayers) : "";

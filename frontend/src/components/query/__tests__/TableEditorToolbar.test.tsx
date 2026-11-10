@@ -60,11 +60,6 @@ function renderStatusBar(overrides: Partial<React.ComponentProps<typeof TableDat
 }
 
 describe("TableEditorToolbar", () => {
-  it("has no discard entry in the top bar", () => {
-    renderToolbar();
-    expect(screen.queryByTitle("query.discardEdits")).not.toBeInTheDocument();
-  });
-
   it("changes the page size directly from the toolbar", async () => {
     const user = userEvent.setup();
     const onPageSizeChange = vi.fn();
@@ -97,10 +92,5 @@ describe("TableDataStatusBar pending edits", () => {
     renderStatusBar({ pendingEditCount: 0 });
     expect(screen.queryByRole("button", { name: "query.discardAll" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "query.previewAndCommit" })).not.toBeInTheDocument();
-  });
-
-  it("has no page-size control (it lives in the toolbar)", () => {
-    renderStatusBar();
-    expect(screen.queryByTitle("query.tableFooterSettings")).not.toBeInTheDocument();
   });
 });

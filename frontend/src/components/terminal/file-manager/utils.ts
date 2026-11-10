@@ -45,16 +45,6 @@ export function getPathBaseName(path: string): string {
   return segments.at(-1) ?? "";
 }
 
-/** 本地路径（可能是 Windows 反斜杠路径）的最后一段。 */
-export function getLocalBaseName(localPath: string): string {
-  return (
-    localPath
-      .replace(/[\\/]+$/, "")
-      .split(/[\\/]/)
-      .at(-1) ?? ""
-  );
-}
-
 export function canMovePathToDirectory(sourcePath: string, targetDirPath: string): boolean {
   const source = normalizeRemotePath("/", sourcePath);
   const target = normalizeRemotePath("/", targetDirPath);

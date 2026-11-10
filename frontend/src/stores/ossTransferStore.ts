@@ -12,6 +12,8 @@ import {
 import { registerTabCloseHook, type QueryTabMeta } from "./tabStore";
 import { useOssBrowserStore } from "./ossBrowserStore";
 import i18n from "../i18n";
+import { errorMessage } from "@/lib/errorMessage";
+import { pathBaseName } from "@/lib/pathBaseName";
 
 export type OssTransferStatus = "active" | "done" | "error" | "cancelled";
 
@@ -93,13 +95,6 @@ interface OssTransferState {
   clearCompleted: (tabId: string) => void;
 }
 
-/** 取路径末段(兼容 / 和 \,去掉结尾分隔符)。 */
-export function basename(p: string): string {
-  const trimmed = p.replace(/[/\\]+$/, "");
-  const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-  return i >= 0 ? trimmed.slice(i + 1) : trimmed;
-}
-
 export const useOssTransferStore = create<OssTransferState>((set, get) => {
   const addTransfer = (t: OssTransfer) =>
     set((s) => {
@@ -144,7 +139,7 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
         case "progress":
           patchTransfer(tabId, transferId, (t) => ({
             ...t,
-            name: !t.files && e.currentFile ? basename(e.currentFile) : t.name,
+            name: !t.files && e.currentFile ? pathBaseName(e.currentFile) : t.name,
             files: t.files && { done: e.filesCompleted, total: e.filesTotal },
             bytesDone: e.bytesDone,
             bytesTotal: e.bytesTotal,
@@ -186,15 +181,23 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
 
     startUploadPaths: async (tabId, assetId, bucket, prefix, localPaths, resolveKeys) => {
       if (!localPaths.length) return;
-      const keys = await resolveKeys(localPaths.map((localPath) => ({ key: prefix + basename(localPath), localPath })));
+      const keys = await resolveKeys(
+        localPaths.map((localPath) => ({ key: prefix + pathBaseName(localPath), localPath }))
+      );
+      // 一项发起失败只报这一项，其余照常上传。
       for (const [i, localPath] of localPaths.entries()) {
         const key = keys[i];
-        if (key !== null) await get().startUploadPath(tabId, assetId, bucket, prefix, localPath, key);
+        if (key === null) continue;
+        try {
+          await get().startUploadPath(tabId, assetId, bucket, prefix, localPath, key);
+        } catch (e) {
+          toast.error(i18n.t("oss.transfer.uploadFailed"), { description: errorMessage(e) });
+        }
       }
     },
 
-    startUploadPath: async (tabId, assetId, bucket, prefix, localPath, key = prefix + basename(localPath)) => {
-      const name = basename(key);
+    startUploadPath: async (tabId, assetId, bucket, prefix, localPath, key = prefix + pathBaseName(localPath)) => {
+      const name = pathBaseName(key);
       const id = await OSSUploadObjectPath(assetId, bucket, key, localPath);
       if (!id) return null;
       addTransfer({
@@ -221,7 +224,7 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
         transferId: id,
         tabId,
         direction: "download",
-        name: basename(key),
+        name: pathBaseName(key),
         retry: { kind: "download", assetId, bucket, key },
         bytesDone: 0,
         bytesTotal: 0,
@@ -240,7 +243,7 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
         transferId: id,
         tabId,
         direction: "download",
-        name: basename(prefix),
+        name: pathBaseName(prefix),
         files: { done: 0, total: 0 },
         retry: { kind: "downloadFolder", assetId, bucket, prefix },
         bytesDone: 0,

@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { useAssetStore } from "../stores/assetStore";
+import { selectLoadError, useAssetStore } from "../stores/assetStore";
 import { useRecentAssetStore } from "../stores/recentAssetStore";
 import { ListAssets } from "../../wailsjs/go/system/System";
 import {
@@ -29,6 +29,25 @@ describe("assetStore", () => {
       initialized: false,
     });
     useRecentAssetStore.setState({ recentIds: [] });
+  });
+
+  describe("load errors", () => {
+    it("clears a group-list failure once a later group fetch succeeds", async () => {
+      vi.mocked(ListGroups).mockRejectedValueOnce(new Error("db locked"));
+      await expect(useAssetStore.getState().fetchGroups()).rejects.toThrow("db locked");
+      expect(selectLoadError(useAssetStore.getState())).toBe("db locked");
+
+      vi.mocked(ListGroups).mockResolvedValueOnce([]);
+      await useAssetStore.getState().fetchGroups();
+      expect(selectLoadError(useAssetStore.getState())).toBeNull();
+    });
+
+    it("keeps the asset-list failure when only the group list recovers", async () => {
+      vi.mocked(ListAssets).mockRejectedValueOnce(new Error("assets locked"));
+      vi.mocked(ListGroups).mockResolvedValueOnce([]);
+      await expect(useAssetStore.getState().refresh()).rejects.toThrow("assets locked");
+      expect(selectLoadError(useAssetStore.getState())).toBe("assets locked");
+    });
   });
 
   describe("fetchAssets", () => {

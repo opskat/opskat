@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { buildTextDiffBlocks } from "../lib/textDiffBlocks";
 
 const diffEditorMock = vi.fn();
@@ -51,6 +51,16 @@ describe("CodeDiffViewer", () => {
   beforeAll(async () => {
     await import("../components/CodeDiffViewer");
   }, 60_000);
+
+  it("colours the side titles by side when toning by side", async () => {
+    const { CodeDiffViewer } = await import("../components/CodeDiffViewer");
+    render(
+      <CodeDiffViewer original="local" modified="remote" originalTitle="Local" modifiedTitle="Remote" toneBySide />
+    );
+
+    expect(screen.getByText("Local").className).toContain("text-success");
+    expect(screen.getByText("Remote").className).toContain("text-info");
+  });
 
   it("forces side-by-side diff mode without inline fallback", async () => {
     const { CodeDiffViewer } = await import("../components/CodeDiffViewer");

@@ -3,13 +3,8 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { OSSListObjects } from "../../../wailsjs/go/oss/OSS";
 import type { oss_svc } from "../../../wailsjs/go/models";
-import {
-  useFileConflictResolver,
-  type FileConflictItem,
-  type FileConflictKind,
-  type FileConflictSide,
-} from "@/components/common/FileConflictDialog";
-import { localConflictSides } from "@/components/common/localConflictSides";
+import { type FileConflictKind, type FileConflictSide } from "@/components/common/FileConflictDialog";
+import { useWriteTargetSettler, type PendingWriteConflict } from "@/components/common/useWriteTargetSettler";
 import { errorMessage } from "@/lib/errorMessage";
 
 export interface OssWriteTarget {
@@ -47,7 +42,7 @@ const MAX_KEEP_BOTH_ATTEMPTS = 1000;
  */
 export function useOssTargetResolver(assetId: number, bucket: string) {
   const { t } = useTranslation();
-  const { resolveConflicts, conflictDialog } = useFileConflictResolver();
+  const { settle, conflictDialog } = useWriteTargetSettler();
 
   const find = useCallback(
     async (key: string): Promise<oss_svc.ObjectItem | undefined> => {
@@ -70,19 +65,20 @@ export function useOssTargetResolver(assetId: number, bucket: string) {
 
   const resolveTargets = useCallback(
     async (targets: OssWriteTarget[], kind: FileConflictKind = "transfer"): Promise<(string | null)[]> => {
-      const result: (string | null)[] = targets.map(() => null);
-      const conflicts: { index: number; item: FileConflictItem; keepBoth?: string }[] = [];
+      const free: (string | null)[] = targets.map(() => null);
+      const conflicts: PendingWriteConflict[] = [];
       for (const [index, target] of targets.entries()) {
         try {
           const existing = await find(target.key);
           if (!existing) {
-            result[index] = target.key;
+            free[index] = target.key;
             continue;
           }
           const keepBoth = await firstFreeKey(target.key);
           conflicts.push({
             index,
             keepBoth,
+            localPath: target.localPath,
             item: {
               targetPath: target.key,
               existing: ossObjectSide(existing),
@@ -95,29 +91,14 @@ export function useOssTargetResolver(assetId: number, bucket: string) {
         }
       }
 
-      const local = conflicts.filter((conflict) => targets[conflict.index].localPath);
-      try {
-        const sides = await localConflictSides(local.map((conflict) => targets[conflict.index].localPath!));
-        local.forEach((conflict, i) => {
-          conflict.item.incoming = sides[i];
-        });
-      } catch (e) {
-        toast.error(errorMessage(e));
-        return targets.map(() => null);
-      }
-
-      const decisions = await resolveConflicts(
-        conflicts.map((conflict) => conflict.item),
+      return settle(
+        targets.map((target) => target.key),
+        free,
+        conflicts,
         kind
       );
-      decisions.forEach((decision, i) => {
-        const { index, keepBoth } = conflicts[i];
-        if (decision === "overwrite") result[index] = targets[index].key;
-        if (decision === "keepBoth") result[index] = keepBoth ?? null;
-      });
-      return result;
     },
-    [find, firstFreeKey, resolveConflicts, t]
+    [find, firstFreeKey, settle, t]
   );
 
   return { resolveTargets, conflictDialog };

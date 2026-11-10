@@ -160,3 +160,26 @@ func TestPasteRejectsTargetNameThatIsNotABaseName(t *testing.T) {
 		require.Error(t, err, "targetName %q", name)
 	}
 }
+
+type statFunc func(string) (os.FileInfo, error)
+
+func (f statFunc) Stat(p string) (os.FileInfo, error) { return f(p) }
+
+func TestStatTargetsDoesNotOfferAKeepBothNameItCouldNotCheck(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.txt"), []byte("abc"), 0o600))
+	existing, err := os.Stat(filepath.Join(root, "a.txt"))
+	require.NoError(t, err)
+
+	// a.txt 存在，a_copy.txt 的检查失败（权限不足等）：它可能就是一个已存在的文件，不能当成可写的「保留两者」目标。
+	got := statTarget(statFunc(func(p string) (os.FileInfo, error) {
+		if p == "/srv/a.txt" {
+			return existing, nil
+		}
+		return nil, os.ErrPermission
+	}), "/srv/a.txt")
+
+	assert.True(t, got.Exists)
+	assert.Empty(t, got.KeepBothPath)
+	assert.NotEmpty(t, got.Error)
+}

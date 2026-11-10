@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type ComponentType, type MouseEvent } from "react";
+import { useState, useCallback, useEffect, useRef, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -12,7 +12,6 @@ import {
   Textarea,
 } from "@opskat/ui";
 import { useWailsEvent } from "@/hooks/useWailsEvent";
-import { S3Icon } from "@/components/asset/brand-icons";
 import { ApprovalClassification } from "./ApprovalClassification";
 import { ExtensionRequestDetail } from "./ExtensionRequestDetail";
 import { TruncatedText } from "./TruncatedText";
@@ -20,22 +19,10 @@ import { RememberPatternEditor } from "./RememberPatternEditor";
 import { hasRememberPatternErrors, rememberPrefill } from "./rememberPattern";
 import { RespondOpsctlApproval } from "../../../wailsjs/go/opsctl/Opsctl";
 import { permission } from "../../../wailsjs/go/models";
-import {
-  ShieldAlert,
-  Terminal,
-  Database,
-  Server,
-  FolderOpen,
-  Globe,
-  Usb,
-  Trash2,
-  Boxes,
-  FileUp,
-  Puzzle,
-} from "lucide-react";
+import { ShieldAlert, Server, FolderOpen, Globe } from "lucide-react";
 import { hasApprovalCommandEdits } from "@/lib/approval";
 import { errorMessage } from "@/lib/errorMessage";
-import { approvalTypePresentation, hasPinnedDetail } from "./approvalTypePresentation";
+import { approvalBadge, hasPinnedDetail } from "./approvalTypePresentation";
 import type { ReviewInfo } from "@/lib/commandReview";
 import { ReviewNotice } from "./ReviewNotice";
 
@@ -102,36 +89,16 @@ interface QueueItem {
 // 进一步只对带 detail 的批生效（见下方 isBatchCollapsed）——与 ApprovalBlock.tsx 同理。
 const BATCH_COLLAPSE_THRESHOLD = 10;
 
-// 与 ApprovalBlock.tsx 同理：lucide 图标是 ForwardRefExoticComponent，S3Icon 是普通的
-// React.FC，这张表按调用点唯一用到的形状（接收 className 的组件）收窄类型。
-type IconComponent = ComponentType<{ className?: string }>;
-
 function TypeBadge({ type, command }: { type: string; command: string }) {
   const { t } = useTranslation();
-  // 登记了操作类型的审批类型(通用资产:HTTP 请求 / 命令 / 取值)徽标显示操作而不是类型名。
-  const op = approvalTypePresentation(type).op?.(command);
-  const icons: Record<string, IconComponent> = {
-    exec: Terminal,
-    serial: Usb,
-    sql: Database,
-    redis: Server,
-    mongo: Database,
-    kafka: Database,
-    delete: Trash2,
-    etcd: Database,
-    k8s: Boxes,
-    cp: FileUp,
-    oss: S3Icon,
-    ext_dev_install: Puzzle,
-  };
-  const Icon = op?.icon ?? icons[type] ?? Terminal;
+  const { icon: Icon, labelKey } = approvalBadge(type, command);
   return (
     <span
       data-testid="approval-type-badge"
       className="inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground bg-muted"
     >
       <Icon className="h-3 w-3" />
-      {op ? t(op.labelKey) : type.toUpperCase()}
+      {labelKey ? t(labelKey) : type}
     </span>
   );
 }

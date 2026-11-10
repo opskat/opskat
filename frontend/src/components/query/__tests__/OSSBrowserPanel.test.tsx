@@ -16,6 +16,7 @@ import { OSSBrowserPanel } from "../OSSBrowserPanel";
 import { useTabStore } from "@/stores/tabStore";
 import { useOssBrowserStore } from "@/stores/ossBrowserStore";
 import { useAssetStore } from "@/stores/assetStore";
+import { toast } from "sonner";
 
 const TAB = "query-7";
 
@@ -157,6 +158,25 @@ describe("OSSBrowserPanel", () => {
       expect(OSSListObjects).toHaveBeenCalledTimes(2);
     }
   );
+
+  it("reports a failed listing retry inline only, not again as a toast", async () => {
+    const toastError = vi.spyOn(toast, "error").mockImplementation(() => "");
+    useAssetStore.setState({
+      assets: [{ ID: 7, Type: "oss", Config: '{"endpoint":"e","access_key_id":"a","bucket":"ootd"}' }] as never,
+    });
+    vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "ootd", creationDate: 0 }] as never);
+    vi.mocked(OSSListObjects)
+      .mockRejectedValueOnce(new Error("AccessDenied"))
+      .mockRejectedValueOnce(new Error("SlowDown"));
+    render(<OSSBrowserPanel tabId={TAB} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("AccessDenied");
+
+    fireEvent.click(screen.getByRole("button", { name: "action.retry" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("SlowDown"));
+    expect(toastError).not.toHaveBeenCalled();
+    toastError.mockRestore();
+  });
 
   it("guards against a missing asset id", () => {
     useTabStore.setState({ tabs: [], activeTabId: null });

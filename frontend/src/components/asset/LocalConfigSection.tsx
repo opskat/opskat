@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { AsyncState } from "@/components/common/AsyncState";
-import { useAsyncList } from "@/components/asset/useAsyncList";
+import { useAsyncList } from "@/hooks/useAsyncList";
 import { Field } from "@/components/asset/fields";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { ListLocalShells } from "../../../wailsjs/go/local/Local";

@@ -63,13 +63,13 @@ import { useTerminalDirectorySync } from "./file-manager/useTerminalDirectorySyn
 import {
   canMovePathToDirectory,
   formatBytes,
-  getLocalBaseName,
   getParentPath,
   getPathBaseName,
   HANDLE_PX,
   joinRemotePath,
 } from "./file-manager/utils";
 import { errorMessage } from "@/lib/errorMessage";
+import { pathBaseName } from "@/lib/pathBaseName";
 
 interface FileManagerPanelProps {
   assetId?: number;
@@ -261,12 +261,13 @@ export function FileManagerPanel({
     async (localPaths: string[], remoteDir: string) => {
       const destinations = await resolveTargets(
         localPaths.map((localPath) => ({
-          targetPath: joinRemotePath(remoteDir, getLocalBaseName(localPath)),
+          targetPath: joinRemotePath(remoteDir, pathBaseName(localPath)),
           localPath,
         }))
       );
       destinations.forEach((destination, index) => {
-        if (destination) void startUploadFile(transferTarget, localPaths[index], destination);
+        if (!destination) return;
+        startUploadFile(transferTarget, localPaths[index], destination).catch((e) => toast.error(errorMessage(e)));
       });
     },
     [resolveTargets, startUploadFile, transferTarget]

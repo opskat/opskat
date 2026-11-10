@@ -90,6 +90,14 @@ export function ExternalEditPendingDialog({
       description: t("externalEdit.pending.acceptRemoteConfirmDesc"),
     });
 
+  // 确认框打开期间这条记录可能已在别处被处理或换了状态：只对仍处于同一状态的记录执行，否则收起确认框。
+  const confirmTarget = discardConfirm
+    ? pendingItems.find(
+        (item) => item.session.id === discardConfirm.session.id && item.session.state === discardConfirm.session.state
+      )?.session
+    : undefined;
+  if (discardConfirm && !confirmTarget) setDiscardConfirm(null);
+
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -283,7 +291,7 @@ export function ExternalEditPendingDialog({
         </DialogContent>
       </Dialog>
       <ConfirmDialog
-        open={discardConfirm !== null}
+        open={confirmTarget !== undefined}
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setDiscardConfirm(null);
         }}
@@ -292,10 +300,9 @@ export function ExternalEditPendingDialog({
         cancelText={t("action.cancel")}
         confirmText={discardConfirm?.confirmText}
         onConfirm={() => {
-          if (!discardConfirm) return;
+          if (!discardConfirm || !confirmTarget) return;
           setDiscardConfirm(null);
-          const { action, session } = discardConfirm;
-          void (action === "overwrite" ? onOverwrite(session) : onAcceptRemote(session));
+          void (discardConfirm.action === "overwrite" ? onOverwrite(confirmTarget) : onAcceptRemote(confirmTarget));
         }}
       />
     </>

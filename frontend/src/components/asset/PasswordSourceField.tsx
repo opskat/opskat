@@ -5,7 +5,7 @@ import { Pencil, Shield } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { Field, Segmented } from "@/components/asset/fields";
 import { AsyncState } from "@/components/common/AsyncState";
-import type { ListLoad } from "@/components/asset/useAsyncList";
+import type { ListLoad } from "@/hooks/useAsyncList";
 import { SecretInput } from "@/components/SecretInput";
 import { credential_entity } from "../../../wailsjs/go/models";
 import { GetAssetPassword } from "../../../wailsjs/go/system/System";

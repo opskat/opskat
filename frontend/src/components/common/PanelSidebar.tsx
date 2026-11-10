@@ -20,8 +20,6 @@ export interface PanelSidebarProps {
   actions?: ReactNode;
   /** Filter box shown under the header. Pass it only for panels that already filter; omit it otherwise. */
   filter?: ReactNode;
-  /** localStorage key override, for a panel whose width was persisted under a legacy key (K8s: `k8s_sidebar_width`). */
-  storageKey?: string;
   /** Sidebar content (tree / list / load states), laid out below the header and filter. */
   children: ReactNode;
 }
@@ -32,13 +30,13 @@ export interface PanelSidebarProps {
  * drag handle as two siblings, so place it directly inside the panel's horizontal flex row, before
  * the content area.
  */
-export function PanelSidebar({ panelType, title, actions, filter, storageKey, children }: PanelSidebarProps) {
+export function PanelSidebar({ panelType, title, actions, filter, children }: PanelSidebarProps) {
   const sidebarRef = useRef<HTMLDivElement>(null);
-  const { size, handleMouseDown } = useResizeHandle({
+  const { size, isResizing, handleMouseDown } = useResizeHandle({
     defaultSize: SIDEBAR_DEFAULT_WIDTH,
     minSize: SIDEBAR_MIN_WIDTH,
     maxSize: SIDEBAR_MAX_WIDTH,
-    storageKey: storageKey ?? `${panelType}_sidebar_width`,
+    storageKey: `${panelType}_sidebar_width`,
     targetRef: sidebarRef,
   });
 
@@ -64,6 +62,10 @@ export function PanelSidebar({ panelType, title, actions, filter, storageKey, ch
         className="w-[3px] shrink-0 cursor-col-resize transition-colors hover:bg-ring/40 active:bg-ring/60"
         onMouseDown={handleMouseDown}
       />
+      {/* 拖动期间盖住整个页面:鼠标划过终端 / 编辑器等内容时拖动不被它们截走,也不会选中文字。 */}
+      {isResizing && (
+        <div className="fixed inset-0 z-50 cursor-col-resize" data-testid={`${panelType}-sidebar-resize-overlay`} />
+      )}
     </>
   );
 }

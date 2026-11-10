@@ -33,7 +33,7 @@ import { useAssetStore } from "@/stores/assetStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { getAssetType, pageTabPrefix } from "@/lib/assetTypes";
-import { openSettingsTab, useTabStore } from "@/stores/tabStore";
+import { openPageTab, openSettingsTab, useTabStore } from "@/stores/tabStore";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { bootstrapExtensions } from "@/extension/init";
 import { openAssetConnection } from "@/lib/openAsset";
@@ -339,18 +339,7 @@ function App() {
       tabStore.activateTab(homeTab?.id || tabStore.tabs[0]?.id || "");
       return;
     }
-    // Page tabs: settings, forward, sshkeys, audit, snippets
-    const existing = tabStore.tabs.find((t) => t.id === page);
-    if (existing) {
-      tabStore.activateTab(page);
-    } else {
-      tabStore.openTab({
-        id: page,
-        type: "page",
-        label: page,
-        meta: { type: "page", pageId: page },
-      });
-    }
+    openPageTab(page);
   }, []);
 
   const tabBarLayout = useLayoutStore((s) => s.tabBarLayout);

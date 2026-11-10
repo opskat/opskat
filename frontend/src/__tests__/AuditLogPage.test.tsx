@@ -235,6 +235,21 @@ describe("AuditLogPage load states", () => {
     expect(await screen.findByText("audit.empty")).toBeInTheDocument();
   });
 
+  it("does not keep showing the previous rows next to a failed reload", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValueOnce({
+      items: [{ ID: 1, ToolName: "exec", AssetName: "web-01", Command: "uptime", Request: "{}", Createtime: 1 }],
+      total: 1,
+    } as never);
+    render(<AuditLogPage />);
+    expect(await screen.findByText("web-01")).toBeInTheDocument();
+
+    vi.mocked(ListAuditLogs).mockRejectedValueOnce(new Error("audit db locked"));
+    await userEvent.click(document.querySelector(".lucide-refresh-cw")!.closest("button")!);
+
+    expect(await screen.findByText(/audit db locked/)).toBeInTheDocument();
+    expect(screen.queryByText("web-01")).not.toBeInTheDocument();
+  });
+
   it("shows loading while a logs retry is in flight", async () => {
     vi.mocked(ListAuditLogs).mockRejectedValueOnce(new Error("audit db locked"));
     render(<AuditLogPage />);

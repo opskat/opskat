@@ -31,9 +31,9 @@ describe("PanelSidebar", () => {
     expect(localStorage.getItem("mongodb_sidebar_width")).toBeNull();
   });
 
-  it("keeps a legacy storage key and clamps drags to the shared range", () => {
+  it("clamps drags to the shared range", () => {
     render(
-      <PanelSidebar panelType="k8s" storageKey="k8s_sidebar_width" title="Cluster">
+      <PanelSidebar panelType="k8s" title="Cluster">
         body
       </PanelSidebar>
     );
@@ -41,7 +41,19 @@ describe("PanelSidebar", () => {
     expect(localStorage.getItem("k8s_sidebar_width")).toBe("420");
     drag(screen.getByTestId("k8s-sidebar-resize"), 5000, -5000);
     expect(localStorage.getItem("k8s_sidebar_width")).toBe("160");
-    expect(localStorage.getItem("k8s_sidebar_width")).not.toBeNull();
+  });
+
+  it("covers the page while dragging so the drag is not lost to the content underneath", () => {
+    render(
+      <PanelSidebar panelType="k8s" title="Cluster">
+        body
+      </PanelSidebar>
+    );
+    const handle = screen.getByTestId("k8s-sidebar-resize");
+    fireEvent.mouseDown(handle, { clientX: 100 });
+    expect(screen.getByTestId("k8s-sidebar-resize-overlay")).toBeInTheDocument();
+    fireEvent.mouseUp(document);
+    expect(screen.queryByTestId("k8s-sidebar-resize-overlay")).toBeNull();
   });
 
   it("renders without a filter row when none is given", () => {

@@ -86,7 +86,6 @@ vi.mock("@/components/CodeDiffViewer", () => ({
         data-navigation-token={props.navigationToken}
         data-testid={props.testId}
       >
-        externalEdit.compare.readOnly externalEdit.compare.remoteSnapshot externalEdit.compare.localDraft
         {props.original}
         {props.modified}
       </div>
@@ -743,13 +742,6 @@ describe("FileManagerPanel", () => {
     await waitFor(() => expect(screen.getByTestId("external-edit-compare-diff-count")).toHaveTextContent("1 / 2"));
     expect(within(workbench).getByRole("button", { name: "externalEdit.compare.previous" })).toBeDisabled();
     expect(within(workbench).getByRole("button", { name: "externalEdit.compare.next" })).toBeEnabled();
-    expect(screen.getByTestId("external-edit-compare-diff-editor")).toHaveTextContent("externalEdit.compare.readOnly");
-    expect(screen.getByTestId("external-edit-compare-diff-editor")).toHaveTextContent(
-      "externalEdit.compare.remoteSnapshot"
-    );
-    expect(screen.getByTestId("external-edit-compare-diff-editor")).toHaveTextContent(
-      "externalEdit.compare.localDraft"
-    );
     expect(screen.getByText("externalEdit.compare.localLeftHelper")).toBeInTheDocument();
   });
 
@@ -2614,6 +2606,41 @@ describe("FileManagerPanel", () => {
       expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/home/me/b.txt", "/srv/app/b_copy.txt");
       expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/home/me/c.txt", "/srv/app/c.txt");
       expect(screen.queryByTestId("file-conflict-dialog")).toBeNull();
+    });
+
+    it("reports an upload the backend refuses to start", async () => {
+      vi.mocked(SFTPUploadFile).mockRejectedValueOnce(new Error("stat /home/me/gone.txt: no such file"));
+      render(panel());
+      await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+
+      await uploadViaButton("/home/me/gone.txt");
+
+      await waitFor(() => expect(toastError).toHaveBeenCalledWith("stat /home/me/gone.txt: no such file"));
+    });
+
+    it("never lets two items of one batch land on the same target", async () => {
+      // a.txt 已存在，保留两者落到 a_copy.txt；同一批里另有一个本就叫 a_copy.txt 的项（远端空闲）。
+      mockTargetStats({ "/srv/app/a.txt": existingFile("/srv/app/a.txt", "/srv/app/a_copy.txt") });
+      render(panel());
+      await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+
+      dropNativeFiles(["/home/me/a.txt", "/home/me/a_copy.txt"]);
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.keepBoth" }));
+
+      await waitFor(() => expect(toastError).toHaveBeenCalledWith("fileConflict.duplicateTarget"));
+      expect(SFTPUploadFile).toHaveBeenCalledTimes(1);
+      expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/home/me/a.txt", "/srv/app/a_copy.txt");
+    });
+
+    it("skips the second of two drops that share a name instead of overwriting the first", async () => {
+      render(panel());
+      await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+
+      dropNativeFiles(["/home/me/a/report.txt", "/home/me/b/report.txt"]);
+
+      await waitFor(() => expect(toastError).toHaveBeenCalledWith("fileConflict.duplicateTarget"));
+      expect(SFTPUploadFile).toHaveBeenCalledTimes(1);
+      expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/home/me/a/report.txt", "/srv/app/report.txt");
     });
 
     it("keeps decisions already made and skips the rest when the dialog is dismissed", async () => {

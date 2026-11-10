@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, within } from "@testing-library/react";
 import { PolicyGroupManager } from "@/components/asset/PolicyGroupManager";
 import { ListPolicyGroups } from "../../wailsjs/go/system/System";
 
@@ -50,6 +50,28 @@ describe("PolicyGroupManager load and delete", () => {
     vi.mocked(ListPolicyGroups).mockResolvedValue([] as never);
     fireEvent.click(screen.getByTestId("async-state-retry"));
     expect(await screen.findByText("asset.policyGroup.empty")).toBeInTheDocument();
+  });
+
+  it("ignores the previous tab's list when it answers after the current tab's", async () => {
+    const answers: Record<string, (v: unknown) => void> = {};
+    vi.mocked(ListPolicyGroups).mockImplementation(
+      (policyType: string) => new Promise((resolve) => (answers[policyType] = resolve)) as never
+    );
+    render(<PolicyGroupManager open onOpenChange={() => {}} initialTab="command" />);
+    await vi.waitFor(() => expect(answers.command).toBeDefined());
+    fireEvent.click(screen.getByText("asset.typeOSS"));
+    await vi.waitFor(() => expect(answers.oss).toBeDefined());
+
+    await act(async () =>
+      answers.oss([{ id: "custom:oss", name: "oss-group", description: "", builtin: false, policyType: "oss" }])
+    );
+    await act(async () =>
+      answers.command([{ id: "custom:cmd", name: "cmd-group", description: "", builtin: false, policyType: "command" }])
+    );
+
+    expect(screen.getByText("oss-group")).toBeInTheDocument();
+    expect(screen.queryByText("cmd-group")).toBeNull();
+    expect(screen.queryByTestId("async-state-loading")).toBeNull();
   });
 
   it("shows loading, not the empty hint, before the list returns", async () => {

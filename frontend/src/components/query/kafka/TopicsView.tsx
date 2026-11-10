@@ -91,7 +91,7 @@ export function TopicsView({ tabId, state }: { tabId: string; state: KafkaTabSta
           )}
         </div>
         <div className="min-h-0 overflow-auto">
-          <TopicDetailPanel tabId={tabId} state={state} />
+          <TopicDetailPanel key={state.selectedTopic} tabId={tabId} state={state} />
         </div>
       </div>
       <CreateTopicDialog tabId={tabId} open={createOpen} onOpenChange={setCreateOpen} />

@@ -93,18 +93,19 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     targetRef: detailRef,
   });
 
+  // Listing failures are kept in listingError and shown in place of the listing, so no toast.
   const onNavigate = useCallback(
-    (prefix: string) => void navigateToPrefix(tabId, prefix).catch(fail),
-    [navigateToPrefix, tabId, fail]
+    (prefix: string) => void navigateToPrefix(tabId, prefix).catch(() => undefined),
+    [navigateToPrefix, tabId]
   );
   const onExpand = useCallback(
     (prefix: string) => void expandNode(tabId, prefix).catch(fail),
     [expandNode, tabId, fail]
   );
-  const onRetryListing = useCallback(() => void refresh(tabId).catch(fail), [refresh, tabId, fail]);
+  const onRetryListing = useCallback(() => void refresh(tabId).catch(() => undefined), [refresh, tabId]);
   const onSelectBucket = useCallback(
-    (bucket: string) => void selectBucket(tabId, bucket).catch(fail),
-    [selectBucket, tabId, fail]
+    (bucket: string) => void selectBucket(tabId, bucket).catch(() => undefined),
+    [selectBucket, tabId]
   );
 
   const onDetailDownload = useCallback(() => {

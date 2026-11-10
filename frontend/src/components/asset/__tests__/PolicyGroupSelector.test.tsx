@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PolicyGroupSelector } from "@/components/asset/PolicyGroupSelector";
 import { ListPolicyGroups } from "../../../../wailsjs/go/system/System";
@@ -36,5 +36,29 @@ describe("PolicyGroupSelector load states", () => {
     renderSelector();
     await userEvent.click(screen.getByTestId("policy-group-add"));
     expect(await screen.findByText("asset.policyGroup.noMore")).toBeInTheDocument();
+  });
+
+  it("ignores an earlier request that answers after a later one", async () => {
+    let answerOld!: (v: unknown) => void;
+    let answerNew!: (v: unknown) => void;
+    vi.mocked(ListPolicyGroups)
+      .mockReturnValueOnce(new Promise((r) => (answerOld = r)) as never)
+      .mockReturnValueOnce(new Promise((r) => (answerNew = r)) as never);
+    const { rerender } = render(
+      <PolicyGroupSelector policyType="ssh" selectedIds={[]} onChange={() => {}} refreshKey={0} />
+    );
+    rerender(<PolicyGroupSelector policyType="ssh" selectedIds={[]} onChange={() => {}} refreshKey={1} />);
+
+    await act(async () =>
+      answerNew([{ id: "custom:new", name: "new", description: "", builtin: false, policyType: "command" }])
+    );
+    await act(async () =>
+      answerOld([{ id: "custom:old", name: "old", description: "", builtin: false, policyType: "command" }])
+    );
+    await userEvent.click(screen.getByTestId("policy-group-add"));
+
+    expect(screen.getByTestId("policy-group-option-custom:new")).toBeInTheDocument();
+    expect(screen.queryByTestId("policy-group-option-custom:old")).toBeNull();
+    expect(screen.queryByTestId("async-state-loading")).toBeNull();
   });
 });
