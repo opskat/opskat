@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/opskat/opskat/internal/pkg/transfer"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -16,9 +17,9 @@ func TestFinalTransferEvent(t *testing.T) {
 		assert.Equal(t, "/tmp/a.txt", ev.LocalPath)
 		assert.Empty(t, ev.Error)
 	})
-	t.Run("a cancelled context is reported as cancelled, not error", func(t *testing.T) {
+	t.Run("a canceled context is reported with the cancel status, not error", func(t *testing.T) {
 		ev := finalTransferEvent("t1", "/tmp/a.txt", fmt.Errorf("upload: %w", context.Canceled))
-		assert.Equal(t, "cancelled", ev.Status)
+		assert.Equal(t, transfer.StatusCancelled, ev.Status)
 	})
 	t.Run("other failures keep their message", func(t *testing.T) {
 		ev := finalTransferEvent("t1", "/tmp/a.txt", errors.New("permission denied"))

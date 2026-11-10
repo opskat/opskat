@@ -26,14 +26,14 @@ type sftpTransferEvent struct {
 	LocalPath string `json:"localPath,omitempty"`
 }
 
-// finalTransferEvent 把传输结果映射为终态事件：被取消（context.Canceled）单独成 "cancelled"，
+// finalTransferEvent 把传输结果映射为终态事件：被取消（context.Canceled）单独成取消状态（transfer.StatusCancelled），
 // 前端不必再从错误文案里推断。
 func finalTransferEvent(transferID, localPath string, err error) sftpTransferEvent {
 	ev := sftpTransferEvent{Progress: transfer.Progress{TransferID: transferID, Status: "done"}, LocalPath: localPath}
 	switch {
 	case err == nil:
 	case errors.Is(err, context.Canceled):
-		ev.Status = "cancelled"
+		ev.Status = transfer.StatusCancelled
 	default:
 		ev.Status = "error"
 		ev.Error = err.Error()
