@@ -8,6 +8,7 @@ import { AssetTree } from "@/components/layout/AssetTree";
 import { MainPanel } from "@/components/layout/MainPanel";
 import { SideAssistantPanel } from "@/components/ai/SideAssistantPanel";
 import { WindowControls } from "@/components/layout/WindowControls";
+import { useApprovalNotice } from "@/hooks/useApprovalNotice";
 import { TopBar } from "@/components/layout/TopBar";
 import { CommandPaletteDialog } from "@/components/command/CommandPaletteDialog";
 import { SnippetAssetDrawer } from "@/components/snippet/SnippetAssetDrawer";
@@ -204,6 +205,12 @@ function App() {
       return !prev;
     });
   }, []);
+
+  const expandAIPanel = useCallback(() => {
+    localStorage.setItem("ai_panel_collapsed", "false");
+    setAiPanelCollapsed(false);
+  }, []);
+  useApprovalNotice(aiPanelCollapsed, expandAIPanel);
 
   const toggleSidebar = useCallback(() => {
     setAssetTreeCollapsed((prev) => {
