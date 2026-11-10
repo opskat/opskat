@@ -21,15 +21,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@opskat/ui";
-import { useAssetStore } from "@/stores/assetStore";
-import { SelectImportFile } from "../../../wailsjs/go/system/System";
 import {
+  SelectImportFile,
+  PreviewImportFile,
+  ExecuteImportFile,
   StartGitHubDeviceFlow,
   WaitGitHubDeviceAuth,
   CancelGitHubAuth,
   GetGitHubUser,
   ExportToGist,
   ListBackupGists,
+  PreviewGistBackup,
   ImportFromGist,
   GetGitHubToken,
   GetStoredGitHubUser,
@@ -41,11 +43,12 @@ import {
   TestWebDAVConfig,
   ListWebDAVBackups,
   ExportToWebDAV,
+  PreviewWebDAVBackup,
   ImportFromWebDAV,
 } from "../../../wailsjs/go/system/System";
 import { backup_svc } from "../../../wailsjs/go/models";
 import { ExportDialog, type WebDAVExportDefaults } from "@/components/settings/ExportDialog";
-import { BackupImportDialog } from "@/components/settings/BackupImportDialog";
+import { BackupImportDialog, type BackupImportSource } from "@/components/settings/BackupImportDialog";
 import {
   Download,
   Upload,
@@ -63,8 +66,6 @@ import {
 import { toast } from "sonner";
 import { notifyCopied, notifySuccess } from "@/lib/notify";
 import { BrowserOpenURL } from "../../../wailsjs/runtime/runtime";
-import { useShortcutStore } from "@/stores/shortcutStore";
-import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
 import { SecretInput } from "@/components/SecretInput";
 import { errorMessage } from "@/lib/errorMessage";
 
@@ -121,15 +122,15 @@ function PasswordInput({
 
 export function BackupSection() {
   const { t } = useTranslation();
-  const { refresh } = useAssetStore();
 
   // File backup
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [exportDialogMode, setExportDialogMode] = useState<"file" | "gist" | "webdav">("file");
-  const [backupImportOpen, setBackupImportOpen] = useState(false);
-  const [backupImportFilePath, setBackupImportFilePath] = useState("");
-  const [backupImportEncrypted, setBackupImportEncrypted] = useState(false);
-  const [backupImportSummary, setBackupImportSummary] = useState<backup_svc.BackupSummary | null>(null);
+
+  // Import / restore (file, Gist, WebDAV share one dialog)
+  const [importSource, setImportSource] = useState<BackupImportSource | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importSeq, setImportSeq] = useState(0);
 
   // GitHub
   const [ghToken, setGhToken] = useState("");
@@ -142,9 +143,6 @@ export function BackupSection() {
   const [gists, setGists] = useState<backup_svc.GistInfo[]>([]);
   const [selectedGistId, setSelectedGistId] = useState("");
   const [gistPushing, setGistPushing] = useState(false);
-  const [gistPulling, setGistPulling] = useState(false);
-  const [gistPullPasswordOpen, setGistPullPasswordOpen] = useState(false);
-  const [gistPullPassword, setGistPullPassword] = useState("");
 
   // WebDAV
   const [webdavConfigured, setWebDAVConfigured] = useState(false);
@@ -158,9 +156,6 @@ export function BackupSection() {
   const [webdavSaving, setWebDAVSaving] = useState(false);
   const [webdavTesting, setWebDAVTesting] = useState(false);
   const [webdavPushing, setWebDAVPushing] = useState(false);
-  const [webdavPulling, setWebDAVPulling] = useState(false);
-  const [webdavPullPasswordOpen, setWebDAVPullPasswordOpen] = useState(false);
-  const [webdavPullPassword, setWebDAVPullPassword] = useState("");
   const [webDAVExportDefaults, setWebDAVExportDefaults] = useState<WebDAVExportDefaults>(emptyWebDAVExportDefaults);
 
   // Load GitHub token on mount
@@ -260,41 +255,11 @@ export function BackupSection() {
     })();
   }, [loadWebDAVBackups]);
 
-  const applyImportResult = useCallback(
-    async (result: backup_svc.ImportResult) => {
-      if (result.shortcuts) {
-        try {
-          const parsed = JSON.parse(result.shortcuts);
-          localStorage.setItem("keyboard_shortcuts", JSON.stringify(parsed));
-          const store = useShortcutStore.getState();
-          store.resetAll();
-          for (const [action, binding] of Object.entries(parsed)) {
-            store.updateShortcut(action as never, binding as never);
-          }
-        } catch {
-          // ignore parse errors
-        }
-      }
-
-      if (result.custom_themes) {
-        try {
-          const themes = JSON.parse(result.custom_themes);
-          const store = useTerminalThemeStore.getState();
-          for (const theme of themes) {
-            if (theme?.id) {
-              store.removeCustomTheme(theme.id);
-            }
-            store.addCustomTheme(theme);
-          }
-        } catch {
-          // ignore parse errors
-        }
-      }
-
-      await refresh();
-    },
-    [refresh]
-  );
+  const openImport = (source: BackupImportSource) => {
+    setImportSource(source);
+    setImportSeq((n) => n + 1);
+    setImportOpen(true);
+  };
 
   // --- File backup ---
   const handleFileExport = () => {
@@ -306,10 +271,16 @@ export function BackupSection() {
     try {
       const info = await SelectImportFile();
       if (!info || !info.filePath) return;
-      setBackupImportFilePath(info.filePath);
-      setBackupImportEncrypted(info.encrypted);
-      setBackupImportSummary(info.summary ?? null);
-      setBackupImportOpen(true);
+      const { filePath } = info;
+      openImport({
+        title: t("backup.importTitle"),
+        passwordPrompt: t("backup.encryptedFile"),
+        successMessage: t("backup.importSuccess"),
+        encrypted: info.encrypted,
+        initialSummary: info.summary ?? null,
+        preview: (password) => PreviewImportFile(filePath, password),
+        execute: (password, opts) => ExecuteImportFile(filePath, password, opts),
+      });
     } catch (e: unknown) {
       toast.error(errorMessage(e));
     }
@@ -376,40 +347,22 @@ export function BackupSection() {
     }
   };
 
-  const handleGistPull = async () => {
+  const handleGistPull = () => {
     if (!selectedGistId || selectedGistId === "__new__") {
       toast.error(t("backup.gistNoBackup"));
       return;
     }
-    setGistPullPassword("");
-    setGistPullPasswordOpen(true);
-  };
-
-  const doGistPull = async () => {
-    if (!gistPullPassword) {
-      toast.error(t("backup.passwordRequired"));
-      return;
-    }
-    setGistPullPasswordOpen(false);
-    setGistPulling(true);
-    try {
-      const opts = new backup_svc.ImportOptions({
-        import_assets: true,
-        import_credentials: true,
-        import_forwards: true,
-        import_policy_groups: true,
-        import_shortcuts: true,
-        import_themes: true,
-        mode: "replace",
-      });
-      const result = await ImportFromGist(selectedGistId, gistPullPassword, ghToken, opts);
-      await applyImportResult(result);
-      notifySuccess(t("backup.gistPullSuccess"));
-    } catch (e: unknown) {
-      toast.error(errorMessage(e));
-    } finally {
-      setGistPulling(false);
-    }
+    const gistId = selectedGistId;
+    const token = ghToken;
+    openImport({
+      title: t("backup.gistPull"),
+      passwordPrompt: t("backup.enterPassword"),
+      successMessage: t("backup.gistPullSuccess"),
+      encrypted: true,
+      initialSummary: null,
+      preview: (password) => PreviewGistBackup(gistId, password, token),
+      execute: (password, opts) => ImportFromGist(gistId, password, token, opts),
+    });
   };
 
   // --- WebDAV ---
@@ -506,40 +459,21 @@ export function BackupSection() {
     }
   };
 
-  const handleWebDAVPull = async () => {
+  const handleWebDAVPull = () => {
     if (!selectedWebDAVBackup) {
       toast.error(t("backup.webdavNoBackup"));
       return;
     }
-    setWebDAVPullPassword("");
-    setWebDAVPullPasswordOpen(true);
-  };
-
-  const doWebDAVPull = async () => {
-    if (!webdavPullPassword) {
-      toast.error(t("backup.passwordRequired"));
-      return;
-    }
-    setWebDAVPullPasswordOpen(false);
-    setWebDAVPulling(true);
-    try {
-      const opts = new backup_svc.ImportOptions({
-        import_assets: true,
-        import_credentials: true,
-        import_forwards: true,
-        import_policy_groups: true,
-        import_shortcuts: true,
-        import_themes: true,
-        mode: "replace",
-      });
-      const result = await ImportFromWebDAV(selectedWebDAVBackup, webdavPullPassword, opts);
-      await applyImportResult(result);
-      notifySuccess(t("backup.webdavPullSuccess"));
-    } catch (e: unknown) {
-      toast.error(errorMessage(e));
-    } finally {
-      setWebDAVPulling(false);
-    }
+    const name = selectedWebDAVBackup;
+    openImport({
+      title: t("backup.webdavPull"),
+      passwordPrompt: t("backup.enterPassword"),
+      successMessage: t("backup.webdavPullSuccess"),
+      encrypted: true,
+      initialSummary: null,
+      preview: (password) => PreviewWebDAVBackup(name, password),
+      execute: (password, opts) => ImportFromWebDAV(name, password, opts),
+    });
   };
 
   return (
@@ -609,12 +543,12 @@ export function BackupSection() {
                 </Button>
                 <Button
                   onClick={handleGistPull}
-                  disabled={gistPulling || !selectedGistId || selectedGistId === "__new__"}
+                  disabled={!selectedGistId || selectedGistId === "__new__"}
                   variant="outline"
                   className="gap-1"
                 >
                   <Download className="h-4 w-4" />
-                  {gistPulling ? t("backup.gistPulling") : t("backup.gistPull")}
+                  {t("backup.gistPull")}
                 </Button>
               </div>
             </>
@@ -727,14 +661,9 @@ export function BackupSection() {
                   <Upload className="h-4 w-4" />
                   {webdavPushing ? t("backup.webdavPushing") : t("backup.webdavPush")}
                 </Button>
-                <Button
-                  onClick={handleWebDAVPull}
-                  disabled={webdavPulling || !selectedWebDAVBackup}
-                  variant="outline"
-                  className="gap-1"
-                >
+                <Button onClick={handleWebDAVPull} disabled={!selectedWebDAVBackup} variant="outline" className="gap-1">
                   <Download className="h-4 w-4" />
-                  {webdavPulling ? t("backup.webdavPulling") : t("backup.webdavPull")}
+                  {t("backup.webdavPull")}
                 </Button>
               </div>
             </>
@@ -752,14 +681,10 @@ export function BackupSection() {
         webDAVDefaults={webDAVExportDefaults}
       />
 
-      {/* Backup import dialog */}
-      <BackupImportDialog
-        open={backupImportOpen}
-        onOpenChange={setBackupImportOpen}
-        filePath={backupImportFilePath}
-        encrypted={backupImportEncrypted}
-        initialSummary={backupImportSummary}
-      />
+      {/* Backup import / restore dialog */}
+      {importSource && (
+        <BackupImportDialog key={importSeq} open={importOpen} onOpenChange={setImportOpen} source={importSource} />
+      )}
 
       {/* GitHub Device Flow dialog */}
       <Dialog open={deviceFlowOpen}>
@@ -798,58 +723,6 @@ export function BackupSection() {
           <DialogFooter>
             <Button variant="outline" onClick={handleCancelDeviceFlow}>
               {t("action.cancel")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Gist pull password dialog */}
-      <Dialog open={gistPullPasswordOpen} onOpenChange={setGistPullPasswordOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{t("backup.gistPull")}</DialogTitle>
-            <DialogDescription>{t("backup.enterPassword")}</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-1.5">
-            <Label>{t("backup.password")}</Label>
-            <PasswordInput
-              value={gistPullPassword}
-              onChange={(e) => setGistPullPassword(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && doGistPull()}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setGistPullPasswordOpen(false)}>
-              {t("action.cancel")}
-            </Button>
-            <Button onClick={doGistPull} disabled={!gistPullPassword}>
-              {t("backup.gistPull")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* WebDAV pull password dialog */}
-      <Dialog open={webdavPullPasswordOpen} onOpenChange={setWebDAVPullPasswordOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{t("backup.webdavPull")}</DialogTitle>
-            <DialogDescription>{t("backup.enterPassword")}</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-1.5">
-            <Label>{t("backup.password")}</Label>
-            <PasswordInput
-              value={webdavPullPassword}
-              onChange={(e) => setWebDAVPullPassword(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && doWebDAVPull()}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setWebDAVPullPasswordOpen(false)}>
-              {t("action.cancel")}
-            </Button>
-            <Button onClick={doWebDAVPull} disabled={!webdavPullPassword}>
-              {t("backup.webdavPull")}
             </Button>
           </DialogFooter>
         </DialogContent>

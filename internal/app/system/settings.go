@@ -724,25 +724,37 @@ func (s *System) ListBackupGists(token string) ([]*backup_svc.GistInfo, error) {
 	return backup_svc.ListBackupGists(token)
 }
 
+// decodeRemoteBackup 解密并解析远程（Gist / WebDAV）备份；远程备份总是加密的。
+func decodeRemoteBackup(content []byte, password string) (*backup_svc.BackupData, error) {
+	jsonData, err := backup_svc.DecryptBackup(content, password)
+	if err != nil {
+		return nil, err
+	}
+	var data backup_svc.BackupData
+	if err := json.Unmarshal(jsonData, &data); err != nil {
+		return nil, fmt.Errorf("解析备份数据失败: %w", err)
+	}
+	return &data, nil
+}
+
+// remoteBackupSummary 解密远程备份并返回概览，不写入任何数据。
+func remoteBackupSummary(content []byte, password string) (*backup_svc.BackupSummary, error) {
+	data, err := decodeRemoteBackup(content, password)
+	if err != nil {
+		return nil, err
+	}
+	summary := data.Summary()
+	summary.Encrypted = true
+	return summary, nil
+}
+
 // PreviewGistBackup 预览 Gist 备份概览
 func (s *System) PreviewGistBackup(gistID, password, token string) (*backup_svc.BackupSummary, error) {
 	content, err := backup_svc.GetGistContent(token, gistID)
 	if err != nil {
 		return nil, err
 	}
-
-	jsonData, err := backup_svc.DecryptBackup(content, password)
-	if err != nil {
-		return nil, err
-	}
-
-	var data backup_svc.BackupData
-	if err := json.Unmarshal(jsonData, &data); err != nil {
-		return nil, fmt.Errorf("解析备份数据失败: %w", err)
-	}
-	summary := data.Summary()
-	summary.Encrypted = true
-	return summary, nil
+	return remoteBackupSummary(content, password)
 }
 
 // ImportFromGist 从 Gist 导入备份
@@ -751,18 +763,11 @@ func (s *System) ImportFromGist(gistID, password, token string, opts backup_svc.
 	if err != nil {
 		return nil, err
 	}
-
-	jsonData, err := backup_svc.DecryptBackup(content, password)
+	data, err := decodeRemoteBackup(content, password)
 	if err != nil {
 		return nil, err
 	}
-
-	var data backup_svc.BackupData
-	if err := json.Unmarshal(jsonData, &data); err != nil {
-		return nil, fmt.Errorf("解析备份数据失败: %w", err)
-	}
-
-	return backup_svc.Import(i18n.Ctx(s.ctx, s.Lang()), &data, &opts, credential_svc.Default())
+	return backup_svc.Import(i18n.Ctx(s.ctx, s.Lang()), data, &opts, credential_svc.Default())
 }
 
 // --- WebDAV 备份 ---
@@ -956,28 +961,34 @@ func clearWebDAVExportDefaults(cfg *bootstrap.AppConfig) {
 	cfg.WebDAVExportIncludeThemes = false
 }
 
+// PreviewWebDAVBackup 下载并解密 WebDAV 备份，返回概览供导入前选择模块。
+func (s *System) PreviewWebDAVBackup(name, password string) (*backup_svc.BackupSummary, error) {
+	content, err := s.webDAVBackupContent(name)
+	if err != nil {
+		return nil, err
+	}
+	return remoteBackupSummary(content, password)
+}
+
 // ImportFromWebDAV 从 WebDAV 导入备份。
 func (s *System) ImportFromWebDAV(name, password string, opts backup_svc.ImportOptions) (*backup_svc.ImportResult, error) {
+	content, err := s.webDAVBackupContent(name)
+	if err != nil {
+		return nil, err
+	}
+	data, err := decodeRemoteBackup(content, password)
+	if err != nil {
+		return nil, err
+	}
+	return backup_svc.Import(i18n.Ctx(s.ctx, s.Lang()), data, &opts, credential_svc.Default())
+}
+
+func (s *System) webDAVBackupContent(name string) ([]byte, error) {
 	cfg, err := s.webDAVConfigFromStorage()
 	if err != nil {
 		return nil, err
 	}
-	content, err := backup_svc.GetWebDAVBackupContent(cfg, name)
-	if err != nil {
-		return nil, err
-	}
-
-	jsonData, err := backup_svc.DecryptBackup(content, password)
-	if err != nil {
-		return nil, err
-	}
-
-	var data backup_svc.BackupData
-	if err := json.Unmarshal(jsonData, &data); err != nil {
-		return nil, fmt.Errorf("解析备份数据失败: %w", err)
-	}
-
-	return backup_svc.Import(i18n.Ctx(s.ctx, s.Lang()), &data, &opts, credential_svc.Default())
+	return backup_svc.GetWebDAVBackupContent(cfg, name)
 }
 
 func (s *System) webDAVConfigFromStorage() (backup_svc.WebDAVConfig, error) {
