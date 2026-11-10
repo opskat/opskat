@@ -173,6 +173,6 @@ describe("TableDataTab JSON view", () => {
     // Switching back keeps the pending edit.
     await user.click(screen.getByRole("radio", { name: "query.tableView" }));
     await waitFor(() => expect(document.querySelector('[data-cell-key="0:name"]')).toBeTruthy());
-    expect(screen.getByTitle("query.applyChanges")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "query.previewAndCommit" })).toBeEnabled();
   });
 });

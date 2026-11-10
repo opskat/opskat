@@ -14,10 +14,11 @@ describe("TableDataTab toolbar", () => {
         gridEdit
         importAvailable
         sqlExportAvailable
+        pageSize={1000}
+        onPageSizeChange={vi.fn()}
         filterSortOpen={false}
         onToggleFilterSort={vi.fn()}
         onSubmit={vi.fn()}
-        onDiscard={vi.fn()}
         onImport={vi.fn()}
         onExport={vi.fn()}
         onPreviewSql={vi.fn()}
@@ -28,7 +29,6 @@ describe("TableDataTab toolbar", () => {
     expect(screen.queryByTitle("query.addRow")).not.toBeInTheDocument();
     expect(screen.queryByTitle("query.deleteRecord")).not.toBeInTheDocument();
     expect(screen.getByTitle("query.submitEdits")).toBeDisabled();
-    expect(screen.getByTitle("query.discardEdits")).toBeDisabled();
     expect(screen.getByTitle("query.previewSql")).toBeDisabled();
     expect(screen.queryByTitle("query.refreshTable")).not.toBeInTheDocument();
     expect(screen.queryByTitle("query.stopLoading")).not.toBeInTheDocument();
@@ -39,7 +39,6 @@ describe("TableDataTab toolbar", () => {
   it("enables pending-edit actions and forwards toolbar handlers", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
-    const onDiscard = vi.fn();
     const onPreviewSql = vi.fn();
     const onToggleFilterSort = vi.fn();
 
@@ -52,10 +51,11 @@ describe("TableDataTab toolbar", () => {
         gridEdit
         importAvailable
         sqlExportAvailable
+        pageSize={1000}
+        onPageSizeChange={vi.fn()}
         filterSortOpen={false}
         onToggleFilterSort={onToggleFilterSort}
         onSubmit={onSubmit}
-        onDiscard={onDiscard}
         onImport={vi.fn()}
         onExport={vi.fn()}
         onPreviewSql={onPreviewSql}
@@ -64,12 +64,10 @@ describe("TableDataTab toolbar", () => {
 
     await user.click(screen.getByTitle("query.filterSort"));
     await user.click(screen.getByTitle("query.submitEdits"));
-    await user.click(screen.getByTitle("query.discardEdits"));
     await user.click(screen.getByTitle("query.previewSql"));
 
     expect(onToggleFilterSort).toHaveBeenCalledOnce();
     expect(onSubmit).toHaveBeenCalledOnce();
-    expect(onDiscard).toHaveBeenCalledOnce();
     expect(onPreviewSql).toHaveBeenCalledOnce();
   });
 
@@ -159,8 +157,8 @@ describe("TableDataTab toolbar", () => {
       />
     );
 
-    await user.click(screen.getByTitle("query.applyChanges"));
-    await user.click(screen.getByTitle("query.discardChanges"));
+    await user.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
+    await user.click(screen.getByRole("button", { name: "query.discardAll" }));
 
     expect(onApplyChanges).toHaveBeenCalledOnce();
     expect(onDiscardChanges).toHaveBeenCalledOnce();

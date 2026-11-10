@@ -10,6 +10,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   Button,
+  ConfirmDialog,
 } from "@opskat/ui";
 import { CodeEditor } from "@/components/CodeEditor";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
@@ -496,6 +497,7 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
     setNewRows([]);
   }, []);
 
+  const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
   const hasEdits = edits.size > 0 || newRows.length > 0;
   // 会丢掉当前页修改的操作(翻页、改页大小、排序、筛选、刷新)都经过这里:没有修改直接执行,
   // 有修改先弹框让用户选择留下、放弃后继续,或提交成功后再继续。
@@ -964,9 +966,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
 
     if (affectedTotal > 0) notifySuccess(t("query.deleteRecordSuccess", { affected: affectedTotal }));
     // 只要有语句执行成功就刷新:命中 0 行也说明服务端数据与网格已经不一致。
+    // 未提交的修改保留:fetchData 换页时 rebaseEdits 让它们跟着各自的行走,被删行上的随之消失。
     if (succeeded > 0) {
-      setEdits(new Map());
-      setNewRows([]);
       await fetchData(page);
       await fetchCount();
     }
@@ -1194,7 +1195,8 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
           filterSortActive={hasActiveFilterSort}
           onToggleFilterSort={() => setShowFilterSort((open) => !open)}
           onSubmit={() => openSqlDialog("confirm")}
-          onDiscard={handleDiscard}
+          pageSize={pageSize}
+          onPageSizeChange={handlePageSizeChange}
           onImport={() => setShowImportDialog(true)}
           onExport={handleExport}
           onPreviewSql={() => openSqlDialog("preview")}
@@ -1301,7 +1303,6 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         totalRows={totalRows}
         page={page}
         totalPages={totalPages}
-        pageSize={pageSize}
         pageInput={pageInput}
         hasPrev={hasPrev}
         hasNext={hasNext}
@@ -1316,7 +1317,6 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         onStopLoading={handleStopLoading}
         onPageInputChange={setPageInput}
         onPageInputConfirm={handlePageInputConfirm}
-        onPageSizeChange={handlePageSizeChange}
         onFirstPage={() => goToPage(0)}
         onPreviousPage={() => goToPage(page - 1)}
         onNextPage={() => goToPage(page + 1)}
@@ -1326,7 +1326,16 @@ function TableDataTabContent({ tabId, innerTabId, database, table }: TableDataTa
         onAddRow={handleAddInlineRow}
         onDeleteRows={handleDeleteSelectedRows}
         onApplyChanges={() => openSqlDialog("confirm")}
-        onDiscardChanges={handleDiscard}
+        onDiscardChanges={() => (pendingEditCount > 1 ? setConfirmDiscardOpen(true) : handleDiscard())}
+      />
+      <ConfirmDialog
+        open={confirmDiscardOpen}
+        onOpenChange={setConfirmDiscardOpen}
+        title={t("query.discardAllTitle")}
+        description={t("query.discardAllDesc", { count: pendingEditCount })}
+        cancelText={t("action.cancel")}
+        confirmText={t("query.discardAll")}
+        onConfirm={handleDiscard}
       />
 
       {/* DDL dialog */}
