@@ -87,18 +87,22 @@ export function EtcdPanel({ tabId }: EtcdPanelProps) {
   // 不要把 execCommand 折叠进 deleteKey 分支：payload 含 flag/value，套 "将删除 key {key}" 会错位。
   let dialogTitle = "";
   let dialogBody = "";
+  let dialogConfirm = "";
   switch (confirmRequest?.action) {
     case "saveKey":
       dialogTitle = t("etcd.detail.saveConfirmTitle");
       dialogBody = t("etcd.detail.saveConfirmBody", { key: confirmRequest.payload });
+      dialogConfirm = t("action.save");
       break;
     case "execCommand":
       dialogTitle = t("etcd.query.execConfirmTitle");
       dialogBody = t("etcd.query.execConfirmBody", { command: confirmRequest.payload });
+      dialogConfirm = t("etcd.query.execConfirmButton");
       break;
     case "deleteKey":
       dialogTitle = t("etcd.query.deleteConfirmTitle");
       dialogBody = t("etcd.query.deleteConfirmBody", { key: confirmRequest.payload });
+      dialogConfirm = t("action.delete");
       break;
   }
 
@@ -176,7 +180,7 @@ export function EtcdPanel({ tabId }: EtcdPanelProps) {
         title={dialogTitle}
         description={dialogBody}
         cancelText={t("action.cancel")}
-        confirmText={t("action.confirm")}
+        confirmText={dialogConfirm}
         onConfirm={() => settleConfirm(true)}
       />
     </div>

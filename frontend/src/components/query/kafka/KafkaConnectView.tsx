@@ -26,7 +26,7 @@ import {
   useKafkaStore,
 } from "@/stores/kafkaStore";
 import { EmptyState, LoadingBlock, Metric, StatusPill } from "./shared";
-import { formatConnectorConfig, parseConnectorConfigObject, formatConnectorTaskSummary } from "./utils";
+import { formatConnectorConfig, parseConnectorConfigObject, formatConnectorTaskSummary, runKafkaAction } from "./utils";
 import { errorMessage } from "@/lib/errorMessage";
 
 export function KafkaConnectView({ tabId, state }: { tabId: string; state: KafkaTabState }) {
@@ -152,8 +152,6 @@ function ConnectorDetailPanel({ tabId, state }: { tabId: string; state: KafkaTab
   const { t } = useTranslation();
   const [updateOpen, setUpdateOpen] = useState(false);
   const [restartOpen, setRestartOpen] = useState(false);
-  const [pauseOpen, setPauseOpen] = useState(false);
-  const [resumeOpen, setResumeOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const pauseConnector = useKafkaStore((s) => s.pauseConnector);
   const resumeConnector = useKafkaStore((s) => s.resumeConnector);
@@ -177,10 +175,30 @@ function ConnectorDetailPanel({ tabId, state }: { tabId: string; state: KafkaTab
         <Button variant="outline" size="sm" className="h-7" onClick={() => setUpdateOpen(true)}>
           {t("query.kafkaUpdateConnectorConfig")}
         </Button>
-        <Button variant="outline" size="sm" className="h-7" onClick={() => setPauseOpen(true)}>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7"
+          onClick={() =>
+            void runKafkaAction(
+              () => pauseConnector(tabId, detail.name),
+              t("query.kafkaConnectorPaused", { name: detail.name })
+            )
+          }
+        >
           {t("query.kafkaPauseConnector")}
         </Button>
-        <Button variant="outline" size="sm" className="h-7" onClick={() => setResumeOpen(true)}>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7"
+          onClick={() =>
+            void runKafkaAction(
+              () => resumeConnector(tabId, detail.name),
+              t("query.kafkaConnectorResumed", { name: detail.name })
+            )
+          }
+        >
           {t("query.kafkaResumeConnector")}
         </Button>
         <Button variant="outline" size="sm" className="h-7" onClick={() => setRestartOpen(true)}>
@@ -210,30 +228,6 @@ function ConnectorDetailPanel({ tabId, state }: { tabId: string; state: KafkaTab
         onOpenChange={setUpdateOpen}
       />
       <RestartConnectorDialog tabId={tabId} name={detail.name} open={restartOpen} onOpenChange={setRestartOpen} />
-      <ConfirmDialog
-        open={pauseOpen}
-        onOpenChange={setPauseOpen}
-        title={t("query.kafkaPauseConnector")}
-        description={t("query.kafkaPauseConnectorConfirmDesc", { name: detail.name })}
-        cancelText={t("action.cancel")}
-        confirmText={t("query.kafkaPauseConnector")}
-        onConfirm={async () => {
-          await pauseConnector(tabId, detail.name);
-          setPauseOpen(false);
-        }}
-      />
-      <ConfirmDialog
-        open={resumeOpen}
-        onOpenChange={setResumeOpen}
-        title={t("query.kafkaResumeConnector")}
-        description={t("query.kafkaResumeConnectorConfirmDesc", { name: detail.name })}
-        cancelText={t("action.cancel")}
-        confirmText={t("query.kafkaResumeConnector")}
-        onConfirm={async () => {
-          await resumeConnector(tabId, detail.name);
-          setResumeOpen(false);
-        }}
-      />
       <ConfirmDialog
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
@@ -457,6 +451,7 @@ function ConnectorConfigDialog({
           }
           cancelText={t("action.cancel")}
           confirmText={mode === "create" ? t("query.kafkaCreateConnector") : t("query.kafkaUpdateConnectorConfig")}
+          variant="default"
           onConfirm={submit}
         />
       </DialogContent>

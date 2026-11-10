@@ -1,4 +1,4 @@
-import { Loader2 } from "lucide-react";
+import { AlertCircle, Loader2 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 
 export function EmptyState({ text }: { text: string }) {
@@ -62,5 +62,19 @@ export function CompactSelect({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+/** 管理操作失败的完整原因：就地换行展示，不截断。 */
+export function ErrorNotice({ message, className = "" }: { message?: string | null; className?: string }) {
+  if (!message) return null;
+  return (
+    <div
+      role="alert"
+      className={`flex items-start gap-1.5 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive ${className}`}
+    >
+      <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span className="min-w-0 whitespace-pre-wrap break-words">{message}</span>
+    </div>
   );
 }

@@ -12,7 +12,8 @@ import {
   Input,
 } from "@opskat/ui";
 import { type KafkaACL, type KafkaACLMutationRequest, type KafkaTabState, useKafkaStore } from "@/stores/kafkaStore";
-import { CompactSelect, EmptyState, LoadingBlock, StatusPill } from "./shared";
+import { CompactSelect, EmptyState, ErrorNotice, LoadingBlock, StatusPill } from "./shared";
+import { runKafkaAction } from "./utils";
 
 const ACL_RESOURCE_TYPES = ["any", "topic", "group", "cluster", "transactional_id", "delegation_token"];
 const ACL_MUTATION_RESOURCE_TYPES = ["topic", "group", "cluster", "transactional_id", "delegation_token"];
@@ -198,7 +199,6 @@ function CreateACLDialog({
   const { t } = useTranslation();
   const createACL = useKafkaStore((s) => s.createACL);
   const state = useKafkaStore((s) => s.states[tabId]);
-  const [confirmOpen, setConfirmOpen] = useState(false);
   const [form, setForm] = useState<KafkaACLMutationRequest>({
     resourceType: "topic",
     resourceName: "",
@@ -219,12 +219,17 @@ function CreateACLDialog({
     (!resourceNameRequired || form.resourceName?.trim());
 
   const submit = async () => {
-    await createACL(tabId, {
-      ...form,
-      resourceName: form.resourceName?.trim(),
-      principal: form.principal.trim(),
-      host: form.host?.trim() || "*",
-    });
+    const ok = await runKafkaAction(
+      () =>
+        createACL(tabId, {
+          ...form,
+          resourceName: form.resourceName?.trim(),
+          principal: form.principal.trim(),
+          host: form.host?.trim() || "*",
+        }),
+      t("query.kafkaACLCreated", { principal: form.principal.trim() })
+    );
+    if (!ok) return;
     setForm({
       resourceType: "topic",
       resourceName: "",
@@ -289,28 +294,17 @@ function CreateACLDialog({
               items={ACL_MUTATION_PERMISSIONS}
             />
           </div>
+          <ErrorNotice message={state?.error} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("action.cancel")}
           </Button>
-          <Button disabled={state?.aclAdminLoading || !canSubmit} onClick={() => setConfirmOpen(true)}>
+          <Button disabled={state?.aclAdminLoading || !canSubmit} onClick={submit}>
             {state?.aclAdminLoading && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
             {t("query.kafkaCreateACL")}
           </Button>
         </DialogFooter>
-        <ConfirmDialog
-          open={confirmOpen}
-          onOpenChange={setConfirmOpen}
-          title={t("query.kafkaCreateACL")}
-          description={t("query.kafkaCreateACLConfirmDesc", {
-            principal: form.principal.trim(),
-            resource: `${form.resourceType}:${form.resourceType === "cluster" ? "kafka-cluster" : form.resourceName}`,
-          })}
-          cancelText={t("action.cancel")}
-          confirmText={t("query.kafkaCreateACL")}
-          onConfirm={submit}
-        />
       </DialogContent>
     </Dialog>
   );

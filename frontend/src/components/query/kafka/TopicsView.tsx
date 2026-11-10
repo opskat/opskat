@@ -26,8 +26,8 @@ import {
   type KafkaTopicSummary,
   useKafkaStore,
 } from "@/stores/kafkaStore";
-import { EmptyState, LoadingBlock, Metric, StatusPill } from "./shared";
-import { parseOptionalJsonObject, parseConfigUpdates } from "./utils";
+import { EmptyState, ErrorNotice, LoadingBlock, Metric, StatusPill } from "./shared";
+import { parseOptionalJsonObject, parseConfigUpdates, runKafkaAction } from "./utils";
 
 export function TopicsView({ tabId, state }: { tabId: string; state: KafkaTabState }) {
   const { t } = useTranslation();
@@ -119,12 +119,17 @@ function CreateTopicDialog({
   const submit = async () => {
     const name = topic.trim();
     if (!name) return;
-    await createTopic(tabId, {
-      topic: name,
-      partitions,
-      replicationFactor,
-      configs: parseOptionalJsonObject(configs),
-    });
+    const ok = await runKafkaAction(
+      () =>
+        createTopic(tabId, {
+          topic: name,
+          partitions,
+          replicationFactor,
+          configs: parseOptionalJsonObject(configs),
+        }),
+      t("query.kafkaTopicCreated", { name })
+    );
+    if (!ok) return;
     setTopic("");
     setConfigs("");
     onOpenChange(false);
@@ -157,6 +162,7 @@ function CreateTopicDialog({
             onChange={(e) => setConfigs(e.target.value)}
             placeholder={t("query.kafkaConfigsPlaceholder")}
           />
+          <ErrorNotice message={state?.error} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -347,6 +353,7 @@ function AlterTopicConfigDialog({
           description={t("query.kafkaUpdateConfigConfirmDesc", { topic })}
           cancelText={t("action.cancel")}
           confirmText={t("action.save")}
+          variant="default"
           onConfirm={confirm}
         />
       </DialogContent>
@@ -413,6 +420,7 @@ function IncreasePartitionsDialog({
           description={t("query.kafkaIncreasePartitionsConfirmDesc", { topic, count: nextCount })}
           cancelText={t("action.cancel")}
           confirmText={t("query.kafkaIncreasePartitions")}
+          variant="default"
           onConfirm={confirm}
         />
       </DialogContent>
@@ -727,7 +735,6 @@ function PayloadPreview({
 
 function ProduceMessagePanel({ tabId, state }: { tabId: string; state: KafkaTabState }) {
   const { t } = useTranslation();
-  const [confirmOpen, setConfirmOpen] = useState(false);
   const setProduceMessage = useKafkaStore((s) => s.setProduceMessage);
   const produceKafkaMessage = useKafkaStore((s) => s.produceKafkaMessage);
   const form = state.produceMessage;
@@ -772,12 +779,18 @@ function ProduceMessagePanel({ tabId, state }: { tabId: string; state: KafkaTabS
           onChange={(e) => setProduceMessage(tabId, { headers: e.target.value })}
           placeholder={t("query.kafkaHeadersPlaceholder")}
         />
+        <ErrorNotice message={state.error} />
         <div className="flex justify-end">
           <Button
             className="h-8 gap-1.5"
             size="sm"
             disabled={state.producingMessage}
-            onClick={() => setConfirmOpen(true)}
+            onClick={() =>
+              void runKafkaAction(
+                () => produceKafkaMessage(tabId),
+                t("query.kafkaMessageSent", { topic: state.selectedTopic || "" })
+              )
+            }
           >
             {state.producingMessage ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -788,15 +801,6 @@ function ProduceMessagePanel({ tabId, state }: { tabId: string; state: KafkaTabS
           </Button>
         </div>
       </div>
-      <ConfirmDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title={t("query.kafkaProduceConfirmTitle")}
-        description={t("query.kafkaProduceConfirmDesc", { topic: state.selectedTopic || "" })}
-        cancelText={t("action.cancel")}
-        confirmText={t("query.kafkaSendMessage")}
-        onConfirm={() => produceKafkaMessage(tabId)}
-      />
     </div>
   );
 }

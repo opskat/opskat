@@ -1,23 +1,13 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Activity,
-  AlertCircle,
-  FileJson,
-  ListTree,
-  Loader2,
-  RefreshCw,
-  Server,
-  Settings,
-  ShieldCheck,
-  Users,
-} from "lucide-react";
+import { Activity, FileJson, ListTree, Loader2, RefreshCw, Server, Settings, ShieldCheck, Users } from "lucide-react";
 import { Button } from "@opskat/ui";
 import { type KafkaTabState, type KafkaView, useKafkaStore } from "@/stores/kafkaStore";
 import { ACLsView } from "./kafka/ACLsView";
 import { BrokersView } from "./kafka/BrokersView";
 import { ConsumerGroupsView } from "./kafka/ConsumerGroupsView";
 import { KafkaConnectView } from "./kafka/KafkaConnectView";
+import { ErrorNotice } from "./kafka/shared";
 import { OverviewView } from "./kafka/OverviewView";
 import { SchemaRegistryView } from "./kafka/SchemaRegistryView";
 import { TopicsView } from "./kafka/TopicsView";
@@ -114,18 +104,14 @@ export function KafkaPanel({ tabId }: KafkaPanelProps) {
         <div className="flex h-11 shrink-0 items-center justify-between border-b px-4">
           <div className="text-sm font-semibold">{activeLabel}</div>
           <div className="flex items-center gap-2">
-            {current.error && (
-              <span className="flex max-w-[480px] items-center gap-1 truncate text-xs text-destructive">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">{current.error}</span>
-              </span>
-            )}
             <Button variant="outline" size="sm" className="h-7 gap-1.5" onClick={() => refreshActiveView(tabId)}>
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
               {t("query.refreshTree")}
             </Button>
           </div>
         </div>
+
+        <ErrorNotice message={current.error} className="mx-4 mt-3 shrink-0" />
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {current.activeView === "overview" && <OverviewView state={current} />}

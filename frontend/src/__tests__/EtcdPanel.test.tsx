@@ -115,7 +115,7 @@ describe("EtcdPanel", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "action.cancel" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "action.confirm" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "etcd.query.execConfirmButton" })).toBeInTheDocument();
 
     // 此时还没真正调用 EtcdExec —— 后端调用必须在用户确认之后
     expect(EtcdExec).not.toHaveBeenCalled();
@@ -158,7 +158,7 @@ describe("EtcdPanel", () => {
 
     await screen.findByRole("alertdialog");
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "action.confirm" }));
+      fireEvent.click(screen.getByRole("button", { name: "etcd.query.execConfirmButton" }));
     });
 
     await waitFor(() => {

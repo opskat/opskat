@@ -1448,6 +1448,7 @@ export const useKafkaStore = create<KafkaStoreState>((set, get) => ({
       set((s) => ({
         states: { ...s.states, [tabId]: { ...s.states[tabId], producingMessage: false, error: errorMessage(err) } },
       }));
+      throw err;
     }
   },
 

@@ -1,3 +1,4 @@
+import { notifySuccess } from "@/lib/notify";
 import type { KafkaConnectorSummary, KafkaSchemaReference, KafkaTopicConfigMutation } from "@/stores/kafkaStore";
 
 export function parseSchemaReferences(value: string): KafkaSchemaReference[] | undefined {
@@ -84,4 +85,18 @@ export function parseRequiredNumber(value: string): number {
     throw new Error("value must be an integer");
   }
   return n;
+}
+
+/**
+ * 执行一次 Kafka 管理操作：成功给提示并返回 true；失败返回 false。
+ * 失败原因已由 store 写入 tab 的 error，由 ErrorNotice 显示，这里不再重复提示。
+ */
+export async function runKafkaAction(action: () => Promise<unknown>, successMessage: string): Promise<boolean> {
+  try {
+    await action();
+  } catch {
+    return false;
+  }
+  notifySuccess(successMessage);
+  return true;
 }

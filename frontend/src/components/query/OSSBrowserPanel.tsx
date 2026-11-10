@@ -214,7 +214,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
   const confirmBody =
     selectionCount === 1
       ? t("oss.browser.deleteConfirmOne", { key: Array.from(state?.selection ?? [])[0] })
-      : t("oss.browser.deleteConfirmMany", { count: selectionCount });
+      : t("oss.browser.deleteConfirmManyIrreversible", { count: selectionCount });
 
   return (
     <div className="flex h-full w-full flex-col" data-testid="oss-browser-panel">
@@ -392,7 +392,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
         title={t("oss.browser.deleteConfirmTitle")}
         description={confirmBody}
         cancelText={t("action.cancel")}
-        confirmText={t("action.confirm")}
+        confirmText={t("action.delete")}
         onConfirm={() => void confirmDelete()}
       />
 
@@ -412,7 +412,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
         title={t("oss.browser.deleteConfirmTitle")}
         description={t("oss.browser.deleteConfirmOne", { key: state?.focusedKey ?? "" })}
         cancelText={t("action.cancel")}
-        confirmText={t("action.confirm")}
+        confirmText={t("action.delete")}
         onConfirm={() => void confirmDetailDelete()}
       />
     </div>

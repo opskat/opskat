@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import {
   OSSCopyObject,
   OSSCreateFolder,
@@ -468,5 +468,46 @@ describe("OSSBrowserPanel", () => {
       expect(OSSUploadObjectPath).not.toHaveBeenCalled();
       expect(screen.queryByText("fileConflict.title")).not.toBeInTheDocument();
     });
+  });
+  it("batch delete confirm states the count and irreversibility, with a verb button", async () => {
+    vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "b1", creationDate: 0 }] as never);
+    render(<OSSBrowserPanel tabId={TAB} />);
+    await screen.findByTestId("oss-bucket-b1");
+    const obj = (key: string) => ({
+      key,
+      size: 1,
+      lastModified: 0,
+      etag: "",
+      storageClass: "",
+      contentType: "",
+      isPrefix: false,
+    });
+    useOssBrowserStore.setState(
+      (s) =>
+        ({
+          tabs: {
+            ...s.tabs,
+            [TAB]: {
+              ...s.tabs[TAB],
+              currentBucket: "b1",
+              currentPrefix: "docs/",
+              viewMode: "list",
+              selection: new Set(["docs/a.txt", "docs/b.txt", "docs/c.txt"]),
+              listing: {
+                objects: [obj("docs/a.txt"), obj("docs/b.txt"), obj("docs/c.txt")],
+                prefixes: [],
+                truncated: false,
+                cursor: "",
+              },
+            },
+          },
+        }) as never
+    );
+    const bar = await screen.findByTestId("oss-selection-bar");
+    fireEvent.click(within(bar).getByRole("button"));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("oss.browser.deleteConfirmManyIrreversible");
+    expect(within(dialog).getByRole("button", { name: "action.delete" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: "action.confirm" })).not.toBeInTheDocument();
   });
 });

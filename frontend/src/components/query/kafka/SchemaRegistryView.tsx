@@ -313,6 +313,7 @@ function RegisterSchemaDialog({
           description={t("query.kafkaRegisterSchemaConfirmDesc", { subject: subject.trim() })}
           cancelText={t("action.cancel")}
           confirmText={t("query.kafkaRegisterSchema")}
+          variant="default"
           onConfirm={submit}
         />
       </DialogContent>
