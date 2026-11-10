@@ -343,6 +343,7 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
       return { assetType: "kafka", configJSON: JSON.stringify(cfg), password: cred.value.password };
     },
     deps: [cred.value, schemaRegistry, connectEnabled, connectClusters, t],
+    dirtyExtra: [cred.value, schemaRegistry, connectEnabled, connectClusters],
   });
 
   const KAFKA_GROUPS: ConfigGroupSchema<KafkaFormState>[] = [

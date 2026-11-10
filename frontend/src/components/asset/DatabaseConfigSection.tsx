@@ -146,6 +146,7 @@ function DatabaseConfigForm({
     },
     // build 按当前的驱动描述序列化:描述更新(扩展升级、换语言)后保存用的是新的那份。
     deps: [cred.value, drivers],
+    dirtyExtra: [cred.value],
     validityDeps: [drivers],
   });
 

@@ -171,6 +171,7 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
       password: cred.value.password,
     }),
     deps: [cred.value],
+    dirtyExtra: [cred.value],
   });
 
   const { items: managedKeys, load: managedKeysLoad } = useAsyncList<credential_entity.Credential>(() =>

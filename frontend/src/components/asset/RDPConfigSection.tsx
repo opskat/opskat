@@ -58,6 +58,7 @@ export function RDPConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
       password: cred.value.password,
     }),
     deps: [cred.value],
+    dirtyExtra: [cred.value],
   });
 
   const groups: ConfigGroupSchema<RDPFormState>[] = [

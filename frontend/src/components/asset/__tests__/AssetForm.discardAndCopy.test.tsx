@@ -96,6 +96,43 @@ describe("AssetForm discards edits only after confirmation", () => {
   });
 });
 
+describe("AssetForm counts credential input as a change", () => {
+  const sshAsset = new asset_entity.Asset({
+    ID: 7,
+    Name: "web-01",
+    Type: "ssh",
+    Config: JSON.stringify({ host: "10.0.0.1", port: 22, username: "root", auth_type: "password" }),
+  });
+
+  it("asks before Esc discards a typed new password", async () => {
+    const onOpenChange = vi.fn();
+    render(<AssetForm open onOpenChange={onOpenChange} editAsset={sshAsset} />);
+    await screen.findByTestId("ssh-host-input");
+    await userEvent.type(document.querySelector<HTMLInputElement>('input[type="password"]')!, "s3cret");
+    await userEvent.keyboard("{Escape}");
+    expect(await screen.findByText("asset.discardTitle")).toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("asks when only the password source is switched to a managed credential", async () => {
+    const onOpenChange = vi.fn();
+    render(<AssetForm open onOpenChange={onOpenChange} editAsset={sshAsset} />);
+    await screen.findByTestId("ssh-host-input");
+    await userEvent.click(screen.getByTestId("password-source-managed"));
+    await userEvent.keyboard("{Escape}");
+    expect(await screen.findByText("asset.discardTitle")).toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("closes at once when the credential section was only opened", async () => {
+    const onOpenChange = vi.fn();
+    render(<AssetForm open onOpenChange={onOpenChange} editAsset={sshAsset} />);
+    await screen.findByTestId("ssh-host-input");
+    await userEvent.keyboard("{Escape}");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
 describe("AssetForm keeps common fields across a type switch", () => {
   async function switchTo(optionTestId: string) {
     await userEvent.click(screen.getByTestId("asset-type-picker"));

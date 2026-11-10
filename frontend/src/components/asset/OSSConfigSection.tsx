@@ -131,6 +131,7 @@ export function OSSConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
       password: cred.value.password,
     }),
     deps: [cred.value],
+    dirtyExtra: [cred.value],
   });
 
   const groups = buildConfigGroups(OSS_GROUPS, { state, patch, ctx: { cred, editAsset } });

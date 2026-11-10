@@ -159,6 +159,7 @@ export function RedisConfigSection({ editAsset, ctx, onValidityChange, ref }: Co
       return { assetType: "redis", configJSON: req.configJSON, password: req.password };
     },
     deps: [cred.value],
+    dirtyExtra: [cred.value],
   });
 
   // 识别探测(从哨兵读取 / 失焦 / 切换识别出的模式后续识别):结果只更新识别状态,不做测试连接判定。

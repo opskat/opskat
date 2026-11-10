@@ -112,6 +112,7 @@ export function EtcdConfigSection({ editAsset, onValidityChange, ref }: ConfigSe
       password: cred.value.password,
     }),
     deps: [cred.value],
+    dirtyExtra: [cred.value],
   });
 
   const groups = buildConfigGroups(ETCD_GROUPS, { state, patch, ctx: { cred, editAsset } });

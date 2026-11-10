@@ -78,6 +78,8 @@ export interface UseConfigSectionOptions<S> {
   /** validate 闭包捕获的、在 hook state 之外的额外身份(如 Kafka 的伴随子状态),驱动校验重算/上报。
    *  省略时校验仅依赖 state(与原行为一致)。 */
   validityDeps?: unknown[];
+  /** 住在 hook state 之外、用户能改的可序列化子状态(如 cred.value、Kafka 伴随配置);关闭前的「有改动」判断把它们和 state 一起算。 */
+  dirtyExtra?: unknown[];
 }
 
 export interface UseConfigSectionResult<S> {
@@ -99,7 +101,18 @@ function sameValidity(a: SectionValidity | null, b: SectionValidity): boolean {
 /** 收编各 ConfigSection 雷同的 state/patch/校验上报/imperative handle 样板。
  *  凭据留在 section 外(K8s 不用、Kafka 有伴随凭据),由调用方经 deps 喂入。 */
 export function useConfigSection<S>(opts: UseConfigSectionOptions<S>): UseConfigSectionResult<S> {
-  const { ref, editAsset, onValidityChange, init, validate, build, buildTest, deps = [], validityDeps = [] } = opts;
+  const {
+    ref,
+    editAsset,
+    onValidityChange,
+    init,
+    validate,
+    build,
+    buildTest,
+    deps = [],
+    validityDeps = [],
+    dirtyExtra = [],
+  } = opts;
 
   const carried = use(AssetFormCarryContext);
   const [initial] = useState<S>(() => {
@@ -107,6 +120,7 @@ export function useConfigSection<S>(opts: UseConfigSectionOptions<S>): UseConfig
     return editAsset ? base : applyCommonFields(base, carried);
   });
   const [state, setState] = useState<S>(initial);
+  const [initialExtra] = useState(() => JSON.stringify(dirtyExtra));
   const patch = (p: Partial<S>) => setState((s) => ({ ...s, ...p }));
 
   // 校验上报:浅比较守卫,仅在结果变化时推给壳,避免每次 keystroke 触发多余渲染。
@@ -140,7 +154,7 @@ export function useConfigSection<S>(opts: UseConfigSectionOptions<S>): UseConfig
         }
         return out;
       },
-      isDirty: () => JSON.stringify(state) !== JSON.stringify(initial),
+      isDirty: () => JSON.stringify(state) !== JSON.stringify(initial) || JSON.stringify(dirtyExtra) !== initialExtra,
     }),
     // build/buildTest 捕获的额外身份由调用方经 deps 提供(如 cred.value)。
     // eslint-disable-next-line react-hooks/exhaustive-deps

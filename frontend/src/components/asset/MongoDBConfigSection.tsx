@@ -136,6 +136,7 @@ export function MongoDBConfigSection({ editAsset, onValidityChange, ref }: Confi
       password: cred.value.password,
     }),
     deps: [cred.value],
+    dirtyExtra: [cred.value],
   });
 
   const groups = buildConfigGroups(MONGODB_GROUPS, { state, patch, ctx: { cred, editAsset } });

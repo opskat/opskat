@@ -214,6 +214,7 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
       };
     },
     deps: [cred.value],
+    dirtyExtra: [cred.value],
   });
 
   useImperativeHandle(
