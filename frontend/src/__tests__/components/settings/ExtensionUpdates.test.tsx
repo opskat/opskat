@@ -169,7 +169,7 @@ describe("settings extensions tab badge", () => {
     render(<SettingsPage />);
     const badge = await screen.findByText("extension.updatesAvailable");
     expect(badge).toHaveClass("sr-only");
-    expect(screen.getByRole("tab", { name: /extension\.title/ })).toHaveTextContent("2");
+    expect(within(screen.getByRole("navigation", { name: "settings.nav.label" })).getByRole("button", { name: /extension\.title/ })).toHaveTextContent("2");
 
     vi.mocked(ListStore).mockResolvedValue(state(card("kafka", { action: "installed" })) as never);
     await emit("ext:store-refreshed");
