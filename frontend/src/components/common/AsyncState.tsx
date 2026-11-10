@@ -15,7 +15,7 @@ export interface AsyncStateProps {
   onRetry?: () => void;
   /**
    * Empty-state content (text or a node). Pass it **only when the successful result is empty**
-   * (`empty={rows.length === 0 ? t("x.empty") : undefined}`); it is never shown while loading or
+   * (`empty={rows.length === 0 ? emptyText : undefined}`); it is never shown while loading or
    * after a failure, so a failed request can't masquerade as "nothing here".
    */
   empty?: ReactNode;

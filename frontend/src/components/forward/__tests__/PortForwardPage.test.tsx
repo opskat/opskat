@@ -74,7 +74,7 @@ describe("PortForwardPage", () => {
     fireEvent.click(screen.getAllByTestId("asset-select").slice(-1)[0]);
     fireEvent.change(screen.getAllByPlaceholderText("forward.port")[0], { target: { value: "70000" } });
     fireEvent.click(screen.getByText("forward.save"));
-    expect(await screen.findByText("forward.error.localPort")).toBeInTheDocument();
+    expect(await screen.findByText("forward.ruleError.localPort")).toBeInTheDocument();
     expect(CreateForwardConfig).not.toHaveBeenCalled();
     expect(screen.getByPlaceholderText("forward.namePlaceholder")).toBeInTheDocument();
   });
@@ -86,7 +86,7 @@ describe("PortForwardPage", () => {
     fireEvent.click(screen.getAllByTestId("asset-select").slice(-1)[0]);
     fireEvent.change(screen.getAllByPlaceholderText("forward.port")[0], { target: { value: "8080" } });
     fireEvent.click(screen.getByText("forward.save"));
-    expect(await screen.findByText("forward.error.remote")).toBeInTheDocument();
+    expect(await screen.findByText("forward.ruleError.remote")).toBeInTheDocument();
     expect(CreateForwardConfig).not.toHaveBeenCalled();
   });
 

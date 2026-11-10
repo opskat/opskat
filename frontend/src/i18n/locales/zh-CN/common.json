@@ -208,6 +208,10 @@
     "saved": "转发配置已保存",
     "startFailed": "启动转发失败",
     "stopFailed": "停止转发失败",
+    "ruleError": {
+      "localPort": "本地端口须为 1–65535 的数字",
+      "remote": "需要填写远程主机和远程端口（1–65535）"
+    },
     "type": {
       "dynamic": "动态转发 (SOCKS5)",
       "local": "本地转发",

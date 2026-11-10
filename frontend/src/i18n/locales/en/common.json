@@ -208,6 +208,10 @@
     "saved": "Forward config saved",
     "startFailed": "Failed to start forward",
     "stopFailed": "Failed to stop forward",
+    "ruleError": {
+      "localPort": "Local port must be a number from 1 to 65535",
+      "remote": "Remote host and a remote port (1–65535) are required"
+    },
     "type": {
       "dynamic": "Dynamic (SOCKS5)",
       "local": "Local forward",

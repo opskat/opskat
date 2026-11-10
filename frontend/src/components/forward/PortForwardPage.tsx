@@ -65,8 +65,8 @@ const isPort = (v: string) => /^\d+$/.test(v.trim()) && Number(v) >= 1 && Number
 
 // 按规则类型校验，返回错误文案键；通过返回 null
 function validateRule(r: EditRule): string | null {
-  if (!isPort(r.localPort)) return "forward.error.localPort";
-  if (r.type !== "dynamic" && (!r.remoteHost.trim() || !isPort(r.remotePort))) return "forward.error.remote";
+  if (!isPort(r.localPort)) return "forward.ruleError.localPort";
+  if (r.type !== "dynamic" && (!r.remoteHost.trim() || !isPort(r.remotePort))) return "forward.ruleError.remote";
   return null;
 }
 
