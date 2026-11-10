@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import {
+  OSSCopyObject,
   OSSCreateFolder,
   OSSDownloadFolder,
+  OSSMoveObject,
   OSSListBuckets,
   OSSListObjects,
   OSSUploadObject,
@@ -316,5 +318,109 @@ describe("OSSBrowserPanel", () => {
     await screen.findByTestId("oss-object-grid");
     expect(screen.queryByTestId("oss-selection-bar")).not.toBeInTheDocument();
     expect(useOssBrowserStore.getState().tabs[TAB]?.selection).toEqual(new Set(["docs/a.txt"]));
+  });
+
+  describe("destination name conflicts", () => {
+    const obj = (key: string) => ({
+      key,
+      size: 5,
+      lastModified: 1700000000,
+      etag: "",
+      storageClass: "",
+      contentType: "",
+      isPrefix: false,
+    });
+    const emptyPage = { prefixes: [], objects: [], nextContinuationToken: "", isTruncated: false };
+
+    async function openDetail(existingKeys: string[]) {
+      vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "b1", creationDate: 0 }] as never);
+      vi.mocked(OSSCopyObject)
+        .mockReset()
+        .mockResolvedValue(undefined as never);
+      vi.mocked(OSSMoveObject)
+        .mockReset()
+        .mockResolvedValue(undefined as never);
+      vi.mocked(OSSListObjects)
+        .mockReset()
+        .mockImplementation((async (req: { prefix: string; maxKeys: number }) =>
+          req.maxKeys === 1 && existingKeys.includes(req.prefix)
+            ? { ...emptyPage, objects: [obj(req.prefix)] }
+            : emptyPage) as never);
+      render(<OSSBrowserPanel tabId={TAB} />);
+      await screen.findByTestId("oss-bucket-b1");
+      useOssBrowserStore.setState(
+        (s) =>
+          ({
+            tabs: {
+              ...s.tabs,
+              [TAB]: {
+                ...s.tabs[TAB],
+                currentBucket: "b1",
+                currentPrefix: "docs/",
+                focusedKey: "docs/a.txt",
+                listing: { objects: [obj("docs/a.txt")], prefixes: [], truncated: false, cursor: "" },
+              },
+            },
+          }) as never
+      );
+      await screen.findByTestId("oss-object-detail");
+    }
+
+    it.each([
+      ["copy", "oss-detail-copy", OSSCopyObject],
+      ["move", "oss-detail-move", OSSMoveObject],
+    ] as const)("%s to an existing key asks first and skip changes nothing", async (_mode, testId, binding) => {
+      vi.stubGlobal("prompt", vi.fn().mockReturnValue("docs/b.txt"));
+      await openDetail(["docs/b.txt"]);
+      fireEvent.click(screen.getByTestId(testId));
+      expect(await screen.findByText("fileConflict.title")).toBeInTheDocument();
+      expect(screen.getByText("docs/b.txt")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "fileConflict.skip" }));
+      await waitFor(() => expect(screen.queryByText("fileConflict.title")).not.toBeInTheDocument());
+      expect(binding).not.toHaveBeenCalled();
+    });
+
+    it("overwrite sends the requested destination key", async () => {
+      vi.stubGlobal("prompt", vi.fn().mockReturnValue("docs/b.txt"));
+      await openDetail(["docs/b.txt"]);
+      fireEvent.click(screen.getByTestId("oss-detail-copy"));
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.overwrite" }));
+      await waitFor(() =>
+        expect(OSSCopyObject).toHaveBeenCalledWith(
+          expect.objectContaining({ srcKey: "docs/a.txt", dstKey: "docs/b.txt" })
+        )
+      );
+    });
+
+    it("keep both lands on the first free _copy name", async () => {
+      vi.stubGlobal("prompt", vi.fn().mockReturnValue("docs/b.txt"));
+      await openDetail(["docs/b.txt", "docs/b_copy.txt"]);
+      fireEvent.click(screen.getByTestId("oss-detail-move"));
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.keepBoth" }));
+      await waitFor(() =>
+        expect(OSSMoveObject).toHaveBeenCalledWith(expect.objectContaining({ dstKey: "docs/b_copy2.txt" }))
+      );
+    });
+
+    it("a free destination goes straight through without a dialog", async () => {
+      vi.stubGlobal("prompt", vi.fn().mockReturnValue("docs/new.txt"));
+      await openDetail([]);
+      fireEvent.click(screen.getByTestId("oss-detail-copy"));
+      await waitFor(() =>
+        expect(OSSCopyObject).toHaveBeenCalledWith(expect.objectContaining({ dstKey: "docs/new.txt" }))
+      );
+      expect(screen.queryByText("fileConflict.title")).not.toBeInTheDocument();
+    });
+
+    it("a failed existence check aborts instead of overwriting", async () => {
+      vi.stubGlobal("prompt", vi.fn().mockReturnValue("docs/b.txt"));
+      await openDetail([]);
+      vi.mocked(OSSListObjects).mockReset().mockRejectedValue(new Error("AccessDenied"));
+      fireEvent.click(screen.getByTestId("oss-detail-copy"));
+      await waitFor(() => expect(OSSListObjects).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 20));
+      expect(OSSCopyObject).not.toHaveBeenCalled();
+      expect(screen.queryByText("fileConflict.title")).not.toBeInTheDocument();
+    });
   });
 });

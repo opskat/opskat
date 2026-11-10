@@ -51,7 +51,15 @@ interface OssTransferTabState {
 interface OssTransferState {
   tabs: Record<string, OssTransferTabState>;
   startUpload: (tabId: string, assetId: number, bucket: string, prefix: string) => Promise<void>;
-  startUploadPath: (tabId: string, assetId: number, bucket: string, prefix: string, localPath: string) => Promise<void>;
+  /** key 缺省为 prefix + 文件名；同名检查选了「保留两者」时由调用方传入改过名的 key。 */
+  startUploadPath: (
+    tabId: string,
+    assetId: number,
+    bucket: string,
+    prefix: string,
+    localPath: string,
+    key?: string
+  ) => Promise<void>;
   startDownload: (tabId: string, assetId: number, bucket: string, key: string) => Promise<void>;
   startDownloadFolder: (tabId: string, assetId: number, bucket: string, prefix: string) => Promise<void>;
   cancel: (transferId: string) => void;
@@ -60,7 +68,7 @@ interface OssTransferState {
 }
 
 /** 取路径末段(兼容 / 和 \,去掉结尾分隔符)。 */
-function basename(p: string): string {
+export function basename(p: string): string {
   const trimmed = p.replace(/[/\\]+$/, "");
   const i = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return i >= 0 ? trimmed.slice(i + 1) : trimmed;
@@ -167,9 +175,9 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
       }
     },
 
-    startUploadPath: async (tabId, assetId, bucket, prefix, localPath) => {
-      const name = basename(localPath);
-      const id = await OSSUploadObjectPath(assetId, bucket, prefix + name, localPath);
+    startUploadPath: async (tabId, assetId, bucket, prefix, localPath, key = prefix + basename(localPath)) => {
+      const name = basename(key);
+      const id = await OSSUploadObjectPath(assetId, bucket, key, localPath);
       if (!id) return;
       addTransfer({
         transferId: id,

@@ -19,6 +19,7 @@ import { OSSObjectDetail } from "@/components/oss/OSSObjectDetail";
 import { OSSPresignDialog } from "@/components/oss/OSSPresignDialog";
 import { OSSTransferDock } from "@/components/oss/OSSTransferDock";
 import { useOssFileDrop } from "@/components/oss/useOssFileDrop";
+import { ossObjectSide, useOssTargetResolver } from "@/components/oss/useOssTargetResolver";
 import { parseOSSConfig } from "@/components/asset/OSSConfigSection.config";
 import { NameDialog } from "@/components/common/NameDialog";
 import { errorMessage } from "@/lib/errorMessage";
@@ -114,6 +115,8 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     );
   }, [assetId, state, startDownload, tabId, t]);
 
+  const { resolveTargets, conflictDialog } = useOssTargetResolver(assetId ?? 0, state?.currentBucket ?? "");
+
   const promptDestination = useCallback(
     async (mode: "copy" | "move" | "rename") => {
       if (!state?.focusedKey) return;
@@ -122,14 +125,21 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
       const destination = window.prompt(t(`oss.detail.${mode}Prompt`), defaultKey)?.trim();
       if (!destination || destination === source) return;
       try {
-        if (mode === "copy") await copyObject(tabId, source, destination);
-        else await moveObject(tabId, source, destination);
+        // 重命名也是移动，同样先检查目标；它的对话框只给「取消 / 覆盖」。
+        const sourceObject = state.listing?.objects.find((o) => o.key === source);
+        const [finalKey] = await resolveTargets(
+          [{ key: destination, incoming: sourceObject ? ossObjectSide(sourceObject) : {} }],
+          mode === "rename" ? "rename" : "transfer"
+        );
+        if (finalKey === null) return;
+        if (mode === "copy") await copyObject(tabId, source, finalKey);
+        else await moveObject(tabId, source, finalKey);
         notifySuccess(t(`oss.detail.${mode}Success`));
       } catch (error) {
         toast.error(errorMessage(error));
       }
     },
-    [copyObject, moveObject, state, tabId, t]
+    [copyObject, moveObject, resolveTargets, state, tabId, t]
   );
 
   const confirmDetailDelete = async () => {
@@ -151,6 +161,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     bucket: state?.currentBucket ?? "",
     prefix: state?.currentPrefix ?? "",
     active: !!assetId && !!state?.currentBucket,
+    resolveKeys: (keys) => resolveTargets(keys.map((key) => ({ key, incoming: {} }))),
   });
 
   const onUpload = useCallback(() => {
@@ -356,6 +367,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
           </>
         )}
       </div>
+      {conflictDialog}
       <NameDialog
         open={newFolderOpen}
         title={t("oss.browser.newFolder")}
