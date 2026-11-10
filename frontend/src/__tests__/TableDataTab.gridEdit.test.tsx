@@ -149,7 +149,9 @@ describe("TableDataTab grid edits go through the driver", () => {
     await waitFor(() =>
       expect(executed()).toEqual(['INSERT users {"name":"cy"}', 'UPDATE users SET {"name":"bea"} WHERE {"id":2}'])
     );
-    await waitFor(() => expect(screen.queryByRole("button", { name: "query.previewAndCommit" })).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "query.previewAndCommit" })).not.toBeInTheDocument()
+    );
   });
 
   it("keeps the failed and unmatched edits for a retry and clears only the successful ones", async () => {
