@@ -153,6 +153,11 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     }
   };
 
+  const resolveKeys = useCallback(
+    (keys: string[]) => resolveTargets(keys.map((key) => ({ key, incoming: {} }))),
+    [resolveTargets]
+  );
+
   const contentRef = useRef<HTMLDivElement>(null);
   const isDragOver = useOssFileDrop({
     dropRef: contentRef,
@@ -161,15 +166,15 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     bucket: state?.currentBucket ?? "",
     prefix: state?.currentPrefix ?? "",
     active: !!assetId && !!state?.currentBucket,
-    resolveKeys: (keys) => resolveTargets(keys.map((key) => ({ key, incoming: {} }))),
+    resolveKeys,
   });
 
   const onUpload = useCallback(() => {
     if (!assetId || !state?.currentBucket) return;
-    void startUpload(tabId, assetId, state.currentBucket, state.currentPrefix).catch(() =>
+    void startUpload(tabId, assetId, state.currentBucket, state.currentPrefix, resolveKeys).catch(() =>
       toast.error(t("oss.transfer.uploadFailed"))
     );
-  }, [assetId, state, startUpload, tabId, t]);
+  }, [assetId, state, startUpload, tabId, t, resolveKeys]);
 
   const onDownload = useCallback(
     (key: string) => {

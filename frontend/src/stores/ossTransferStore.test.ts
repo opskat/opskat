@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import {
-  OSSUploadObject,
+  OSSPickUploadFiles,
+  OSSUploadObjectPath,
   OSSDownloadObject,
   OSSDownloadFolder,
   OSSStartTransfer,
@@ -23,7 +24,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.mocked(EventsOn).mockClear();
   vi.mocked(EventsOff).mockClear();
-  vi.mocked(OSSUploadObject).mockReset();
+  vi.mocked(OSSPickUploadFiles).mockReset();
+  vi.mocked(OSSUploadObjectPath).mockReset();
   vi.mocked(OSSDownloadObject).mockReset();
   vi.mocked(OSSDownloadFolder).mockReset();
   vi.mocked(OSSStartTransfer).mockReset().mockResolvedValue(undefined);
@@ -36,10 +38,19 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+const keepKeys = async (keys: string[]) => keys;
+
+/** 选中 ids.length 个本地文件并上传，后端依次返回 ids 作为 transferId。 */
+async function upload(ids: string[], tab = TAB, assetId = 9, prefix = "docs/") {
+  vi.mocked(OSSPickUploadFiles).mockResolvedValue(ids.map((id) => `/x/${id}.txt`) as never);
+  const mockPath = vi.mocked(OSSUploadObjectPath).mockReset();
+  ids.forEach((id) => mockPath.mockResolvedValueOnce(id as never));
+  await useOssTransferStore.getState().startUpload(tab, assetId, "b", prefix, keepKeys);
+}
+
 describe("ossTransferStore", () => {
   it("startUpload subscribes one active row per returned transferId", async () => {
-    vi.mocked(OSSUploadObject).mockResolvedValue(["oss-1", "oss-2"] as never);
-    await useOssTransferStore.getState().startUpload(TAB, 9, "b", "docs/");
+    await upload(["oss-1", "oss-2"]);
     const rows = useOssTransferStore.getState().tabs[TAB].transfers;
     expect(Object.keys(rows)).toEqual(["oss-1", "oss-2"]);
     expect(rows["oss-1"].status).toBe("active");
@@ -50,15 +61,23 @@ describe("ossTransferStore", () => {
     expect(OSSStartTransfer).toHaveBeenCalledWith("oss-1");
   });
 
-  it("startUpload with an empty array (dialog cancel) adds no rows", async () => {
-    vi.mocked(OSSUploadObject).mockResolvedValue([] as never);
-    await useOssTransferStore.getState().startUpload(TAB, 9, "b", "docs/");
+  it("startUpload with no picked files (dialog cancel) adds no rows", async () => {
+    await upload([]);
     expect(useOssTransferStore.getState().tabs[TAB]?.transfers ?? {}).toEqual({});
   });
 
+  it("startUpload uploads each picked file to the key the resolver returns", async () => {
+    vi.mocked(OSSPickUploadFiles).mockResolvedValue(["/x/a.txt", "/x/b.txt"] as never);
+    vi.mocked(OSSUploadObjectPath).mockResolvedValue("oss-1" as never);
+    const resolveKeys = vi.fn(async () => [null, "docs/b_copy.txt"]);
+    await useOssTransferStore.getState().startUpload(TAB, 9, "b", "docs/", resolveKeys);
+    expect(resolveKeys).toHaveBeenCalledWith(["docs/a.txt", "docs/b.txt"]);
+    expect(OSSUploadObjectPath).toHaveBeenCalledTimes(1);
+    expect(OSSUploadObjectPath).toHaveBeenCalledWith(9, "b", "docs/b_copy.txt", "/x/b.txt");
+  });
+
   it("a progress event merges numeric fields and keeps status active", async () => {
-    vi.mocked(OSSUploadObject).mockResolvedValue(["oss-1"] as never);
-    await useOssTransferStore.getState().startUpload(TAB, 9, "b", "docs/");
+    await upload(["oss-1"]);
     handlerFor("oss-1")({
       transferId: "oss-1",
       status: "progress",
@@ -77,8 +96,7 @@ describe("ossTransferStore", () => {
   });
 
   it("a done event marks done, EventsOff, and auto-removes after 5s", async () => {
-    vi.mocked(OSSUploadObject).mockResolvedValue(["oss-1"] as never);
-    await useOssTransferStore.getState().startUpload(TAB, 9, "b", "docs/");
+    await upload(["oss-1"]);
     handlerFor("oss-1")({
       transferId: "oss-1",
       status: "done",
@@ -98,8 +116,7 @@ describe("ossTransferStore", () => {
   it("on upload done, refreshes the browser only when targetPrefix === currentPrefix", async () => {
     const refresh = vi.fn().mockResolvedValue(undefined);
     useOssBrowserStore.setState({ tabs: { [TAB]: { currentPrefix: "docs/" } as never }, refresh } as never);
-    vi.mocked(OSSUploadObject).mockResolvedValue(["oss-1"] as never);
-    await useOssTransferStore.getState().startUpload(TAB, 9, "b", "docs/");
+    await upload(["oss-1"]);
     handlerFor("oss-1")({
       transferId: "oss-1",
       status: "done",
@@ -116,8 +133,7 @@ describe("ossTransferStore", () => {
   it("on upload done, does NOT refresh when the user navigated away", async () => {
     const refresh = vi.fn().mockResolvedValue(undefined);
     useOssBrowserStore.setState({ tabs: { [TAB]: { currentPrefix: "other/" } as never }, refresh } as never);
-    vi.mocked(OSSUploadObject).mockResolvedValue(["oss-1"] as never);
-    await useOssTransferStore.getState().startUpload(TAB, 9, "b", "docs/");
+    await upload(["oss-1"]);
     handlerFor("oss-1")({
       transferId: "oss-1",
       status: "done",
@@ -132,8 +148,7 @@ describe("ossTransferStore", () => {
   });
 
   it("an explicit cancelled event sets status cancelled (no substring inference)", async () => {
-    vi.mocked(OSSUploadObject).mockResolvedValue(["oss-1"] as never);
-    await useOssTransferStore.getState().startUpload(TAB, 9, "b", "docs/");
+    await upload(["oss-1"]);
     handlerFor("oss-1")({
       transferId: "oss-1",
       status: "cancelled",
@@ -149,8 +164,7 @@ describe("ossTransferStore", () => {
   });
 
   it("an error event sets status error with the message", async () => {
-    vi.mocked(OSSUploadObject).mockResolvedValue(["oss-1"] as never);
-    await useOssTransferStore.getState().startUpload(TAB, 9, "b", "docs/");
+    await upload(["oss-1"]);
     handlerFor("oss-1")({
       transferId: "oss-1",
       status: "error",
@@ -236,8 +250,7 @@ describe("ossTransferStore", () => {
   });
 
   it("clearCompleted keeps only active rows", async () => {
-    vi.mocked(OSSUploadObject).mockResolvedValue(["oss-1", "oss-2"] as never);
-    await useOssTransferStore.getState().startUpload(TAB, 9, "b", "docs/");
+    await upload(["oss-1", "oss-2"]);
     handlerFor("oss-1")({
       transferId: "oss-1",
       status: "error",
@@ -255,10 +268,8 @@ describe("ossTransferStore", () => {
   });
 
   it("keeps two tabs isolated", async () => {
-    vi.mocked(OSSUploadObject).mockResolvedValue(["oss-a"] as never);
-    await useOssTransferStore.getState().startUpload("tab-A", 1, "b", "");
-    vi.mocked(OSSUploadObject).mockResolvedValue(["oss-b"] as never);
-    await useOssTransferStore.getState().startUpload("tab-B", 2, "b", "");
+    await upload(["oss-a"], "tab-A", 1, "");
+    await upload(["oss-b"], "tab-B", 2, "");
     expect(Object.keys(useOssTransferStore.getState().tabs["tab-A"].transfers)).toEqual(["oss-a"]);
     expect(Object.keys(useOssTransferStore.getState().tabs["tab-B"].transfers)).toEqual(["oss-b"]);
   });

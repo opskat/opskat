@@ -18,19 +18,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// deriveUploadKey 目标 key = keyPrefix + 本地文件名;非空且不以 "/" 结尾的前缀会补一个 "/",
-// 已以 "/" 结尾或为空的前缀保持不变(空前缀 → key 就是文件名本身,上传到 bucket 根)。
-func deriveUploadKey(keyPrefix, localPath string) string {
-	base := filepath.Base(localPath)
-	if keyPrefix == "" {
-		return base
-	}
-	if !strings.HasSuffix(keyPrefix, "/") {
-		keyPrefix += "/"
-	}
-	return keyPrefix + base
-}
-
 // contentTypeFor 按扩展名猜测 Content-Type，猜不出时回退为通用二进制流。
 func contentTypeFor(localPath string) string {
 	if ct := mime.TypeByExtension(filepath.Ext(localPath)); ct != "" {
@@ -58,35 +45,21 @@ func (o *OSS) emitTerminal(transferID string, err error) {
 	}
 }
 
-// OSSUploadObject 弹原生多选对话框,对每个选中文件起一路流式上传,返回各 transferID。
-// 用户取消对话框 → 返回空切片。
-func (o *OSS) OSSUploadObject(assetID int64, bucket, keyPrefix string) ([]string, error) {
+// OSSPickUploadFiles 弹原生多选对话框,返回用户选中的本地文件路径;用户取消 → 返回空切片。
+// 前端先对目标 key 做同名检查,再逐个走 OSSUploadObjectPath 上传。
+func (o *OSS) OSSPickUploadFiles() ([]string, error) {
 	ctx := o.i18nCtx()
-	logger.Ctx(ctx).Info("oss upload selection start", zap.Int64("assetId", assetID), zap.String("bucket", bucket))
-	if assetID <= 0 || bucket == "" {
-		err := fmt.Errorf("invalid request: assetID and bucket are required")
-		logger.Ctx(ctx).Error("oss upload selection fail", zap.Int64("assetId", assetID), zap.Error(err))
-		return nil, err
-	}
 	localPaths, err := wailsRuntime.OpenMultipleFilesDialog(o.ctx, wailsRuntime.OpenDialogOptions{
 		Title: "选择上传文件",
 	})
 	if err != nil {
+		logger.Ctx(ctx).Error("oss pick upload files fail", zap.Error(err))
 		return nil, fmt.Errorf("打开文件对话框失败: %w", err)
 	}
-	if len(localPaths) == 0 {
-		return []string{}, nil // 用户取消
+	if localPaths == nil {
+		return []string{}, nil
 	}
-
-	ids := make([]string, 0, len(localPaths))
-	for _, localPath := range localPaths {
-		transferID := transfer.GenerateID("oss")
-		key := deriveUploadKey(keyPrefix, localPath)
-		o.pending.Store(transferID, func() { o.uploadObject(transferID, assetID, bucket, key, localPath) })
-		ids = append(ids, transferID)
-	}
-	logger.Ctx(ctx).Info("oss upload selection end", zap.Int64("assetId", assetID), zap.Int("count", len(ids)))
-	return ids, nil
+	return localPaths, nil
 }
 
 // OSSUploadObjectPath 无对话框(拖拽遮罩用),流式上传单个本地文件到指定 key。

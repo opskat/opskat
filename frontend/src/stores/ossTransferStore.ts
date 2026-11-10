@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { toast } from "sonner";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import {
-  OSSUploadObject,
+  OSSPickUploadFiles,
   OSSUploadObjectPath,
   OSSDownloadObject,
   OSSDownloadFolder,
@@ -48,9 +48,27 @@ interface OssTransferTabState {
   transfers: Record<string, OssTransfer>;
 }
 
+export type ResolveKeys = (keys: string[]) => Promise<(string | null)[]>;
+
 interface OssTransferState {
   tabs: Record<string, OssTransferTabState>;
-  startUpload: (tabId: string, assetId: number, bucket: string, prefix: string) => Promise<void>;
+  /** 选本地文件 → 同名检查 → 逐个上传。resolveKeys 与传入 key 一一对应，null 表示跳过该项。 */
+  startUpload: (
+    tabId: string,
+    assetId: number,
+    bucket: string,
+    prefix: string,
+    resolveKeys: ResolveKeys
+  ) => Promise<void>;
+  /** 同上，但本地路径已知（拖放）。 */
+  startUploadPaths: (
+    tabId: string,
+    assetId: number,
+    bucket: string,
+    prefix: string,
+    localPaths: string[],
+    resolveKeys: ResolveKeys
+  ) => Promise<void>;
   /** key 缺省为 prefix + 文件名；同名检查选了「保留两者」时由调用方传入改过名的 key。 */
   startUploadPath: (
     tabId: string,
@@ -156,22 +174,17 @@ export const useOssTransferStore = create<OssTransferState>((set, get) => {
   return {
     tabs: {},
 
-    startUpload: async (tabId, assetId, bucket, prefix) => {
-      const ids = await OSSUploadObject(assetId, bucket, prefix); // 空数组 = 用户取消对话框
-      for (const id of ids) {
-        addTransfer({
-          transferId: id,
-          tabId,
-          direction: "upload",
-          name: "",
-          targetPrefix: prefix,
-          bytesDone: 0,
-          bytesTotal: 0,
-          speed: 0,
-          status: "active",
-        });
-        subscribeProgress(tabId, id);
-        await OSSStartTransfer(id);
+    startUpload: async (tabId, assetId, bucket, prefix, resolveKeys) => {
+      const localPaths = await OSSPickUploadFiles(); // 空数组 = 用户取消对话框
+      await get().startUploadPaths(tabId, assetId, bucket, prefix, localPaths, resolveKeys);
+    },
+
+    startUploadPaths: async (tabId, assetId, bucket, prefix, localPaths, resolveKeys) => {
+      if (!localPaths.length) return;
+      const keys = await resolveKeys(localPaths.map((p) => prefix + basename(p)));
+      for (const [i, localPath] of localPaths.entries()) {
+        const key = keys[i];
+        if (key !== null) await get().startUploadPath(tabId, assetId, bucket, prefix, localPath, key);
       }
     },
 

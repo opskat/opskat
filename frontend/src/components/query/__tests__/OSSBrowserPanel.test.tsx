@@ -7,7 +7,8 @@ import {
   OSSMoveObject,
   OSSListBuckets,
   OSSListObjects,
-  OSSUploadObject,
+  OSSPickUploadFiles,
+  OSSUploadObjectPath,
 } from "../../../../wailsjs/go/oss/OSS";
 import { OSSBrowserPanel } from "../OSSBrowserPanel";
 import { useTabStore } from "@/stores/tabStore";
@@ -131,9 +132,18 @@ describe("OSSBrowserPanel", () => {
     expect(screen.getByText("oss.browser.missingAsset")).toBeInTheDocument();
   });
 
-  it("clicking upload starts an upload into the current prefix", async () => {
+  it("clicking upload picks local files and uploads them into the current prefix", async () => {
     vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "b1", creationDate: 0 }] as never);
-    vi.mocked(OSSUploadObject).mockResolvedValue([] as never);
+    vi.mocked(OSSListObjects)
+      .mockReset()
+      .mockResolvedValue({
+        prefixes: [],
+        objects: [],
+        nextContinuationToken: "",
+        isTruncated: false,
+      } as never);
+    vi.mocked(OSSPickUploadFiles).mockResolvedValue(["/local/a.txt"] as never);
+    vi.mocked(OSSUploadObjectPath).mockResolvedValue("" as never);
     render(<OSSBrowserPanel tabId={TAB} />);
     await screen.findByTestId("oss-bucket-b1");
     // put the tab into a selected-bucket state so the breadcrumb renders
@@ -152,7 +162,7 @@ describe("OSSBrowserPanel", () => {
         }) as never
     );
     fireEvent.click(await screen.findByTestId("oss-upload"));
-    await waitFor(() => expect(OSSUploadObject).toHaveBeenCalledWith(7, "b1", "docs/"));
+    await waitFor(() => expect(OSSUploadObjectPath).toHaveBeenCalledWith(7, "b1", "docs/a.txt", "/local/a.txt"));
   });
 
   it.each(["list", "grid"] as const)("downloads a folder of the current bucket from the %s view", async (viewMode) => {
@@ -420,6 +430,42 @@ describe("OSSBrowserPanel", () => {
       await waitFor(() => expect(OSSListObjects).toHaveBeenCalled());
       await new Promise((r) => setTimeout(r, 20));
       expect(OSSCopyObject).not.toHaveBeenCalled();
+      expect(screen.queryByText("fileConflict.title")).not.toBeInTheDocument();
+    });
+
+    async function openUploadWithExisting(existing: string[]) {
+      await openDetail(existing);
+      vi.mocked(OSSPickUploadFiles)
+        .mockReset()
+        .mockResolvedValue(["/local/b.txt"] as never);
+      vi.mocked(OSSUploadObjectPath)
+        .mockReset()
+        .mockResolvedValue("" as never);
+    }
+
+    it("toolbar upload onto an existing key asks first and skip uploads nothing", async () => {
+      await openUploadWithExisting(["docs/b.txt"]);
+      fireEvent.click(screen.getByTestId("oss-upload"));
+      expect(await screen.findByText("fileConflict.title")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "fileConflict.skip" }));
+      await waitFor(() => expect(screen.queryByText("fileConflict.title")).not.toBeInTheDocument());
+      expect(OSSUploadObjectPath).not.toHaveBeenCalled();
+    });
+
+    it("toolbar upload with keep both uploads to the _copy key", async () => {
+      await openUploadWithExisting(["docs/b.txt"]);
+      fireEvent.click(screen.getByTestId("oss-upload"));
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.keepBoth" }));
+      await waitFor(() => expect(OSSUploadObjectPath).toHaveBeenCalledWith(7, "b1", "docs/b_copy.txt", "/local/b.txt"));
+    });
+
+    it("toolbar upload with a failed existence check uploads nothing", async () => {
+      await openUploadWithExisting([]);
+      vi.mocked(OSSListObjects).mockReset().mockRejectedValue(new Error("AccessDenied"));
+      fireEvent.click(screen.getByTestId("oss-upload"));
+      await waitFor(() => expect(OSSListObjects).toHaveBeenCalled());
+      await new Promise((r) => setTimeout(r, 20));
+      expect(OSSUploadObjectPath).not.toHaveBeenCalled();
       expect(screen.queryByText("fileConflict.title")).not.toBeInTheDocument();
     });
   });
