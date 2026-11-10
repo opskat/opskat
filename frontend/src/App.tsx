@@ -284,7 +284,7 @@ function App() {
       const copied = new asset_entity.Asset({
         ...fullAsset,
         ID: 0,
-        Name: `${fullAsset.Name} - 副本`,
+        Name: t("asset.copyName", { name: fullAsset.Name }),
       });
       setEditingAsset(copied);
       setAssetFormOpen(true);
@@ -511,6 +511,7 @@ function App() {
                 open={assetFormOpen}
                 onOpenChange={setAssetFormOpen}
                 editAsset={editingAsset}
+                copy={!!editingAsset && !editingAsset.ID}
                 defaultGroupId={defaultGroupId}
               />
             )}

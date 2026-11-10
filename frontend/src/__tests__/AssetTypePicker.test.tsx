@@ -110,7 +110,7 @@ describe("AssetTypePicker custom types", () => {
 
   it("manage opens the custom types settings tab and leaves the form", async () => {
     const user = userEvent.setup();
-    const onLeave = vi.fn();
+    const onLeave = vi.fn((proceed: () => void) => proceed());
     render(<AssetTypePicker value="ssh" onChange={() => {}} onLeave={onLeave} />);
     await user.click(screen.getByRole("combobox"));
     await user.click(screen.getByTestId("asset-type-manage-custom"));

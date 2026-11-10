@@ -12,6 +12,7 @@ import {
 import type { asset_entity } from "../../../wailsjs/go/models";
 import type {
   AssetConfigBuildResult,
+  CommonFields,
   AssetFormContext,
   AssetFormHandle,
   AssetTestConfig,
@@ -45,6 +46,20 @@ export function useShownError(hasError: boolean): boolean {
     if (shown) reportShown();
   }, [shown, attempt, reportShown]);
   return shown;
+}
+
+/** 新建表单里换资产类型时,壳把上一个区块的通用连接字段经此交给新区块的初始 state。 */
+export const AssetFormCarryContext = createContext<CommonFields>({});
+
+const COMMON_KEYS = ["host", "port", "username"] as const;
+
+function applyCommonFields<S>(state: S, carried: CommonFields): S {
+  const next: Record<string, unknown> = { ...(state as Record<string, unknown>) };
+  for (const key of COMMON_KEYS) {
+    const value = carried[key];
+    if (value !== undefined && typeof next[key] === typeof value) next[key] = value;
+  }
+  return next as S;
 }
 
 export interface UseConfigSectionOptions<S> {
@@ -86,7 +101,12 @@ function sameValidity(a: SectionValidity | null, b: SectionValidity): boolean {
 export function useConfigSection<S>(opts: UseConfigSectionOptions<S>): UseConfigSectionResult<S> {
   const { ref, editAsset, onValidityChange, init, validate, build, buildTest, deps = [], validityDeps = [] } = opts;
 
-  const [state, setState] = useState<S>(() => init(editAsset));
+  const carried = use(AssetFormCarryContext);
+  const [initial] = useState<S>(() => {
+    const base = init(editAsset);
+    return editAsset ? base : applyCommonFields(base, carried);
+  });
+  const [state, setState] = useState<S>(initial);
   const patch = (p: Partial<S>) => setState((s) => ({ ...s, ...p }));
 
   // 校验上报:浅比较守卫,仅在结果变化时推给壳,避免每次 keystroke 触发多余渲染。
@@ -107,6 +127,20 @@ export function useConfigSection<S>(opts: UseConfigSectionOptions<S>): UseConfig
     () => ({
       buildConfig: (ctx: AssetFormContext) => build(state, ctx),
       buildTestConfig: buildTest ? (ctx: AssetFormContext) => buildTest(state, ctx) : null,
+      commonFields: () => {
+        const current = state as Record<string, unknown>;
+        const defaults = init(undefined) as Record<string, unknown>;
+        const out: CommonFields = {};
+        for (const key of COMMON_KEYS) {
+          const value = current[key];
+          if (typeof value !== "string" && typeof value !== "number") continue;
+          // 还是本类型的默认值(含空)就是没填过,不带走——否则会盖掉新类型自己的默认端口/用户名。
+          if (value === "" || value === defaults[key]) continue;
+          Object.assign(out, { [key]: value });
+        }
+        return out;
+      },
+      isDirty: () => JSON.stringify(state) !== JSON.stringify(initial),
     }),
     // build/buildTest 捕获的额外身份由调用方经 deps 提供(如 cred.value)。
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -11,10 +11,15 @@ import {
   DialogTitle,
   DialogFooter,
   Button,
+  ConfirmDialog,
   Input,
 } from "@opskat/ui";
 import { Field } from "@/components/asset/fields";
-import { AssetFormErrorsContext, type AssetFormErrors } from "@/components/asset/useConfigSection";
+import {
+  AssetFormCarryContext,
+  AssetFormErrorsContext,
+  type AssetFormErrors,
+} from "@/components/asset/useConfigSection";
 import { DescriptionBar } from "@/components/asset/DescriptionBar";
 import { IconPicker } from "@/components/asset/IconPicker";
 import { GroupSelect } from "@/components/asset/GroupSelect";
@@ -29,6 +34,7 @@ import { useAssetTypeOptions, getAssetTypeLabel } from "@/lib/assetTypes/options
 import { getAssetType } from "@/lib/assetTypes";
 import type {
   AssetFormHandle,
+  CommonFields,
   AssetFormContext,
   AssetTestAttempt,
   AssetTestResult,
@@ -40,6 +46,8 @@ interface AssetFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   editAsset?: asset_entity.Asset | null;
+  /** 把 editAsset 当作复制来源:标题是「复制」,类型可见但不可改,保存时新建而不是更新。 */
+  copy?: boolean;
   defaultGroupId?: number;
 }
 
@@ -90,7 +98,7 @@ function formIconFor(type: string): string {
   return getAssetType(type)?.formIcon ?? (DEFAULT_ICONS[type] || "server");
 }
 
-export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }: AssetFormProps) {
+export function AssetForm({ open, onOpenChange, editAsset, copy = false, defaultGroupId = 0 }: AssetFormProps) {
   const { t } = useTranslation();
   const { createAsset, updateAsset } = useAssetStore();
 
@@ -106,6 +114,20 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   const [groupId, setGroupId] = useState(0);
   const [description, setDescription] = useState("");
   const [icon, setIcon] = useState("server");
+  // 用户亲手选过图标:之后换类型不再用类型默认图标覆盖,区块(数据库驱动)也不再改它。
+  const [iconTouched, setIconTouched] = useState(false);
+  // 打开时的壳字段,关闭前据此判断有没有改动;区块自己的改动由区块经 handle.isDirty 报告。
+  const [baseline, setBaseline] = useState({
+    name: "",
+    groupId: 0,
+    description: "",
+    assetType: "ssh" as AssetType,
+    typeVariant: undefined as string | undefined,
+  });
+  // 换类型时从旧区块取走的通用连接字段,新区块挂载时用它预填。
+  const [carried, setCarried] = useState<CommonFields>({});
+  // 等用户确认「放弃修改」后才执行的关闭/离开动作。
+  const [pendingDiscard, setPendingDiscard] = useState<{ run: () => void } | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   // 当前 in-flight 测试；壳只依赖通用 cancel 生命周期，不识别协议类型。
@@ -177,6 +199,9 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   if (open !== prevSync.open || editAsset !== prevSync.editAsset || defaultGroupId !== prevSync.defaultGroupId) {
     setPrevSync({ open, editAsset, defaultGroupId });
     setRejected({ key: sectionKey, count: 0 });
+    setIconTouched(false);
+    setCarried({});
+    setPendingDiscard(null);
     if (open) {
       if (editAsset) {
         const editType = (editAsset.Type || "ssh") as AssetType;
@@ -186,6 +211,13 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         setGroupId(editAsset.GroupID);
         setIcon(editAsset.Icon || formIconFor(editType));
         setDescription(editAsset.Description);
+        setBaseline({
+          name: editAsset.Name,
+          groupId: editAsset.GroupID,
+          description: editAsset.Description,
+          assetType: editType,
+          typeVariant: getAssetType(editType)?.variantOf?.(editAsset),
+        });
 
         // config 回填一律由 ConfigSection 经 editAsset prop 完成——扩展类型的 section
         // 也是注册出来的（见 extension/assetTypes.ts），壳不再认识任何具体类型。
@@ -196,6 +228,7 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
         setGroupId(defaultGroupId);
         setIcon("server");
         setDescription("");
+        setBaseline({ name: "", groupId: defaultGroupId, description: "", assetType: "ssh", typeVariant: undefined });
         // ConfigSection 经 key={assetType} 重挂载自初始化。
       }
     }
@@ -203,9 +236,32 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
 
   const handleTypeChange = (newType: AssetType, variant?: string, defaultIcon?: string) => {
     if (newType === assetType && variant === typeVariant) return;
+    // 旧区块里用户填过的主机/端口/用户名带去新区块;新旧都没有的字段保留之前带着的值。
+    const common = sectionRef.current?.commonFields?.();
+    if (common) setCarried((prev) => ({ ...prev, ...common }));
     setAssetType(newType);
     setTypeVariant(variant);
-    setIcon(defaultIcon ?? formIconFor(newType));
+    if (!iconTouched) setIcon(defaultIcon ?? formIconFor(newType));
+  };
+
+  const isDirty = () =>
+    name !== baseline.name ||
+    groupId !== baseline.groupId ||
+    description !== baseline.description ||
+    assetType !== baseline.assetType ||
+    typeVariant !== baseline.typeVariant ||
+    iconTouched ||
+    !!sectionRef.current?.isDirty?.();
+
+  // 有改动先确认放弃;没有就直接执行。Esc、关闭按钮、取消、离开去管理自定义类型都走这里。
+  const guardDiscard = (run: () => void) => {
+    if (isDirty()) setPendingDiscard({ run });
+    else run();
+  };
+
+  const closeForm = () => {
+    cancelActiveTest();
+    onOpenChange(false);
   };
 
   // 静默取消正在进行的测试（用于保存/关闭对话框等退出动作）。无 in-flight 测试时是 no-op。
@@ -389,114 +445,142 @@ export function AssetForm({ open, onOpenChange, editAsset, defaultGroupId = 0 }:
   );
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) cancelActiveTest();
-        onOpenChange(next);
-      }}
-    >
-      <DialogContent
-        data-testid="asset-form-dialog"
-        className="sm:max-w-[600px] max-h-[85vh] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0"
-        onInteractOutside={(e) => e.preventDefault()}
+    <>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          if (next) onOpenChange(true);
+          else guardDiscard(closeForm);
+        }}
       >
-        <DialogHeader className="border-b px-6 pt-[22px] pb-[18px] text-left">
-          <DialogTitle className="text-[17px]">
-            {editAsset ? t("action.edit") : t("action.add")} {typeLabel}
-          </DialogTitle>
-          <DialogDescription className="text-[12.5px]">{t("asset.formDescription")}</DialogDescription>
-        </DialogHeader>
-        <div className="min-h-0 overflow-y-auto px-6 py-5">
-          <div className="flex flex-col gap-[22px]">
-            {/* Asset Type */}
-            {!editAsset && (
-              <Field label={t("asset.type")}>
-                <AssetTypePicker
-                  value={assetType}
-                  variant={typeVariant}
-                  onChange={(v, variant, defaultIcon) => handleTypeChange(v as AssetType, variant, defaultIcon)}
-                  onLeave={() => {
-                    cancelActiveTest();
-                    onOpenChange(false);
-                  }}
-                />
-              </Field>
-            )}
-
-            {/* Icon + Name + Group (single row) */}
-            <div className="flex items-end gap-[14px]">
-              <Field label={t("asset.icon")} className="w-14 shrink-0">
-                <IconPicker value={icon} onChange={setIcon} type="asset" compact />
-              </Field>
-              <Field label={t("asset.name")} error={nameError} className="min-w-0 flex-1">
-                <Input
-                  data-testid="asset-form-name-input"
-                  aria-invalid={!!nameError || undefined}
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder={
-                    assetType === "ssh"
-                      ? "prod-web-01"
-                      : assetType === "database"
-                        ? "prod-mysql-01"
-                        : assetType === "redis"
-                          ? "prod-redis-01"
-                          : assetType === "mongodb"
-                            ? "prod-mongo-01"
-                            : assetType === "kafka"
-                              ? "prod-kafka-01"
-                              : assetType === "k8s"
-                                ? "prod-k8s-01"
-                                : `prod-${assetType}-01`
-                  }
-                />
-              </Field>
-              <Field label={t("asset.group")} className="w-[168px] shrink-0">
-                <GroupSelect value={groupId} onValueChange={setGroupId} />
-              </Field>
-            </div>
-
-            {/* 每种类型的配置区块都来自注册表（内置手写、扩展由 configSchema 生成） */}
-            {sectionDef?.ConfigSection && (
-              <AssetTypeSectionSuspense>
-                <AssetFormErrorsContext value={formErrors}>
-                  <sectionDef.ConfigSection
-                    key={sectionKey}
-                    ref={sectionRef}
-                    editAsset={editAsset ?? undefined}
-                    ctx={ctx}
-                    onValidityChange={reportValidity}
-                    onIconChange={setIcon}
+        <DialogContent
+          data-testid="asset-form-dialog"
+          className="sm:max-w-[600px] max-h-[85vh] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0"
+          onInteractOutside={(e) => e.preventDefault()}
+        >
+          <DialogHeader className="border-b px-6 pt-[22px] pb-[18px] text-left">
+            <DialogTitle className="text-[17px]">
+              {copy
+                ? t("asset.copyTitle", { type: typeLabel })
+                : `${editAsset ? t("action.edit") : t("action.add")} ${typeLabel}`}
+            </DialogTitle>
+            <DialogDescription className="text-[12.5px]">{t("asset.formDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 overflow-y-auto px-6 py-5">
+            <div className="flex flex-col gap-[22px]">
+              {/* Asset Type */}
+              {(!editAsset || copy) && (
+                <Field label={t("asset.type")}>
+                  <AssetTypePicker
+                    value={assetType}
                     variant={typeVariant}
+                    disabled={copy}
+                    onChange={(v, variant, defaultIcon) => handleTypeChange(v as AssetType, variant, defaultIcon)}
+                    onLeave={(proceed) =>
+                      guardDiscard(() => {
+                        proceed();
+                        closeForm();
+                      })
+                    }
                   />
-                </AssetFormErrorsContext>
-              </AssetTypeSectionSuspense>
-            )}
+                </Field>
+              )}
 
-            {/* Description(折叠成一行,贴近 footer) */}
-            <DescriptionBar value={description} onChange={setDescription} />
+              {/* Icon + Name + Group (single row) */}
+              <div className="flex items-end gap-[14px]">
+                <Field label={t("asset.icon")} className="w-14 shrink-0">
+                  <IconPicker
+                    value={icon}
+                    onChange={(v) => {
+                      setIcon(v);
+                      setIconTouched(true);
+                    }}
+                    type="asset"
+                    compact
+                  />
+                </Field>
+                <Field label={t("asset.name")} error={nameError} className="min-w-0 flex-1">
+                  <Input
+                    data-testid="asset-form-name-input"
+                    aria-invalid={!!nameError || undefined}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={
+                      assetType === "ssh"
+                        ? "prod-web-01"
+                        : assetType === "database"
+                          ? "prod-mysql-01"
+                          : assetType === "redis"
+                            ? "prod-redis-01"
+                            : assetType === "mongodb"
+                              ? "prod-mongo-01"
+                              : assetType === "kafka"
+                                ? "prod-kafka-01"
+                                : assetType === "k8s"
+                                  ? "prod-k8s-01"
+                                  : `prod-${assetType}-01`
+                    }
+                  />
+                </Field>
+                <Field label={t("asset.group")} className="w-[168px] shrink-0">
+                  <GroupSelect value={groupId} onValueChange={setGroupId} />
+                </Field>
+              </div>
+
+              {/* 每种类型的配置区块都来自注册表（内置手写、扩展由 configSchema 生成） */}
+              {sectionDef?.ConfigSection && (
+                <AssetTypeSectionSuspense>
+                  <AssetFormErrorsContext value={formErrors}>
+                    <AssetFormCarryContext value={carried}>
+                      <sectionDef.ConfigSection
+                        key={sectionKey}
+                        ref={sectionRef}
+                        editAsset={editAsset ?? undefined}
+                        ctx={ctx}
+                        onValidityChange={reportValidity}
+                        onIconChange={(v) => {
+                          if (!iconTouched) setIcon(v);
+                        }}
+                        variant={typeVariant}
+                      />
+                    </AssetFormCarryContext>
+                  </AssetFormErrorsContext>
+                </AssetTypeSectionSuspense>
+              )}
+
+              {/* Description(折叠成一行,贴近 footer) */}
+              <DescriptionBar value={description} onChange={setDescription} />
+            </div>
           </div>
-        </div>
-        <DialogFooter className="border-t bg-background px-6 py-4 sm:items-center sm:justify-between">
-          <div className="flex min-w-0 flex-1 flex-col gap-1">{testConnectionButton}</div>
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <Button
-              variant="ghost"
-              onClick={() => {
-                cancelActiveTest();
-                onOpenChange(false);
-              }}
-            >
-              {t("action.cancel")}
-            </Button>
-            <Button data-testid="asset-form-submit" onClick={handleSubmit} disabled={saveDisabled}>
-              {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {saving ? t("action.saving") : t("action.save")}
-            </Button>
-          </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          <DialogFooter className="border-t bg-background px-6 py-4 sm:items-center sm:justify-between">
+            <div className="flex min-w-0 flex-1 flex-col gap-1">{testConnectionButton}</div>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button variant="ghost" onClick={() => guardDiscard(closeForm)}>
+                {t("action.cancel")}
+              </Button>
+              <Button data-testid="asset-form-submit" onClick={handleSubmit} disabled={saveDisabled}>
+                {saving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                {saving ? t("action.saving") : t("action.save")}
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <ConfirmDialog
+        open={pendingDiscard !== null}
+        onOpenChange={(next) => {
+          if (!next) setPendingDiscard(null);
+        }}
+        title={t("asset.discardTitle")}
+        description={t("asset.discardDescription")}
+        cancelText={t("asset.discardKeepEditing")}
+        confirmText={t("asset.discardConfirm")}
+        onConfirm={() => {
+          const pending = pendingDiscard;
+          setPendingDiscard(null);
+          pending?.run();
+        }}
+      />
+    </>
   );
 }
