@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useSFTPStore, type SFTPTransfer } from "../stores/sftpStore";
-import { SFTPUpload } from "../../wailsjs/go/ssh/SSH";
+import { SFTPUploadFile } from "../../wailsjs/go/ssh/SSH";
 import { SFTPDownload, SFTPCancelTransfer } from "../../wailsjs/go/ssh/SSH";
 
 function makeTransfer(
@@ -200,13 +200,15 @@ describe("sftpStore", () => {
     });
   });
 
-  describe("startUpload", () => {
+  describe("startUploadFile", () => {
     it("calls backend and initializes transfer on success", async () => {
-      vi.mocked(SFTPUpload).mockResolvedValue("transfer-123");
+      vi.mocked(SFTPUploadFile).mockResolvedValue("transfer-123");
 
-      const result = await useSFTPStore.getState().startUpload({ tabId: "tab1", sessionId: "s1" }, "/remote/path");
+      const result = await useSFTPStore
+        .getState()
+        .startUploadFile({ tabId: "tab1", sessionId: "s1" }, "/local/path", "/remote/path");
       expect(result).toBe("transfer-123");
-      expect(SFTPUpload).toHaveBeenCalledWith("s1", "/remote/path");
+      expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/local/path", "/remote/path");
       expect(useSFTPStore.getState().transfers["transfer-123"]).toBeDefined();
       expect(useSFTPStore.getState().transfers["transfer-123"].tabId).toBe("tab1");
       expect(useSFTPStore.getState().transfers["transfer-123"].sessionId).toBe("s1");
@@ -215,17 +217,23 @@ describe("sftpStore", () => {
     });
 
     it("returns null when backend returns empty", async () => {
-      vi.mocked(SFTPUpload).mockResolvedValue("");
+      vi.mocked(SFTPUploadFile).mockResolvedValue("");
 
-      const result = await useSFTPStore.getState().startUpload({ tabId: "tab1", sessionId: "s1" }, "/remote/path");
+      const result = await useSFTPStore
+        .getState()
+        .startUploadFile({ tabId: "tab1", sessionId: "s1" }, "/local/path", "/remote/path");
       expect(result).toBeNull();
     });
 
     it("keeps transfers scoped to their initiating tabs", async () => {
-      vi.mocked(SFTPUpload).mockResolvedValueOnce("transfer-1").mockResolvedValueOnce("transfer-2");
+      vi.mocked(SFTPUploadFile).mockResolvedValueOnce("transfer-1").mockResolvedValueOnce("transfer-2");
 
-      await useSFTPStore.getState().startUpload({ tabId: "tab1", sessionId: "s1" }, "/remote/file1");
-      await useSFTPStore.getState().startUpload({ tabId: "tab2", sessionId: "s2" }, "/remote/file2");
+      await useSFTPStore
+        .getState()
+        .startUploadFile({ tabId: "tab1", sessionId: "s1" }, "/local/file1", "/remote/file1");
+      await useSFTPStore
+        .getState()
+        .startUploadFile({ tabId: "tab2", sessionId: "s2" }, "/local/file2", "/remote/file2");
 
       expect(
         useSFTPStore
@@ -239,8 +247,8 @@ describe("sftpStore", () => {
           .getTabTransfers("tab2")
           .map((transfer) => transfer.transferId)
       ).toEqual(["transfer-2"]);
-      expect(SFTPUpload).toHaveBeenNthCalledWith(1, "s1", "/remote/file1");
-      expect(SFTPUpload).toHaveBeenNthCalledWith(2, "s2", "/remote/file2");
+      expect(SFTPUploadFile).toHaveBeenNthCalledWith(1, "s1", "/local/file1", "/remote/file1");
+      expect(SFTPUploadFile).toHaveBeenNthCalledWith(2, "s2", "/local/file2", "/remote/file2");
     });
   });
 

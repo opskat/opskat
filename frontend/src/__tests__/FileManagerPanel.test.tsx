@@ -16,7 +16,17 @@ import {
   type ExternalEditSession,
   type ExternalEditSettings,
 } from "../lib/externalEditApi";
-import { ChangeSSHDirectory, SFTPListDir, SFTPRename, SFTPUpload, SFTPUploadDir } from "../../wailsjs/go/ssh/SSH";
+import {
+  ChangeSSHDirectory,
+  SFTPListDir,
+  SFTPPaste,
+  SFTPRename,
+  SFTPSelectUploadDir,
+  SFTPSelectUploadFile,
+  SFTPStatTargets,
+  SFTPUploadFile,
+} from "../../wailsjs/go/ssh/SSH";
+import { OnFileDrop } from "../../wailsjs/runtime/runtime";
 import { sftp_svc } from "../../wailsjs/go/models";
 import { profiled } from "./renderCount";
 import { formatBytes, formatDate, planChainRender } from "../components/terminal/file-manager/utils";
@@ -284,6 +294,27 @@ function listDirCalls(path: string) {
   return vi.mocked(SFTPListDir).mock.calls.filter((call) => call[1] === path);
 }
 
+/** 默认所有目标都空闲；existing 里列出的路径视为已存在（或检查失败）。 */
+function mockTargetStats(existing: Record<string, Partial<sftp_svc.TargetStat>>) {
+  vi.mocked(SFTPStatTargets).mockImplementation((_sessionId: string, paths: string[]) =>
+    Promise.resolve(
+      paths.map(
+        (path) => ({ path, exists: false, isDir: false, size: 0, modTime: 0, ...existing[path] }) as sftp_svc.TargetStat
+      )
+    )
+  );
+}
+
+function existingFile(path: string, keepBothPath: string): Partial<sftp_svc.TargetStat> {
+  return { exists: true, isDir: false, size: 2048, modTime: 1_700_000_000, keepBothPath, path };
+}
+
+function dropNativeFiles(paths: string[]) {
+  const handler = vi.mocked(OnFileDrop).mock.calls.at(-1)?.[0];
+  if (!handler) throw new Error("file manager did not register a native drop handler");
+  act(() => handler(10, 10, paths));
+}
+
 function rowOf(text: string): HTMLElement {
   return screen.getByText(text).closest("[data-sftp-entry-row]") as HTMLElement;
 }
@@ -361,6 +392,7 @@ describe("FileManagerPanel", () => {
     codeDiffViewerMock.mockClear();
     codeEditorMountMock.mockClear();
     vi.mocked(SFTPListDir).mockResolvedValue([]);
+    mockTargetStats({});
   });
 
   it("resizes through the shared drag lifecycle and commits once on mouseup", () => {
@@ -553,8 +585,9 @@ describe("FileManagerPanel", () => {
 
   it("starts file and folder uploads from the file manager status bar", async () => {
     const user = userEvent.setup();
-    vi.mocked(SFTPUpload).mockResolvedValue("upload-file");
-    vi.mocked(SFTPUploadDir).mockResolvedValue("upload-folder");
+    vi.mocked(SFTPSelectUploadFile).mockResolvedValue("/home/me/report.txt");
+    vi.mocked(SFTPSelectUploadDir).mockResolvedValue("/home/me/site");
+    vi.mocked(SFTPUploadFile).mockResolvedValue("upload-1");
 
     render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
 
@@ -563,11 +596,13 @@ describe("FileManagerPanel", () => {
     const statusBar = screen.getByTestId("sftp-status-bar");
     await user.click(within(statusBar).getByRole("button", { name: "sftp.uploadTo" }));
     await user.click(await screen.findByRole("menuitem", { name: "sftp.upload" }));
-    expect(SFTPUpload).toHaveBeenCalledWith("s1", "/srv/app/");
+    await waitFor(() =>
+      expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/home/me/report.txt", "/srv/app/report.txt")
+    );
 
     await user.click(within(statusBar).getByRole("button", { name: "sftp.uploadTo" }));
     await user.click(await screen.findByRole("menuitem", { name: "sftp.uploadDir" }));
-    expect(SFTPUploadDir).toHaveBeenCalledWith("s1", "/srv/app/");
+    await waitFor(() => expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/home/me/site", "/srv/app/site"));
   });
 
   it("opens the new folder dialog from the file manager status bar", async () => {
@@ -2437,6 +2472,267 @@ describe("FileManagerPanel", () => {
       } finally {
         widthSpy.mockRestore();
       }
+    });
+  });
+  describe("same-name conflicts", () => {
+    const panel = () => <FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />;
+
+    async function uploadViaButton(localPath: string) {
+      const user = userEvent.setup();
+      vi.mocked(SFTPSelectUploadFile).mockResolvedValue(localPath);
+      const statusBar = screen.getByTestId("sftp-status-bar");
+      await user.click(within(statusBar).getByRole("button", { name: "sftp.uploadTo" }));
+      await user.click(await screen.findByRole("menuitem", { name: "sftp.upload" }));
+    }
+
+    it("asks before uploading over an existing file and shows the target with both sides", async () => {
+      mockTargetStats({ "/srv/app/report.txt": existingFile("/srv/app/report.txt", "/srv/app/report_copy.txt") });
+      render(panel());
+      await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+
+      await uploadViaButton("/home/me/report.txt");
+
+      const dialog = await screen.findByTestId("file-conflict-dialog");
+      expect(within(dialog).getByTestId("file-conflict-target")).toHaveTextContent("/srv/app/report.txt");
+      expect(within(dialog).getByText("fileConflict.existing")).toBeInTheDocument();
+      expect(within(dialog).getByText("2.0 KB")).toBeInTheDocument();
+      expect(SFTPStatTargets).toHaveBeenCalledWith("s1", ["/srv/app/report.txt"]);
+      expect(SFTPUploadFile).not.toHaveBeenCalled();
+    });
+
+    it("skips the upload when the user chooses skip", async () => {
+      mockTargetStats({ "/srv/app/report.txt": existingFile("/srv/app/report.txt", "/srv/app/report_copy.txt") });
+      render(panel());
+      await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+      await uploadViaButton("/home/me/report.txt");
+
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.skip" }));
+
+      await waitFor(() => expect(screen.queryByTestId("file-conflict-dialog")).toBeNull());
+      expect(SFTPUploadFile).not.toHaveBeenCalled();
+    });
+
+    it("uploads under the _copy name when the user keeps both", async () => {
+      mockTargetStats({ "/srv/app/report.txt": existingFile("/srv/app/report.txt", "/srv/app/report_copy.txt") });
+      render(panel());
+      await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+      await uploadViaButton("/home/me/report.txt");
+
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.keepBoth" }));
+
+      await waitFor(() =>
+        expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/home/me/report.txt", "/srv/app/report_copy.txt")
+      );
+    });
+
+    it("uploads onto the existing path when the user overwrites", async () => {
+      mockTargetStats({ "/srv/app/report.txt": existingFile("/srv/app/report.txt", "/srv/app/report_copy.txt") });
+      render(panel());
+      await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+      await uploadViaButton("/home/me/report.txt");
+
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.overwrite" }));
+
+      await waitFor(() =>
+        expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/home/me/report.txt", "/srv/app/report.txt")
+      );
+    });
+
+    it("aborts the item instead of overwriting when the existence check fails", async () => {
+      mockTargetStats({ "/srv/app/report.txt": { error: "permission denied" } });
+      render(panel());
+      await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+      await uploadViaButton("/home/me/report.txt");
+
+      await waitFor(() => expect(toastError).toHaveBeenCalled());
+      expect(screen.queryByTestId("file-conflict-dialog")).toBeNull();
+      expect(SFTPUploadFile).not.toHaveBeenCalled();
+    });
+
+    it("aborts the whole upload when the existence check itself is rejected", async () => {
+      vi.mocked(SFTPStatTargets).mockRejectedValue(new Error("session closed"));
+      render(panel());
+      await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+      await uploadViaButton("/home/me/report.txt");
+
+      await waitFor(() => expect(toastError).toHaveBeenCalledWith("session closed"));
+      expect(SFTPUploadFile).not.toHaveBeenCalled();
+    });
+
+    it("checks native drops and applies one decision to the remaining conflicts", async () => {
+      mockTargetStats({
+        "/srv/app/a.txt": existingFile("/srv/app/a.txt", "/srv/app/a_copy.txt"),
+        "/srv/app/b.txt": existingFile("/srv/app/b.txt", "/srv/app/b_copy.txt"),
+      });
+      render(panel());
+      await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+
+      dropNativeFiles(["/home/me/a.txt", "/home/me/b.txt", "/home/me/c.txt"]);
+
+      const dialog = await screen.findByTestId("file-conflict-dialog");
+      expect(SFTPStatTargets).toHaveBeenCalledTimes(1);
+      expect(SFTPStatTargets).toHaveBeenCalledWith("s1", ["/srv/app/a.txt", "/srv/app/b.txt", "/srv/app/c.txt"]);
+      fireEvent.click(within(dialog).getByLabelText("fileConflict.applyToRest"));
+      fireEvent.click(within(dialog).getByRole("button", { name: "fileConflict.keepBoth" }));
+
+      await waitFor(() => expect(SFTPUploadFile).toHaveBeenCalledTimes(3));
+      expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/home/me/a.txt", "/srv/app/a_copy.txt");
+      expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/home/me/b.txt", "/srv/app/b_copy.txt");
+      expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/home/me/c.txt", "/srv/app/c.txt");
+      expect(screen.queryByTestId("file-conflict-dialog")).toBeNull();
+    });
+
+    it("keeps decisions already made and skips the rest when the dialog is dismissed", async () => {
+      const user = userEvent.setup();
+      mockTargetStats({
+        "/srv/app/a.txt": existingFile("/srv/app/a.txt", "/srv/app/a_copy.txt"),
+        "/srv/app/b.txt": existingFile("/srv/app/b.txt", "/srv/app/b_copy.txt"),
+      });
+      render(panel());
+      await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+
+      dropNativeFiles(["/home/me/a.txt", "/home/me/b.txt"]);
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.overwrite" }));
+      await waitFor(() => expect(screen.getByTestId("file-conflict-target")).toHaveTextContent("/srv/app/b.txt"));
+      await user.keyboard("{Escape}");
+
+      await waitFor(() => expect(screen.queryByTestId("file-conflict-dialog")).toBeNull());
+      expect(SFTPUploadFile).toHaveBeenCalledTimes(1);
+      expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/home/me/a.txt", "/srv/app/a.txt");
+    });
+
+    it("queues a second drop behind the open conflict instead of dropping the first", async () => {
+      mockTargetStats({
+        "/srv/app/a.txt": existingFile("/srv/app/a.txt", "/srv/app/a_copy.txt"),
+        "/srv/app/b.txt": existingFile("/srv/app/b.txt", "/srv/app/b_copy.txt"),
+      });
+      render(panel());
+      await waitFor(() => expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/app"));
+
+      dropNativeFiles(["/home/me/a.txt"]);
+      await waitFor(() => expect(screen.getByTestId("file-conflict-target")).toHaveTextContent("/srv/app/a.txt"));
+      dropNativeFiles(["/home/me/b.txt"]);
+      await waitFor(() => expect(SFTPStatTargets).toHaveBeenCalledTimes(2));
+      expect(screen.getByTestId("file-conflict-target")).toHaveTextContent("/srv/app/a.txt");
+
+      fireEvent.click(screen.getByRole("button", { name: "fileConflict.skip" }));
+      await waitFor(() => expect(screen.getByTestId("file-conflict-target")).toHaveTextContent("/srv/app/b.txt"));
+      fireEvent.click(screen.getByRole("button", { name: "fileConflict.overwrite" }));
+
+      await waitFor(() => expect(SFTPUploadFile).toHaveBeenCalledTimes(1));
+      expect(SFTPUploadFile).toHaveBeenCalledWith("s1", "/home/me/b.txt", "/srv/app/b.txt");
+    });
+
+    it("offers only cancel and overwrite when renaming onto an existing name", async () => {
+      mockDirListings({ "/srv/app": [fileEntry("old.log"), fileEntry("new.log")] });
+      mockTargetStats({ "/srv/app/new.log": existingFile("/srv/app/new.log", "/srv/app/new_copy.log") });
+      render(panel());
+      fireEvent.click(await screen.findByText("old.log"));
+      fireEvent.keyDown(window, { key: "F2" });
+      const input = await screen.findByDisplayValue("old.log");
+      fireEvent.change(input, { target: { value: "new.log" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      const dialog = await screen.findByTestId("file-conflict-dialog");
+      expect(within(dialog).queryByRole("button", { name: "fileConflict.keepBoth" })).toBeNull();
+      expect(within(dialog).queryByRole("button", { name: "fileConflict.skip" })).toBeNull();
+      fireEvent.click(within(dialog).getByRole("button", { name: "action.cancel" }));
+      await waitFor(() => expect(screen.queryByTestId("file-conflict-dialog")).toBeNull());
+      expect(SFTPRename).not.toHaveBeenCalled();
+    });
+
+    it("renames over the existing entry once overwrite is confirmed", async () => {
+      mockDirListings({ "/srv/app": [fileEntry("old.log"), fileEntry("new.log")] });
+      mockTargetStats({ "/srv/app/new.log": existingFile("/srv/app/new.log", "/srv/app/new_copy.log") });
+      render(panel());
+      fireEvent.click(await screen.findByText("old.log"));
+      fireEvent.keyDown(window, { key: "F2" });
+      const input = await screen.findByDisplayValue("old.log");
+      fireEvent.change(input, { target: { value: "new.log" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.overwrite" }));
+      await waitFor(() => expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/old.log", "/srv/app/new.log"));
+    });
+
+    it("asks before a drag-move lands on an existing name", async () => {
+      mockDirListings({ "/srv/app": [dirEntry("logs"), fileEntry("app.log")] });
+      mockTargetStats({ "/srv/app/logs/app.log": existingFile("/srv/app/logs/app.log", "/srv/app/logs/app_copy.log") });
+      render(panel());
+      await screen.findByText("app.log");
+
+      const dataTransfer = createDragDataTransfer();
+      fireEvent.dragStart(rowOf("app.log"), { dataTransfer });
+      fireEvent.dragOver(rowOf("logs"), { dataTransfer });
+      fireEvent.drop(rowOf("logs"), { dataTransfer });
+
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.skip" }));
+      await waitFor(() => expect(screen.queryByTestId("file-conflict-dialog")).toBeNull());
+      expect(SFTPRename).not.toHaveBeenCalled();
+
+      fireEvent.dragStart(rowOf("app.log"), { dataTransfer });
+      fireEvent.dragOver(rowOf("logs"), { dataTransfer });
+      fireEvent.drop(rowOf("logs"), { dataTransfer });
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.keepBoth" }));
+      await waitFor(() =>
+        expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/app.log", "/srv/app/logs/app_copy.log")
+      );
+    });
+
+    async function copyFromTab1(name: string) {
+      mockDirListings({ "/srv/app": [fileEntry(name)], "/srv/www": [fileEntry(name)] });
+      const view = render(panel());
+      fireEvent.click(await screen.findByText(name));
+      fireEvent.keyDown(window, { key: "c", ctrlKey: true });
+      await waitFor(() =>
+        expect(within(screen.getByTestId("sftp-status-bar")).getByText("sftp.clipboardCopy")).toBeInTheDocument()
+      );
+      return view;
+    }
+
+    it("asks before pasting over an existing entry and skips it when told to", async () => {
+      const view = await copyFromTab1("app.log");
+      view.unmount();
+      mockTargetStats({ "/srv/www/app.log": existingFile("/srv/www/app.log", "/srv/www/app_copy.log") });
+      render(<FileManagerPanel tabId="tab2" sessionId="s2" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("app.log");
+
+      fireEvent.keyDown(window, { key: "v", ctrlKey: true });
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.skip" }));
+
+      await waitFor(() => expect(screen.queryByTestId("file-conflict-dialog")).toBeNull());
+      expect(SFTPStatTargets).toHaveBeenCalledWith("s2", ["/srv/www/app.log"]);
+      expect(SFTPPaste).not.toHaveBeenCalled();
+    });
+
+    it("pastes under the chosen name when overwriting", async () => {
+      const view = await copyFromTab1("app.log");
+      view.unmount();
+      mockTargetStats({ "/srv/www/app.log": existingFile("/srv/www/app.log", "/srv/www/app_copy.log") });
+      render(<FileManagerPanel tabId="tab2" sessionId="s2" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("app.log");
+
+      fireEvent.keyDown(window, { key: "v", ctrlKey: true });
+      fireEvent.click(await screen.findByRole("button", { name: "fileConflict.overwrite" }));
+
+      await waitFor(() => expect(SFTPPaste).toHaveBeenCalledTimes(1));
+      const req = vi.mocked(SFTPPaste).mock.calls[0][0];
+      expect(req.targetSessionId).toBe("s2");
+      expect(req.targetDir).toBe("/srv/www");
+      expect(req.items).toEqual([{ sessionId: "s1", path: "/srv/app/app.log", isDir: false, targetName: "app.log" }]);
+    });
+
+    it("duplicates in place under the _copy name without asking", async () => {
+      await copyFromTab1("app.log");
+      mockTargetStats({ "/srv/app/app.log": existingFile("/srv/app/app.log", "/srv/app/app_copy.log") });
+
+      fireEvent.keyDown(window, { key: "v", ctrlKey: true });
+
+      await waitFor(() => expect(SFTPPaste).toHaveBeenCalledTimes(1));
+      expect(screen.queryByTestId("file-conflict-dialog")).toBeNull();
+      expect(vi.mocked(SFTPPaste).mock.calls[0][0].items).toEqual([
+        { sessionId: "s1", path: "/srv/app/app.log", isDir: false, targetName: "app_copy.log" },
+      ]);
     });
   });
 });

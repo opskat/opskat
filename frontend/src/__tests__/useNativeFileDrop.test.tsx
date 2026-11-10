@@ -12,14 +12,14 @@ describe("useNativeFileDrop", () => {
     vi.mocked(OnFileDropOff).mockClear();
   });
 
-  it("uploads through SFTP when dropped inside the file manager panel", () => {
+  it("hands one drop's paths over as a single batch with the current directory", async () => {
     const panel = document.createElement("div");
     panel.getBoundingClientRect = () =>
       ({ left: 100, right: 300, top: 10, bottom: 500, width: 200, height: 490 }) as DOMRect;
     const panelRef = createRef<HTMLDivElement>();
     Object.defineProperty(panelRef, "current", { value: panel });
     const currentPathRef = { current: "/home/app" };
-    const startUploadFile = vi.fn().mockResolvedValue("t1");
+    const uploadLocalPaths = vi.fn().mockResolvedValue(undefined);
 
     renderHook(() =>
       useNativeFileDrop({
@@ -27,25 +27,25 @@ describe("useNativeFileDrop", () => {
         isActive: true,
         isOpen: true,
         panelRef,
-        tabId: "tab1",
-        sessionId: "s1",
-        startUploadFile,
+        uploadLocalPaths,
       })
     );
 
     const handler = vi.mocked(OnFileDrop).mock.calls[0][0];
-    act(() => handler(150, 20, ["C:/tmp/a.txt"]));
+    act(() => handler(150, 20, ["C:/tmp/a.txt", "C:/tmp/b.txt"]));
+    await act(async () => {});
 
-    expect(startUploadFile).toHaveBeenCalledWith({ tabId: "tab1", sessionId: "s1" }, "C:/tmp/a.txt", "/home/app/");
+    expect(uploadLocalPaths).toHaveBeenCalledTimes(1);
+    expect(uploadLocalPaths).toHaveBeenCalledWith(["C:/tmp/a.txt", "C:/tmp/b.txt"], "/home/app");
   });
 
-  it("ignores drops outside the file manager panel", () => {
+  it("ignores drops outside the file manager panel", async () => {
     const panel = document.createElement("div");
     panel.getBoundingClientRect = () =>
       ({ left: 100, right: 300, top: 10, bottom: 500, width: 200, height: 490 }) as DOMRect;
     const panelRef = createRef<HTMLDivElement>();
     Object.defineProperty(panelRef, "current", { value: panel });
-    const startUploadFile = vi.fn().mockResolvedValue("t1");
+    const uploadLocalPaths = vi.fn().mockResolvedValue(undefined);
 
     renderHook(() =>
       useNativeFileDrop({
@@ -53,15 +53,14 @@ describe("useNativeFileDrop", () => {
         isActive: true,
         isOpen: true,
         panelRef,
-        tabId: "tab1",
-        sessionId: "s1",
-        startUploadFile,
+        uploadLocalPaths,
       })
     );
 
     const handler = vi.mocked(OnFileDrop).mock.calls[0][0];
     act(() => handler(50, 20, ["C:/tmp/a.txt"]));
+    await act(async () => {});
 
-    expect(startUploadFile).not.toHaveBeenCalled();
+    expect(uploadLocalPaths).not.toHaveBeenCalled();
   });
 });

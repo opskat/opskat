@@ -17,7 +17,16 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@opskat/ui";
-import { SFTPCreateFile, SFTPDelete, SFTPGetwd, SFTPMkdir, SFTPPaste, SFTPRename } from "../../../wailsjs/go/ssh/SSH";
+import {
+  SFTPCreateFile,
+  SFTPDelete,
+  SFTPGetwd,
+  SFTPMkdir,
+  SFTPPaste,
+  SFTPRename,
+  SFTPSelectUploadDir,
+  SFTPSelectUploadFile,
+} from "../../../wailsjs/go/ssh/SSH";
 import { sftp_svc } from "../../../wailsjs/go/models";
 import {
   builtInEditorID,
@@ -49,10 +58,12 @@ import { type ClipboardState, type DeleteTarget, type CtxMenuState, type Permiss
 import { useFileManagerDirectory } from "./file-manager/useFileManagerDirectory";
 import { useNativeFileDrop } from "./file-manager/useNativeFileDrop";
 import { useResizeHandle } from "./file-manager/useResizeHandle";
+import { sftpEntrySide, useSFTPTargetResolver, type SFTPWriteTarget } from "./file-manager/useSFTPTargetResolver";
 import { useTerminalDirectorySync } from "./file-manager/useTerminalDirectorySync";
 import {
   canMovePathToDirectory,
   formatBytes,
+  getLocalBaseName,
   getParentPath,
   getPathBaseName,
   HANDLE_PX,
@@ -170,8 +181,6 @@ export function FileManagerPanel({
   const [activeSyncMode, setActiveSyncMode] = useState<DirectorySyncMenuMode>(null);
   const [builtInBlock, setBuiltInBlock] = useState<{ remotePath: string; reasonKey: string } | null>(null);
 
-  const startUpload = useSFTPStore((s) => s.startUpload);
-  const startUploadDir = useSFTPStore((s) => s.startUploadDir);
   const startUploadFile = useSFTPStore((s) => s.startUploadFile);
   const startDownload = useSFTPStore((s) => s.startDownload);
   const startDownloadDir = useSFTPStore((s) => s.startDownloadDir);
@@ -246,14 +255,42 @@ export function FileManagerPanel({
     return new Set(clipboard.items.filter((item) => item.sessionId === sessionId).map((item) => item.path));
   }, [clipboard, sessionId]);
 
+  const { resolveTargets, conflictDialog } = useSFTPTargetResolver(sessionId);
+
+  const uploadLocalPaths = useCallback(
+    async (localPaths: string[], remoteDir: string) => {
+      const destinations = await resolveTargets(
+        localPaths.map((localPath) => ({
+          targetPath: joinRemotePath(remoteDir, getLocalBaseName(localPath)),
+          incoming: {},
+        }))
+      );
+      destinations.forEach((destination, index) => {
+        if (destination) void startUploadFile(transferTarget, localPaths[index], destination);
+      });
+    },
+    [resolveTargets, startUploadFile, transferTarget]
+  );
+
+  const pickAndUpload = useCallback(
+    async (kind: "file" | "dir") => {
+      try {
+        const localPath = kind === "file" ? await SFTPSelectUploadFile() : await SFTPSelectUploadDir();
+        if (!localPath) return;
+        await uploadLocalPaths([localPath], currentPathRef.current);
+      } catch (e) {
+        toast.error(errorMessage(e));
+      }
+    },
+    [currentPathRef, uploadLocalPaths]
+  );
+
   const isDragOver = useNativeFileDrop({
     currentPathRef,
     isActive,
     isOpen,
     panelRef,
-    sessionId,
-    startUploadFile,
-    tabId,
+    uploadLocalPaths,
   });
   const { handleResizeStart, isResizing, outerRef } = useResizeHandle({ onWidthChange, panelRef, width });
 
@@ -337,7 +374,7 @@ export function FileManagerPanel({
       .map((path) => {
         const entry = entryByPath.get(path);
         if (!entry) return null;
-        return { sessionId, path, name: entry.name, isDir: entry.isDir, size: entry.size };
+        return { sessionId, path, name: entry.name, isDir: entry.isDir, size: entry.size, modTime: entry.modTime };
       })
       .filter(Boolean) as ClipboardState["items"];
   }, [entryByPath, selected, sessionId]);
@@ -349,7 +386,7 @@ export function FileManagerPanel({
         .map((path) => {
           const entry = entryByPath.get(path);
           if (!entry) return null;
-          return { sessionId, path, name: entry.name, isDir: entry.isDir, size: entry.size };
+          return { sessionId, path, name: entry.name, isDir: entry.isDir, size: entry.size, modTime: entry.modTime };
         })
         .filter(Boolean) as ClipboardState["items"];
       if (!items.length) return;
@@ -371,13 +408,42 @@ export function FileManagerPanel({
 
   const paste = useCallback(async () => {
     if (!clipboard?.items.length) return;
+    const targetDir = currentPathRef.current;
+    // 剪切到它本来所在的目录是空操作，不做同名检查。
+    const items = clipboard.items.filter(
+      (item) => !(clipboard.mode === "cut" && item.sessionId === sessionId && getParentPath(item.path) === targetDir)
+    );
+    if (!items.length) return;
+    const destinations = await resolveTargets(
+      items.map((item): SFTPWriteTarget => {
+        const targetPath = joinRemotePath(targetDir, item.name);
+        return {
+          targetPath,
+          incoming: sftpEntrySide(item),
+          duplicateInPlace: clipboard.mode === "copy" && item.sessionId === sessionId && item.path === targetPath,
+        };
+      })
+    );
+    const pasteItems = items.flatMap((item, index) => {
+      const destination = destinations[index];
+      if (!destination) return [];
+      return [
+        new sftp_svc.PasteItem({
+          sessionId: item.sessionId,
+          path: item.path,
+          isDir: item.isDir,
+          targetName: getPathBaseName(destination),
+        }),
+      ];
+    });
+    if (!pasteItems.length) return;
     try {
       await SFTPPaste(
         new sftp_svc.PasteRequest({
           targetSessionId: sessionId,
-          targetDir: currentPathRef.current,
+          targetDir,
           mode: clipboard.mode,
-          items: clipboard.items,
+          items: pasteItems,
         })
       );
       if (clipboard.mode === "cut") setGlobalClipboard(null);
@@ -385,7 +451,7 @@ export function FileManagerPanel({
     } catch (e) {
       toast.error(errorMessage(e));
     }
-  }, [clipboard, currentPathRef, refreshTree, sessionId]);
+  }, [clipboard, currentPathRef, refreshTree, resolveTargets, sessionId]);
 
   const goUp = useCallback(() => {
     if (currentPath === "/") return;
@@ -619,15 +685,25 @@ export function FileManagerPanel({
         setRenamePath(null);
         return;
       }
+      const [destination] = await resolveTargets(
+        [
+          {
+            targetPath: joinRemotePath(getParentPath(oldPath), nextName),
+            incoming: sftpEntrySide(entry),
+          },
+        ],
+        "rename"
+      );
+      if (!destination) return;
       try {
-        await SFTPRename(sessionId, oldPath, joinRemotePath(getParentPath(oldPath), nextName));
+        await SFTPRename(sessionId, oldPath, destination);
         setRenamePath(null);
         await refreshTree();
       } catch (e) {
         toast.error(errorMessage(e));
       }
     },
-    [entryByPath, refreshTree, sessionId]
+    [entryByPath, refreshTree, resolveTargets, sessionId]
   );
 
   const moveEntriesToDirectory = useCallback(
@@ -641,14 +717,27 @@ export function FileManagerPanel({
           return {
             from: path,
             to: joinRemotePath(targetDirPath, name),
+            entry,
           };
         })
-        .filter((item): item is { from: string; to: string } => !!item && item.from !== item.to);
+        .filter((item): item is NonNullable<typeof item> => !!item && item.from !== item.to);
 
       if (!moves.length) return;
 
+      const destinations = await resolveTargets(
+        moves.map(({ to, entry }) => ({
+          targetPath: to,
+          incoming: entry ? sftpEntrySide(entry) : {},
+        }))
+      );
+      const accepted = moves.flatMap((move, index) => {
+        const destination = destinations[index];
+        return destination ? [{ from: move.from, to: destination }] : [];
+      });
+      if (!accepted.length) return;
+
       try {
-        for (const move of moves) {
+        for (const move of accepted) {
           await SFTPRename(sessionId, move.from, move.to);
         }
         setSelected([]);
@@ -657,7 +746,7 @@ export function FileManagerPanel({
         toast.error(errorMessage(e));
       }
     },
-    [entryByPath, refreshTree, sessionId, setSelected]
+    [entryByPath, refreshTree, resolveTargets, sessionId, setSelected]
   );
 
   const openPermission = useCallback(
@@ -744,10 +833,10 @@ export function FileManagerPanel({
           if (targetPath) openProperties(targetPath);
           break;
         case "upload":
-          startUpload(transferTarget, currentPath.endsWith("/") ? currentPath : currentPath + "/");
+          void pickAndUpload("file");
           break;
         case "uploadDir":
-          startUploadDir(transferTarget, currentPath.endsWith("/") ? currentPath : currentPath + "/");
+          void pickAndUpload("dir");
           break;
         case "newFile":
           setNameDialog("file");
@@ -773,7 +862,6 @@ export function FileManagerPanel({
     },
     [
       ctxMenu,
-      currentPath,
       currentPathRef,
       copyFilePaths,
       copyOrCut,
@@ -784,14 +872,13 @@ export function FileManagerPanel({
       openPermission,
       openProperties,
       paste,
+      pickAndUpload,
       refreshTree,
       selected,
       selectedItems,
       startDownload,
       startDownloadDir,
       startRename,
-      startUpload,
-      startUploadDir,
       syncTerminalToPath,
       t,
       transferTarget,
@@ -847,7 +934,6 @@ export function FileManagerPanel({
 
   const totalWidth = width + HANDLE_PX;
   const selectedTotalSize = selectedEntries.reduce((sum, entry) => sum + (entry.isDir ? 0 : entry.size), 0);
-  const uploadTargetDir = currentPath.endsWith("/") ? currentPath : currentPath + "/";
 
   return (
     <>
@@ -973,11 +1059,11 @@ export function FileManagerPanel({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => void startUpload(transferTarget, uploadTargetDir)}>
+                    <DropdownMenuItem onClick={() => void pickAndUpload("file")}>
                       <Upload className="h-4 w-4" />
                       {t("sftp.upload")}
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => void startUploadDir(transferTarget, uploadTargetDir)}>
+                    <DropdownMenuItem onClick={() => void pickAndUpload("dir")}>
                       <FolderUp className="h-4 w-4" />
                       {t("sftp.uploadDir")}
                     </DropdownMenuItem>
@@ -1061,6 +1147,7 @@ export function FileManagerPanel({
         </DialogContent>
       </Dialog>
 
+      {conflictDialog}
       <ConfirmDialog
         open={!!deleteTarget}
         onOpenChange={(open) => !open && setDeleteTarget(null)}

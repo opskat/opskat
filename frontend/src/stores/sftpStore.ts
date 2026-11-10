@@ -1,12 +1,5 @@
 import { create } from "zustand";
-import { SFTPUpload } from "../../wailsjs/go/ssh/SSH";
-import {
-  SFTPUploadDir,
-  SFTPUploadFile,
-  SFTPDownload,
-  SFTPDownloadDir,
-  SFTPCancelTransfer,
-} from "../../wailsjs/go/ssh/SSH";
+import { SFTPUploadFile, SFTPDownload, SFTPDownloadDir, SFTPCancelTransfer } from "../../wailsjs/go/ssh/SSH";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import { registerTabCloseHook, registerTabReplaceHook } from "./tabStore";
 
@@ -48,8 +41,7 @@ interface SFTPState {
   fileManagerPaths: Record<string, string>;
   fileManagerWidth: number;
 
-  startUpload: (target: SFTPTransferTarget, remotePath: string) => Promise<string | null>;
-  startUploadDir: (target: SFTPTransferTarget, remotePath: string) => Promise<string | null>;
+  /** 上传本地文件或目录到 remotePath（目标完整路径；同名冲突由调用方先决定）。 */
   startUploadFile: (target: SFTPTransferTarget, localPath: string, remotePath: string) => Promise<string | null>;
   startDownload: (target: SFTPTransferTarget, remotePath: string) => Promise<string | null>;
   startDownloadDir: (target: SFTPTransferTarget, remotePath: string) => Promise<string | null>;
@@ -192,20 +184,6 @@ export const useSFTPStore = create<SFTPState>((set, get) => ({
   fileManagerOpenTabs: {},
   fileManagerPaths: {},
   fileManagerWidth: DEFAULT_FILE_MANAGER_WIDTH,
-
-  startUpload: async (target, remotePath) => {
-    const transferId = await SFTPUpload(target.sessionId, remotePath);
-    if (!transferId) return null;
-    subscribeProgress(transferId, target, "upload", set, get);
-    return transferId;
-  },
-
-  startUploadDir: async (target, remotePath) => {
-    const transferId = await SFTPUploadDir(target.sessionId, remotePath);
-    if (!transferId) return null;
-    subscribeProgress(transferId, target, "upload", set, get);
-    return transferId;
-  },
 
   startUploadFile: async (target, localPath, remotePath) => {
     const transferId = await SFTPUploadFile(target.sessionId, localPath, remotePath);
