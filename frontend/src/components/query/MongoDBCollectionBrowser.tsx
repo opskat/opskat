@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronRight, ChevronDown, Code2, Database, Table2, Plus, RefreshCw, Loader2, Search } from "lucide-react";
+import { ChevronRight, ChevronDown, Code2, Database, Table2, Plus, Loader2, Search } from "lucide-react";
 import { Button, Input, ScrollArea } from "@opskat/ui";
+import { AsyncState } from "@/components/common/AsyncState";
+import { PanelSidebar, SidebarRefreshButton } from "@/components/common/PanelSidebar";
 import { useQueryStore } from "@/stores/queryStore";
 
 interface MongoDBCollectionBrowserProps {
@@ -91,14 +93,15 @@ export function MongoDBCollectionBrowser({ tabId, assetId }: MongoDBCollectionBr
     loadMongoDatabases(tabId).finally(() => setLoadingDbs(false));
   };
 
+  const hasDatabases = mongoState.databases.length > 0;
+  const listStatus = loadingDbs ? "loading" : mongoState.error && !hasDatabases ? "error" : "ready";
+
   return (
-    <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between px-2 py-1.5 border-b border-border shrink-0">
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          {t("query.collections")}
-        </span>
-        <div className="flex gap-0.5">
+    <PanelSidebar
+      panelType="mongodb"
+      title={t("query.collections")}
+      actions={
+        <>
           <Button
             variant="ghost"
             size="icon"
@@ -122,15 +125,11 @@ export function MongoDBCollectionBrowser({ tabId, assetId }: MongoDBCollectionBr
           >
             <Plus className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={handleLoad} title={t("query.refreshTree")}>
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
-
-      {/* Filter input */}
-      {showFilter && (
-        <div className="border-b px-2 py-1.5 shrink-0">
+          <SidebarRefreshButton onClick={handleLoad} loading={loadingDbs} />
+        </>
+      }
+      filter={
+        showFilter ? (
           <div className="relative">
             <Search className="absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -147,22 +146,31 @@ export function MongoDBCollectionBrowser({ tabId, assetId }: MongoDBCollectionBr
               }}
             />
           </div>
-        </div>
+        ) : undefined
+      }
+    >
+      {/* A failed collection load leaves the tree usable, so the reason sits above it. */}
+      {mongoState.error && hasDatabases && !loadingDbs && (
+        <AsyncState status="error" error={mongoState.error} onRetry={handleLoad} />
       )}
 
       {/* Tree */}
-      <ScrollArea className="flex-1 min-h-0">
-        <div className="p-1 space-y-0.5">
-          {loadingDbs ? (
-            <div className="flex items-center justify-center py-4">
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            </div>
-          ) : visibleDbs.length === 0 ? (
-            <div className="text-xs text-muted-foreground text-center py-4">
-              {filterLower ? t("query.noMatch") : t("query.databases")}
-            </div>
-          ) : (
-            visibleDbs.map(({ db, dbMatch, collections: dbCollections }) => {
+      <AsyncState
+        status={listStatus}
+        error={mongoState.error}
+        onRetry={handleLoad}
+        empty={
+          listStatus === "ready" && visibleDbs.length === 0
+            ? filterLower
+              ? t("query.noMatch")
+              : t("query.mongo.noDatabases")
+            : undefined
+        }
+        className="flex-1"
+      >
+        <ScrollArea className="flex-1 min-h-0">
+          <div className="p-1 space-y-0.5">
+            {visibleDbs.map(({ db, dbMatch, collections: dbCollections }) => {
               const isExpanded = filterLower ? true : expandedDbs.includes(db);
 
               return (
@@ -187,13 +195,13 @@ export function MongoDBCollectionBrowser({ tabId, assetId }: MongoDBCollectionBr
                   {/* Collections */}
                   {isExpanded && (
                     <div className="ml-3">
-                      {loadingCollections.has(db) || !dbCollections ? (
+                      {loadingCollections.has(db) || (!dbCollections && !mongoState.error) ? (
                         <div className="flex items-center gap-1.5 px-2 py-1">
                           <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
                         </div>
-                      ) : dbCollections.length === 0 ? (
+                      ) : !dbCollections ? null : dbCollections.length === 0 ? (
                         <div className="px-2 py-1 text-xs text-muted-foreground italic">
-                          {filterLower && !dbMatch ? t("query.noMatch") : t("query.mongoCollections")}
+                          {filterLower && !dbMatch ? t("query.noMatch") : t("query.mongo.noCollections")}
                         </div>
                       ) : (
                         dbCollections.map((col) => {
@@ -233,10 +241,10 @@ export function MongoDBCollectionBrowser({ tabId, assetId }: MongoDBCollectionBr
                   )}
                 </div>
               );
-            })
-          )}
-        </div>
-      </ScrollArea>
-    </div>
+            })}
+          </div>
+        </ScrollArea>
+      </AsyncState>
+    </PanelSidebar>
   );
 }

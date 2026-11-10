@@ -223,6 +223,7 @@ These project blocks already solve picker / credential / icon / form-field probl
 | `IconPicker` | [`components/asset/IconPicker.tsx`](../frontend/src/components/asset/IconPicker.tsx) | Icon + custom color picker; value is `"name"` or `"name#hexcolor"`; also exports `getIconComponent` / `getIconColor` (§8) |
 | `Segmented` | [`components/asset/fields.tsx`](../frontend/src/components/asset/fields.tsx) | Pill segmented control (radiogroup, floating active pill) — prefer it over a `Select` for a 2–4 option toggle (auth type, key source, connection method) |
 | `AsyncState` | [`components/common/AsyncState.tsx`](../frontend/src/components/common/AsyncState.tsx) | Loading / empty / error+retry block for a region backed by one request (`status` `loading` / `error` / `ready`, `error`, `onRetry`, `empty`); the empty state shows only after a successful empty result (§10) |
+| `PanelSidebar` | [`components/common/PanelSidebar.tsx`](../frontend/src/components/common/PanelSidebar.tsx) | Left sidebar shell of the data panels: title + icon-action header (`<SidebarRefreshButton>` spins and disables while loading), optional `filter` row, content slot and drag handle; width persisted per `panelType` (§7) |
 | Asset config-form fields | [`fields.tsx`](../frontend/src/components/asset/fields.tsx) · [`configFields.tsx`](../frontend/src/components/asset/configFields.tsx) · [`ConfigTabs.tsx`](../frontend/src/components/asset/ConfigTabs.tsx) | `Field` / `FieldLabel` label+control primitives plus the schema-driven field/tab renderer (`ConfigGroupSchema` → underline-tab groups) the asset form is built from; the wiring hook is in [`adding-an-asset-type.md` §F3](./references/adding-an-asset-type.md#f3-configsection-and-pure-configts-serialization) |
 
 ### 6.4 Toast (`notify` + sonner)
@@ -286,6 +287,10 @@ The shell layout mode lives in [`layoutStore`](../frontend/src/stores/layoutStor
 ### Resizable split panes
 
 Splitting is **custom — no resizable-panel library.** [`terminal/SplitPane.tsx`](../frontend/src/components/terminal/SplitPane.tsx) renders a recursive split tree (`vertical` / `horizontal`, a `ratio`, and `first` / `second` children) as nested flex rows/cols; a `w-1`/`h-1` divider (`bg-border`, `hover:bg-primary/50`) drags to update the ratio (`flex` transitions `150ms ease-out`, suppressed while dragging). The tree and ratios persist per tab. The asset tree, left panel, DatabasePanel sidebar, and AI panel resize the same way — drag handlers + localStorage, not a lib. **Reuse this pattern** (and the divider styling) for any new split surface.
+
+### Data-panel sidebar
+
+The data panels (SQL, Redis, MongoDB, and the panels that follow them) build their left sidebar on [`PanelSidebar`](../frontend/src/components/common/PanelSidebar.tsx) — `<PanelSidebar panelType title actions filter?>` — instead of hand-rolling a header and drag bar. It renders the sidebar plus its 3px drag handle as two siblings, so put it directly in the panel's horizontal flex row. The header is the title (left, `text-xs`) and icon actions (right); the refresh action is `<SidebarRefreshButton>`, whose icon spins and is disabled while the request runs. One width range applies everywhere (160–420px, default 220px) and the dragged width persists per panel kind under `${panelType}_sidebar_width`; a panel that already persisted under another key passes `storageKey` (K8s: `k8s_sidebar_width`). Pass `filter` only for a panel that already filters — the shell doesn't add filtering, and omitting it renders no filter row. Load / empty / error inside the content slot use `AsyncState` (§10).
 
 ### Visibility, not unmount
 

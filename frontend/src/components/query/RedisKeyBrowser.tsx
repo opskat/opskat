@@ -13,7 +13,6 @@ import { createPortal } from "react-dom";
 import {
   Database,
   Server,
-  RefreshCw,
   Loader2,
   Search,
   Key,
@@ -34,6 +33,7 @@ import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import { Button, Input, ConfirmDialog, computeContextMenuPosition } from "@opskat/ui";
+import { PanelSidebar, SidebarRefreshButton } from "@/components/common/PanelSidebar";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import {
@@ -568,38 +568,31 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   ];
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Browser actions */}
-      <div className="flex items-center gap-1 border-b px-2 py-1.5">
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => setViewMode((v) => (v === "list" ? "tree" : "list"))}
-          title={viewMode === "list" ? t("query.treeView") : t("query.listView")}
-        >
-          {viewMode === "list" ? <FolderTree className="size-3.5" /> : <List className="size-3.5" />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => setCreateDialogOpen(true)}
-          title={t("query.createRedisKey")}
-        >
-          <Plus className="size-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={handleRefresh}
-          disabled={state.loadingKeys}
-          title={t("query.refreshTree")}
-        >
-          <RefreshCw className={`size-3.5 ${state.loadingKeys ? "animate-spin" : ""}`} />
-        </Button>
-      </div>
-
-      {/* Filter input */}
-      <div className="border-b px-2 py-1.5">
+    <PanelSidebar
+      panelType="redis"
+      title={t("query.redisKeys")}
+      actions={
+        <>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setViewMode((v) => (v === "list" ? "tree" : "list"))}
+            title={viewMode === "list" ? t("query.treeView") : t("query.listView")}
+          >
+            {viewMode === "list" ? <FolderTree className="size-3.5" /> : <List className="size-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setCreateDialogOpen(true)}
+            title={t("query.createRedisKey")}
+          >
+            <Plus className="size-3.5" />
+          </Button>
+          <SidebarRefreshButton onClick={handleRefresh} loading={state.loadingKeys} />
+        </>
+      }
+      filter={
         <div className="relative">
           <Search className="absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -610,8 +603,8 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
             onKeyDown={handleFilterKeyDown}
           />
         </div>
-      </div>
-
+      }
+    >
       {/* Key count */}
       <div className="flex items-center justify-between gap-2 border-b px-2 py-1 text-xs text-muted-foreground">
         <span>{t("query.keyCount", { count: visibleKeys.length })}</span>
@@ -871,6 +864,6 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
         confirmText={t("action.delete")}
         onConfirm={confirmDelete}
       />
-    </div>
+    </PanelSidebar>
   );
 }

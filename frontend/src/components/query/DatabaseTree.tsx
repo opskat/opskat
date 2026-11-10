@@ -57,6 +57,7 @@ import {
   useDatabaseDrivers,
 } from "@/lib/dbDrivers";
 import { errorMessage } from "@/lib/errorMessage";
+import { PanelSidebar, SidebarRefreshButton } from "@/components/common/PanelSidebar";
 
 interface DatabaseTreeProps {
   tabId: string;
@@ -425,14 +426,9 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
 
   if (driverUnavailable) {
     return (
-      <div className="flex flex-col h-full">
-        <div className="flex items-center px-2 py-1.5 border-b border-border shrink-0">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            {t("query.databases")}
-          </span>
-        </div>
+      <PanelSidebar panelType="database" title={t("query.databases")}>
         <DriverUnavailableNotice driver={driver} />
-      </div>
+      </PanelSidebar>
     );
   }
 
@@ -551,13 +547,11 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   };
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between px-2 py-1.5 border-b border-border shrink-0">
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          {t("query.databases")}
-        </span>
-        <div className="flex gap-0.5">
+    <PanelSidebar
+      panelType="database"
+      title={t("query.databases")}
+      actions={
+        <>
           <Button
             variant="ghost"
             size="icon"
@@ -632,21 +626,11 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
               )}
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => loadDatabases(tabId)}
-            title={t("query.refreshTree")}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
-
-      {/* Filter input */}
-      {showFilter && (
-        <div className="border-b px-2 py-1.5 shrink-0">
+          <SidebarRefreshButton onClick={() => loadDatabases(tabId)} loading={loadingDbs} />
+        </>
+      }
+      filter={
+        showFilter ? (
           <div className="relative">
             <Search className="absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -663,9 +647,9 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
               }}
             />
           </div>
-        </div>
-      )}
-
+        ) : undefined
+      }
+    >
       {/* Error message */}
       {error && (
         <div className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/10 px-2 py-2 text-xs text-destructive">
@@ -928,6 +912,6 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
         }
         onConfirm={handleConfirmAction}
       />
-    </div>
+    </PanelSidebar>
   );
 }
