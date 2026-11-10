@@ -22,6 +22,7 @@ import {
   TooltipTrigger,
   cn,
 } from "@opskat/ui";
+import { AsyncState, type AsyncStatus } from "@/components/common/AsyncState";
 import { SecretInput } from "@/components/SecretInput";
 import { notifySuccess } from "@/lib/notify";
 import { GetNetworkProxySettings, SaveNetworkProxySettings } from "../../../wailsjs/go/system/System";
@@ -51,6 +52,8 @@ export function NetworkSection() {
   const [touched, setTouched] = useState<Partial<Record<Field, boolean>>>({});
   const [saving, setSaving] = useState(false);
   const [testOpen, setTestOpen] = useState(false);
+  const [loadStatus, setLoadStatus] = useState<AsyncStatus>("loading");
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const apply = useCallback((view: system.NetworkProxyView) => {
     setForm(networkProxyFormFromView(view));
@@ -58,13 +61,38 @@ export function NetworkSection() {
     setEnvVars(view.envVars);
   }, []);
 
-  useEffect(() => {
-    GetNetworkProxySettings()
-      .then(apply)
-      .catch((e: unknown) => toast.error(errorMessage(e)));
+  const load = useCallback(() => {
+    GetNetworkProxySettings().then(
+      (view) => {
+        apply(view);
+        setLoadStatus("ready");
+      },
+      (e: unknown) => {
+        setLoadError(errorMessage(e));
+        setLoadStatus("error");
+      }
+    );
   }, [apply]);
 
-  if (!form) return null;
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const retry = () => {
+    setLoadStatus("loading");
+    setLoadError(null);
+    load();
+  };
+
+  if (!form) {
+    return (
+      <Card>
+        <CardContent>
+          <AsyncState status={loadStatus} error={loadError} onRetry={retry} />
+        </CardContent>
+      </Card>
+    );
+  }
 
   const errors = validateNetworkProxyForm(form);
   const update = (patch: Partial<NetworkProxyForm>, field?: Field) => {

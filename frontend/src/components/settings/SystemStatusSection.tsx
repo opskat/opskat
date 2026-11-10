@@ -1,4 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { AsyncState } from "@/components/common/AsyncState";
+import { useAsyncList } from "@/components/asset/useAsyncList";
 import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@opskat/ui";
 import { CircleCheck, Info, TriangleAlert, OctagonX, ChevronDown, ChevronRight } from "lucide-react";
@@ -46,13 +48,7 @@ function StatusEntryItem({ entry }: { entry: StatusEntry }) {
 
 export function SystemStatusSection() {
   const { t } = useTranslation();
-  const [entries, setEntries] = useState<StatusEntry[]>([]);
-
-  useEffect(() => {
-    GetSystemStatus().then((data) => {
-      setEntries((data as StatusEntry[]) || []);
-    });
-  }, []);
+  const { items: entries, load } = useAsyncList<StatusEntry>(() => GetSystemStatus() as Promise<StatusEntry[]>);
 
   const hasProblems = entries.some((e) => e.level === "warn" || e.level === "error");
 
@@ -62,19 +58,21 @@ export function SystemStatusSection() {
         <CardTitle className="text-base">{t("systemStatus.title")}</CardTitle>
       </CardHeader>
       <CardContent>
-        {!hasProblems ? (
-          <div className="flex flex-col items-center justify-center py-8 text-center">
-            <CircleCheck className="h-12 w-12 text-success mb-3" />
-            <p className="font-medium">{t("systemStatus.allGood")}</p>
-            <p className="text-sm text-muted-foreground mt-1">{t("systemStatus.allGoodDesc")}</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {entries.map((entry, i) => (
-              <StatusEntryItem key={i} entry={entry} />
-            ))}
-          </div>
-        )}
+        <AsyncState status={load.status} error={load.error} onRetry={load.reload}>
+          {!hasProblems ? (
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <CircleCheck className="h-12 w-12 text-success mb-3" />
+              <p className="font-medium">{t("systemStatus.allGood")}</p>
+              <p className="text-sm text-muted-foreground mt-1">{t("systemStatus.allGoodDesc")}</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {entries.map((entry, i) => (
+                <StatusEntryItem key={i} entry={entry} />
+              ))}
+            </div>
+          )}
+        </AsyncState>
       </CardContent>
     </Card>
   );
