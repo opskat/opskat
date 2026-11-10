@@ -10,7 +10,6 @@ const buckets: oss_svc.BucketItem[] = [
 ];
 const rows: OssPrefixRow[] = [{ depth: 0, name: "docs", prefix: "docs/", isExpanded: false, loaded: false }];
 const base = {
-  loadingBuckets: false,
   onSelectBucket: vi.fn(),
   onToggleExpand: vi.fn(),
   onNavigatePrefix: vi.fn(),
@@ -49,12 +48,12 @@ describe("OSSBucketTree", () => {
 
   it("shows the no-buckets placeholder for an empty account", () => {
     render(<OSSBucketTree {...base} buckets={[]} currentBucket="" rows={[]} />);
-    expect(screen.getByTestId("oss-buckets-empty")).toHaveTextContent("oss.browser.noBuckets");
+    expect(screen.getByTestId("async-state-empty")).toHaveTextContent("oss.browser.noBuckets");
   });
 
   it("shows a skeleton while buckets are loading and none are known yet", () => {
-    render(<OSSBucketTree {...base} buckets={null} currentBucket="" rows={[]} loadingBuckets />);
-    expect(screen.getByTestId("oss-buckets-loading")).toBeInTheDocument();
+    render(<OSSBucketTree {...base} buckets={null} currentBucket="" rows={[]} />);
+    expect(screen.getByTestId("async-state-loading")).toBeInTheDocument();
   });
 
   it("gives bucket, expand, and path controls pointer and keyboard-focus feedback", () => {
@@ -68,5 +67,22 @@ describe("OSSBucketTree", () => {
     render(<OSSBucketTree {...base} buckets={buckets} currentBucket="b1" rows={rows} />);
     expect(screen.getByTestId("oss-bucket-b1")).toHaveAttribute("aria-current", "true");
     expect(screen.getByTestId("oss-tree-toggle-docs/")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows the bucket-list failure with a retry instead of a blank sidebar", () => {
+    const onRetryBuckets = vi.fn();
+    render(
+      <OSSBucketTree
+        {...base}
+        buckets={null}
+        currentBucket=""
+        rows={[]}
+        error="AccessDenied"
+        onRetryBuckets={onRetryBuckets}
+      />
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("AccessDenied");
+    fireEvent.click(screen.getByTestId("async-state-retry"));
+    expect(onRetryBuckets).toHaveBeenCalled();
   });
 });

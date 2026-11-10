@@ -102,7 +102,7 @@ describe("K8sClusterPage refresh", () => {
     await user.click(podLabels[0]!);
     await screen.findByText("api-old");
 
-    await user.click(screen.getAllByRole("button", { name: "action.refresh" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "query.refreshTree" })[0]!);
 
     await waitFor(() => {
       expect(GetK8sNamespacePods).toHaveBeenCalledTimes(2);
@@ -127,7 +127,7 @@ describe("K8sClusterPage refresh", () => {
     await user.click(await screen.findByText("api"));
     await screen.findByText("example/api:old");
 
-    await user.click(screen.getAllByRole("button", { name: "action.refresh" })[0]!);
+    await user.click(screen.getAllByRole("button", { name: "query.refreshTree" })[0]!);
 
     await waitFor(() => {
       expect(GetK8sPodDetail).toHaveBeenCalledTimes(2);

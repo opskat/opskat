@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useResizeHandle, ConfirmDialog } from "@opskat/ui";
+import { ConfirmDialog } from "@opskat/ui";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { EtcdTreePane } from "@/components/etcd/EtcdTreePane";
 import { EtcdQueryBar } from "@/components/etcd/EtcdQueryBar";
@@ -68,14 +68,6 @@ export function EtcdPanel({ tabId }: EtcdPanelProps) {
     [requestConfirm]
   );
 
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  const { size: sidebarWidth, handleMouseDown } = useResizeHandle({
-    defaultSize: 260,
-    minSize: 180,
-    maxSize: 480,
-    targetRef: sidebarRef,
-  });
-
   if (!assetId) {
     return <div className="p-3 text-xs text-destructive">missing asset id</div>;
   }
@@ -109,16 +101,8 @@ export function EtcdPanel({ tabId }: EtcdPanelProps) {
   return (
     <div className="flex h-full w-full flex-col" data-testid="etcd-panel">
       <div className="flex min-h-0 flex-1">
-        {/* Left: KV tree */}
-        <div ref={sidebarRef} className="shrink-0 border-r" style={{ width: sidebarWidth }}>
-          <EtcdTreePane assetId={assetId} onSelectKey={setSelectedKey} selectedKey={selectedKey} />
-        </div>
-
-        {/* Resize handle */}
-        <div
-          className="w-1 shrink-0 cursor-col-resize hover:bg-accent active:bg-accent"
-          onMouseDown={handleMouseDown}
-        />
+        {/* Left: KV tree (PanelSidebar shell incl. drag handle) */}
+        <EtcdTreePane assetId={assetId} onSelectKey={setSelectedKey} selectedKey={selectedKey} />
 
         {/* Right: tabs (tree-detail / query-table) */}
         <div className="flex min-w-0 flex-1 flex-col">

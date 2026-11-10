@@ -49,6 +49,18 @@ beforeEach(() => {
 });
 
 describe("OSSBrowserPanel", () => {
+  it("shows the bucket-list failure in the sidebar and retries it", async () => {
+    vi.mocked(OSSListBuckets).mockRejectedValueOnce(new Error("AccessDenied"));
+    render(<OSSBrowserPanel tabId={TAB} />);
+    const sidebar = await screen.findByTestId("oss-sidebar");
+    expect(await within(sidebar).findByRole("alert")).toHaveTextContent("AccessDenied");
+
+    vi.mocked(OSSListBuckets).mockResolvedValueOnce([{ name: "b1", creationDate: 0 }] as never);
+    fireEvent.click(within(sidebar).getByTestId("async-state-retry"));
+    expect(await within(sidebar).findByTestId("oss-bucket-b1")).toBeInTheDocument();
+    expect(OSSListBuckets).toHaveBeenCalledTimes(2);
+  });
+
   it("loads buckets on mount and renders them in the tree", async () => {
     vi.mocked(OSSListBuckets).mockResolvedValue([{ name: "b1", creationDate: 0 }] as never);
     render(<OSSBrowserPanel tabId={TAB} />);

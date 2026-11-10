@@ -21,6 +21,7 @@ import { OSSTransferDock } from "@/components/oss/OSSTransferDock";
 import { useOssFileDrop } from "@/components/oss/useOssFileDrop";
 import { ossObjectSide, useOssTargetResolver } from "@/components/oss/useOssTargetResolver";
 import { parseOSSConfig } from "@/components/asset/OSSConfigSection.config";
+import { PanelSidebar, SidebarRefreshButton } from "@/components/common/PanelSidebar";
 import { NameDialog } from "@/components/common/NameDialog";
 import { errorMessage } from "@/lib/errorMessage";
 
@@ -70,21 +71,19 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
   const assetConfig = useAssetStore((s) => s.assets.find((a) => a.ID === assetId)?.Config);
   const defaultBucket = useMemo(() => parseOSSConfig(assetConfig ?? "").bucket, [assetConfig]);
 
+  // The failure is kept in the tab state and shown in the sidebar, so no toast here.
+  const reloadBuckets = useCallback(() => {
+    if (assetId) void loadBuckets(tabId, assetId, defaultBucket).catch(() => undefined);
+  }, [assetId, tabId, defaultBucket, loadBuckets]);
+
   useEffect(() => {
-    if (assetId) void loadBuckets(tabId, assetId, defaultBucket).catch(fail);
-  }, [assetId, tabId, defaultBucket, loadBuckets, fail]);
+    reloadBuckets();
+  }, [reloadBuckets]);
 
   const rows = useMemo(() => (state ? flattenPrefixTree(state.tree, state.expanded, "") : []), [state]);
 
   const focusedObject = useMemo(() => state?.listing?.objects.find((o) => o.key === state.focusedKey) ?? null, [state]);
 
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  const { size: sidebarWidth, handleMouseDown } = useResizeHandle({
-    defaultSize: 260,
-    minSize: 180,
-    maxSize: 480,
-    targetRef: sidebarRef,
-  });
   const detailRef = useRef<HTMLDivElement>(null);
   const { size: detailWidth, handleMouseDown: handleDetailResize } = useResizeHandle({
     defaultSize: 320,
@@ -220,23 +219,22 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     <div className="flex h-full w-full flex-col" data-testid="oss-browser-panel">
       <div className="flex min-h-0 flex-1">
         {/* Left: bucket list + lazy prefix tree */}
-        <div ref={sidebarRef} className="shrink-0 border-r" style={{ width: sidebarWidth }}>
+        <PanelSidebar
+          panelType="oss"
+          title={t("oss.browser.sidebarTitle")}
+          actions={<SidebarRefreshButton onClick={reloadBuckets} loading={state?.loading.buckets ?? false} />}
+        >
           <OSSBucketTree
             buckets={state?.buckets ?? null}
             currentBucket={state?.currentBucket ?? ""}
             rows={rows}
-            loadingBuckets={state?.loading.buckets ?? false}
+            error={state?.error}
+            onRetryBuckets={reloadBuckets}
             onSelectBucket={onSelectBucket}
             onToggleExpand={onExpand}
             onNavigatePrefix={onNavigate}
           />
-        </div>
-
-        {/* Resize handle */}
-        <div
-          className="w-1 shrink-0 cursor-col-resize hover:bg-accent active:bg-accent"
-          onMouseDown={handleMouseDown}
-        />
+        </PanelSidebar>
 
         {/* Right: breadcrumb + (selection bar) + object list */}
         <div

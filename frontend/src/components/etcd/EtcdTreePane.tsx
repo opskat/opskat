@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { ChevronRight, ChevronDown, Folder, FileText, RefreshCw, Loader2 } from "lucide-react";
+import { ChevronRight, ChevronDown, Folder, FileText } from "lucide-react";
+import { Input } from "@opskat/ui";
+import { AsyncState } from "@/components/common/AsyncState";
+import { PanelSidebar, SidebarRefreshButton } from "@/components/common/PanelSidebar";
+import { errorMessage } from "@/lib/errorMessage";
 import { useEtcdStore, etcdCacheKey, type EtcdTreeNode } from "@/stores/etcdStore";
 
 export interface EtcdTreePaneProps {
@@ -27,6 +31,8 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([ROOT_PREFIX]));
   const [filter, setFilter] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  // Root listing failure (null = none). Child-prefix failures stay toasts: the rest of the tree is still usable.
+  const [rootError, setRootError] = useState<string | null>(null);
 
   function reportLoadError(e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -38,18 +44,31 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
     if (refreshing) return;
     setRefreshing(true);
     invalidate(assetId);
+    setRootError(null);
     const prefixes = new Set<string>([ROOT_PREFIX, ...expanded]);
     try {
-      await Promise.all([...prefixes].map((p) => loadPrefix(assetId, p, { force: true }).catch(reportLoadError)));
+      await Promise.all(
+        [...prefixes].map((p) =>
+          loadPrefix(assetId, p, { force: true }).catch((e) =>
+            p === ROOT_PREFIX ? setRootError(errorMessage(e)) : reportLoadError(e)
+          )
+        )
+      );
     } finally {
       setRefreshing(false);
     }
   }
 
+  function loadRoot() {
+    setRootError(null);
+    loadPrefix(assetId, ROOT_PREFIX).catch((e) => setRootError(errorMessage(e)));
+  }
+
   // 首次加载根 prefix —— 不需要显式展开根（根永远渲染顶层）
   useEffect(() => {
-    loadPrefix(assetId, ROOT_PREFIX).catch(reportLoadError);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    loadPrefix(assetId, ROOT_PREFIX)
+      .then(() => setRootError(null))
+      .catch((e) => setRootError(errorMessage(e)));
   }, [assetId, loadPrefix]);
 
   function toggleExpand(prefix: string) {
@@ -123,10 +142,10 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
             {truncated && (
               <div
                 data-testid="etcd-tree-truncated"
-                className="px-2 py-1 text-[10px] italic text-muted-foreground"
+                className="px-2 py-1 text-xs italic text-muted-foreground"
                 style={{ paddingLeft: padding + 16 }}
               >
-                {t("etcd.tree.truncated", { count: "?", limit: LIST_LIMIT })}
+                {t("etcd.tree.truncated", { limit: LIST_LIMIT })}
               </div>
             )}
           </>
@@ -135,43 +154,44 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
     );
   }
 
-  const rootNodes = nodesFor(ROOT_PREFIX) ?? [];
+  const rootNodes = nodesFor(ROOT_PREFIX);
   const rootTruncated = truncatedFor(ROOT_PREFIX);
+  const rootStatus = rootError !== null ? "error" : rootNodes ? "ready" : "loading";
 
   return (
-    <div className="flex h-full w-full flex-col">
-      <div className="flex items-center gap-1.5 border-b p-2">
-        <input
-          type="text"
+    <PanelSidebar
+      panelType="etcd"
+      title={t("etcd.tree.title")}
+      actions={<SidebarRefreshButton onClick={() => void refreshTree()} loading={refreshing} />}
+      filter={
+        <Input
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           placeholder={t("etcd.tree.filterPlaceholder")}
-          className="h-7 min-w-0 flex-1 rounded border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+          className="h-7 text-xs"
         />
-        <button
-          type="button"
-          className="flex size-7 shrink-0 items-center justify-center rounded border text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
-          onClick={() => void refreshTree()}
-          disabled={refreshing}
-          title={t("etcd.tree.refresh")}
-          data-testid="etcd-tree-refresh"
-        >
-          {refreshing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-        </button>
-      </div>
-      <div className="flex-1 overflow-auto py-1">
-        {rootNodes.length === 0 && <div className="px-3 py-2 text-xs text-muted-foreground">…</div>}
-        {rootNodes.map((n) => renderNode(n, 0))}
-        {rootTruncated && (
-          <div
-            data-testid="etcd-tree-truncated"
-            className="px-2 py-1 text-[10px] italic text-muted-foreground"
-            style={{ paddingLeft: 16 }}
-          >
-            {t("etcd.tree.truncated", { count: "?", limit: LIST_LIMIT })}
-          </div>
-        )}
-      </div>
-    </div>
+      }
+    >
+      <AsyncState
+        status={rootStatus}
+        error={rootError}
+        onRetry={loadRoot}
+        empty={rootNodes && rootNodes.length === 0 ? t("etcd.tree.empty") : undefined}
+        className="flex-1"
+      >
+        <div className="flex-1 overflow-auto py-1">
+          {(rootNodes ?? []).map((n) => renderNode(n, 0))}
+          {rootTruncated && (
+            <div
+              data-testid="etcd-tree-truncated"
+              className="px-2 py-1 text-xs italic text-muted-foreground"
+              style={{ paddingLeft: 16 }}
+            >
+              {t("etcd.tree.truncated", { limit: LIST_LIMIT })}
+            </div>
+          )}
+        </div>
+      </AsyncState>
+    </PanelSidebar>
   );
 }
