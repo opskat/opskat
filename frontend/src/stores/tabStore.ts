@@ -80,6 +80,29 @@ export function registerTabCloseHook(hook: TabCloseHook) {
   closeHooks.push(hook);
 }
 
+// === Close Impact ===
+
+/** 关闭一个 tab 会带来的损失：会被断开的会话数、会被中断的在途传输数。 */
+export interface TabCloseImpact {
+  sessions: number;
+  transfers: number;
+}
+
+type TabCloseImpactProbe = (tab: Tab) => TabCloseImpact;
+const closeImpactProbes: TabCloseImpactProbe[] = [];
+
+/** 由持有会话 / 传输的 store 侧注册；tabStore 自己不依赖这些 store（它们反过来依赖 tabStore）。 */
+export function registerTabCloseImpact(probe: TabCloseImpactProbe) {
+  closeImpactProbes.push(probe);
+}
+
+export type CloseAction =
+  { kind: "tab"; id: string } | { kind: "all" } | { kind: "others" | "left" | "right"; id: string };
+
+export interface PendingCloseConfirm extends TabCloseImpact {
+  action: CloseAction;
+}
+
 // === Replace Hook ===
 
 type TabReplaceHook = (oldId: string, newId: string) => void;
@@ -135,6 +158,8 @@ interface TabStoreState {
   pendingCloseTabId: string | null;
   /** 本次启动从 localStorage 恢复出来的 tab；恢复态需要重新校验远端。 */
   restoredTabIds: string[];
+  /** 关闭会断开会话 / 中断传输时先挂起的动作，由 TabCloseConfirmHost 弹出确认。 */
+  closeConfirm: PendingCloseConfirm | null;
 
   openTab: (tab: Tab, activate?: boolean) => void;
   closeTab: (id: string) => void;
@@ -150,6 +175,9 @@ interface TabStoreState {
   closeOtherTabs: (id: string) => void;
   closeLeftTabs: (id: string) => void;
   closeRightTabs: (id: string) => void;
+  closeAllTabs: () => void;
+  confirmClose: () => void;
+  cancelCloseConfirm: () => void;
 }
 
 export const useTabStore = create<TabStoreState>((set, get) => ({
@@ -158,6 +186,7 @@ export const useTabStore = create<TabStoreState>((set, get) => ({
   unsavedTabIds: [],
   pendingCloseTabId: null,
   restoredTabIds: [],
+  closeConfirm: null,
 
   openTab: (tab, activate = true) => {
     const { tabs } = get();
@@ -185,14 +214,7 @@ export const useTabStore = create<TabStoreState>((set, get) => ({
     }
   },
 
-  closeTab: (id) => {
-    // 有未保存改动时不关：把 tab 切到前台，由承载它的界面接管「保存 / 不保存 / 取消」的决定。
-    if (get().unsavedTabIds.includes(id)) {
-      set({ pendingCloseTabId: id, activeTabId: id });
-      return;
-    }
-    get().forceCloseTab(id);
-  },
+  closeTab: (id) => requestClose({ kind: "tab", id }),
 
   forceCloseTab: (id) => {
     const { tabs, activeTabId } = get();
@@ -277,31 +299,89 @@ export const useTabStore = create<TabStoreState>((set, get) => ({
     set({ tabs: next });
   },
 
-  closeOtherTabs: (id) => {
-    const state = get();
-    set(
-      bulkCloseTabs(
-        state,
-        state.tabs.filter((t) => t.id !== id),
-        id
-      )
-    );
+  closeOtherTabs: (id) => requestClose({ kind: "others", id }),
+  closeLeftTabs: (id) => requestClose({ kind: "left", id }),
+  closeRightTabs: (id) => requestClose({ kind: "right", id }),
+  closeAllTabs: () => requestClose({ kind: "all" }),
+
+  confirmClose: () => {
+    const pending = get().closeConfirm;
+    if (!pending) return;
+    set({ closeConfirm: null });
+    runClose(pending.action);
   },
 
-  closeLeftTabs: (id) => {
-    const state = get();
-    const idx = state.tabs.findIndex((t) => t.id === id);
-    if (idx <= 0) return;
-    set(bulkCloseTabs(state, state.tabs.slice(0, idx), id));
-  },
-
-  closeRightTabs: (id) => {
-    const state = get();
-    const idx = state.tabs.findIndex((t) => t.id === id);
-    if (idx === -1 || idx >= state.tabs.length - 1) return;
-    set(bulkCloseTabs(state, state.tabs.slice(idx + 1), id));
-  },
+  cancelCloseConfirm: () => set({ closeConfirm: null }),
 }));
+
+function closeTargets(state: TabStoreState, action: CloseAction): Tab[] {
+  if (action.kind === "all") return state.tabs;
+  const idx = state.tabs.findIndex((t) => t.id === action.id);
+  if (idx === -1) return [];
+  switch (action.kind) {
+    case "tab":
+      return [state.tabs[idx]];
+    case "others":
+      return state.tabs.filter((t) => t.id !== action.id);
+    case "left":
+      return state.tabs.slice(0, idx);
+    case "right":
+      return state.tabs.slice(idx + 1);
+  }
+}
+
+function sumImpact(tabs: Tab[]): TabCloseImpact {
+  const total = { sessions: 0, transfers: 0 };
+  for (const tab of tabs) {
+    for (const probe of closeImpactProbes) {
+      const impact = probe(tab);
+      total.sessions += impact.sessions;
+      total.transfers += impact.transfers;
+    }
+  }
+  return total;
+}
+
+/**
+ * 关闭入口：会断开会话 / 中断传输时先挂起等确认（批量关闭任何一项有损失即确认，单个 tab 只在有在途传输时确认）；
+ * 否则直接执行。未保存改动的确认留给 runClose 之后的既有流程，两者先后出现、不会叠在一起。
+ * 未保存的 tab 不会被批量关闭，所以不计入损失。
+ */
+function requestClose(action: CloseAction) {
+  const state = useTabStore.getState();
+  const unsaved = new Set(state.unsavedTabIds);
+  const impact = sumImpact(closeTargets(state, action).filter((t) => !unsaved.has(t.id)));
+  const needsConfirm = action.kind === "tab" ? impact.transfers > 0 : impact.sessions > 0 || impact.transfers > 0;
+  if (needsConfirm) {
+    useTabStore.setState({ closeConfirm: { action, ...impact } });
+    return;
+  }
+  runClose(action);
+}
+
+function runClose(action: CloseAction) {
+  const state = useTabStore.getState();
+  switch (action.kind) {
+    case "tab": {
+      // 有未保存改动时不关：把 tab 切到前台，由承载它的界面接管「保存 / 不保存 / 取消」的决定。
+      if (state.unsavedTabIds.includes(action.id)) {
+        useTabStore.setState({ pendingCloseTabId: action.id, activeTabId: action.id });
+        return;
+      }
+      state.forceCloseTab(action.id);
+      return;
+    }
+    case "all": {
+      for (const tab of [...state.tabs]) runClose({ kind: "tab", id: tab.id });
+      return;
+    }
+    default: {
+      const targets = closeTargets(state, action);
+      if (targets.length === 0) return;
+      useTabStore.setState(bulkCloseTabs(state, targets, action.id));
+    }
+  }
+}
 
 /**
  * 批量关闭「其它 / 左侧 / 右侧」的共同实现。有未保存改动的 tab 一律留下：
