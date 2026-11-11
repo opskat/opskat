@@ -98,17 +98,18 @@ func cmdCp(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args [
 	if plan.Multiple {
 		return cmdCpMultiSource(ctx, handlers, srcs, dst, recursive)
 	}
-	return cmdCpSingleSource(ctx, handlers, srcs[0], dst)
+	return cmdCpSingleSource(ctx, handlers, srcs[0], dst, plan.Destination)
 }
 
-// cmdCpSingleSource 传一个被指名的文件/对象：目的地就是用户写的那个字符串，没有基点拼接，
-// 因此也不要求尾随 "/"。审批排在目标路径探测之前——两端在解析时就已完全确定，先问一句
-// "这个路径存在吗"只会把一次不需要授权的探测塞进审批之前。SSH `~` 的 home 查询不探测
+// cmdCpSingleSource 传一个被指名的文件/对象：dstPath 是 PlanTransfer 定下的具体落点——目的端
+// 字面量，或目的端写成目录形态时的 <目录><源文件名>（#364）；不要求尾随 "/"。审批的、交给
+// 工具的都是这一条，用户批准的因此就是实际写入的那个文件。审批排在目标路径探测之前——
+// 两端在解析时就已完全确定，先问一句"这个路径存在吗"只会把一次不需要授权的探测塞进审批之前。SSH `~` 的 home 查询不探测
 // 目标路径，是把审批主体变成确定绝对路径所必需的解析步骤。
 func cmdCpSingleSource(
-	ctx context.Context, handlers map[string]tool.ToolHandlerFunc, src, dst *cpEndpoint,
+	ctx context.Context, handlers map[string]tool.ToolHandlerFunc, src, dst *cpEndpoint, dstPath string,
 ) int {
-	if err := dst.adapter.ValidateDestination(dst.path); err != nil {
+	if err := dst.adapter.ValidateDestination(dstPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
@@ -117,14 +118,14 @@ func cmdCpSingleSource(
 	// 换来一次执行），因此必须与 exec 一样过审批。
 	approvalCtx, result, approvalAssetID, err := requireCpApproval(ctx, []cpTarget{
 		{ep: src, dir: helper.DirRead, path: src.path},
-		{ep: dst, dir: helper.DirWrite, path: dst.path},
+		{ep: dst, dir: helper.DirWrite, path: dstPath},
 	}, cpDetail([]*cpEndpoint{src}, dst))
 	if err != nil {
 		return cpApprovalFailed(approvalCtx, []*cpEndpoint{src}, dst, false, approvalAssetID, err, result)
 	}
 	ctx = approvalCtx
 	decision := result.ToCheckResult()
-	params := cpToolParams(src.arg, dst.arg, false, src.assetID(), dst.assetID())
+	params := cpToolParams(src.arg, dst.argFor(dstPath), false, src.assetID(), dst.assetID())
 
 	return callHandler(ctx, handlers, "cp", params, decision)
 }
@@ -574,6 +575,10 @@ the two sides works, including SSH server to object storage.
 Flags:
   -r, --recursive   Transfer a directory tree / object prefix.
 
+Destination:
+  A destination ending with "/" is a directory: a single file lands at
+  <destination>/<file name>. Otherwise it names the file to write.
+
 Multiple Sources:
   With -r, a glob pattern, or more than one source, the destination must end
   with "/" and each entry lands at <destination>/<path relative to the source
@@ -590,6 +595,7 @@ Approval:
 
 Examples:
   opsctl cp ./config.yml web-server:/etc/app/config.yml   Upload by name
+  opsctl cp ./config.yml web-server:/tmp/                 Upload into a directory
   opsctl cp 1:/var/log/app.log ./app.log                  Download by ID
   opsctl cp 1:/etc/hosts 2:/tmp/hosts                     Between two assets
   opsctl cp ./dump.sql.gz s3-prod:/backups/dump.sql.gz    Upload to object storage

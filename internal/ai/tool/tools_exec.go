@@ -28,7 +28,8 @@ func execTools() []tool.Tool {
 					"src": {Type: "string", Description: "Source endpoint: an absolute local path, <asset>:/<path>, " +
 						"or <asset>:~/<path> for an SSH asset."},
 					"dst": {Type: "string", Description: "Destination endpoint, same syntax as src. It names the " +
-						"file to write, including the filename."},
+						"file to write, including the filename; a dst ending with \"/\" is a directory and the " +
+						"file lands under it with its source name."},
 					"recursive": {Type: "boolean", Description: "Transfer a directory tree / object prefix instead " +
 						"of a single file. With recursive, or when src contains a glob pattern (* ? [), dst must " +
 						"end with \"/\" and each entry lands under it."},

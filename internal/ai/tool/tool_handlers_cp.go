@@ -128,6 +128,9 @@ func handleCp(ctx context.Context, args map[string]any) (string, error) {
 	if plan.Sources[0].Expands {
 		return cpMultiSource(ctx, checker, src, dst, recursive, detail)
 	}
+	// 单源的目的端从这里起就是那条具体落点：写成目录形态时已拼上源文件名，校验、审批、
+	// 写入范围与写入都只认它。
+	dst.path = plan.Destination
 	return cpSingleSource(ctx, checker, src, dst, detail)
 }
 
@@ -158,8 +161,8 @@ func parseCpEndpoint(ctx context.Context, raw string) (*cpEndpoint, error) {
 	return &cpEndpoint{raw: raw, asset: asset, path: p, adapter: adapter}, nil
 }
 
-// cpSingleSource 传一个被指名的文件/对象：目的地就是用户写的那个字符串，没有基点拼接，
-// 因此也不要求尾随 "/"。
+// cpSingleSource 传一个被指名的文件/对象：dst.path 是 PlanTransfer 定下的具体落点——目的端
+// 字面量，或目的端写成目录形态时的 <目录><源文件名>。不要求尾随 "/"。
 func cpSingleSource(
 	ctx context.Context, checker *permission.CommandPolicyChecker, src, dst *cpEndpoint, detail string,
 ) (string, error) {

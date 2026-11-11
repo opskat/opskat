@@ -521,6 +521,7 @@ The path after `:` must start with `/`. When the part before the colon does name
 - Local → object storage: `opsctl cp ./dump.sql.gz s3-prod:/backups/2026/dump.sql.gz`
 - Object storage → local: `opsctl cp s3-prod:/artifacts/app.tar ./app.tar`
 - SSH → object storage: `opsctl cp web-01:/var/log/app.log s3-prod:/logs/app.log`
+- Into a directory: `opsctl cp ./small.json web-01:/tmp/` writes `/tmp/small.json` — a destination ending with `/` is a directory and the file keeps its name. Without the trailing `/`, the destination is the file to write.
 
 **Recursion and wildcards**:
 - `-r` transfers a directory tree or an object prefix: `opsctl cp -r ./dist s3-prod:/bucket/releases/v2/`

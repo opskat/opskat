@@ -402,6 +402,26 @@ func TestCpTransfersFileAndReportsSummary(t *testing.T) {
 	})
 }
 
+// TestCpSingleSourceIntoDirectoryKeepsTheFileName 锁 #364：单源的目的端以 "/" 结尾时是
+// 目录，文件落在它下面并保留源文件名——审批的与写入的都是这条具体落点。此前目的端被当成
+// 字面文件名，SFTP 拿目录本身去 Create，服务端只回一句 SSH_FX_FAILURE。
+func TestCpSingleSourceIntoDirectoryKeepsTheFileName(t *testing.T) {
+	Convey("单源目的端以 / 结尾时落到 <目录>/<源文件名>", t, func() {
+		ctx, seen := setupCp(t, "allow")
+		src := filepath.Join(t.TempDir(), "small.json")
+		So(os.WriteFile(src, []byte("{}"), 0o600), ShouldBeNil)
+
+		_, err := handleCp(ctx, map[string]any{"src": src, "dst": "sink-01:/tmp/"})
+
+		So(err, ShouldBeNil)
+		So(cpFake.validated, ShouldResemble, []string{"/tmp/small.json"})
+		So(*seen, ShouldHaveLength, 1)
+		So((*seen)[0].Command, ShouldEqual, "/tmp/small.json")
+		So(string(cpFake.written["/tmp/small.json"]), ShouldEqual, "{}")
+		So(cpFake.written, ShouldNotContainKey, "/tmp/")
+	})
+}
+
 // TestCpMultiSourceEntryLandsUnderDestinationBase 是"落点"这条契约的锁：多源形态下
 // 目的路径是 dst 基点 + RelPath，不是字面 dst。只命中一个文件的通配同样是多源——
 // 按条数判形态就会把这次传输落到 `/logs/`（一个前缀）上，而不是 `/logs/app.log`。
