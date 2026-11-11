@@ -2464,9 +2464,11 @@ describe("interjectQueuedMessage", () => {
       calls.push(`remove:${id}`);
       return true;
     }) as any);
+    // 与真实后端一致：被取消的一轮先发 stopped，随后仍会补发终态 done（cago cancelPartial + emitDone）。
     vi.mocked(StopAIGeneration).mockImplementation((async () => {
       calls.push("stop");
       callbacks.at(-1)?.({ type: "stopped" });
+      callbacks.at(-1)?.({ type: "done" });
     }) as any);
     vi.mocked(QueueAIMessage).mockImplementation((async (_conv: number, id: string) => {
       calls.push(`queue:${id}`);
@@ -2522,6 +2524,28 @@ describe("interjectQueuedMessage", () => {
     expect(StopAIGeneration).not.toHaveBeenCalled();
   });
 
+  it("does not stop when the turn finished on its own while the removal was in flight", async () => {
+    await startRunningTurn();
+    vi.mocked(RemoveQueuedAIMessage).mockImplementation((async (_conv: number, id: string) => {
+      calls.push(`remove:${id}`);
+      callbacks.at(-1)?.({ type: "done" });
+      return true;
+    }) as any);
+
+    await useAIStore.getState().interjectQueuedMessage(convId, "q1");
+    await waitForStoreCondition(() => calls.includes("send"));
+
+    expect(StopAIGeneration).not.toHaveBeenCalled();
+    const msgs = useAIStore.getState().conversationMessages[convId];
+    expect(msgs[1].blocks.some((b) => b.type === "interjected")).toBe(false);
+    const sent = vi.mocked(SendAIMessage).mock.calls.at(-1)![1] as Array<{ role: string; content: string }>;
+    expect(sent.filter((m) => m.role === "user").map((m) => m.content)).toEqual([
+      "web-01 磁盘快满了",
+      "只看 /var/log 和 /data",
+      "顺便看下 docker 镜像",
+    ]);
+  });
+
   it("a manual stop adds no interjection notice", async () => {
     await startRunningTurn();
 
@@ -2529,6 +2553,6 @@ describe("interjectQueuedMessage", () => {
     await waitForStoreCondition(() => calls.includes("send"));
 
     const msgs = useAIStore.getState().conversationMessages[convId];
-    expect(msgs[1].blocks.some((b) => (b.type as string) === "interjected")).toBe(false);
+    expect(msgs[1].blocks.some((b) => b.type === "interjected")).toBe(false);
   });
 });

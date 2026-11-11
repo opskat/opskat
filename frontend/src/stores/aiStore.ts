@@ -423,9 +423,10 @@ function loadInitialSidebarState() {
 // 模块级 per-conversation 事件监听管理（不放 zustand，因为含函数引用）
 const conversationListeners = new Map<number, { cancel: (() => void) | null; generation: number }>();
 const conversationStopRequests = new Set<number>();
-// 正在「立即插话」的会话 → 被点的排队消息 id。点击时登记，由该轮的终态事件取走：
-// stopped 时按插话处理，done / error 说明这一轮在停止生效前已自行结束，登记作废。
-const conversationInterjections = new Map<number, string>();
+// 正在「立即插话」的会话 → 被点的排队消息 id 与这一轮是否已被停止。点击时登记；stopped 只打标记，
+// 由随后的终态 done 取走并发出（cago 取消后仍会补发 done，在 stopped 时就续发会被 done 的 drainQueue
+// 抢先把整队一起发出）。done 到达时未被停止 = 这一轮在停止生效前已自行结束，登记作废；error 同样作废。
+const conversationInterjections = new Map<number, { queueId: string; stopped: boolean }>();
 
 const conversationRenameVersions = new Map<number, number>();
 const conversationRenameInFlight = new Set<number>();
@@ -1479,8 +1480,8 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
 
     case "stopped": {
       cleanupStreamBuffer(convId);
-      const interjectionId = conversationInterjections.get(convId);
-      conversationInterjections.delete(convId);
+      const interjection = conversationInterjections.get(convId);
+      if (interjection) interjection.stopped = true;
       const updated = updateLastAssistant(msgs, (msg) => {
         const newBlocks = msg.blocks.map((b) => {
           if (b.type === "tool" && b.status === "running") {
@@ -1500,7 +1501,7 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
           }
           return b;
         });
-        if (interjectionId) newBlocks.push({ type: "interjected", content: "" });
+        if (interjection) newBlocks.push({ type: "interjected", content: "" });
         return { ...msg, blocks: newBlocks, streaming: false };
       });
       if (updated) {
@@ -1514,14 +1515,10 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
       useAIStore.getState().fetchConversations();
 
       if (hasConversationHosts(convId)) {
-        if (interjectionId) {
-          setTimeout(() => {
-            void sendInterjection(convId, interjectionId);
-          }, 0);
-        } else {
-          drainQueue(convId);
-        }
+        // 插话：等这一轮的终态 done 再续发，见 conversationInterjections。
+        if (!interjection) drainQueue(convId);
       } else {
+        conversationInterjections.delete(convId);
         cleanupConversationIfUnused(convId);
       }
       break;
@@ -1546,7 +1543,9 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
 
     case "done": {
       cleanupStreamBuffer(convId);
-      // 这一轮在插话的停止生效前已自行结束：被点的消息还在队列里，随下面的 drainQueue 发出。
+      // 插话已停止这一轮 → 只续发被点的那条；未停止 = 这一轮在停止生效前已自行结束，
+      // 被点的消息还在队列里，随下面的 drainQueue 发出。
+      const interjection = conversationInterjections.get(convId);
       conversationInterjections.delete(convId);
       const updated = updateLastAssistant(msgs, (msg) => {
         const newBlocks = msg.blocks.map((b) =>
@@ -1586,7 +1585,13 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
         });
 
       if (hasConversationHosts(convId)) {
-        drainQueue(convId);
+        if (interjection?.stopped) {
+          setTimeout(() => {
+            void sendInterjection(convId, interjection.queueId);
+          }, 0);
+        } else {
+          drainQueue(convId);
+        }
       } else {
         cleanupConversationIfUnused(convId);
       }
@@ -2652,7 +2657,7 @@ export const useAIStore = create<AIState>((set, get) => {
       if (!streaming?.sending || conversationInterjections.has(convId)) return;
       if (!streaming.pendingQueue.some((item) => item.id === queueId)) return;
       // 先登记再移除：移除期间这一轮若自行结束，done / error 会清掉登记，下面据此放弃停止。
-      conversationInterjections.set(convId, queueId);
+      conversationInterjections.set(convId, { queueId, stopped: false });
       let removed: boolean;
       try {
         // 必须在停止之前：StopAIGeneration 会释放运行器，之后就无法从后端队列里取出这条了。
@@ -2663,7 +2668,7 @@ export const useAIStore = create<AIState>((set, get) => {
         return;
       }
       // 没移除成功 = 已在安全点注入（消息已生效）或这一轮已结束，都不必再中断。
-      if (!removed || conversationInterjections.get(convId) !== queueId) {
+      if (!removed || conversationInterjections.get(convId)?.queueId !== queueId) {
         conversationInterjections.delete(convId);
         return;
       }
