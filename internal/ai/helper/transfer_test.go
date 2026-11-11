@@ -232,6 +232,24 @@ func TestLocalTransfer_WriteCreatesParentsAndOpenReadRoundTrips(t *testing.T) {
 	}
 }
 
+// 本地目的端是个已存在的目录时报 ErrDestinationIsDirectory：Windows 上以写方式打开目录
+// 只得到一句 "Access is denied"，看不出是目的端写成了目录。
+func TestLocalTransferWriteOntoExistingDirectoryIsReported(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "downloads")
+	if err := os.Mkdir(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	err := localTransfer.Write(context.Background(), nil, dir, strings.NewReader("x"), 1)
+
+	if !errors.Is(err, ErrDestinationIsDirectory) {
+		t.Fatalf("error = %v, want ErrDestinationIsDirectory", err)
+	}
+	if !strings.Contains(err.Error(), dir) {
+		t.Errorf("error %q does not name the destination %q", err, dir)
+	}
+}
+
 func TestLocalTransferWriteCannotFollowSymlinkOutsideApprovedScope(t *testing.T) {
 	approved := t.TempDir()
 	outsideDir := t.TempDir()

@@ -130,8 +130,9 @@ func handleCp(ctx context.Context, args map[string]any) (string, error) {
 	}
 	// 单源的目的端从这里起就是那条具体落点：写成目录形态时已拼上源文件名，校验、审批、
 	// 写入范围与写入都只认它。
+	writtenAsDir := helper.IsDirectoryDestination(dst.path, !dst.isRemote())
 	dst.path = plan.Destination
-	return cpSingleSource(ctx, checker, src, dst, detail)
+	return cpSingleSource(ctx, checker, src, dst, writtenAsDir, detail)
 }
 
 // parseCpEndpoint 把一个端点串解析成 (资产, 路径, 适配器)。语法由 helper.ParseTransferEndpoint
@@ -162,9 +163,11 @@ func parseCpEndpoint(ctx context.Context, raw string) (*cpEndpoint, error) {
 }
 
 // cpSingleSource 传一个被指名的文件/对象：dst.path 是 PlanTransfer 定下的具体落点——目的端
-// 字面量，或目的端写成目录形态时的 <目录><源文件名>。不要求尾随 "/"。
+// 字面量，或目的端写成目录形态时的 <目录><源文件名>。不要求尾随 "/"。writtenAsDir 报告用户
+// 写的目的端是不是目录形态，只用于决定报错里要不要建议补 "/"。
 func cpSingleSource(
-	ctx context.Context, checker *permission.CommandPolicyChecker, src, dst *cpEndpoint, detail string,
+	ctx context.Context, checker *permission.CommandPolicyChecker, src, dst *cpEndpoint, writtenAsDir bool,
+	detail string,
 ) (string, error) {
 	if err := dst.adapter.ValidateDestination(dst.path); err != nil {
 		return "", err
@@ -192,6 +195,11 @@ func cpSingleSource(
 	writeCtx := helper.WithTransferWriteScope(ctx, cpDestinationScope(dst))
 	transferredBytes, err := transferOne(writeCtx, src, dst, res.Entries[0], dst.path)
 	if err != nil {
+		// 单源的目的路径是用户亲手写的那一条：它不带 "/" 却是个已存在的目录，补上 "/" 就是
+		// "落到目录下"。已经带了 "/" 的（拼出的落点撞上同名目录）再建议一次就是兜圈子。
+		if errors.Is(err, helper.ErrDestinationIsDirectory) && !writtenAsDir {
+			return "", fmt.Errorf(`%w; to copy into it, end the destination with "/"`, err)
+		}
 		return "", err
 	}
 	ReportCpProgress(ctx, CpProgress{

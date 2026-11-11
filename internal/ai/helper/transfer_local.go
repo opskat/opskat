@@ -197,6 +197,11 @@ func (localAdapter) Write(
 	}
 	f, err := root.OpenFile(rel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o666)
 	if err != nil {
+		// 以写方式打开目录在 Windows 上只回一句 "Access is denied"，看不出原因；失败之后
+		// 问一次它是不是目录，把原因说清楚。成功路径上不多一次系统调用。
+		if info, statErr := root.Lstat(rel); statErr == nil && info.IsDir() {
+			return fmt.Errorf("local destination %q: %w", path, ErrDestinationIsDirectory)
+		}
 		return fmt.Errorf("failed to create local file: %w", err)
 	}
 	closed := false

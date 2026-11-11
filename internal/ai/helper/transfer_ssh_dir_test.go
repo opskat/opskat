@@ -2,6 +2,7 @@ package helper
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -150,4 +151,48 @@ func TestPrepareTransferDirsIsOptional(t *testing.T) {
 	if err != nil || got != ctx {
 		t.Fatalf("PrepareTransferDirs(local) = %v, %v; want the same ctx and no error", got, err)
 	}
+}
+
+// 写入目标本身是个已存在的目录时，三条写入路径（单文件带范围、单文件无范围、多源已建好
+// 目录）都要报 ErrDestinationIsDirectory，而不是去 Create 一个目录、拿回服务端一句不带
+// 原因的 SSH_FX_FAILURE（#364 的另一半）。目录里不得留下任何东西。
+func TestSFTPWriteOntoExistingDirectoryIsReported(t *testing.T) {
+	newDir := func(t *testing.T) (root, dir string) {
+		t.Helper()
+		root = t.TempDir()
+		dir = filepath.Join(root, "tmp")
+		if err := os.Mkdir(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		return sftpiotest.RemotePath(root), sftpiotest.RemotePath(dir)
+	}
+	assertReported := func(t *testing.T, err error, dir string) {
+		t.Helper()
+		if !errors.Is(err, ErrDestinationIsDirectory) {
+			t.Fatalf("error = %v, want ErrDestinationIsDirectory", err)
+		}
+		if !strings.Contains(err.Error(), dir) {
+			t.Errorf("error %q does not name the destination %q", err, dir)
+		}
+	}
+
+	t.Run("single file within a write scope", func(t *testing.T) {
+		root, dir := newDir(t)
+		ctx := WithTransferWriteScope(context.Background(), root)
+		err := writeSFTP(ctx, newTestSFTP(t), dir, strings.NewReader("x"), nil)
+		assertReported(t, err, dir)
+	})
+	t.Run("single file without a write scope", func(t *testing.T) {
+		_, dir := newDir(t)
+		err := writeSFTP(context.Background(), newTestSFTP(t), dir, strings.NewReader("x"), nil)
+		assertReported(t, err, dir)
+	})
+	t.Run("prepared directories", func(t *testing.T) {
+		root, dir := newDir(t)
+		writeErrs, prepErr := prepareAndWrite(t, root, []string{dir})
+		if prepErr != nil {
+			t.Fatalf("PrepareTransferDirs: %v", prepErr)
+		}
+		assertReported(t, writeErrs[0], dir)
+	})
 }

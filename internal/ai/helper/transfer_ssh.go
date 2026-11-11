@@ -372,8 +372,10 @@ func checkSFTPWriteScope(client *sftp.Client, scope string) (exists bool, err er
 	return true, nil
 }
 
-// lstatSFTPComponent 核验写入目标 p 路径上的一级 current：不得是符号链接；mustBeDir 时存在
-// 就必须是目录。不存在不是错误，由 exists=false 交回。
+// lstatSFTPComponent 核验写入目标 p 路径上的一级 current：不得是符号链接；mustBeDir 时它是
+// 上级目录，存在就必须是目录；否则它就是要写的文件本身，存在时不得是目录——拿目录去 Create
+// 只会换回服务端一句不带原因的 SSH_FX_FAILURE（OpenSSH 把 EISDIR 报成通用失败）。
+// 不存在不是错误，由 exists=false 交回。
 func lstatSFTPComponent(client *sftp.Client, p, current string, mustBeDir bool) (exists bool, err error) {
 	info, err := client.Lstat(current)
 	if err != nil {
@@ -387,6 +389,9 @@ func lstatSFTPComponent(client *sftp.Client, p, current string, mustBeDir bool) 
 	}
 	if mustBeDir && !info.IsDir() {
 		return true, fmt.Errorf("remote destination parent %q is not a directory", current)
+	}
+	if !mustBeDir && info.IsDir() {
+		return true, fmt.Errorf("remote destination %q: %w", p, ErrDestinationIsDirectory)
 	}
 	return true, nil
 }

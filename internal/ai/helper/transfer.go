@@ -2,6 +2,7 @@ package helper
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -53,6 +54,10 @@ func (r *ListResult) appendEntry(entry Entry) error {
 	return nil
 }
 
+// ErrDestinationIsDirectory 表示写入目标本身是一个已存在的目录。端点只报这个事实；要不要
+// 建议"目的端末尾加 /"由调用方按形态决定——只有单源时目的路径是用户亲手写的那一条。
+var ErrDestinationIsDirectory = errors.New("destination is an existing directory")
+
 // TransferAdapter 是一类传输端点的全部能力：怎么展开、怎么读写、以及在每个方向上要授权
 // 什么。四件事放在同一个接口里，是为了不出现第二张"类型 → 审批语义"的表。
 type TransferAdapter interface {
@@ -65,6 +70,7 @@ type TransferAdapter interface {
 	// 本次调用，调用方负责 Close。
 	OpenRead(ctx context.Context, asset *asset_entity.Asset, path string) (io.ReadCloser, int64, error)
 	// Write 把 r 的内容写入该端点的 path，必要时创建中间目录；size 未知时传 -1。
+	// path 本身是个已存在的目录时返回包装了 ErrDestinationIsDirectory 的错误。
 	Write(ctx context.Context, asset *asset_entity.Asset, path string, r io.Reader, size int64) error
 	// ValidateDestination 判断 path 能不能当这一端点的写入目标，只看形态、不碰网络。
 	//

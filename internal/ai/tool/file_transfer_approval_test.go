@@ -3,6 +3,7 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -41,6 +42,7 @@ type cpTestAdapter struct {
 	listed    []string          // 被要求展开的 pattern，按调用序
 	validated []string          // ValidateDestination 收到的路径，按调用序
 	rejectDst string            // 等于它的目的路径被判为形态错误
+	dirs      map[string]bool   // 目的端上已存在的目录：写到这些路径时报 ErrDestinationIsDirectory
 }
 
 var cpFake = &cpTestAdapter{}
@@ -54,6 +56,7 @@ func (a *cpTestAdapter) reset() {
 	a.listed = nil
 	a.validated = nil
 	a.rejectDst = ""
+	a.dirs = nil
 }
 
 func (a *cpTestAdapter) List(
@@ -76,6 +79,9 @@ func (a *cpTestAdapter) OpenRead(
 func (a *cpTestAdapter) Write(
 	_ context.Context, _ *asset_entity.Asset, p string, r io.Reader, _ int64,
 ) error {
+	if a.dirs[p] {
+		return fmt.Errorf("cptest %q: %w", p, helper.ErrDestinationIsDirectory)
+	}
 	content, err := io.ReadAll(r)
 	if err != nil {
 		return err
@@ -419,6 +425,48 @@ func TestCpSingleSourceIntoDirectoryKeepsTheFileName(t *testing.T) {
 		So((*seen)[0].Command, ShouldEqual, "/tmp/small.json")
 		So(string(cpFake.written["/tmp/small.json"]), ShouldEqual, "{}")
 		So(cpFake.written, ShouldNotContainKey, "/tmp/")
+	})
+}
+
+// TestCpSingleSourceOntoDirectoryPointsAtTheTrailingSlash：单源的目的端不带 "/"、实际却是
+// 已存在的目录时，报错要指出这是个目录并建议末尾加 "/"——用户写的就是那条路径，补上
+// "/" 正好是 #364 修好的"落到目录下"；已经带了 "/" 的再建议一次就是兜圈子。多源的落点是工具拼出来的（基点 + RelPath），撞上
+// 目录说明源里的文件和目的端的目录同名，"给目的端加 /"在那里是错误的建议，不能出现。
+func TestCpSingleSourceOntoDirectoryPointsAtTheTrailingSlash(t *testing.T) {
+	Convey("目的端是已存在的目录", t, func() {
+		ctx, _ := setupCp(t, "allow")
+		dir := t.TempDir()
+		src := filepath.Join(dir, "small.json")
+		So(os.WriteFile(src, []byte("{}"), 0o600), ShouldBeNil)
+
+		Convey("单源：提示在目的端末尾加 /", func() {
+			cpFake.dirs = map[string]bool{"/tmp": true}
+
+			_, err := handleCp(ctx, map[string]any{"src": src, "dst": "sink-01:/tmp"})
+
+			So(errors.Is(err, helper.ErrDestinationIsDirectory), ShouldBeTrue)
+			So(err.Error(), ShouldContainSubstring, `"/tmp"`)
+			So(err.Error(), ShouldContainSubstring, `end the destination with "/"`)
+			So(cpFake.written, ShouldBeEmpty)
+		})
+
+		Convey("单源目的端已经以 / 结尾：拼出的落点是目录时不再建议加 /", func() {
+			cpFake.dirs = map[string]bool{"/tmp/small.json": true}
+
+			_, err := handleCp(ctx, map[string]any{"src": src, "dst": "sink-01:/tmp/"})
+
+			So(errors.Is(err, helper.ErrDestinationIsDirectory), ShouldBeTrue)
+			So(err.Error(), ShouldNotContainSubstring, `end the destination with`)
+		})
+
+		Convey("多源：只报目录，不给加 / 的建议", func() {
+			cpFake.dirs = map[string]bool{"/logs/small.json": true}
+
+			_, err := handleCp(ctx, map[string]any{"src": filepath.Join(dir, "*.json"), "dst": "sink-01:/logs/"})
+
+			So(errors.Is(err, helper.ErrDestinationIsDirectory), ShouldBeTrue)
+			So(err.Error(), ShouldNotContainSubstring, `end the destination with`)
+		})
 	})
 }
 

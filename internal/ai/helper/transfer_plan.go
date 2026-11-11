@@ -40,8 +40,7 @@ func PlanTransfer(sourcePaths []string, destination string, localDestination, re
 		plan.Multiple = plan.Multiple || expands
 	}
 	plan.Multiple = plan.Multiple || len(sourcePaths) > 1
-	isDir := strings.HasSuffix(destination, "/") ||
-		(localDestination && strings.HasSuffix(destination, string(os.PathSeparator)))
+	isDir := IsDirectoryDestination(destination, localDestination)
 	if plan.Multiple && !isDir {
 		return nil, fmt.Errorf("destination %q must end with \"/\" when there is more than one source (multiple arguments, --recursive, or a glob pattern): each entry lands at <destination>/<path relative to the source base>", destination)
 	}
@@ -52,4 +51,11 @@ func PlanTransfer(sourcePaths []string, destination string, localDestination, re
 		plan.Destination = destination + filepath.Base(sourcePaths[0])
 	}
 	return plan, nil
+}
+
+// IsDirectoryDestination 报告目的端是否写成了目录形态：远端（POSIX 路径）以 "/" 结尾，
+// 本机路径还可以用本机的路径分隔符结尾（Windows 的 "\"）。纯语法判定，不探测目的端。
+func IsDirectoryDestination(destination string, localDestination bool) bool {
+	return strings.HasSuffix(destination, "/") ||
+		(localDestination && strings.HasSuffix(destination, string(os.PathSeparator)))
 }
