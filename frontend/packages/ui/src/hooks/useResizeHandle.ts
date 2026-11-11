@@ -43,21 +43,20 @@ export function useResizeHandle({
   onResizeEnd,
   targetRef,
 }: UseResizeHandleOptions) {
+  // state 记的是用户要的尺寸，不随上下限截断；上下限只在读取时生效。这样 maxSize 随窗口变小时
+  // 显示尺寸跟着收窄，窗口再放大又回到用户拖出的尺寸。
   const [size, setSize] = useState(() => {
     if (storageKey) {
       const saved = localStorage.getItem(storageKey);
-      if (saved) return clamp(Number(saved), minSize, maxSize);
+      if (saved) return Number(saved);
     }
-    return clamp(defaultSize, minSize, maxSize);
+    return defaultSize;
   });
   const [isResizing, setIsResizing] = useState(false);
   const sizeRef = useRef(size);
   useEffect(() => {
     sizeRef.current = size;
   }, [size]);
-  useEffect(() => {
-    if (currentSize != null) sizeRef.current = clamp(currentSize, minSize, maxSize);
-  }, [currentSize, minSize, maxSize]);
   // 保持 targetRef 引用在回调内是最新的，而不用把它放进 handleMouseDown 依赖里
   const targetRefRef = useRef(targetRef);
   useEffect(() => {
@@ -70,7 +69,7 @@ export function useResizeHandle({
       setIsResizing(true);
       onResizeStart?.();
       const start = axis === "x" ? e.clientX : e.clientY;
-      const startSize = currentSize == null ? sizeRef.current : clamp(currentSize, minSize, maxSize);
+      const startSize = clamp(currentSize ?? sizeRef.current, minSize, maxSize);
       const target = targetRefRef.current?.current ?? null;
       const styleProp = axis === "x" ? "width" : "height";
 
@@ -123,7 +122,7 @@ export function useResizeHandle({
   );
 
   return {
-    size: currentSize == null ? size : clamp(currentSize, minSize, maxSize),
+    size: clamp(currentSize ?? size, minSize, maxSize),
     isResizing,
     handleMouseDown,
   };

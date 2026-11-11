@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 import { useAIStore } from "../stores/aiStore";
 import { useTabStore } from "../stores/tabStore";
 import { SideAssistantPanel } from "../components/ai/SideAssistantPanel";
@@ -517,5 +517,55 @@ describe("SideAssistantPanel", () => {
       ).toBe(true);
     });
     expect(useAIStore.getState().sidebarTabs[0].conversationId).toBe(5);
+  });
+});
+
+// issue #366：侧栏宽度只受窗口限制——大屏能拉过 520px，缩小窗口时随之收窄、放大后恢复用户拖出的宽度。
+describe("SideAssistantPanel width bound", () => {
+  const originalInnerWidth = window.innerWidth;
+
+  function setWindowWidth(width: number) {
+    Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: width });
+  }
+
+  function resizeWindow(width: number) {
+    setWindowWidth(width);
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    useAIStore.setState({ configured: false, sidebarTabs: [], activeSidebarTabId: null });
+  });
+
+  afterEach(() => {
+    cleanup();
+    setWindowWidth(originalInnerWidth);
+  });
+
+  it("keeps a saved width wider than 520px on a wide window", () => {
+    setWindowWidth(2560);
+    localStorage.setItem("ai_sidebar_width", "1200");
+
+    const { container } = render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
+
+    expect((container.firstChild as HTMLElement).style.width).toBe("1200px");
+  });
+
+  it("narrows with the window so the main area stays visible, and restores the width when the window grows back", () => {
+    setWindowWidth(2560);
+    localStorage.setItem("ai_sidebar_width", "1200");
+    const { container } = render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
+    const outer = container.firstChild as HTMLElement;
+
+    resizeWindow(1000);
+    const narrowed = parseInt(outer.style.width, 10);
+    expect(narrowed).toBeLessThan(1000);
+    expect(narrowed).toBeGreaterThanOrEqual(280);
+
+    resizeWindow(2560);
+    expect(outer.style.width).toBe("1200px");
   });
 });

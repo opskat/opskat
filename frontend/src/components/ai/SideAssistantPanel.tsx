@@ -3,6 +3,7 @@ import { cn, useResizeHandle } from "@opskat/ui";
 import { useShallow } from "zustand/shallow";
 import { useAIStore } from "@/stores/aiStore";
 import { useFullscreen } from "@/hooks/useFullscreen";
+import { useWindowWidth } from "@/hooks/useWindowWidth";
 import { SideAssistantHeader } from "./SideAssistantHeader";
 import { SideAssistantContextBar } from "./SideAssistantContextBar";
 import { SideAssistantHistoryDropdown } from "./SideAssistantHistoryDropdown";
@@ -11,6 +12,9 @@ import { Trans } from "react-i18next";
 import { History, Loader2 } from "lucide-react";
 
 const AIChatContent = lazy(() => import("./AIChatContent").then((m) => ({ default: m.AIChatContent })));
+
+const MIN_WIDTH = 280;
+const MAIN_AREA_RESERVE = 360;
 
 interface SideAssistantPanelProps {
   collapsed: boolean;
@@ -60,14 +64,16 @@ export function SideAssistantPanel({ collapsed, onToggle }: SideAssistantPanelPr
   const [historyOpen, setHistoryOpen] = useState(false);
 
   const panelRef = useRef<HTMLDivElement>(null);
+  // 宽度上限只来自窗口：给左侧主区域留出 MAIN_AREA_RESERVE，拖拽手柄始终能抓到、能拖回来。
+  const windowWidth = useWindowWidth();
   const {
     size: width,
     isResizing: resizing,
     handleMouseDown: handleResizeStart,
   } = useResizeHandle({
     defaultSize: 360,
-    minSize: 280,
-    maxSize: 520,
+    minSize: MIN_WIDTH,
+    maxSize: Math.max(MIN_WIDTH, windowWidth - MAIN_AREA_RESERVE),
     reverse: true,
     storageKey: "ai_sidebar_width",
     targetRef: panelRef,
