@@ -6,7 +6,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Microsoft/go-winio v0.6.3
 	github.com/bouncyball-git/gopher-rdp v1.0.8
-	github.com/cago-frame/agents v0.0.0-20261027034639-d00ec537a3fe
+	github.com/cago-frame/agents v0.0.0-20261111084649-cfec8e47f64b
 	github.com/cago-frame/cago v0.0.0-20260926025905-604723c9e69d
 	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.10.1

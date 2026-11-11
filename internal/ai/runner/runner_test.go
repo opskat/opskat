@@ -558,6 +558,54 @@ func TestRunner_CancelDuringRetryBackoffEmitsStopped(t *testing.T) {
 	})
 }
 
+// 工具执行阶段用户点停止 / 插话（#366）：必须翻译出 stopped，而不是把还在排队的消息注入被停止的
+// 这一轮、再拿已取消的 ctx 请求模型——真实 HTTP provider 会立即以 "context canceled" 失败，
+// 前端看到的是「Conversation failed」，插话也因收不到 stopped 而失效。
+func TestRunner_CancelDuringToolDispatchEmitsStopped(t *testing.T) {
+	Convey("工具执行中 Runner.Cancel：翻译出 stopped，不注入排队消息、不再请求模型", t, func() {
+		mock := providertest.New().
+			QueueStream(
+				provider.StreamChunk{ToolCallDelta: &provider.ToolCallDelta{Index: 0, ID: "call_1", Name: "no_such_tool", ArgsDelta: "{}"}},
+				provider.StreamChunk{FinishReason: provider.FinishToolCalls},
+			).
+			// 真实 HTTP provider 在已取消的 ctx 上发请求时返回的错误。
+			QueueError(fmt.Errorf("Post \"http://llm/v1/chat/completions\": %w", context.Canceled))
+
+		cfg := SystemConfig{Provider: mock, Cwd: t.TempDir()}
+		sys, err := BuildSystem(context.Background(), cfg)
+		So(err, ShouldBeNil)
+		defer func() { _ = sys.Close(context.Background()) }()
+
+		conv := agent.LoadConversation("opskat-cancel-tool-test", nil)
+		runner := sys.Agent().Runner(conv)
+		defer func() { _ = runner.Close() }()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		events, err := runner.Send(ctx, "go")
+		So(err, ShouldBeNil)
+
+		var types []string
+		translator := NewStreamTranslator()
+		for ev := range events {
+			// 工具即将执行：模拟用户在工具运行期间排队一条消息并停止。
+			if ev.Kind == agent.EventPreToolUse {
+				So(runner.Steer(context.Background(), "queued while the tool ran"), ShouldBeNil)
+				So(runner.Cancel("user_stop"), ShouldBeNil)
+			}
+			translator.Translate(ev, func(se StreamEvent) {
+				types = append(types, se.Type)
+			})
+		}
+		translator.Close()
+		So(types, ShouldContain, "stopped")
+		So(types, ShouldNotContain, "error")
+		So(types, ShouldNotContain, "queue_consumed")
+		So(mock.Received(), ShouldHaveLength, 1)
+		So(ctx.Err(), ShouldBeNil)
+	})
+}
+
 // queueParentDispatch 把"父 agent 调 subagent(type=explore, prompt=go)"
 // 那一步流压进 mock 队列。providertest 是 FIFO 共享队列，调用方需自己按
 // 父→子→...→子→父 的顺序把各步压进去（不能用 defer 把父收尾流后置，
