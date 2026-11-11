@@ -2563,4 +2563,27 @@ describe("interjectQueuedMessage", () => {
     const msgs = useAIStore.getState().conversationMessages[convId];
     expect(msgs[1].blocks.some((b) => b.type === "interjected")).toBe(false);
   });
+
+  // 手动停止与插话中断的是同一个工具：都按已取消显示，不能一个标失败（会话状态随之变成 error）一个标取消；
+  // 停止只作用于被停的那一轮，下一轮真正失败的工具仍是失败。
+  it("a manual stop marks the interrupted tool cancelled, and later failures in the next round stay failed", async () => {
+    await startRunningTurn();
+
+    await useAIStore.getState().stopGeneration(tabId);
+    await waitForStoreCondition(() => calls.includes("send"));
+
+    let msgs = useAIStore.getState().conversationMessages[convId];
+    expect(msgs[1].blocks[0]).toMatchObject({ type: "tool", status: "cancelled" });
+
+    callbacks.at(-1)?.({ type: "tool_start", tool_name: "exec", tool_input: "{}", tool_call_id: "call-2" });
+    callbacks.at(-1)?.({
+      type: "tool_result",
+      tool_name: "exec",
+      tool_call_id: "call-2",
+      content: "exit status 1",
+      is_error: true,
+    });
+    msgs = useAIStore.getState().conversationMessages[convId];
+    expect(msgs.at(-1)?.blocks.find((b) => b.toolCallId === "call-2")).toMatchObject({ status: "error" });
+  });
 });
