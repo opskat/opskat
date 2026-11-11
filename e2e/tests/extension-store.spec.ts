@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect, type Page } from "@playwright/test";
 
+import { openSettingsSection } from "../fixtures/settings";
+
 // Settings → Extensions → Store, installing for real: the signed index and the OCI
 // registry are the harness's extension-store mock (fixtures/ext-store-mock, plain
 // http on the port block's +6), which the app reaches through the
@@ -31,8 +33,7 @@ async function openStore(page: Page): Promise<void> {
   await expect(async () => {
     await page.goto("/");
     await expect(page.getByTestId("app-root")).toBeVisible();
-    await page.getByTestId("nav-settings").click();
-    await page.getByRole("tab", { name: "扩展" }).click();
+    await openSettingsSection(page, "extensions");
     await expect(page.getByText("笔记本", { exact: true })).toBeVisible({ timeout: 3_000 });
   }).toPass({ timeout: EXT_READY });
   await page.getByTestId("ext-view-store").click();

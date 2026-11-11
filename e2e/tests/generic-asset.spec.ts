@@ -4,6 +4,7 @@ import { createCommandCustomTypeViaUI, createGenericAssetViaUI, createHttpCustom
 import { findCustomTypeBySlug, waitForAuditLogs } from "../fixtures/db";
 import { startHttpMock } from "../fixtures/http-mock";
 import { runOpsctl } from "../fixtures/opsctl";
+import { openSettingsSection } from "../fixtures/settings";
 
 // Whole-flow coverage for docs/specs/2026-09-28-generic-asset.md: define a custom
 // type in the UI, create a generic asset from it, then drive it exactly the way an
@@ -246,8 +247,7 @@ test("custom type editor: the first click after typing into a template input tak
   await page.goto("/");
   await expect(page.getByTestId("app-root")).toBeVisible();
 
-  await page.getByTestId("nav-settings").click();
-  await page.getByRole("navigation", { name: "Settings sections" }).getByRole("button", { name: "Custom types" }).click();
+  await openSettingsSection(page, "custom-types");
   await page.getByRole("button", { name: "New type" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();

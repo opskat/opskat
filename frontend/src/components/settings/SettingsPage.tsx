@@ -121,6 +121,7 @@ export function SettingsPage() {
                   <button
                     key={item.id}
                     type="button"
+                    data-testid={`settings-nav-${item.id}`}
                     aria-current={current ? "page" : undefined}
                     onClick={() => setActiveTab(item.id)}
                     className={cn(

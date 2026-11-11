@@ -254,8 +254,9 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
         </div>
       )}
 
-      {/* Action buttons */}
-      <div className="flex justify-end gap-2 pt-1">
+      {/* Action buttons：AI 面板很窄时换行而不是向左溢出——justify-end 的溢出落在起始侧，
+          最左边的「拒绝」会被挤出面板、压在主内容区下面点不到。 */}
+      <div className="flex flex-wrap justify-end gap-2 pt-1">
         {kind === "batch" ? (
           <>
             <Button

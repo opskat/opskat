@@ -1613,6 +1613,7 @@
     "panel.sidebar": "切换资产列表",
     "panel.switch": "切换 Assets / Tabs 面板",
     "panel.filter": "查找标签页",
+    "panel.toolbar": "显示 / 隐藏工具条",
     "terminal.copy": "终端复制",
     "terminal.paste": "终端粘贴",
     "terminal.selectAll": "终端全选",
@@ -1622,10 +1623,7 @@
     "page.home": "切换到首页",
     "page.settings": "切换到设置",
     "page.sshkeys": "切换到 SSH 密钥",
-    "command.quickopen": "快速打开",
-    "panel": {
-      "toolbar": "显示 / 隐藏工具条"
-    }
+    "command.quickopen": "快速打开"
   },
   "commandPalette": {
     "placeholder": "搜索资产、标签或代码片段...",
