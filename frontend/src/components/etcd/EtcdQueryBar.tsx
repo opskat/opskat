@@ -137,7 +137,7 @@ export function EtcdQueryBar({ assetId, onResult, onDestructive }: EtcdQueryBarP
           <button
             key={tmpl}
             type="button"
-            className="rounded border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-accent"
+            className="rounded border bg-background px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent"
             onClick={() => setCmd(tmpl)}
           >
             {tmpl}
@@ -146,12 +146,12 @@ export function EtcdQueryBar({ assetId, onResult, onDestructive }: EtcdQueryBarP
       </div>
       {history.length > 0 && (
         <div className="flex flex-wrap items-center gap-1">
-          <span className="text-[10px] text-muted-foreground">{t("etcd.query.history")}:</span>
+          <span className="text-[11px] text-muted-foreground">{t("etcd.query.history")}:</span>
           {history.slice(0, 6).map((h) => (
             <button
               key={h}
               type="button"
-              className="rounded border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-accent"
+              className="rounded border bg-background px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent"
               onClick={() => setCmd(h)}
             >
               {h}
@@ -159,7 +159,7 @@ export function EtcdQueryBar({ assetId, onResult, onDestructive }: EtcdQueryBarP
           ))}
         </div>
       )}
-      {error && <div className="text-[11px] text-destructive">{error}</div>}
+      {error && <div className="text-xs text-destructive">{error}</div>}
     </div>
   );
 }

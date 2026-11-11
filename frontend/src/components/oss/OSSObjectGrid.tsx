@@ -11,6 +11,9 @@ export interface OSSObjectGridProps {
   objects: oss_svc.ObjectItem[];
   focusedKey: string | null;
   loading: boolean;
+  /** Why the listing failed (null when it didn't); shown with `onRetry` instead of the empty folder. */
+  error: string | null;
+  onRetry: () => void;
   loadingPage: boolean;
   truncated: boolean;
   thumbnails: Record<string, string>;
@@ -26,6 +29,8 @@ export function OSSObjectGrid({
   objects,
   focusedKey,
   loading,
+  error,
+  onRetry,
   loadingPage,
   truncated,
   thumbnails,
@@ -44,6 +49,8 @@ export function OSSObjectGrid({
       className="min-h-0 flex-1 overflow-auto p-3"
       empty={prefixes.length === 0 && objects.length === 0}
       loading={loading}
+      error={error}
+      onRetry={onRetry}
       loadingPage={loadingPage}
       truncated={truncated}
       testIdPrefix="oss-grid"
@@ -102,7 +109,7 @@ export function OSSObjectGrid({
             <span className="w-full truncate text-xs" title={o.key}>
               {prefixLeafName(o.key)}
             </span>
-            <span className="text-[10px] text-muted-foreground">{formatBytes(o.size)}</span>
+            <span className="text-[11px] text-muted-foreground">{formatBytes(o.size)}</span>
           </button>
         ))}
       </div>

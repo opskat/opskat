@@ -140,7 +140,7 @@ describe("TableDataTab unsaved edits guard", () => {
     await waitFor(() => expect(dialog()).toBeNull());
     expect(rowsCalls()).toHaveLength(0);
     expect(cell("0:status")).toHaveTextContent("paid");
-    expect(screen.getByTitle("query.applyChanges")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "query.previewAndCommit" })).toBeEnabled();
   });
 
   it("discard drops the edit and then pages", async () => {
@@ -151,7 +151,7 @@ describe("TableDataTab unsaved edits guard", () => {
 
     await waitFor(() => expect(requestedPages()).toEqual([1]));
     await waitFor(() => expect(cell("0:status")).toHaveTextContent("next"));
-    expect(screen.getByTitle("query.applyChanges")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "query.previewAndCommit" })).not.toBeInTheDocument();
     expect(vi.mocked(ExecuteSQL)).not.toHaveBeenCalled();
   });
 
@@ -170,7 +170,9 @@ describe("TableDataTab unsaved edits guard", () => {
     await waitFor(() => expect(vi.mocked(ExecuteSQL)).toHaveBeenCalledOnce());
     expect(String(vi.mocked(ExecuteSQL).mock.calls[0][1])).toMatch(/^UPDATE/);
     await waitFor(() => expect(requestedPages().at(-1)).toBe(1));
-    await waitFor(() => expect(screen.getByTitle("query.applyChanges")).toBeDisabled());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "query.previewAndCommit" })).not.toBeInTheDocument()
+    );
   });
 
   it("a failed submit stays on the page with the edit kept", async () => {
@@ -185,7 +187,7 @@ describe("TableDataTab unsaved edits guard", () => {
     await waitFor(() => expect(screen.queryByText("query.confirmExecute")).toBeNull());
     expect(requestedPages()).not.toContain(1);
     expect(cell("0:status")).toHaveTextContent("paid");
-    expect(screen.getByTitle("query.applyChanges")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "query.previewAndCommit" })).toBeEnabled();
   });
 
   it("cancelling the preview stays put and forgets the pending page change", async () => {
@@ -201,7 +203,7 @@ describe("TableDataTab unsaved edits guard", () => {
     expect(cell("0:status")).toHaveTextContent("paid");
 
     // 之后单独提交一次,不应再顺带翻到第 2 页。
-    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
     await user.click(await screen.findByText("query.confirmExecute"));
     await waitFor(() => expect(vi.mocked(ExecuteSQL)).toHaveBeenCalledOnce());
     await waitFor(() => expect(rowsCalls().length).toBeGreaterThan(0));
@@ -213,7 +215,6 @@ describe("TableDataTab unsaved edits guard", () => {
       "changing the page size",
       'query.unsavedEditsDescPageSize({"size":500})',
       async (user) => {
-        await user.click(screen.getByTitle("query.tableFooterSettings"));
         const limitInput = screen.getByLabelText("query.pageSize");
         await user.clear(limitInput);
         await user.type(limitInput, "500{Enter}");
@@ -273,13 +274,12 @@ describe("TableDataTab unsaved edits guard", () => {
     await user.click(within(guard).getByText("query.unsavedEditsDiscard"));
 
     await waitFor(() => expect(rowsCalls().length).toBeGreaterThan(0));
-    expect(screen.getByTitle("query.applyChanges")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "query.previewAndCommit" })).not.toBeInTheDocument();
   });
 
   it("stay after a page size change shows the current page size again, not the rejected draft", async () => {
     const user = await renderLoaded();
     editCell("0:status", "paid");
-    await user.click(screen.getByTitle("query.tableFooterSettings"));
     const limitInput = screen.getByLabelText("query.pageSize");
     await user.clear(limitInput);
     await user.type(limitInput, "200{Enter}");

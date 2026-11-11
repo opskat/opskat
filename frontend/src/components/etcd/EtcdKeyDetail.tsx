@@ -9,6 +9,7 @@ import { useEtcdStore } from "@/stores/etcdStore";
 import { CodeEditor, type CodeEditorLanguage } from "@/components/CodeEditor";
 import type { etcd_svc } from "../../../wailsjs/go/models";
 import { errorMessage } from "@/lib/errorMessage";
+import { AsyncState } from "@/components/common/AsyncState";
 
 export interface EtcdKeyDetailProps {
   assetId: number;
@@ -177,6 +178,8 @@ export function EtcdKeyDetail({
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState<etcd_svc.EtcdKV | null>(null);
   const [err, setErr] = useState("");
+  // 「重试」递增它以重新拉取当前 key / revision
+  const [reloadSeq, setReloadSeq] = useState(0);
   const [format, setFormat] = useState<Format>("raw");
   const [deleting, setDeleting] = useState(false);
 
@@ -199,6 +202,7 @@ export function EtcdKeyDetail({
     exec: typeof exec;
     t: typeof t;
     revision: number;
+    reloadSeq: number;
   } | null>(null);
   if (
     prevFetch === null ||
@@ -206,9 +210,10 @@ export function EtcdKeyDetail({
     prevFetch.selectedKey !== selectedKey ||
     prevFetch.exec !== exec ||
     prevFetch.t !== t ||
-    prevFetch.revision !== revision
+    prevFetch.revision !== revision ||
+    prevFetch.reloadSeq !== reloadSeq
   ) {
-    setPrevFetch({ assetId, selectedKey, exec, t, revision });
+    setPrevFetch({ assetId, selectedKey, exec, t, revision, reloadSeq });
     if (selectedKey) {
       setLoading(true);
       setErr("");
@@ -238,7 +243,7 @@ export function EtcdKeyDetail({
     return () => {
       cancelled = true;
     };
-  }, [assetId, selectedKey, exec, t, revision]);
+  }, [assetId, selectedKey, exec, t, revision, reloadSeq]);
 
   // 切换 key 时复位状态:渲染期对比上次 selectedKey,替代 effect 里的同步 setState
   const [prevSelectedKey, setPrevSelectedKey] = useState(selectedKey);
@@ -393,9 +398,17 @@ export function EtcdKeyDetail({
   if (!selectedKey) {
     return <div className="p-3 text-xs text-muted-foreground">{t("etcd.detail.selectKey")}</div>;
   }
-  if (loading) return <div className="p-3 text-xs text-muted-foreground">{t("etcd.detail.loading")}</div>;
-  if (err) return <div className="p-3 text-xs text-destructive">{err}</div>;
-  if (!detail) return <div className="p-3 text-xs text-muted-foreground">{t("etcd.detail.empty")}</div>;
+  if (loading || err || !detail) {
+    return (
+      <AsyncState
+        status={loading ? "loading" : err ? "error" : "ready"}
+        error={err}
+        onRetry={() => setReloadSeq((n) => n + 1)}
+        empty={t("etcd.detail.empty")}
+        className="flex-1"
+      />
+    );
+  }
 
   const leaseInfo = leaseDisplay(detail.lease, t("etcd.detail.metaLeaseNone"));
 
@@ -424,7 +437,7 @@ export function EtcdKeyDetail({
         </div>
         {revision > 0 && (
           <span
-            className="flex shrink-0 items-center gap-1 rounded bg-warning/10 px-1.5 py-0.5 font-mono text-[10px] text-warning"
+            className="flex shrink-0 items-center gap-1 rounded bg-warning/10 px-1.5 py-0.5 font-mono text-[11px] text-warning"
             data-testid="etcd-detail-history-banner"
           >
             <History className="size-3" /> {t("etcd.detail.historyAt", { rev: revision })}
@@ -461,7 +474,7 @@ export function EtcdKeyDetail({
 
       {/* ── VALUE label + format tabs (编辑态隐藏 tabs，因为编辑只针对 raw value) ── */}
       <div className="flex items-center gap-2 border-b px-4 py-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           {t("etcd.detail.valueLabel")}
         </span>
         <div className="flex-1" />
@@ -559,7 +572,7 @@ export function EtcdKeyDetail({
                       >
                         <span>{t("etcd.detail.historyLatest")}</span>
                         {historyItems.length > 0 && (
-                          <span className="font-mono text-[10px] text-muted-foreground">
+                          <span className="font-mono text-[11px] text-muted-foreground">
                             rev {Number(historyItems[0].modRevision)}
                           </span>
                         )}
@@ -585,7 +598,7 @@ export function EtcdKeyDetail({
                           );
                         })
                       ) : (
-                        <div className="px-2 py-1 text-[10px] italic text-muted-foreground">
+                        <div className="px-2 py-1 text-[11px] italic text-muted-foreground">
                           {t("etcd.detail.historyEmpty")}
                         </div>
                       )}
@@ -635,7 +648,7 @@ function MetaCol({
   const valueClass = accent === "purple" ? "text-syntax-number" : muted ? "text-muted-foreground" : "text-foreground";
   return (
     <div className="flex flex-col gap-0.5" data-testid={testId}>
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span>
       <span className={`select-text font-mono text-[12px] font-medium ${valueClass}`}>{value}</span>
     </div>
   );

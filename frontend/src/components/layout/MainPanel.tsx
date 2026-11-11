@@ -417,7 +417,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
                 <ul className="flex flex-col gap-2">
                   {(["doubleClick", "click", "rightClick"] as const).map((k) => (
                     <li key={k} className="flex items-center gap-2">
-                      <kbd className="inline-flex min-w-[52px] items-center justify-center rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] text-foreground/70">
+                      <kbd className="inline-flex min-w-[52px] items-center justify-center rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">
                         {t(`app.hints.${k}Key`)}
                       </kbd>
                       <span>{t(`app.hints.${k}`)}</span>
@@ -425,13 +425,13 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
                   ))}
                 </ul>
                 <div className="my-3 h-px w-full bg-border/70" />
-                <div className="mb-2 text-[10px] uppercase tracking-wider text-muted-foreground/60">
+                <div className="mb-2 text-[11px] uppercase tracking-wider text-muted-foreground/60">
                   {t("app.shortcuts.title")}
                 </div>
                 <ul className="flex flex-col gap-2">
                   {SHORTCUT_HINTS.map(([action, key]) => (
                     <li key={action} className="flex items-center gap-2">
-                      <kbd className="inline-flex min-w-[52px] items-center justify-center rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] text-foreground/70">
+                      <kbd className="inline-flex min-w-[52px] items-center justify-center rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[11px] text-foreground/70">
                         {formatBinding(shortcuts[action])}
                       </kbd>
                       <span>{t(`app.shortcuts.${key}`)}</span>
@@ -442,7 +442,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
 
               <button
                 type="button"
-                onClick={() => openSettingsTab(t("nav.settings"))}
+                onClick={() => openSettingsTab(t("nav.settings"), "shortcuts")}
                 className="text-xs text-muted-foreground/70 transition-colors hover:text-foreground"
               >
                 {t("app.shortcuts.all")} →

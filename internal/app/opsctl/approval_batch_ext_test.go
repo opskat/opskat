@@ -20,7 +20,7 @@ func answeringBatchDialog(o *Opsctl, resp permission.ApprovalResponse) *[]map[st
 			return
 		}
 		*shown = payload["items"].([]map[string]any)
-		go o.RespondOpsctlApproval(payload["confirm_id"].(string), resp)
+		go answerOrDeny(o, payload["confirm_id"].(string), resp)
 	}
 	return shown
 }
@@ -45,7 +45,7 @@ func TestHandleBatchApprovalShowsTheExtensionItems(t *testing.T) {
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}
 	shown := answeringBatchDialog(o, permission.ApprovalResponse{Decision: "allow"})
 
-	resp := o.handleBatchApproval(extBatchRequest())
+	resp := o.handleBatchApproval(context.Background(), extBatchRequest())
 
 	require.True(t, resp.Approved)
 	require.Len(t, *shown, 2)
@@ -66,7 +66,7 @@ func TestHandleBatchApprovalRefusesAllowAllForExtensionItems(t *testing.T) {
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}
 	answeringBatchDialog(o, permission.ApprovalResponse{Decision: "allowAll"})
 
-	resp := o.handleBatchApproval(extBatchRequest())
+	resp := o.handleBatchApproval(context.Background(), extBatchRequest())
 
 	require.False(t, resp.Approved)
 }

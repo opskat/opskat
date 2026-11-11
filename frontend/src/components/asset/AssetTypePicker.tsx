@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { Search, ChevronDown, Plus, Settings2 } from "lucide-react";
 import { cn, Popover, PopoverContent, PopoverTrigger, Input, Button } from "@opskat/ui";
 import { useCustomTypeList, useCustomTypeStore } from "@/stores/customTypeStore";
-import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { openSettingsTab } from "@/stores/tabStore";
 import { CustomTypeEditorDialog } from "@/components/settings/CustomTypeEditorDialog";
 import {
@@ -26,8 +25,8 @@ interface AssetTypePickerProps {
    * 外层不必(在新建类型的回调里也没法)再按标识查一遍。
    */
   onChange: (type: string, variant?: string, defaultIcon?: string) => void;
-  /** 跳去别的页面(自定义类型管理)前调用,让外层表单关闭。 */
-  onLeave?: () => void;
+  /** 去别的页面(自定义类型管理)前交给外层决定:外层(表单)可先确认放弃修改,再调用 proceed 才真正跳转。缺省则立即跳转。 */
+  onLeave?: (proceed: () => void) => void;
   disabled?: boolean;
 }
 
@@ -78,9 +77,11 @@ export function AssetTypePicker({ value, variant, onChange, onLeave, disabled }:
 
   const openManage = () => {
     setOpen(false);
-    useSettingsUiStore.getState().setActiveTab("custom-types");
-    openSettingsTab(t("nav.settings"));
-    onLeave?.();
+    const proceed = () => {
+      openSettingsTab(t("nav.settings"), "custom-types");
+    };
+    if (onLeave) onLeave(proceed);
+    else proceed();
   };
 
   const renderOption = (o: AssetTypeOption) => {
@@ -126,7 +127,7 @@ export function AssetTypePicker({ value, variant, onChange, onLeave, disabled }:
               {SelectedIcon && <SelectedIcon className="h-4 w-4 shrink-0" />}
               <span className="truncate">{selected ? resolveLabel(selected) : value}</span>
               {selected?.group === "custom" && (
-                <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                <span className="rounded-sm bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
                   {t("assetType.customBadge")}
                 </span>
               )}

@@ -154,7 +154,8 @@ test("edit a cell, add a row and delete a row in a SQLite table, then read the f
   await typeIntoCell(page, "0:value", "alpha-edited");
   await page.getByTestId("table-apply-changes").click();
   await confirmPreview(page);
-  await expect(page.getByTestId("table-apply-changes")).toBeDisabled();
+  // 提交后没有待提交的修改，提交按钮随底栏的待提交区一起消失。
+  await expect(page.getByTestId("table-apply-changes")).toHaveCount(0);
   expect(
     readBack(targetPath, "SELECT id, value FROM probes ORDER BY id"),
   ).toEqual([
@@ -169,7 +170,8 @@ test("edit a cell, add a row and delete a row in a SQLite table, then read the f
   await typeIntoCell(page, "3:value", "delta");
   await page.getByTestId("table-apply-changes").click();
   await confirmPreview(page);
-  await expect(page.getByTestId("table-apply-changes")).toBeDisabled();
+  // 提交后没有待提交的修改，提交按钮随底栏的待提交区一起消失。
+  await expect(page.getByTestId("table-apply-changes")).toHaveCount(0);
   expect(
     readBack(targetPath, "SELECT id, value FROM probes WHERE value = 'delta'"),
   ).toEqual([{ id: 4, value: "delta" }]);

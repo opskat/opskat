@@ -107,7 +107,7 @@ describe("TableDataTab keyboard paste", () => {
     await waitFor(() => expect(cell("2:id")).toHaveTextContent("9"));
     expect(cell("2:name")).toHaveTextContent("zoe");
 
-    fireEvent.click(screen.getByTitle("query.applyChanges"));
+    fireEvent.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
     fireEvent.click(await screen.findByText("query.confirmExecute"));
 
     await waitFor(() => expect(insertCalls()).toHaveLength(1));
@@ -162,7 +162,7 @@ describe("TableDataTab keyboard paste", () => {
     await waitFor(() => expect(cell("1:id")).toHaveTextContent("8"));
     expect(cell("2:name")).toHaveTextContent("zoe");
 
-    fireEvent.click(screen.getByTitle("query.applyChanges"));
+    fireEvent.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
     fireEvent.click(await screen.findByText("query.confirmExecute"));
 
     await waitFor(() => expect(insertCalls()).toHaveLength(1));

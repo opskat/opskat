@@ -54,9 +54,12 @@ import {
   OBJECT_BROWSER_CAPABILITIES,
   driverHasCapability,
   findDatabaseDriver,
+  refreshDatabaseDrivers,
   useDatabaseDrivers,
 } from "@/lib/dbDrivers";
 import { errorMessage } from "@/lib/errorMessage";
+import { PanelSidebar, SidebarRefreshButton } from "@/components/common/PanelSidebar";
+import { AsyncState } from "@/components/common/AsyncState";
 
 interface DatabaseTreeProps {
   tabId: string;
@@ -425,14 +428,9 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
 
   if (driverUnavailable) {
     return (
-      <div className="flex flex-col h-full">
-        <div className="flex items-center px-2 py-1.5 border-b border-border shrink-0">
-          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            {t("query.databases")}
-          </span>
-        </div>
+      <PanelSidebar panelType="database" title={t("query.databases")}>
         <DriverUnavailableNotice driver={driver} />
-      </div>
+      </PanelSidebar>
     );
   }
 
@@ -449,6 +447,8 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const driversLoading = driversState.status === "loading";
   const loadingDbs = dbState.loadingDbs || driversLoading;
   const error = driversState.status === "error" ? driversState.error : dbError;
+  // 驱动描述没取到时重取描述(成功后自动加载库列表);否则重新加载库列表,连同已展开库的表。
+  const retryLoad = driversState.status === "error" ? refreshDatabaseDrivers : () => loadDatabases(tabId);
   const renderTableItem = (db: string, tbl: string, label = tbl) => {
     const key = tableKey(db, tbl);
     const isSelected = selectedVisibleKeys.includes(key);
@@ -551,13 +551,11 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   };
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between px-2 py-1.5 border-b border-border shrink-0">
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          {t("query.databases")}
-        </span>
-        <div className="flex gap-0.5">
+    <PanelSidebar
+      panelType="database"
+      title={t("query.databases")}
+      actions={
+        <>
           <Button
             variant="ghost"
             size="icon"
@@ -632,21 +630,11 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
               )}
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => loadDatabases(tabId)}
-            title={t("query.refreshTree")}
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-      </div>
-
-      {/* Filter input */}
-      {showFilter && (
-        <div className="border-b px-2 py-1.5 shrink-0">
+          <SidebarRefreshButton onClick={() => loadDatabases(tabId)} loading={loadingDbs} />
+        </>
+      }
+      filter={
+        showFilter ? (
           <div className="relative">
             <Search className="absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -663,28 +651,30 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
               }}
             />
           </div>
-        </div>
-      )}
-
-      {/* Error message */}
-      {error && (
-        <div className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/10 px-2 py-2 text-xs text-destructive">
-          <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
-          <span className="break-all">{error}</span>
-        </div>
+        ) : undefined
+      }
+    >
+      {/* 加载失败:原因 + 重试。已有(上次缓存的)库列表时仍列在下面。 */}
+      {error && !loadingDbs && (
+        <AsyncState
+          status="error"
+          error={error}
+          onRetry={retryLoad}
+          className="items-start border-b px-2 py-2 text-left"
+        />
       )}
 
       {/* Tree */}
       <ScrollArea className="flex-1 min-h-0">
         <div ref={treeRef} className="p-1 space-y-0.5">
           {loadingDbs ? (
-            <div className="flex items-center justify-center py-4">
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-            </div>
+            <AsyncState status="loading" />
           ) : visibleDbs.length === 0 ? (
-            <div className="text-xs text-muted-foreground text-center py-4">
-              {filterLower ? t("query.noMatch") : t("query.databases")}
-            </div>
+            filterLower ? (
+              <div className="text-xs text-muted-foreground text-center py-4">{t("query.noMatch")}</div>
+            ) : error ? null : (
+              <AsyncState status="ready" empty={t("query.noDatabases")} />
+            )
           ) : (
             visibleDbs.map(({ db, dbMatch, tables: dbTables, schemas }) => {
               const isExpanded = filterLower ? true : expandedDbs.includes(db);
@@ -928,6 +918,6 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
         }
         onConfirm={handleConfirmAction}
       />
-    </div>
+    </PanelSidebar>
   );
 }

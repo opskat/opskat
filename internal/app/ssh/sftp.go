@@ -2,6 +2,7 @@ package ssh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,27 @@ import (
 
 // --- SFTP 文件传输 ---
 
+// sftpTransferEvent 是传输终态事件：在通用进度之上带本地路径，让前端能「打开所在目录」。
+type sftpTransferEvent struct {
+	transfer.Progress
+	LocalPath string `json:"localPath,omitempty"`
+}
+
+// finalTransferEvent 把传输结果映射为终态事件：被取消（context.Canceled）单独成取消状态（transfer.StatusCancelled），
+// 前端不必再从错误文案里推断。
+func finalTransferEvent(transferID, localPath string, err error) sftpTransferEvent {
+	ev := sftpTransferEvent{Progress: transfer.Progress{TransferID: transferID, Status: "done"}, LocalPath: localPath}
+	switch {
+	case err == nil:
+	case errors.Is(err, context.Canceled):
+		ev.Status = transfer.StatusCancelled
+	default:
+		ev.Status = "error"
+		ev.Error = err.Error()
+	}
+	return ev
+}
+
 // SFTPGetwd 获取远程工作目录（用户 home）
 func (s *SSH) SFTPGetwd(sessionID string) (string, error) {
 	return s.sftp.Getwd(sessionID)
@@ -29,80 +51,32 @@ func (s *SSH) SFTPListDir(sessionID, dirPath string) ([]sftp_svc.FileEntry, erro
 	return s.sftp.ListDir(sessionID, dirPath)
 }
 
-// SFTPUpload 上传文件：弹出本地文件选择 → 上传到 remotePath
-func (s *SSH) SFTPUpload(sessionID, remotePath string) (string, error) {
+// SFTPSelectUploadFile 弹出本地文件选择框，返回所选路径（取消时为空）。
+// 上传本身走 SFTPUploadFile：前端要先检查目标是否同名，再决定传到哪里。
+func (s *SSH) SFTPSelectUploadFile() (string, error) {
 	localPath, err := wailsRuntime.OpenFileDialog(s.ctx, wailsRuntime.OpenDialogOptions{
 		Title: "选择上传文件",
 	})
 	if err != nil {
 		return "", fmt.Errorf("打开文件对话框失败: %w", err)
 	}
-	if localPath == "" {
-		return "", nil // 用户取消
-	}
-
-	if strings.HasSuffix(remotePath, "/") {
-		remotePath += filepath.Base(localPath)
-	}
-
-	transferID := s.sftp.GenerateTransferID()
-	go func() {
-		err := s.sftp.Upload(s.ctx, transferID, sessionID, localPath, remotePath, func(p transfer.Progress) {
-			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, p)
-		})
-		if err != nil {
-			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
-				TransferID: transferID,
-				Status:     "error",
-				Error:      err.Error(),
-			})
-			return
-		}
-		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
-			TransferID: transferID,
-			Status:     "done",
-		})
-	}()
-	return transferID, nil
+	return localPath, nil
 }
 
-// SFTPUploadDir 上传目录
-func (s *SSH) SFTPUploadDir(sessionID, remotePath string) (string, error) {
+// SFTPSelectUploadDir 弹出本地目录选择框，返回所选路径（取消时为空）。
+func (s *SSH) SFTPSelectUploadDir() (string, error) {
 	localDir, err := wailsRuntime.OpenDirectoryDialog(s.ctx, wailsRuntime.OpenDialogOptions{
 		Title: "选择上传文件夹",
 	})
 	if err != nil {
 		return "", fmt.Errorf("打开目录对话框失败: %w", err)
 	}
-	if localDir == "" {
-		return "", nil
-	}
+	return localDir, nil
+}
 
-	if strings.HasSuffix(remotePath, "/") {
-		remotePath += filepath.Base(localDir)
-	} else {
-		remotePath += "/" + filepath.Base(localDir)
-	}
-
-	transferID := s.sftp.GenerateTransferID()
-	go func() {
-		err := s.sftp.UploadDir(s.ctx, transferID, sessionID, localDir, remotePath, func(p transfer.Progress) {
-			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, p)
-		})
-		if err != nil {
-			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
-				TransferID: transferID,
-				Status:     "error",
-				Error:      err.Error(),
-			})
-			return
-		}
-		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
-			TransferID: transferID,
-			Status:     "done",
-		})
-	}()
-	return transferID, nil
+// SFTPStatTargets 检查一组远端目标路径是否已被占用，供上传/移动/粘贴前做同名冲突判断。
+func (s *SSH) SFTPStatTargets(sessionID string, paths []string) ([]sftp_svc.TargetStat, error) {
+	return s.sftp.StatTargets(sessionID, paths)
 }
 
 // SFTPDownload 下载文件
@@ -124,18 +98,7 @@ func (s *SSH) SFTPDownload(sessionID, remotePath string) (string, error) {
 		err := s.sftp.Download(s.ctx, transferID, sessionID, remotePath, localPath, func(p transfer.Progress) {
 			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, p)
 		})
-		if err != nil {
-			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
-				TransferID: transferID,
-				Status:     "error",
-				Error:      err.Error(),
-			})
-			return
-		}
-		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
-			TransferID: transferID,
-			Status:     "done",
-		})
+		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, finalTransferEvent(transferID, localPath, err))
 	}()
 	return transferID, nil
 }
@@ -159,27 +122,19 @@ func (s *SSH) SFTPDownloadDir(sessionID, remotePath string) (string, error) {
 		err := s.sftp.DownloadDir(s.ctx, transferID, sessionID, remotePath, localDir, func(p transfer.Progress) {
 			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, p)
 		})
-		if err != nil {
-			wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
-				TransferID: transferID,
-				Status:     "error",
-				Error:      err.Error(),
-			})
-			return
-		}
-		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, transfer.Progress{
-			TransferID: transferID,
-			Status:     "done",
-		})
+		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, finalTransferEvent(transferID, localDir, err))
 	}()
 	return transferID, nil
 }
 
-// SFTPUploadFile 直接上传本地文件或目录（不弹对话框，用于拖拽上传）
+// SFTPUploadFile 上传本地文件或目录到 remotePath（目标的完整路径，同名冲突已由调用方决定）。
 func (s *SSH) SFTPUploadFile(sessionID, localPath, remotePath string) (string, error) {
 	info, err := os.Stat(localPath)
 	if err != nil {
 		return "", fmt.Errorf("stat %s: %w", localPath, err)
+	}
+	if remotePath == "" || strings.HasSuffix(remotePath, "/") {
+		return "", fmt.Errorf("remote path must name the destination: %q", remotePath)
 	}
 
 	transferID := s.sftp.GenerateTransferID()
@@ -187,32 +142,16 @@ func (s *SSH) SFTPUploadFile(sessionID, localPath, remotePath string) (string, e
 		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, p)
 	}
 	emitDone := func(err error) {
-		if err != nil {
-			emitProgress(transfer.Progress{TransferID: transferID, Status: "error", Error: err.Error()})
-			return
-		}
-		emitProgress(transfer.Progress{TransferID: transferID, Status: "done"})
+		wailsRuntime.EventsEmit(s.ctx, "transfer:progress:"+transferID, finalTransferEvent(transferID, "", err))
 	}
 
-	if info.IsDir() {
-		dirRemotePath := remotePath
-		if strings.HasSuffix(dirRemotePath, "/") {
-			dirRemotePath += filepath.Base(localPath)
-		} else {
-			dirRemotePath += "/" + filepath.Base(localPath)
+	go func() {
+		if info.IsDir() {
+			emitDone(s.sftp.UploadDir(s.ctx, transferID, sessionID, localPath, remotePath, emitProgress))
+			return
 		}
-		go func() {
-			emitDone(s.sftp.UploadDir(s.ctx, transferID, sessionID, localPath, dirRemotePath, emitProgress))
-		}()
-	} else {
-		fileRemotePath := remotePath
-		if strings.HasSuffix(fileRemotePath, "/") {
-			fileRemotePath += filepath.Base(localPath)
-		}
-		go func() {
-			emitDone(s.sftp.Upload(s.ctx, transferID, sessionID, localPath, fileRemotePath, emitProgress))
-		}()
-	}
+		emitDone(s.sftp.Upload(s.ctx, transferID, sessionID, localPath, remotePath, emitProgress))
+	}()
 
 	return transferID, nil
 }

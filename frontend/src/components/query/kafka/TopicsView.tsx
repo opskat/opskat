@@ -26,8 +26,8 @@ import {
   type KafkaTopicSummary,
   useKafkaStore,
 } from "@/stores/kafkaStore";
-import { EmptyState, LoadingBlock, Metric, StatusPill } from "./shared";
-import { parseOptionalJsonObject, parseConfigUpdates } from "./utils";
+import { EmptyState, ErrorNotice, LoadingBlock, Metric, StatusPill } from "./shared";
+import { parseOptionalJsonObject, parseConfigUpdates, runKafkaAction } from "./utils";
 
 export function TopicsView({ tabId, state }: { tabId: string; state: KafkaTabState }) {
   const { t } = useTranslation();
@@ -81,7 +81,7 @@ export function TopicsView({ tabId, state }: { tabId: string; state: KafkaTabSta
           {state.loadingTopics && !state.topics.length ? (
             <LoadingBlock />
           ) : state.topics.length === 0 ? (
-            <EmptyState text={t("query.kafkaNoTopics")} />
+            <EmptyState text={t("query.kafkaNoTopics")} failed={!!state.error} />
           ) : (
             <TopicTable
               topics={state.topics}
@@ -91,7 +91,7 @@ export function TopicsView({ tabId, state }: { tabId: string; state: KafkaTabSta
           )}
         </div>
         <div className="min-h-0 overflow-auto">
-          <TopicDetailPanel tabId={tabId} state={state} />
+          <TopicDetailPanel key={state.selectedTopic} tabId={tabId} state={state} />
         </div>
       </div>
       <CreateTopicDialog tabId={tabId} open={createOpen} onOpenChange={setCreateOpen} />
@@ -115,16 +115,24 @@ function CreateTopicDialog({
   const [partitions, setPartitions] = useState(1);
   const [replicationFactor, setReplicationFactor] = useState(1);
   const [configs, setConfigs] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
   const submit = async () => {
     const name = topic.trim();
     if (!name) return;
-    await createTopic(tabId, {
-      topic: name,
-      partitions,
-      replicationFactor,
-      configs: parseOptionalJsonObject(configs),
-    });
+    setError(null);
+    const ok = await runKafkaAction(
+      () =>
+        createTopic(tabId, {
+          topic: name,
+          partitions,
+          replicationFactor,
+          configs: parseOptionalJsonObject(configs),
+        }),
+      t("query.kafkaTopicCreated", { name }),
+      setError
+    );
+    if (!ok) return;
     setTopic("");
     setConfigs("");
     onOpenChange(false);
@@ -157,6 +165,7 @@ function CreateTopicDialog({
             onChange={(e) => setConfigs(e.target.value)}
             placeholder={t("query.kafkaConfigsPlaceholder")}
           />
+          <ErrorNotice message={error} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -215,11 +224,12 @@ function TopicDetailPanel({ tabId, state }: { tabId: string; state: KafkaTabStat
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [partitionsOpen, setPartitionsOpen] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const deleteTopic = useKafkaStore((s) => s.deleteTopic);
   if (state.loadingTopicDetail) return <LoadingBlock />;
   if (!state.selectedTopic) return <EmptyState text={t("query.kafkaSelectTopic")} />;
   const detail = state.topicDetail;
-  if (!detail) return <EmptyState text={t("query.kafkaNoTopicDetail")} />;
+  if (!detail) return <EmptyState text={t("query.kafkaNoTopicDetail")} failed={!!state.error} />;
   return (
     <div className="space-y-4 p-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -243,6 +253,7 @@ function TopicDetailPanel({ tabId, state }: { tabId: string; state: KafkaTabStat
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
+      <ErrorNotice message={actionError} />
       <div className="grid grid-cols-3 gap-2">
         <Metric label={t("query.kafkaPartitions")} value={detail.partitionCount} />
         <Metric label={t("query.kafkaReplicationFactor")} value={detail.replicationFactor} />
@@ -287,7 +298,14 @@ function TopicDetailPanel({ tabId, state }: { tabId: string; state: KafkaTabStat
         description={t("query.kafkaDeleteTopicConfirmDesc", { topic: detail.name })}
         cancelText={t("action.cancel")}
         confirmText={t("action.delete")}
-        onConfirm={() => deleteTopic(tabId, detail.name)}
+        onConfirm={() => {
+          setActionError(null);
+          void runKafkaAction(
+            () => deleteTopic(tabId, detail.name),
+            t("query.kafkaTopicDeleted", { name: detail.name }),
+            setActionError
+          );
+        }}
       />
     </div>
   );
@@ -307,13 +325,18 @@ function AlterTopicConfigDialog({
   const { t } = useTranslation();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [updatesText, setUpdatesText] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const alterTopicConfig = useKafkaStore((s) => s.alterTopicConfig);
   const state = useKafkaStore((s) => s.states[tabId]);
 
   const confirm = async () => {
-    const updates = parseConfigUpdates(updatesText);
-    await alterTopicConfig(tabId, topic, updates);
-    onOpenChange(false);
+    setError(null);
+    const ok = await runKafkaAction(
+      () => alterTopicConfig(tabId, topic, parseConfigUpdates(updatesText)),
+      t("query.kafkaTopicConfigUpdated", { topic }),
+      setError
+    );
+    if (ok) onOpenChange(false);
   };
 
   return (
@@ -330,6 +353,7 @@ function AlterTopicConfigDialog({
             onChange={(e) => setUpdatesText(e.target.value)}
             placeholder={t("query.kafkaConfigUpdatesPlaceholder")}
           />
+          <ErrorNotice message={error} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -347,6 +371,7 @@ function AlterTopicConfigDialog({
           description={t("query.kafkaUpdateConfigConfirmDesc", { topic })}
           cancelText={t("action.cancel")}
           confirmText={t("action.save")}
+          variant="default"
           onConfirm={confirm}
         />
       </DialogContent>
@@ -374,12 +399,18 @@ function IncreasePartitionsDialog({
     nextCount: currentCount + 1,
   });
   const nextCount = nextCountState.currentCount === currentCount ? nextCountState.nextCount : currentCount + 1;
+  const [error, setError] = useState<string | null>(null);
   const increasePartitions = useKafkaStore((s) => s.increasePartitions);
   const state = useKafkaStore((s) => s.states[tabId]);
 
   const confirm = async () => {
-    await increasePartitions(tabId, topic, nextCount);
-    onOpenChange(false);
+    setError(null);
+    const ok = await runKafkaAction(
+      () => increasePartitions(tabId, topic, nextCount),
+      t("query.kafkaPartitionsIncreased", { topic, count: nextCount }),
+      setError
+    );
+    if (ok) onOpenChange(false);
   };
 
   return (
@@ -396,6 +427,7 @@ function IncreasePartitionsDialog({
             onChange={(value) => setNextCountState({ currentCount, nextCount: value })}
             placeholder={t("query.kafkaPartitions")}
           />
+          <ErrorNotice message={error} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -413,6 +445,7 @@ function IncreasePartitionsDialog({
           description={t("query.kafkaIncreasePartitionsConfirmDesc", { topic, count: nextCount })}
           cancelText={t("action.cancel")}
           confirmText={t("query.kafkaIncreasePartitions")}
+          variant="default"
           onConfirm={confirm}
         />
       </DialogContent>
@@ -520,7 +553,7 @@ function MessageBrowser({ tabId, state }: { tabId: string; state: KafkaTabState 
       {state.loadingMessages && !records.length ? (
         <LoadingBlock />
       ) : records.length === 0 ? (
-        <EmptyState text={t("query.kafkaNoMessages")} />
+        <EmptyState text={t("query.kafkaNoMessages")} failed={!!state.error} />
       ) : (
         <MessageTable records={records} />
       )}
@@ -549,6 +582,7 @@ function DeleteRecordsDialog({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [partition, setPartition] = useState("");
   const [offset, setOffset] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const deleteTopicRecords = useKafkaStore((s) => s.deleteTopicRecords);
   const state = useKafkaStore((s) => s.states[tabId]);
 
@@ -559,8 +593,13 @@ function DeleteRecordsDialog({
 
   const confirm = async () => {
     const partitions: KafkaDeleteRecordsPartition[] = [{ partition: partitionValue, offset: offsetValue }];
-    await deleteTopicRecords(tabId, topic, partitions);
-    onOpenChange(false);
+    setError(null);
+    const ok = await runKafkaAction(
+      () => deleteTopicRecords(tabId, topic, partitions),
+      t("query.kafkaRecordsDeleted", { topic }),
+      setError
+    );
+    if (ok) onOpenChange(false);
   };
 
   return (
@@ -583,6 +622,7 @@ function DeleteRecordsDialog({
             onChange={(e) => setOffset(e.target.value)}
             placeholder={t("query.kafkaDeleteBeforeOffset")}
           />
+          <ErrorNotice message={error} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -655,7 +695,7 @@ function MessageTable({ records }: { records: KafkaRecord[] }) {
             <td className="px-3 py-2 text-right font-mono">{record.partition}</td>
             <td className="px-3 py-2 text-right font-mono">
               <div>{record.offset}</div>
-              <div className="mt-1 text-[10px] text-muted-foreground">{record.timestamp}</div>
+              <div className="mt-1 text-[11px] text-muted-foreground">{record.timestamp}</div>
             </td>
             <td className="max-w-[180px] px-3 py-2">
               <PayloadPreview
@@ -713,10 +753,10 @@ function PayloadPreview({
   const { t } = useTranslation();
   return (
     <div className="min-w-0">
-      <div className="mb-1 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
+      <div className="mb-1 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
         <span>{encoding}</span>
         <span>{bytes}B</span>
-        {truncated && <span className="rounded border px-1 text-[9px]">{t("query.kafkaTruncated")}</span>}
+        {truncated && <span className="rounded border px-1 text-[11px]">{t("query.kafkaTruncated")}</span>}
       </div>
       <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-all rounded bg-muted/40 p-2 font-mono text-[11px] leading-relaxed">
         {value || "-"}
@@ -727,9 +767,9 @@ function PayloadPreview({
 
 function ProduceMessagePanel({ tabId, state }: { tabId: string; state: KafkaTabState }) {
   const { t } = useTranslation();
-  const [confirmOpen, setConfirmOpen] = useState(false);
   const setProduceMessage = useKafkaStore((s) => s.setProduceMessage);
   const produceKafkaMessage = useKafkaStore((s) => s.produceKafkaMessage);
+  const [error, setError] = useState<string | null>(null);
   const form = state.produceMessage;
 
   return (
@@ -772,12 +812,20 @@ function ProduceMessagePanel({ tabId, state }: { tabId: string; state: KafkaTabS
           onChange={(e) => setProduceMessage(tabId, { headers: e.target.value })}
           placeholder={t("query.kafkaHeadersPlaceholder")}
         />
+        <ErrorNotice message={error} />
         <div className="flex justify-end">
           <Button
             className="h-8 gap-1.5"
             size="sm"
             disabled={state.producingMessage}
-            onClick={() => setConfirmOpen(true)}
+            onClick={() => {
+              setError(null);
+              void runKafkaAction(
+                () => produceKafkaMessage(tabId),
+                t("query.kafkaMessageSent", { topic: state.selectedTopic || "" }),
+                setError
+              );
+            }}
           >
             {state.producingMessage ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -788,15 +836,6 @@ function ProduceMessagePanel({ tabId, state }: { tabId: string; state: KafkaTabS
           </Button>
         </div>
       </div>
-      <ConfirmDialog
-        open={confirmOpen}
-        onOpenChange={setConfirmOpen}
-        title={t("query.kafkaProduceConfirmTitle")}
-        description={t("query.kafkaProduceConfirmDesc", { topic: state.selectedTopic || "" })}
-        cancelText={t("action.cancel")}
-        confirmText={t("query.kafkaSendMessage")}
-        onConfirm={() => produceKafkaMessage(tabId)}
-      />
     </div>
   );
 }

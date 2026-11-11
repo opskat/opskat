@@ -53,6 +53,32 @@ describe("harness: 成功 toast 必须走 notify helper（AGENTS.md，#135）", 
   });
 });
 
+describe("harness: 任意字号不得小于 11px（DESIGN.md §5）", { timeout: eslintTimeout }, () => {
+  it.each(["text-[8px]", "text-[9px]", "text-[10px]", "text-[10.5px]"])("%s 被拦截", async (cls) => {
+    const ids = await ruleIds(
+      "src/components/harness-fixture.tsx",
+      `export const C = () => <span className="flex ${cls}">x</span>;\n`
+    );
+    expect(ids).toContain("no-restricted-syntax");
+  });
+
+  it("模板字符串与带变体前缀的写法同样被拦截", async () => {
+    const ids = await ruleIds(
+      "src/components/harness-fixture.tsx",
+      "export const cls = (extra: string) => `md:text-[10px] ${extra}`;\n"
+    );
+    expect(ids).toContain("no-restricted-syntax");
+  });
+
+  it("11px 及以上、text-xs 与其他任意值不被误报", async () => {
+    const ids = await ruleIds(
+      "src/components/harness-fixture.tsx",
+      `export const C = () => <span className="text-[11px] text-[100px] text-[12px] text-xs w-[10px] leading-[10px]">x</span>;\n`
+    );
+    expect(ids).not.toContain("no-restricted-syntax");
+  });
+});
+
 describe("harness: 组件禁用 palette 类名，只用语义 token（DESIGN.md）", { timeout: eslintTimeout }, () => {
   it("字符串字面量里的 palette 类名被拦截（含透明度后缀）", async () => {
     const ids = await ruleIds(

@@ -194,4 +194,49 @@ describe("SnippetsPage", () => {
       expect(checkboxes.length).toBe(3);
     });
   });
+
+  it("shows the failure reason with retry instead of the empty state when the list fails to load", async () => {
+    vi.mocked(ListSnippets).mockRejectedValueOnce(new Error("snippet db down"));
+    renderPage();
+    expect(await screen.findByText(/snippet db down/)).toBeInTheDocument();
+    expect(screen.queryByText("snippet.emptyState")).toBeNull();
+
+    vi.mocked(ListSnippets).mockResolvedValue([]);
+    fireEvent.click(screen.getByTestId("async-state-retry"));
+    expect(await screen.findByText("snippet.emptyState")).toBeInTheDocument();
+  });
+
+  it("shows a failed reload with retry instead of the previous filter's rows", async () => {
+    const row = {
+      ID: 1,
+      Name: "old-row",
+      Category: "shell",
+      Content: "ls",
+      Description: "",
+      LastAssetIDs: "",
+      Source: "user",
+      SourceRef: "",
+      UseCount: 0,
+      Status: 1,
+      CreatedAt: "2024-01-01T00:00:00Z",
+      UpdatedAt: "2024-01-01T00:00:00Z",
+    } as any;
+    vi.mocked(ListSnippets).mockResolvedValue([row]);
+    renderPage();
+    expect(await screen.findByText("old-row")).toBeInTheDocument();
+
+    vi.mocked(ListSnippets).mockRejectedValueOnce(new Error("snippet db down"));
+    useSnippetStore.getState().setFilter({ keyword: "deploy" });
+
+    expect(await screen.findByText(/snippet db down/)).toBeInTheDocument();
+    expect(screen.getByTestId("async-state-retry")).toBeInTheDocument();
+    expect(screen.queryByText("old-row")).toBeNull();
+  });
+
+  it("shows the failure when categories fail to load", async () => {
+    vi.mocked(ListSnippetCategories).mockRejectedValueOnce(new Error("cat down"));
+    renderPage();
+    expect(await screen.findByText(/cat down/)).toBeInTheDocument();
+    expect(screen.queryByText("snippet.emptyState")).toBeNull();
+  });
 });

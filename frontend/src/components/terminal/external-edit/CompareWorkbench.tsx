@@ -64,8 +64,8 @@ export function ExternalEditCompareWorkbench({ compareResult, onDismiss }: Compa
   return (
     <ExternalEditIdeaFrame
       fileName={compareResult.fileName}
-      helper={t("externalEdit.compare.helper")}
-      layoutLabel={t("externalEdit.compare.remoteLeftLocalRight")}
+      helper={t("externalEdit.compare.localLeftHelper")}
+      layoutLabel={t("externalEdit.compare.localLeftRemoteRight")}
       mode="compare"
       remotePath={compareResult.remotePath}
       sidebarLabel={t("externalEdit.compare.projectView")}
@@ -114,18 +114,20 @@ export function ExternalEditCompareWorkbench({ compareResult, onDismiss }: Compa
         data-idea-layout="read-only-diff"
         data-testid="external-edit-compare-idea-layout"
       >
+        {/* Monaco 的 original 在左、modified 在右：本地作 original，远端作 modified */}
         <CodeDiffViewer
           activeBlockIndex={activeBlockIndex}
           badge={t("externalEdit.compare.readOnly")}
           className="border-border bg-card text-card-foreground"
           height="100%"
           language="plaintext"
-          modified={compareResult.localContent || ""}
-          modifiedTitle={t("externalEdit.compare.localDraft")}
+          modified={compareResult.remoteContent || ""}
+          modifiedTitle={t("externalEdit.side.remote")}
           navigationToken={navigationToken}
-          original={compareResult.remoteContent || ""}
-          originalTitle={t("externalEdit.compare.remoteSnapshot")}
+          original={compareResult.localContent || ""}
+          originalTitle={t("externalEdit.side.local")}
           testId="external-edit-compare-diff-editor"
+          toneBySide
           onDiffStatsChange={({ total }) => {
             setWorkbenchState((current) => {
               const base = getCurrentCompareState(current, compareResult);

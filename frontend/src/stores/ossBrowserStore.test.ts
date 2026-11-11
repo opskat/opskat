@@ -43,7 +43,7 @@ function baseState(over: Partial<any> = {}): any {
     listing: { objects: [], prefixes: [], cursor: "", truncated: false },
     selection: new Set(),
     loading: { buckets: false, listing: false, page: false },
-    error: null,
+    bucketsError: null,
     ...over,
   };
 }
@@ -107,7 +107,7 @@ describe("loadBuckets", () => {
     vi.mocked(OSSListBuckets).mockRejectedValue(new Error("boom"));
     await expect(useOssBrowserStore.getState().loadBuckets(TAB, 7)).rejects.toThrow("boom");
     const s = useOssBrowserStore.getState().tabs[TAB];
-    expect(s.error).toContain("boom");
+    expect(s.bucketsError).toContain("boom");
     expect(s.loading.buckets).toBe(false);
   });
 });
@@ -309,7 +309,7 @@ describe("ossBrowserStore P3b-3 additions", () => {
           },
           selection: new Set(),
           loading: { buckets: false, listing: false, page: false },
-          error: null,
+          bucketsError: null,
           viewMode: "list",
           focusedKey: null,
           thumbnails: {},

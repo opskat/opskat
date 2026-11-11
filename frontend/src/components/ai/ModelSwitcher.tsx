@@ -85,7 +85,7 @@ export function ModelSwitcher({ conversationId, hostTabId }: ModelSwitcherProps)
       <DropdownMenuContent align="start" side="top" className="w-64">
         <DropdownMenuLabel className="flex items-center justify-between gap-2 py-1 font-normal">
           <span className="text-xs font-semibold text-muted-foreground">{t("ai.selectModel")}</span>
-          <span className="text-[10px] text-muted-foreground/70">{t("ai.modelScopeHint")}</span>
+          <span className="text-[11px] text-muted-foreground/70">{t("ai.modelScopeHint")}</span>
         </DropdownMenuLabel>
         {providers.map((p) => {
           const isSelected = p.id === currentProviderId;

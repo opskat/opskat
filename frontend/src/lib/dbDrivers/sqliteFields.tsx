@@ -2,7 +2,11 @@ import { useTranslation } from "react-i18next";
 import { Button, Input } from "@opskat/ui";
 import { Field, Segmented } from "@/components/asset/fields";
 import { AssetSelect } from "@/components/asset/AssetSelect";
-import type { DatabaseFormState } from "@/components/asset/DatabaseConfigSection.config";
+import {
+  sqlitePathError,
+  sqliteSSHError,
+  type DatabaseFormState,
+} from "@/components/asset/DatabaseConfigSection.config";
 import { SelectSQLiteFile } from "../../../wailsjs/go/system/System";
 import { registerDriverFormField } from "./formFields";
 
@@ -37,14 +41,15 @@ export function SQLiteSourceField({ state, patch }: { state: DatabaseFormState; 
 }
 
 /** 数据库文件路径;本机文件可用系统对话框选择。 */
-export function SQLitePathField({ state, patch }: { state: DatabaseFormState; patch: Patch }) {
+export function SQLitePathField({ state, patch, error }: { state: DatabaseFormState; patch: Patch; error?: string }) {
   const { t } = useTranslation();
   const isRemote = state.sqliteSource === "remote_ssh_vfs";
   return (
-    <Field label={t("asset.sqliteFilePath")}>
+    <Field label={t("asset.sqliteFilePath")} error={error}>
       <div className="flex gap-2">
         <Input
           data-testid="database-sqlite-path-input"
+          aria-invalid={!!error || undefined}
           value={state.path}
           onChange={(e) => patch({ path: e.target.value })}
           placeholder={isRemote ? "/var/lib/app/app.db" : t("asset.sqliteFilePathPlaceholder")}
@@ -67,10 +72,18 @@ export function SQLitePathField({ state, patch }: { state: DatabaseFormState; pa
 }
 
 /** 远端文件所在的 SSH 资产。 */
-export function SQLiteSSHAssetField({ state, patch }: { state: DatabaseFormState; patch: Patch }) {
+export function SQLiteSSHAssetField({
+  state,
+  patch,
+  error,
+}: {
+  state: DatabaseFormState;
+  patch: Patch;
+  error?: string;
+}) {
   const { t } = useTranslation();
   return (
-    <Field label={t("asset.sqliteRemoteSSH")}>
+    <Field label={t("asset.sqliteRemoteSSH")} error={error}>
       <AssetSelect
         value={state.sshTunnelId}
         onValueChange={(v) => patch({ sshTunnelId: v, connectionType: "jumphost" })}
@@ -86,12 +99,17 @@ registerDriverFormField("sqlite_source", [
   { kind: "custom", render: (state, patch) => <SQLiteSourceField state={state} patch={patch} /> },
 ]);
 registerDriverFormField("path", [
-  { kind: "custom", render: (state, patch) => <SQLitePathField state={state} patch={patch} /> },
+  {
+    kind: "custom",
+    error: (s) => sqlitePathError(s.path),
+    render: (state, patch, error) => <SQLitePathField state={state} patch={patch} error={error} />,
+  },
 ]);
 registerDriverFormField("ssh_asset_id", [
   {
     kind: "custom",
     visibleWhen: (s) => s.sqliteSource === "remote_ssh_vfs",
-    render: (state, patch) => <SQLiteSSHAssetField state={state} patch={patch} />,
+    error: (s) => sqliteSSHError(s.sshTunnelId),
+    render: (state, patch, error) => <SQLiteSSHAssetField state={state} patch={patch} error={error} />,
   },
 ]);

@@ -64,12 +64,9 @@ const present = (title: string) => screen.queryByTitle(title) !== null;
 function gridEditEntries() {
   return {
     submit: present("query.submitEdits"),
-    discard: present("query.discardEdits"),
     preview: present("query.previewSql"),
     addRow: present("query.addRow"),
     deleteRecord: present("query.deleteRecord"),
-    apply: present("query.applyChanges"),
-    discardChanges: present("query.discardChanges"),
   };
 }
 
@@ -115,12 +112,9 @@ describe("TableDataTab 的功能入口", () => {
       expect(screen.queryByText("query.viewDDL")).toBeInTheDocument();
       expect(gridEditEntries()).toEqual({
         submit: true,
-        discard: true,
         preview: true,
         addRow: true,
         deleteRecord: true,
-        apply: true,
-        discardChanges: true,
       });
       expect(present("query.importData")).toBe(true);
       expect(await sqlExportOptionShown()).toBe(true);

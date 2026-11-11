@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { renderForSave } from "./rejectedSave";
 import userEvent from "@testing-library/user-event";
 import { createRef } from "react";
 import { DatabaseConfigSection } from "@/components/asset/DatabaseConfigSection";
@@ -7,7 +8,7 @@ import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formCon
 import { asset_entity, dbdriver } from "../../../../wailsjs/go/models";
 import { ListDatabaseDrivers } from "../../../../wailsjs/go/query/Query";
 import { refreshDatabaseDrivers } from "@/lib/dbDrivers";
-import { BUILTIN_DRIVERS } from "@/__tests__/dbDriverFixtures";
+import { BUILTIN_DRIVERS, EXT_DRIVER } from "@/__tests__/dbDriverFixtures";
 
 vi.mock("../../../../wailsjs/go/system/System", () => ({
   ListCredentialsByType: () => Promise.resolve([]),
@@ -397,5 +398,88 @@ describe("DatabaseConfigSection Kerberos 字段组(kerberos)", () => {
     );
     expect(screen.queryByTestId("krb-auth-kerberos")).toBeNull();
     expect((await ref.current!.buildConfig(ctx)).configJSON).not.toContain("krb_");
+  });
+
+  function renderKrbForSave(overrides: Record<string, string>) {
+    const config = JSON.stringify({ ...JSON.parse(KRB), ...overrides });
+    return renderForSave(
+      <DatabaseConfigSection
+        editAsset={new asset_entity.Asset({ ID: 6, Type: "database", Config: config })}
+        ctx={ctx}
+        onValidityChange={vi.fn()}
+      />
+    );
+  }
+
+  it.each([
+    ["a principal without @REALM", { krb_principal: "app" }, "krb-principal", "asset.formKrbPrincipal"],
+    ["a KDC list with no address", { krb_kdc: "," }, "krb-kdc", "asset.formKrbKDC"],
+    ["no Kerberos password", { krb_password: "" }, "krb-password", "asset.formKrbCredential"],
+  ])("rejected save shows %s under its field", async (_, overrides, testId, reason) => {
+    const { rejectSave, reportShown } = renderKrbForSave(overrides);
+    const input = await screen.findByTestId(testId);
+    rejectSave();
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    expect(reportShown).toHaveBeenCalled();
+  });
+
+  it("rejected save shows a missing keytab path under the keytab field", async () => {
+    const { rejectSave, reportShown } = renderKrbForSave({});
+    await userEvent.setup().click(await screen.findByTestId("krb-credential-keytab"));
+    rejectSave();
+    expect(screen.getByTestId("krb-keytab-file")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("asset.formKrbCredential")).toBeInTheDocument();
+    expect(reportShown).toHaveBeenCalled();
+  });
+});
+
+describe("DatabaseConfigSection on a rejected save", () => {
+  it("shows a missing SQLite path under the path field", async () => {
+    const editAsset = new asset_entity.Asset({ ID: 6, Type: "database", Config: '{"driver":"sqlite","path":""}' });
+    const { rejectSave, reportShown } = renderForSave(
+      <DatabaseConfigSection editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />
+    );
+    const path = await screen.findByTestId("database-sqlite-path-input");
+
+    rejectSave();
+
+    expect(path).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("asset.formMissingPath")).toBeInTheDocument();
+    expect(reportShown).toHaveBeenCalled();
+  });
+
+  it("shows a missing SSH asset for a remote SQLite file under the SSH asset field", async () => {
+    const editAsset = new asset_entity.Asset({
+      ID: 6,
+      Type: "database",
+      Config: '{"driver":"sqlite","path":"/data/app.db","sqlite_source":"remote_ssh_vfs"}',
+    });
+    const { rejectSave } = renderForSave(
+      <DatabaseConfigSection editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />
+    );
+    await screen.findByTestId("database-sqlite-path-input");
+    rejectSave();
+    expect(screen.getByText("asset.formMissingSQLiteSSH")).toBeInTheDocument();
+  });
+
+  it("shows a missing required driver field under that field", async () => {
+    vi.mocked(ListDatabaseDrivers).mockResolvedValue([...BUILTIN_DRIVERS, EXT_DRIVER]);
+    const editAsset = new asset_entity.Asset({
+      ID: 6,
+      Type: "database",
+      Config: '{"driver":"extdb","host":"db.internal","port":7357}',
+    });
+    const { rejectSave, reportShown } = renderForSave(
+      <DatabaseConfigSection editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />
+    );
+    await screen.findByTestId("database-host-input");
+    expect(screen.queryByText("asset.generic.required")).toBeNull();
+
+    rejectSave();
+
+    expect(screen.getByText("asset.generic.required")).toBeInTheDocument();
+    expect(screen.getByTestId("config-tab-error-connection")).toBeInTheDocument();
+    expect(reportShown).toHaveBeenCalled();
   });
 });

@@ -44,10 +44,10 @@ func TestRespondOpsctlApprovalInvalidResponseLogOmitsPayload(t *testing.T) {
 		ch:    ch,
 	})
 
-	o.RespondOpsctlApproval("bad-log", permission.ApprovalResponse{Decision: "invalid --password " + secret})
+	require.Error(t, o.RespondOpsctlApproval("bad-log", permission.ApprovalResponse{Decision: "invalid --password " + secret}))
 
-	require.Equal(t, "deny", (<-ch).Decision)
-	entries := logs.FilterMessage("invalid opsctl approval response denied").All()
+	require.Empty(t, ch)
+	entries := logs.FilterMessage("opsctl approval response rejected").All()
 	require.Len(t, entries, 1)
 	fields := entries[0].ContextMap()
 	require.NotContains(t, fields, "decision")
@@ -58,7 +58,7 @@ func TestRespondOpsctlApprovalInvalidResponseLogOmitsPayload(t *testing.T) {
 }
 
 // 审批响应只经 ParseApprovalResponse 的既有类型/策略校验（deny、allow、allowAll、
-// edited_items 的 kind 能力）；伪造响应按白名单拒绝，合法响应逐字透传。
+// edited_items 的 kind 能力）；伪造响应按白名单拒绝（返回错误、不送达），合法响应逐字透传。
 func TestRespondOpsctlApprovalPreservesParsedValidation(t *testing.T) {
 	expected := []permission.ApprovalItem{{Type: "exec", AssetID: 1, AssetName: "web-1", Command: "uptime"}}
 	edited := []permission.ApprovalItem{{Type: "exec", AssetID: 1, AssetName: "web-1", Command: "uptime *"}}
@@ -68,7 +68,7 @@ func TestRespondOpsctlApprovalPreservesParsedValidation(t *testing.T) {
 		ch := make(chan permission.ApprovalResponse, 1)
 		o.pendingOpsctlApprovals.Store("c1", pendingOpsctlApproval{kind: permission.ApprovalKindSingle, items: expected, ch: ch})
 
-		o.RespondOpsctlApproval("c1", permission.ApprovalResponse{Decision: "allowAll", EditedItems: edited})
+		require.NoError(t, o.RespondOpsctlApproval("c1", permission.ApprovalResponse{Decision: "allowAll", EditedItems: edited}))
 
 		got := <-ch
 		require.Equal(t, "allowAll", got.Decision)
@@ -80,10 +80,9 @@ func TestRespondOpsctlApprovalPreservesParsedValidation(t *testing.T) {
 		ch := make(chan permission.ApprovalResponse, 1)
 		o.pendingOpsctlApprovals.Store("c2", pendingOpsctlApproval{kind: permission.ApprovalKindBatch, items: expected, ch: ch})
 
-		o.RespondOpsctlApproval("c2", permission.ApprovalResponse{Decision: "allowAll", EditedItems: edited})
+		require.Error(t, o.RespondOpsctlApproval("c2", permission.ApprovalResponse{Decision: "allowAll", EditedItems: edited}))
 
-		got := <-ch
-		require.Equal(t, "deny", got.Decision)
+		require.Empty(t, ch)
 	})
 
 	t.Run("edited_items rejected for allow-once", func(t *testing.T) {
@@ -91,10 +90,9 @@ func TestRespondOpsctlApprovalPreservesParsedValidation(t *testing.T) {
 		ch := make(chan permission.ApprovalResponse, 1)
 		o.pendingOpsctlApprovals.Store("c3", pendingOpsctlApproval{kind: permission.ApprovalKindOnce, items: expected, ch: ch})
 
-		o.RespondOpsctlApproval("c3", permission.ApprovalResponse{Decision: "allow", EditedItems: edited})
+		require.Error(t, o.RespondOpsctlApproval("c3", permission.ApprovalResponse{Decision: "allow", EditedItems: edited}))
 
-		got := <-ch
-		require.Equal(t, "deny", got.Decision)
+		require.Empty(t, ch)
 	})
 
 	t.Run("deny and allow passed through", func(t *testing.T) {
@@ -102,10 +100,11 @@ func TestRespondOpsctlApprovalPreservesParsedValidation(t *testing.T) {
 		ch := make(chan permission.ApprovalResponse, 1)
 		o.pendingOpsctlApprovals.Store("c4", pendingOpsctlApproval{kind: permission.ApprovalKindSingle, items: expected, ch: ch})
 
-		o.RespondOpsctlApproval("c4", permission.ApprovalResponse{Decision: "allow"})
+		require.NoError(t, o.RespondOpsctlApproval("c4", permission.ApprovalResponse{Decision: "allow"}))
 		require.Equal(t, "allow", (<-ch).Decision)
 
-		o.RespondOpsctlApproval("c4", permission.ApprovalResponse{Decision: "deny"})
+		o.pendingOpsctlApprovals.Store("c5", pendingOpsctlApproval{kind: permission.ApprovalKindSingle, items: expected, ch: ch})
+		require.NoError(t, o.RespondOpsctlApproval("c5", permission.ApprovalResponse{Decision: "deny"}))
 		require.Equal(t, "deny", (<-ch).Decision)
 	})
 }
@@ -118,11 +117,11 @@ func TestHandleGrantApprovalAnswerDuringEmitIsDelivered(t *testing.T) {
 	o := &Opsctl{ctx: ctx, appCtx: context.Background(), lang: extTestLang{}}
 	o.emit = func(name string, payload map[string]any) {
 		if name == "opsctl:grant-approval" {
-			o.RespondOpsctlApproval(payload["session_id"].(string), permission.ApprovalResponse{Decision: "allow"})
+			require.NoError(t, o.RespondOpsctlApproval(payload["session_id"].(string), permission.ApprovalResponse{Decision: "allow"}))
 		}
 	}
 
-	resp := o.handleGrantApproval(grantRequest("read"))
+	resp := o.handleGrantApproval(context.Background(), grantRequest("read"))
 
 	require.True(t, resp.Approved, "reason: %s", resp.Reason)
 }

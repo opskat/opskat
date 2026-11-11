@@ -1,4 +1,4 @@
-import { ExtensionConfigForm } from "@/components/asset/ExtensionConfigForm";
+import { DriverFieldsForm } from "./DriverFieldsForm";
 import type { FieldDesc } from "@/components/asset/configFields";
 import type { DatabaseFormState } from "@/components/asset/DatabaseConfigSection.config";
 import type { ExtensionConfigProperty, ExtensionConfigSchema } from "@/extension/configSchema";
@@ -55,20 +55,34 @@ function hasValue(f: DriverField, v: unknown): boolean {
   return typeof v === "string" && v.trim() !== "";
 }
 
-/** 是否有必填的专属字段还没有值;口令类已存过也算有值。 */
-export function missingRequiredDriverField(driver: DriverDescriptor, state: DatabaseFormState): boolean {
+const DRIVER_FIELD_INVALID = "asset.formInvalidDriverField";
+const DRIVER_FIELD_REQUIRED = "asset.generic.required";
+
+/**
+ * 各专属字段的错误(字段 key → i18n key;无错的字段不出现):填了却不合声明的数字类取值(如小数,
+ * 保存时不能悄悄丢掉用户填的东西,先拦下),或必填却没有值(口令类已存过也算有值)。
+ */
+function driverFieldErrors(driver: DriverDescriptor, state: DatabaseFormState): Record<string, string> {
   const values = driverOptionValues(driver, state);
-  return driverFieldsOf(driver).some(
-    (f) => f.required && !hasValue(f, values[f.key]) && !(isPassword(f) && storedSecret(driver, state, f.key) !== "")
-  );
+  const out: Record<string, string> = {};
+  for (const f of driverFieldsOf(driver)) {
+    const v = values[f.key];
+    if (f.type === "number" && v != null && !hasValue(f, v)) out[f.key] = DRIVER_FIELD_INVALID;
+    else if (f.required && !hasValue(f, v) && !(isPassword(f) && storedSecret(driver, state, f.key) !== "")) {
+      out[f.key] = DRIVER_FIELD_REQUIRED;
+    }
+  }
+  return out;
 }
 
-/** 是否有填了却不合声明的数字类取值(如小数):保存时不能悄悄丢掉用户填的东西,先拦下。 */
+/** 是否有必填的专属字段还没有值;口令类已存过也算有值。 */
+export function missingRequiredDriverField(driver: DriverDescriptor, state: DatabaseFormState): boolean {
+  return Object.values(driverFieldErrors(driver, state)).includes(DRIVER_FIELD_REQUIRED);
+}
+
+/** 是否有填了却不合声明的数字类取值(如小数)。 */
 export function invalidDriverField(driver: DriverDescriptor, state: DatabaseFormState): boolean {
-  const values = driverOptionValues(driver, state);
-  return driverFieldsOf(driver).some(
-    (f) => f.type === "number" && values[f.key] != null && !hasValue(f, values[f.key])
-  );
+  return Object.values(driverFieldErrors(driver, state)).includes(DRIVER_FIELD_INVALID);
 }
 
 /**
@@ -116,7 +130,13 @@ function configSchemaOf(fields: DriverField[]): ExtensionConfigSchema {
   };
 }
 
-/** 驱动在某个 Tab 里声明的专属字段,作为该 Tab 的一个表单块;没有时为空。 */
+/** 该 Tab 里专属字段的错误(只含这些字段)。 */
+function tabFieldErrors(driver: DriverDescriptor, fields: DriverField[], state: DatabaseFormState) {
+  const all = driverFieldErrors(driver, state);
+  return Object.fromEntries(fields.filter((f) => all[f.key]).map((f) => [f.key, all[f.key]]));
+}
+
+/** 驱动在某个 Tab 里声明的专属字段,作为该 Tab 的一个表单块;没有时为空。保存被拒后各字段的错误画在字段下。 */
 export function driverFieldsForTab(driver: DriverDescriptor, tab: string): FieldDesc<DatabaseFormState>[] {
   const fields = driverFieldsOf(driver).filter((f) => f.tab === tab);
   if (fields.length === 0) return [];
@@ -124,14 +144,16 @@ export function driverFieldsForTab(driver: DriverDescriptor, tab: string): Field
   return [
     {
       kind: "custom",
-      render: (state, patch) => (
-        <ExtensionConfigForm
-          configSchema={schema}
+      error: (state) => Object.values(tabFieldErrors(driver, fields, state))[0] ?? "",
+      render: (state, patch, error) => (
+        <DriverFieldsForm
+          schema={schema}
           value={driverOptionValues(driver, state)}
           onChange={(next) => patch({ driverOptions: next })}
           withheldSecrets={Object.fromEntries(
             fields.filter((f) => isPassword(f) && storedSecret(driver, state, f.key) !== "").map((f) => [f.key, f.key])
           )}
+          fieldErrors={error ? tabFieldErrors(driver, fields, state) : {}}
         />
       ),
     },

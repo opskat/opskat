@@ -617,7 +617,7 @@ export function FileList({
         {error && !loading && (
           <div className="flex flex-col items-center justify-center py-8 gap-1 px-2">
             <span className="text-destructive text-center text-xs">{t("sftp.loadError")}</span>
-            <span className="text-muted-foreground text-center break-all text-[10px]">{error}</span>
+            <span className="text-muted-foreground text-center break-all text-xs">{error}</span>
             <Button variant="outline" size="xs" onClick={onRetry} className="mt-1">
               {t("sftp.retry")}
             </Button>
@@ -688,7 +688,7 @@ export function FileList({
 function DropHint({ count, target }: { count: number; target: string }) {
   const { t } = useTranslation();
   return (
-    <span className="shrink-0 text-[10px] text-primary" data-testid="sftp-drop-hint">
+    <span className="shrink-0 text-[11px] text-primary" data-testid="sftp-drop-hint">
       {t("sftp.tree.dropHint", { count, target })}
     </span>
   );
@@ -987,8 +987,8 @@ const FileRow = memo(function FileRow({
       {/* 目录行不带大小也不带日期:名字宽度在深层最稀缺,而目录的修改时间对定位最没帮助。 */}
       {!entry.isDir && (
         <>
-          <span className="text-muted-foreground shrink-0 text-[10px]">{formatBytes(entry.size)}</span>
-          {showsDate && <span className="text-muted-foreground shrink-0 text-[10px]">{formatDate(entry.modTime)}</span>}
+          <span className="text-muted-foreground shrink-0 text-[11px]">{formatBytes(entry.size)}</span>
+          {showsDate && <span className="text-muted-foreground shrink-0 text-[11px]">{formatDate(entry.modTime)}</span>}
         </>
       )}
     </div>
@@ -1022,7 +1022,7 @@ function TreeStatusRow({ row, panelWidth, onRetry }: TreeStatusRowProps) {
       {row.state === "error" && (
         <>
           <span className="text-destructive shrink-0">{t("sftp.loadError")}</span>
-          <span className="min-w-0 flex-1 truncate text-[10px]" title={row.message ?? undefined}>
+          <span className="min-w-0 flex-1 truncate text-xs" title={row.message ?? undefined}>
             {row.message}
           </span>
           <Button variant="outline" size="xs" className="shrink-0" onClick={() => onRetry(row.path)}>

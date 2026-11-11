@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
+import { AsyncState } from "@/components/common/AsyncState";
+import { useAsyncList } from "@/hooks/useAsyncList";
 import { Field } from "@/components/asset/fields";
 import { useConfigSection } from "@/components/asset/useConfigSection";
 import { ListLocalShells } from "../../../wailsjs/go/local/Local";
@@ -13,7 +14,7 @@ type ShellInfo = localterm_svc.ShellInfo;
 
 export function LocalConfigSection({ editAsset, onValidityChange, ref }: ConfigSectionProps) {
   const { t } = useTranslation();
-  const [shells, setShells] = useState<ShellInfo[]>([]);
+  const { items: shells, load: shellsLoad } = useAsyncList<ShellInfo>(() => ListLocalShells());
   const { state, patch } = useConfigSection<LocalFormState>({
     ref,
     editAsset,
@@ -24,12 +25,6 @@ export function LocalConfigSection({ editAsset, onValidityChange, ref }: ConfigS
     build: async (s) => ({ configJSON: buildLocalConfig(s), sshTunnelId: 0 }),
     // buildTest 省略 → buildTestConfig 为 null。
   });
-
-  useEffect(() => {
-    ListLocalShells()
-      .then((list) => setShells(list || []))
-      .catch(() => setShells([]));
-  }, []);
 
   const onSelectPreset = (val: string) => {
     if (val === "__default__") {
@@ -43,20 +38,29 @@ export function LocalConfigSection({ editAsset, onValidityChange, ref }: ConfigS
   return (
     <div className="flex flex-col gap-4">
       <Field label={t("asset.localShell")}>
-        <Select onValueChange={onSelectPreset}>
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder={t("asset.localShellPreset")} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__default__">{t("asset.localDefaultShell")}</SelectItem>
-            {shells.map((s, i) => (
-              <SelectItem key={`${s.path}-${i}`} value={String(i)}>
-                {s.name}
-                {s.args && s.args.length ? ` (${s.path} ${formatLocalShellArgs(s.args)})` : ` (${s.path})`}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {shellsLoad.status === "error" ? (
+          <AsyncState
+            status="error"
+            error={shellsLoad.error}
+            onRetry={shellsLoad.reload}
+            className="items-start p-0 text-left"
+          />
+        ) : (
+          <Select onValueChange={onSelectPreset}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder={t("asset.localShellPreset")} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__default__">{t("asset.localDefaultShell")}</SelectItem>
+              {shells.map((s, i) => (
+                <SelectItem key={`${s.path}-${i}`} value={String(i)}>
+                  {s.name}
+                  {s.args && s.args.length ? ` (${s.path} ${formatLocalShellArgs(s.args)})` : ` (${s.path})`}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         <Input
           value={state.shell}
           onChange={(e) => patch({ shell: e.target.value })}

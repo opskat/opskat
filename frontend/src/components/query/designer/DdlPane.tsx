@@ -18,7 +18,7 @@ export function DdlPane({ assetId, database, table }: { assetId: number; databas
   if (state.status === "error") {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6">
-        <code className="max-w-lg rounded-md bg-muted px-3 py-2 font-mono text-[11px] text-muted-foreground select-text">
+        <code className="max-w-lg rounded-md bg-muted px-3 py-2 font-mono text-xs text-muted-foreground select-text">
           {state.error}
         </code>
         <Button size="sm" variant="outline" className="h-7 text-xs" onClick={reload}>

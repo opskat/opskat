@@ -162,9 +162,17 @@ export function listedMappingAnnouncedAddresses(raw: string): Set<string> {
 /** 模式必填校验(镜像后端 validateMode);canTest/canSave 共用,与 formMissingHost 同类提示。 */
 export function redisModeRequiredKey(state: RedisFormState): string {
   if (state.mode === "standalone") return state.host.trim() ? "" : "asset.formMissingHost";
-  if (parseRedisNodes(state.nodes).length === 0) return "asset.redisNodesRequired";
-  if (state.mode === "sentinel" && !state.masterName.trim()) return "asset.redisMasterNameRequired";
-  return "";
+  return redisNodesError(state.nodes) || (state.mode === "sentinel" ? redisMasterNameError(state.masterName) : "");
+}
+
+/** 集群/哨兵至少要能解析出一个节点:redisModeRequiredKey 与节点字段共用。 */
+export function redisNodesError(nodes: string): string {
+  return parseRedisNodes(nodes).length > 0 ? "" : "asset.redisNodesRequired";
+}
+
+/** 哨兵模式的主节点名必填:redisModeRequiredKey 与主节点名字段共用。 */
+export function redisMasterNameError(masterName: string): string {
+  return masterName.trim() ? "" : "asset.redisMasterNameRequired";
 }
 
 export interface SentinelPasswordFragment {

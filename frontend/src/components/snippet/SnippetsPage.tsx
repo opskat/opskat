@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Plus, Pencil, Copy, Trash2, Lock, Search, Loader2, Play } from "lucide-react";
+import { Plus, Pencil, Copy, Trash2, Lock, Search, Play } from "lucide-react";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import {
@@ -20,6 +20,7 @@ import { snippet_entity } from "../../../wailsjs/go/models";
 import { SnippetFormDialog } from "./SnippetFormDialog";
 import { SnippetAssetDrawer } from "./SnippetAssetDrawer";
 import { isRunnableCategoryId } from "./snippetRun";
+import { AsyncState } from "@/components/common/AsyncState";
 import { errorMessage } from "@/lib/errorMessage";
 
 // Stable per-category badge styling. Order must be deterministic so a given
@@ -59,6 +60,7 @@ export function SnippetsPage() {
   const categories = useSnippetStore((s) => s.categories);
   const list = useSnippetStore((s) => s.list);
   const listLoading = useSnippetStore((s) => s.listLoading);
+  const listError = useSnippetStore((s) => s.listError);
   const filter = useSnippetStore((s) => s.filter);
   const loadCategories = useSnippetStore((s) => s.loadCategories);
   const loadList = useSnippetStore((s) => s.loadList);
@@ -75,9 +77,20 @@ export function SnippetsPage() {
   const [runTarget, setRunTarget] = useState<snippet_entity.Snippet | null>(null);
 
   // Load categories + initial list on mount.
+  const [firstLoadDone, setFirstLoadDone] = useState(false);
+  const [categoriesError, setCategoriesError] = useState<string | null>(null);
+  const loadAll = useCallback(
+    () =>
+      loadCategories()
+        // A list failure is recorded in the store (`listError`).
+        .then(() => loadList().catch(() => {}))
+        .catch((e) => setCategoriesError(errorMessage(e)))
+        .finally(() => setFirstLoadDone(true)),
+    [loadCategories, loadList]
+  );
   useEffect(() => {
-    void loadCategories().then(() => loadList());
-  }, [loadCategories, loadList]);
+    void loadAll();
+  }, [loadAll]);
 
   // Debounce search input → filter.keyword
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -174,7 +187,7 @@ export function SnippetsPage() {
           .map((id) => (categoryLabelById[id] ? categoryLabelById[id] : t("snippet.unknownCategory", { name: id })))
           .join(", ");
 
-  const isEmpty = list.length === 0 && !listLoading;
+  const loadError = categoriesError ?? listError;
   const hasActiveFilter = filter.categories.length > 0 || filter.keyword.trim() !== "";
 
   return (
@@ -229,7 +242,7 @@ export function SnippetsPage() {
                       />
                       <span
                         className={cn(
-                          "inline-block px-1.5 py-0.5 rounded text-[10px] font-mono",
+                          "inline-block px-1.5 py-0.5 rounded text-[11px] font-mono",
                           categoryBadgeClass(c.id, orderedCategoryIds)
                         )}
                       >
@@ -255,10 +268,10 @@ export function SnippetsPage() {
                             onChange={() => toggleCategoryFilter(id)}
                             className="h-3.5 w-3.5"
                           />
-                          <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted text-muted-foreground">
+                          <span className="inline-block px-1.5 py-0.5 rounded text-[11px] font-mono bg-muted text-muted-foreground">
                             {t("snippet.unknownCategory", { name: id })}
                           </span>
-                          <span className="text-[10px] text-muted-foreground">{t("snippet.orphanedSuffix")}</span>
+                          <span className="text-[11px] text-muted-foreground">{t("snippet.orphanedSuffix")}</span>
                         </label>
                       );
                     })}
@@ -288,136 +301,140 @@ export function SnippetsPage() {
             </tr>
           </thead>
           <tbody>
-            {listLoading && list.length === 0 && (
+            {/* 失败时只显示原因与重试:旧列表属于上一次的筛选条件,留着会被当成这次的结果。 */}
+            {(list.length === 0 || loadError) && (
               <tr>
-                <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground">
-                  <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
+                <td colSpan={5}>
+                  <AsyncState
+                    status={loadError ? "error" : listLoading || !firstLoadDone ? "loading" : "ready"}
+                    error={loadError}
+                    onRetry={() => {
+                      setCategoriesError(null);
+                      void loadAll();
+                    }}
+                    className="py-12"
+                    empty={hasActiveFilter ? t("snippet.emptyStateFiltered") : t("snippet.emptyState")}
+                  />
                 </td>
               </tr>
             )}
-            {isEmpty && (
-              <tr>
-                <td colSpan={5} className="px-4 py-12 text-center text-muted-foreground">
-                  {hasActiveFilter ? t("snippet.emptyStateFiltered") : t("snippet.emptyState")}
-                </td>
-              </tr>
-            )}
-            {list.map((s) => {
-              const readOnly = isReadOnly(s);
-              return (
-                <tr key={s.ID} className="border-b hover:bg-muted/50 transition-colors">
-                  <td className="px-4 py-2">
-                    {isOrphanCategory(s.Category) ? (
-                      <span
-                        className="inline-block px-1.5 py-0.5 rounded text-[10px] font-mono bg-muted text-muted-foreground"
-                        title={t("snippet.unknownCategoryTooltip")}
-                      >
-                        {t("snippet.unknownCategory", { name: s.Category })}
-                      </span>
-                    ) : (
-                      <span
-                        className={cn(
-                          "inline-block px-1.5 py-0.5 rounded text-[10px] font-mono",
-                          categoryBadgeClass(s.Category, orderedCategoryIds)
-                        )}
-                      >
-                        {categoryLabelById[s.Category] ?? s.Category}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2">
-                    <div className="flex items-center gap-1.5">
-                      {readOnly && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Lock className="h-3 w-3 text-muted-foreground" data-testid="readonly-lock" />
-                          </TooltipTrigger>
-                          <TooltipContent>{t("snippet.readOnlyTooltip")}</TooltipContent>
-                        </Tooltip>
-                      )}
-                      <span className="font-medium">{s.Name}</span>
-                      {s.Description && (
-                        <span className="text-xs text-muted-foreground truncate max-w-xs" title={s.Description}>
-                          — {s.Description}
+            {!loadError &&
+              list.map((s) => {
+                const readOnly = isReadOnly(s);
+                return (
+                  <tr key={s.ID} className="border-b hover:bg-muted/50 transition-colors">
+                    <td className="px-4 py-2">
+                      {isOrphanCategory(s.Category) ? (
+                        <span
+                          className="inline-block px-1.5 py-0.5 rounded text-[11px] font-mono bg-muted text-muted-foreground"
+                          title={t("snippet.unknownCategoryTooltip")}
+                        >
+                          {t("snippet.unknownCategory", { name: s.Category })}
+                        </span>
+                      ) : (
+                        <span
+                          className={cn(
+                            "inline-block px-1.5 py-0.5 rounded text-[11px] font-mono",
+                            categoryBadgeClass(s.Category, orderedCategoryIds)
+                          )}
+                        >
+                          {categoryLabelById[s.Category] ?? s.Category}
                         </span>
                       )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">
-                    {formatUpdated(s.UpdatedAt)}
-                  </td>
-                  <td className="px-4 py-2 text-xs font-mono text-muted-foreground">{s.Source || "user"}</td>
-                  <td className="px-4 py-2">
-                    <div className="flex items-center justify-end gap-1">
-                      {isRunnableCategoryId(s.Category, categories) && (
+                    </td>
+                    <td className="px-4 py-2">
+                      <div className="flex items-center gap-1.5">
+                        {readOnly && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Lock className="h-3 w-3 text-muted-foreground" data-testid="readonly-lock" />
+                            </TooltipTrigger>
+                            <TooltipContent>{t("snippet.readOnlyTooltip")}</TooltipContent>
+                          </Tooltip>
+                        )}
+                        <span className="font-medium">{s.Name}</span>
+                        {s.Description && (
+                          <span className="text-xs text-muted-foreground truncate max-w-xs" title={s.Description}>
+                            — {s.Description}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                      {formatUpdated(s.UpdatedAt)}
+                    </td>
+                    <td className="px-4 py-2 text-xs font-mono text-muted-foreground">{s.Source || "user"}</td>
+                    <td className="px-4 py-2">
+                      <div className="flex items-center justify-end gap-1">
+                        {isRunnableCategoryId(s.Category, categories) && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7"
+                                aria-label={t("snippet.actions.run")}
+                                onClick={() => setRunTarget(s)}
+                              >
+                                <Play className="h-3.5 w-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{t("snippet.actions.run")}</TooltipContent>
+                          </Tooltip>
+                        )}
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button
                               variant="ghost"
                               size="icon"
                               className="h-7 w-7"
-                              aria-label={t("snippet.actions.run")}
-                              onClick={() => setRunTarget(s)}
+                              disabled={readOnly}
+                              aria-label={t("snippet.actions.edit")}
+                              onClick={() => onClickEdit(s)}
                             >
-                              <Play className="h-3.5 w-3.5" />
+                              <Pencil className="h-3.5 w-3.5" />
                             </Button>
                           </TooltipTrigger>
-                          <TooltipContent>{t("snippet.actions.run")}</TooltipContent>
+                          <TooltipContent>
+                            {readOnly ? t("snippet.readOnlyTooltip") : t("snippet.actions.edit")}
+                          </TooltipContent>
                         </Tooltip>
-                      )}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            disabled={readOnly}
-                            aria-label={t("snippet.actions.edit")}
-                            onClick={() => onClickEdit(s)}
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {readOnly ? t("snippet.readOnlyTooltip") : t("snippet.actions.edit")}
-                        </TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            aria-label={t("snippet.actions.duplicate")}
-                            onClick={() => onClickDuplicate(s)}
-                          >
-                            <Copy className="h-3.5 w-3.5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>{t("snippet.actions.duplicate")}</TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-destructive hover:text-destructive"
-                            disabled={readOnly}
-                            aria-label={t("snippet.actions.delete")}
-                            onClick={() => setConfirmTarget(s)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {readOnly ? t("snippet.readOnlyTooltip") : t("snippet.actions.delete")}
-                        </TooltipContent>
-                      </Tooltip>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              aria-label={t("snippet.actions.duplicate")}
+                              onClick={() => onClickDuplicate(s)}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{t("snippet.actions.duplicate")}</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-destructive hover:text-destructive"
+                              disabled={readOnly}
+                              aria-label={t("snippet.actions.delete")}
+                              onClick={() => setConfirmTarget(s)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            {readOnly ? t("snippet.readOnlyTooltip") : t("snippet.actions.delete")}
+                          </TooltipContent>
+                        </Tooltip>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
           </tbody>
         </table>
       </div>

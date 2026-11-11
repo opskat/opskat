@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import { renderForSave } from "./rejectedSave";
 import { createRef } from "react";
 import { KafkaConfigSection } from "@/components/asset/KafkaConfigSection";
 import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
@@ -313,5 +314,49 @@ describe("KafkaConfigSection ref 契约", () => {
     const ref = createRef<AssetFormHandle>();
     render(<KafkaConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={() => {}} />);
     await expect(ref.current!.buildConfig(ctx)).rejects.toThrow("asset.kafkaConnectClusterInvalid");
+  });
+});
+
+describe("KafkaConfigSection on a rejected save", () => {
+  it("switches to Schema Registry and shows its missing URL under the field", () => {
+    const editAsset = new asset_entity.Asset({
+      ID: 3,
+      Type: "kafka",
+      Config: JSON.stringify({ brokers: ["b:9092"], schema_registry: { enabled: true, url: "" } }),
+    });
+    const { rejectSave, reportShown } = renderForSave(
+      <KafkaConfigSection editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />
+    );
+    rejectSave();
+    expect(screen.getByTestId("config-tab-schema_registry")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("config-tab-error-schema_registry")).toBeInTheDocument();
+    expect(screen.getByText("asset.kafkaSchemaRegistryURLRequired")).toBeInTheDocument();
+    expect(screen.getByTestId("kafka-sr-url-input")).toHaveAttribute("aria-invalid", "true");
+    expect(reportShown).toHaveBeenCalled();
+  });
+
+  it("shows a Connect cluster's missing URL under that cluster's URL field", () => {
+    const editAsset = new asset_entity.Asset({
+      ID: 3,
+      Type: "kafka",
+      Config: JSON.stringify({
+        brokers: ["b:9092"],
+        connect: { enabled: true, clusters: [{ name: "main", url: "" }] },
+      }),
+    });
+    const { rejectSave } = renderForSave(
+      <KafkaConfigSection editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />
+    );
+    rejectSave();
+    expect(screen.getByTestId("config-tab-connect")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("config-tab-error-connect")).toBeInTheDocument();
+    expect(screen.getByTestId("kafka-connect-url-input-0")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByTestId("kafka-connect-name-input-0")).not.toHaveAttribute("aria-invalid");
+  });
+
+  it("shows brokers that parse to nothing under the brokers field", () => {
+    const { rejectSave } = renderForSave(<KafkaConfigSection ctx={ctx} onValidityChange={vi.fn()} />);
+    rejectSave();
+    expect(screen.getByText("asset.formMissingKafkaBrokers")).toBeInTheDocument();
   });
 });

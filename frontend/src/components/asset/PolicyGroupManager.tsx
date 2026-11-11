@@ -14,6 +14,7 @@ import {
 } from "../../../wailsjs/go/system/System";
 import { loadExtensionLocales } from "@/extension/i18n";
 import { policy_group_entity } from "../../../wailsjs/go/models";
+import { AsyncState, type AsyncStatus } from "@/components/common/AsyncState";
 import { errorMessage } from "@/lib/errorMessage";
 
 interface PolicyGroupManagerProps {
@@ -117,6 +118,10 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
   const activeTab =
     open && activeTabState.initialTab === initialActiveTab ? activeTabState.activeTab : initialActiveTab;
   const [groups, setGroups] = useState<policy_group_entity.PolicyGroupItem[]>([]);
+  // Result of the latest list request, keyed by tab: a tab without a result yet is loading.
+  const [groupsResult, setGroupsResult] = useState<{ tab: string; error: string | null } | null>(null);
+  const groupsStatus: AsyncStatus =
+    groupsResult?.tab !== activeTab ? "loading" : groupsResult.error ? "error" : "ready";
   const [tabs, setTabs] = useState(builtinTabs);
   const [editState, setEditState] = useState<EditState | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
@@ -168,7 +173,10 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
     };
   }, [open, discoverTabs]);
 
+  // 只采用最新一次请求的结果：切页签后上一个页签的回包晚到时丢弃，不盖掉当前页签的列表。
+  const latestFetchRef = useRef(0);
   const fetchGroups = useCallback(async () => {
+    const request = ++latestFetchRef.current;
     try {
       const items = await ListPolicyGroups(activeTab);
       // 先加载扩展 i18n，再 setGroups 触发渲染
@@ -176,9 +184,13 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
       for (const name of extNames) {
         await loadExtensionLocales(name);
       }
+      if (request !== latestFetchRef.current) return;
       setGroups(items || []);
-    } catch {
+      setGroupsResult({ tab: activeTab, error: null });
+    } catch (e) {
+      if (request !== latestFetchRef.current) return;
       setGroups([]);
+      setGroupsResult({ tab: activeTab, error: errorMessage(e) });
     }
   }, [activeTab]);
 
@@ -342,10 +354,21 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
         </div>
 
         <div className="flex-1 overflow-y-auto space-y-4 py-2">
+          {groupsStatus !== "ready" && (
+            <AsyncState
+              status={groupsStatus}
+              error={groupsResult?.error}
+              onRetry={() => {
+                setGroupsResult(null);
+                void fetchGroups();
+              }}
+            />
+          )}
+
           {/* Built-in groups */}
           {builtinGroups.length > 0 && (
             <div>
-              <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
+              <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
                 {t("asset.policyGroup.builtinSection")}
               </div>
               <div className="space-y-1">
@@ -366,13 +389,13 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
                     <div className="flex-1 min-w-0">
                       <div className="text-xs font-medium truncate">{displayName(g)}</div>
                       {displayDesc(g) && (
-                        <div className="text-[10px] text-muted-foreground truncate">{displayDesc(g)}</div>
+                        <div className="text-[11px] text-muted-foreground truncate">{displayDesc(g)}</div>
                       )}
                     </div>
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-6 px-2 text-[10px] gap-1"
+                      className="h-6 px-2 text-[11px] gap-1"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleCopy(g.id);
@@ -390,7 +413,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
           {/* Extension groups */}
           {extensionGroups.length > 0 && (
             <div>
-              <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
+              <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider mb-2">
                 {t("asset.policyGroup.extensionSection")}
               </div>
               <div className="space-y-1">
@@ -411,13 +434,13 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
                     <div className="flex-1 min-w-0">
                       <div className="text-xs font-medium truncate">{displayName(g)}</div>
                       {displayDesc(g) && (
-                        <div className="text-[10px] text-muted-foreground truncate">{displayDesc(g)}</div>
+                        <div className="text-[11px] text-muted-foreground truncate">{displayDesc(g)}</div>
                       )}
                     </div>
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-6 px-2 text-[10px] gap-1"
+                      className="h-6 px-2 text-[11px] gap-1"
                       onClick={(e) => {
                         e.stopPropagation();
                         handleCopy(g.id);
@@ -435,15 +458,15 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
           {/* Custom groups */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+              <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
                 {t("asset.policyGroup.customSection")}
               </div>
-              <Button variant="outline" size="sm" className="h-6 px-2 text-[10px] gap-1" onClick={handleCreate}>
+              <Button variant="outline" size="sm" className="h-6 px-2 text-[11px] gap-1" onClick={handleCreate}>
                 <Plus className="h-3 w-3" />
                 {t("asset.policyGroup.create")}
               </Button>
             </div>
-            {customGroups.length === 0 && !editState && (
+            {groupsStatus === "ready" && customGroups.length === 0 && !editState && (
               <div className="text-center text-xs text-muted-foreground py-4">{t("asset.policyGroup.empty")}</div>
             )}
             <div className="space-y-1">
@@ -457,7 +480,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
                 >
                   <div className="flex-1 min-w-0">
                     <div className="text-xs font-medium truncate">{g.name}</div>
-                    {g.description && <div className="text-[10px] text-muted-foreground truncate">{g.description}</div>}
+                    {g.description && <div className="text-[11px] text-muted-foreground truncate">{g.description}</div>}
                   </div>
                   <Button
                     variant="ghost"
@@ -632,7 +655,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
           title={t("asset.policyGroup.deleteConfirmTitle")}
           description={t("asset.policyGroup.deleteConfirm", { name: deleteConfirm?.name })}
           cancelText={t("action.cancel")}
-          confirmText={t("action.confirm")}
+          confirmText={t("action.delete")}
           onConfirm={() => {
             if (deleteConfirm) {
               handleDelete(deleteConfirm.id);

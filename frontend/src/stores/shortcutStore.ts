@@ -32,6 +32,7 @@ export type ShortcutAction =
   | "panel.sidebar"
   | "panel.switch"
   | "panel.filter"
+  | "panel.toolbar"
   | "terminal.copy"
   | "terminal.paste"
   | "terminal.selectAll"
@@ -62,6 +63,7 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   "panel.sidebar",
   "panel.switch",
   "panel.filter",
+  "panel.toolbar",
   "terminal.copy",
   "terminal.paste",
   "terminal.selectAll",
@@ -93,6 +95,7 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutAction, ShortcutBinding> = {
   "panel.sidebar": { code: "KeyE", mod: true, ctrl: false, shift: false, alt: false },
   "panel.switch": { code: "KeyE", mod: true, ctrl: false, shift: true, alt: false },
   "panel.filter": { code: "KeyF", mod: true, ctrl: false, shift: false, alt: false },
+  "panel.toolbar": { code: "KeyB", mod: true, ctrl: false, shift: true, alt: false },
   "terminal.copy": { code: "KeyC", mod: true, ctrl: false, shift: !isMac, alt: false },
   "terminal.paste": { code: "KeyV", mod: true, ctrl: false, shift: !isMac, alt: false },
   "terminal.selectAll": { code: "KeyA", mod: true, ctrl: false, shift: false, alt: false },

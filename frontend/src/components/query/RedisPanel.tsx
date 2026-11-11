@@ -1,7 +1,6 @@
 import { useRef, type WheelEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Activity, Key, X } from "lucide-react";
-import { useResizeHandle } from "@opskat/ui";
 import { RedisKeyBrowser } from "./RedisKeyBrowser";
 import { RedisKeyDetail } from "./RedisKeyDetail";
 import { RedisOpsPanel } from "./RedisOpsPanel";
@@ -27,14 +26,7 @@ export function RedisPanel({ tabId }: RedisPanelProps) {
   const activateRedisOverview = useQueryStore((s) => s.activateRedisOverview);
   const activateRedisKeyTab = useQueryStore((s) => s.activateRedisKeyTab);
   const closeRedisKeyTab = useQueryStore((s) => s.closeRedisKeyTab);
-  const sidebarRef = useRef<HTMLDivElement>(null);
   const tabStripRef = useRef<HTMLDivElement>(null);
-  const { size: sidebarWidth, handleMouseDown } = useResizeHandle({
-    defaultSize: 220,
-    minSize: 160,
-    maxSize: 400,
-    targetRef: sidebarRef,
-  });
 
   const activateKeyTab = (key: string) => {
     activateRedisKeyTab(tabId, key);
@@ -57,13 +49,8 @@ export function RedisPanel({ tabId }: RedisPanelProps) {
 
   return (
     <div className="flex h-full w-full">
-      {/* Left: Key browser */}
-      <div ref={sidebarRef} className="shrink-0 border-r" style={{ width: sidebarWidth }}>
-        <RedisKeyBrowser tabId={tabId} />
-      </div>
-
-      {/* Resize handle */}
-      <div className="w-1 shrink-0 cursor-col-resize hover:bg-accent active:bg-accent" onMouseDown={handleMouseDown} />
+      {/* Left: Key browser (shell + drag handle) */}
+      <RedisKeyBrowser tabId={tabId} />
 
       {/* Right: Redis pages */}
       <div className="flex min-w-0 flex-1 flex-col">

@@ -26,14 +26,7 @@ import {
   GetK8sNamespaceSecrets,
   GetK8sPodDetail,
 } from "../../../wailsjs/go/k8s/K8s";
-import {
-  useResizeHandle,
-  ContextMenu,
-  ContextMenuTrigger,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-} from "@opskat/ui";
+import { ContextMenu, ContextMenuTrigger, ContextMenuContent, ContextMenuItem, ContextMenuSeparator } from "@opskat/ui";
 import { InfoItem } from "@/components/asset/detail/InfoItem";
 import { K8sSectionCard } from "./K8sSectionCard";
 import { K8sResourceHeader } from "./K8sResourceHeader";
@@ -61,6 +54,8 @@ import type {
 } from "./cluster/types";
 import { ConfigMapDetailView, SecretDetailView, ServiceDetailView } from "./cluster/ResourceDetailViews";
 import { errorMessage } from "@/lib/errorMessage";
+import { AsyncState } from "@/components/common/AsyncState";
+import { PanelSidebar, SidebarRefreshButton } from "@/components/common/PanelSidebar";
 
 interface Props {
   asset: asset_entity.Asset;
@@ -168,19 +163,6 @@ export function K8sClusterPage({ asset }: Props) {
   const [autoRefreshingItems, setAutoRefreshingItems] = useState<Set<string>>(
     new Set(initialSnapshot?.autoRefreshingItems || [])
   );
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  const {
-    size: sidebarWidth,
-    isResizing: sidebarResizing,
-    handleMouseDown: handleSidebarResize,
-  } = useResizeHandle({
-    defaultSize: 208,
-    minSize: 160,
-    maxSize: 420,
-    storageKey: "k8s_sidebar_width",
-    targetRef: sidebarRef,
-  });
-
   // 仅 IO:拉取集群信息,所有 setState 在 promise 链里(可安全从 effect 调)。
   const fetchInfo = (resetState: boolean) => {
     GetK8sClusterInfo(asset.ID)
@@ -467,6 +449,16 @@ export function K8sClusterPage({ asset }: Props) {
     },
     [namespaceResources, loadingNamespaces, fetchNamespaceResources, setLoadingNamespaces]
   );
+
+  // 失败后的重试:清掉该命名空间的错误再拉取。
+  const retryNamespace = (ns: string) => {
+    setNamespaceErrors((prev) => {
+      const next = { ...prev };
+      delete next[ns];
+      return next;
+    });
+    loadNamespaceResources(ns);
+  };
 
   const toggleNamespace = (ns: string) => {
     setExpandedNamespaces((prev) => {
@@ -1234,28 +1226,9 @@ export function K8sClusterPage({ asset }: Props) {
     }
   };
 
-  if (loading) {
+  if (loading || error) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full gap-4 p-8">
-        <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive max-w-md text-center">
-          {error}
-        </div>
-        <button
-          onClick={() => loadInfo()}
-          className="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm hover:bg-muted"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          {t("action.retry")}
-        </button>
-      </div>
+      <AsyncState status={loading ? "loading" : "error"} error={error} onRetry={() => loadInfo()} className="h-full" />
     );
   }
 
@@ -1291,26 +1264,13 @@ export function K8sClusterPage({ asset }: Props) {
 
   return (
     <div className="flex h-full w-full">
-      <div
-        ref={sidebarRef}
-        className="shrink-0 border-r border-border bg-sidebar h-full overflow-y-auto"
-        style={{ width: sidebarWidth }}
+      <PanelSidebar
+        panelType="k8s"
+        title={<span className="normal-case">{asset.Name}</span>}
+        actions={<SidebarRefreshButton onClick={refreshInfo} loading={refreshing} />}
       >
-        <div className="p-3 border-b border-border">
-          <h2 className="text-sm font-semibold truncate">{asset.Name}</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">v{info.version}</p>
-        </div>
-
-        <div className="p-2">
-          <button
-            onClick={refreshInfo}
-            disabled={refreshing}
-            className="flex items-center gap-1.5 w-full rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted/50 mb-1 disabled:opacity-50"
-          >
-            <RefreshCw className={`h-3 w-3 ${refreshing ? "animate-spin" : ""}`} />
-            {t("action.refresh")}
-          </button>
-
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          <p className="px-2 pb-1 text-xs text-muted-foreground">v{info.version}</p>
           <div
             className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs cursor-pointer mb-0.5 ${
               activeTabId === "overview" ? "bg-muted font-medium" : "hover:bg-muted/50"
@@ -1325,10 +1285,10 @@ export function K8sClusterPage({ asset }: Props) {
             className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs cursor-pointer hover:bg-muted/50"
             onClick={() => setExpandedNodes(!expandedNodes)}
           >
-            <span className="text-[10px] w-3">{expandedNodes ? "\u25BC" : "\u25B6"}</span>
+            <span className="text-[11px] w-3">{expandedNodes ? "\u25BC" : "\u25B6"}</span>
             <Box className="h-3.5 w-3.5" />
             {t("asset.k8sNodes")}
-            <span className="ml-auto text-[10px] text-muted-foreground">{info.nodes.length}</span>
+            <span className="ml-auto text-[11px] text-muted-foreground">{info.nodes.length}</span>
           </div>
           {expandedNodes &&
             info.nodes.map((node) => (
@@ -1351,7 +1311,7 @@ export function K8sClusterPage({ asset }: Props) {
           <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs text-muted-foreground/70 mt-1">
             <Layers className="h-3.5 w-3.5" />
             {t("asset.k8sNamespaces")}
-            <span className="ml-auto text-[10px]">{info.namespaces.length}</span>
+            <span className="ml-auto text-[11px]">{info.namespaces.length}</span>
           </div>
           {info.namespaces.map((ns) => (
             <div key={ns.name}>
@@ -1359,33 +1319,20 @@ export function K8sClusterPage({ asset }: Props) {
                 className="flex items-center gap-1.5 pl-6 pr-2 py-1.5 rounded-md text-xs cursor-pointer hover:bg-muted/50"
                 onClick={() => toggleNamespace(ns.name)}
               >
-                <span className="text-[10px] w-3 translate-x-[-2px]">
+                <span className="text-[11px] w-3 translate-x-[-2px]">
                   {expandedNamespaces.has(ns.name) ? "\u25BC" : "\u25B6"}
                 </span>
                 <span className="truncate">{ns.name}</span>
               </div>
               {expandedNamespaces.has(ns.name) && (
                 <div className="ml-3">
-                  {loadingNamespaces.has(ns.name) && (
-                    <div className="flex items-center gap-1.5 pl-8 pr-2 py-1 text-xs text-muted-foreground">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      {t("asset.k8sLoadingNamespace")}
-                    </div>
-                  )}
-                  {namespaceErrors[ns.name] && (
-                    <div
-                      className="flex items-start gap-1 pl-8 pr-2 py-1 text-xs text-destructive cursor-pointer"
-                      title={namespaceErrors[ns.name]}
-                      onClick={() => {
-                        const next = { ...namespaceErrors };
-                        delete next[ns.name];
-                        setNamespaceErrors(next);
-                        loadNamespaceResources(ns.name);
-                      }}
-                    >
-                      <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                      <span>{t("asset.k8sNamespaceResourceError")}</span>
-                    </div>
+                  {(loadingNamespaces.has(ns.name) || namespaceErrors[ns.name]) && (
+                    <AsyncState
+                      status={loadingNamespaces.has(ns.name) ? "loading" : "error"}
+                      error={namespaceErrors[ns.name]}
+                      onRetry={() => retryNamespace(ns.name)}
+                      className="items-start py-1 pl-8 pr-2 text-left"
+                    />
                   )}
                   {namespaceResources[ns.name] &&
                     (() => {
@@ -1429,7 +1376,7 @@ export function K8sClusterPage({ asset }: Props) {
                                       )}
                                       <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
                                       <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                      <span className="ml-auto text-[11px] text-muted-foreground">{displayCount}</span>
                                     </div>
                                     {deploymentsExpanded && (
                                       <div className="ml-3">
@@ -1488,7 +1435,7 @@ export function K8sClusterPage({ asset }: Props) {
                                                 )}
                                                 <span className="w-1.5 h-1.5 rounded-full bg-info shrink-0" />
                                                 <span className="truncate">{deployment.name}</span>
-                                                <span className="ml-auto text-[10px] text-muted-foreground">
+                                                <span className="ml-auto text-[11px] text-muted-foreground">
                                                   {deployment.ready}
                                                 </span>
                                                 <button
@@ -1613,7 +1560,7 @@ export function K8sClusterPage({ asset }: Props) {
                                       )}
                                       <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
                                       <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                      <span className="ml-auto text-[11px] text-muted-foreground">{displayCount}</span>
                                     </div>
                                     {podsExpanded && (
                                       <div className="ml-3">
@@ -1712,7 +1659,7 @@ export function K8sClusterPage({ asset }: Props) {
                                       )}
                                       <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
                                       <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                      <span className="ml-auto text-[11px] text-muted-foreground">{displayCount}</span>
                                     </div>
                                     {servicesExpanded && (
                                       <div className="ml-3">
@@ -1764,7 +1711,7 @@ export function K8sClusterPage({ asset }: Props) {
                                           >
                                             <Container className="h-3 w-3 shrink-0 text-muted-foreground" />
                                             <span className="truncate">{svc.name}</span>
-                                            <span className="ml-auto text-[10px] text-muted-foreground">
+                                            <span className="ml-auto text-[11px] text-muted-foreground">
                                               {svc.type}
                                             </span>
                                             <button
@@ -1806,7 +1753,7 @@ export function K8sClusterPage({ asset }: Props) {
                                       )}
                                       <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
                                       <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                      <span className="ml-auto text-[11px] text-muted-foreground">{displayCount}</span>
                                     </div>
                                     {configMapsExpanded && (
                                       <div className="ml-3">
@@ -1897,7 +1844,7 @@ export function K8sClusterPage({ asset }: Props) {
                                       )}
                                       <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
                                       <span className="truncate">{t(rt.labelKey)}</span>
-                                      <span className="ml-auto text-[10px] text-muted-foreground">{displayCount}</span>
+                                      <span className="ml-auto text-[11px] text-muted-foreground">{displayCount}</span>
                                     </div>
                                     {secretsExpanded && (
                                       <div className="ml-3">
@@ -1949,7 +1896,7 @@ export function K8sClusterPage({ asset }: Props) {
                                           >
                                             <Key className="h-3 w-3 shrink-0 text-muted-foreground" />
                                             <span className="truncate">{s.name}</span>
-                                            <span className="ml-auto text-[10px] text-muted-foreground">{s.type}</span>
+                                            <span className="ml-auto text-[11px] text-muted-foreground">{s.type}</span>
                                             <button
                                               className="ml-0.5 inline-flex items-center gap-1 rounded-sm hover:bg-muted-foreground/20 px-1 py-0.5 text-muted-foreground"
                                               onClick={(e) => {
@@ -1977,7 +1924,7 @@ export function K8sClusterPage({ asset }: Props) {
                                 >
                                   <rt.icon className="h-3 w-3 shrink-0 text-muted-foreground" style={{}} />
                                   <span className="truncate">{t(rt.labelKey)}</span>
-                                  <span className="ml-auto text-[10px] text-muted-foreground">{count}</span>
+                                  <span className="ml-auto text-[11px] text-muted-foreground">{count}</span>
                                 </div>
                               );
                             }
@@ -1990,13 +1937,7 @@ export function K8sClusterPage({ asset }: Props) {
             </div>
           ))}
         </div>
-      </div>
-
-      <div
-        className="w-[3px] shrink-0 cursor-col-resize hover:bg-ring/40 active:bg-ring/60 transition-colors"
-        onMouseDown={handleSidebarResize}
-      />
-      {sidebarResizing && <div className="fixed inset-0 z-50 cursor-col-resize" />}
+      </PanelSidebar>
 
       <div className="flex-1 min-w-0 flex flex-col h-full">
         {innerTabs.length > 0 && (
@@ -2206,12 +2147,7 @@ export function K8sClusterPage({ asset }: Props) {
                 ) : namespaceErrors[activeNs.name] ? (
                   <div
                     className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive cursor-pointer"
-                    onClick={() => {
-                      const next = { ...namespaceErrors };
-                      delete next[activeNs.name];
-                      setNamespaceErrors(next);
-                      loadNamespaceResources(activeNs.name);
-                    }}
+                    onClick={() => retryNamespace(activeNs.name)}
                   >
                     <div className="flex items-center gap-2">
                       <AlertCircle className="h-4 w-4" />

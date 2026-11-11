@@ -60,7 +60,7 @@ export const RetryBanner = memo(function RetryBanner({ status }: { status: ChatM
         {classified && <span className="font-medium">{classified.message}</span>}
       </div>
       {status.cause && (
-        <pre className="select-text whitespace-pre-wrap break-words text-[11px] font-mono leading-relaxed m-0 opacity-80">
+        <pre className="select-text whitespace-pre-wrap break-words text-xs font-mono leading-relaxed m-0 opacity-80">
           {status.cause}
         </pre>
       )}

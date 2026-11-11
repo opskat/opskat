@@ -136,7 +136,6 @@ describe("TableDataTab loading cancellation", () => {
       expect(vi.mocked(OpenTable).mock.calls.some(([, , , size]) => Number(size) === 1000)).toBe(true)
     );
 
-    await user.click(screen.getByTitle("query.tableFooterSettings"));
     const limitInput = screen.getByLabelText("query.pageSize");
     await user.clear(limitInput);
     await user.type(limitInput, "250{Enter}");

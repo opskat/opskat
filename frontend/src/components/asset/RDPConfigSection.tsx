@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { useConfigSection } from "@/components/asset/useConfigSection";
-import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
+import { buildConfigGroups, portRangeError, type ConfigGroupSchema } from "@/components/asset/configFields";
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
@@ -27,10 +27,12 @@ export function RDPConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
     onValidityChange,
     init: (a) => (a ? parseRDPConfig(a.Config, a.sshTunnelId || 0) : { ...RDP_DEFAULTS }),
     validate: (s) => {
-      const ok = !!s.host.trim() && !!s.username.trim() && s.port > 0;
-      const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
-      const canUse = ok && !proxyChainError;
-      return { canTest: canUse, canSave: canUse, saveDisabledReason: ok ? proxyChainError : "asset.formMissingHost" };
+      const reason =
+        (!s.host.trim() && "asset.formMissingHost") ||
+        (!s.username.trim() && "asset.formMissingUsername") ||
+        portRangeError(s.port) ||
+        proxyChainValidationKey(s.proxyChainLayers);
+      return { canTest: !reason, canSave: !reason, saveDisabledReason: reason };
     },
     build: async (s, ctx) => ({
       configJSON: buildRDPConfig(
@@ -56,6 +58,7 @@ export function RDPConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
       password: cred.value.password,
     }),
     deps: [cred.value],
+    dirtyExtra: [cred.value],
   });
 
   const groups: ConfigGroupSchema<RDPFormState>[] = [
@@ -83,6 +86,7 @@ export function RDPConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
               blankWhenZero: true,
               placeholder: "3389",
               testid: "rdp-port-input",
+              error: (s) => portRangeError(s.port),
             },
           ],
         },

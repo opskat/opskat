@@ -9,6 +9,8 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 )
 
+// An invalid answer fails closed at the IPC boundary: it is refused with an error and
+// never reaches the waiting request, so nothing is approved by a malformed payload.
 func TestRespondOpsctlApprovalInvalidResponseFailsClosedAtBoundary(t *testing.T) {
 	tests := []struct {
 		name string
@@ -33,11 +35,9 @@ func TestRespondOpsctlApprovalInvalidResponseFailsClosedAtBoundary(t *testing.T)
 			expected := []permission.ApprovalItem{{Type: "exec", Command: "review"}}
 			o.pendingOpsctlApprovals.Store("confirm-1", pendingOpsctlApproval{kind: permission.ApprovalKindSingle, items: expected, ch: ch})
 
-			o.RespondOpsctlApproval("confirm-1", tc.resp)
+			require.Error(t, o.RespondOpsctlApproval("confirm-1", tc.resp))
 
-			got := <-ch
-			require.Equal(t, "deny", got.Decision)
-			require.Empty(t, got.EditedItems)
+			require.Empty(t, ch)
 		})
 	}
 }

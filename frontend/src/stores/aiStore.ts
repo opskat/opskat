@@ -952,6 +952,22 @@ function visitBlockStatuses(blocks: ContentBlock[] | undefined, visitor: (status
   return false;
 }
 
+/** 所有处于等待审批状态的会话 id（含未在侧栏打开的会话）。返回基本类型数组，可配合 useShallow 订阅。 */
+export function selectWaitingApprovalConversationIds(state: {
+  conversationMessages: Record<number, unknown>;
+}): number[] {
+  return Object.keys(state.conversationMessages)
+    .map(Number)
+    .filter((id) => getConversationStatus(id) === "waiting_approval");
+}
+
+/** 会话标题：会话列表优先，其次侧栏/标签页标题。 */
+export function getConversationDisplayTitle(convId: number): string {
+  return (
+    useAIStore.getState().conversations.find((c) => c.ID === convId)?.Title || getConversationTitleFallback(convId)
+  );
+}
+
 function getConversationStatus(convId: number | null): SidebarTabStatus {
   if (convId == null) return null;
   const state = useAIStore.getState();

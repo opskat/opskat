@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { AsyncState } from "@/components/common/AsyncState";
+import { useAsyncList } from "@/hooks/useAsyncList";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
@@ -99,34 +101,24 @@ type ExtensionView = "installed" | "store";
 export function ExtensionSection() {
   const { t } = useTranslation();
   const [view, setView] = useState<ExtensionView>("installed");
-  const [extensions, setExtensions] = useState<ExtInfo[]>([]);
   const [reloading, setReloading] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [uninstallTarget, setUninstallTarget] = useState<ExtInfo | null>(null);
   const [cleanData, setCleanData] = useState(false);
   const [detailTarget, setDetailTarget] = useState<ExtInfo | null>(null);
 
-  const loadExtensions = async () => {
-    try {
-      const exts = await ListInstalledExtensions(i18n.language);
-      setExtensions(exts || []);
-    } catch {
-      setExtensions([]);
-    }
-  };
-
-  useEffect(() => {
-    // 挂载时拉取:加载体的 setState 均在 await 之后,经 async 边界调用避免 effect 内同步 setState
-    void (async () => {
-      await loadExtensions();
-    })();
-  }, []);
+  // 操作之后在后台重新拉取（列表留在原处）：失败时落到可重试的错误块，不会冒充空列表。
+  const {
+    items: extensions,
+    load,
+    refresh: loadExtensions,
+  } = useAsyncList<ExtInfo>(() => ListInstalledExtensions(i18n.language));
 
   const handleReload = async () => {
     setReloading(true);
     try {
       await ReloadExtensions();
-      await loadExtensions();
+      loadExtensions();
       notifySuccess(t("extension.reloadSuccess"));
     } catch (e) {
       toast.error(`${t("extension.reloadError")}: ${errorMessage(e)}`);
@@ -140,7 +132,7 @@ export function ExtensionSection() {
     try {
       const result = fromDir ? await InstallExtensionFromDirectory() : await InstallExtension();
       if (result) {
-        await loadExtensions();
+        loadExtensions();
         notifySuccess(t("extension.installSuccess"));
       }
     } catch (e) {
@@ -154,7 +146,7 @@ export function ExtensionSection() {
     if (!uninstallTarget) return;
     try {
       await UninstallExtension(uninstallTarget.name, cleanData);
-      await loadExtensions();
+      loadExtensions();
       notifySuccess(t("extension.uninstallSuccess"));
     } catch (e) {
       toast.error(errorMessage(e));
@@ -173,7 +165,7 @@ export function ExtensionSection() {
         await EnableExtension(ext.name);
         notifySuccess(t("extension.enableSuccess"));
       }
-      await loadExtensions();
+      loadExtensions();
     } catch (e) {
       toast.error(errorMessage(e));
     }
@@ -184,7 +176,7 @@ export function ExtensionSection() {
   const installFromStore = async (card: StoreCard): Promise<extstore_svc.InstallResult> => {
     const result = await InstallStoreExtension(card.name);
     if (!result.canceled && !result.error) {
-      await loadExtensions();
+      loadExtensions();
       notifySuccess(t("extension.installSuccess"));
     }
     return result;
@@ -278,12 +270,19 @@ export function ExtensionSection() {
               </div>
             </CardHeader>
             <CardContent>
-              {extensions.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Puzzle className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">{t("extension.noExtensions")}</p>
-                </div>
-              ) : (
+              <AsyncState
+                status={load.status}
+                error={load.error}
+                onRetry={load.reload}
+                empty={
+                  extensions.length === 0 ? (
+                    <>
+                      <Puzzle className="h-8 w-8 opacity-50" />
+                      <p className="text-sm">{t("extension.noExtensions")}</p>
+                    </>
+                  ) : undefined
+                }
+              >
                 <div className="space-y-3">
                   {extensions.map((ext) => {
                     const update = availableUpdates[ext.name];
@@ -370,7 +369,7 @@ export function ExtensionSection() {
                     );
                   })}
                 </div>
-              )}
+              </AsyncState>
             </CardContent>
           </Card>
 

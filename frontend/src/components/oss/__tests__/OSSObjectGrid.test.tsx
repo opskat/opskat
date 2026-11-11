@@ -33,6 +33,8 @@ function obj(key: string, over: Partial<oss_svc.ObjectItem> = {}): oss_svc.Objec
 }
 const base = {
   loading: false,
+  error: null as string | null,
+  onRetry: vi.fn(),
   loadingPage: false,
   truncated: false,
   focusedKey: null as string | null,
@@ -84,9 +86,10 @@ describe("OSSObjectGrid", () => {
 
   it("shows loading and empty states", () => {
     const { rerender } = render(<OSSObjectGrid {...base} prefixes={[]} objects={[]} loading />);
-    expect(screen.getByTestId("oss-grid-loading")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(screen.queryByText("oss.browser.emptyDir")).not.toBeInTheDocument();
     rerender(<OSSObjectGrid {...base} prefixes={[]} objects={[]} />);
-    expect(screen.getByTestId("oss-grid-empty")).toBeInTheDocument();
+    expect(screen.getByText("oss.browser.emptyDir")).toBeInTheDocument();
   });
 
   it("uses keyboard-operable tiles with visible focus feedback", () => {
@@ -114,7 +117,7 @@ describe("OSSObjectGrid", () => {
 
   it("shows a visible spinner while the initial grid or next page is loading", () => {
     const { rerender } = render(<OSSObjectGrid {...base} prefixes={[]} objects={[]} loading />);
-    expect(screen.getByTestId("oss-grid-loading-spinner")).toHaveClass("animate-spin");
+    expect(screen.getByRole("status").querySelector(".animate-spin")).not.toBeNull();
     rerender(<OSSObjectGrid {...base} prefixes={[]} objects={[obj("docs/a.txt")]} loadingPage />);
     expect(screen.getByTestId("oss-grid-page-spinner-icon")).toHaveClass("animate-spin");
   });

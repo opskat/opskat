@@ -1,5 +1,4 @@
 import {
-  Check,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
@@ -14,9 +13,7 @@ import {
   Save,
   Settings2,
   Square,
-  Undo2,
   Upload,
-  X,
 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -42,6 +39,60 @@ import type { TableExportFormat } from "@/lib/tableExport";
 
 export type { TableExportFormat };
 
+const DEFAULT_PAGE_SIZE_RANGE = { min: 1, max: 100000 };
+
+/** 页大小输入框:草稿在失焦 / 回车时才提交,超出范围夹到边界,被拦截时回退到实际页大小。 */
+export function PageSizeField({
+  pageSize,
+  range,
+  onChange,
+  className,
+  stopKeyPropagation = false,
+}: {
+  pageSize: number;
+  range: { min: number; max: number };
+  onChange: (value: number) => void;
+  className?: string;
+  stopKeyPropagation?: boolean;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState(String(pageSize));
+
+  // 外部改页大小时同步草稿输入框:渲染期对比上次值,替代 effect 里的同步 setState。
+  const [prevPageSize, setPrevPageSize] = useState(pageSize);
+  if (pageSize !== prevPageSize) {
+    setPrevPageSize(pageSize);
+    setDraft(String(pageSize));
+  }
+
+  const commit = () => {
+    const next = Math.max(range.min, Math.min(range.max, Math.floor(Number(draft))));
+    if (!Number.isFinite(next)) {
+      setDraft(String(pageSize));
+      return;
+    }
+    if (next !== pageSize) onChange(next);
+    // 草稿回到实际页大小:被拦截(留在本页)时不残留被拒绝的值;真正生效时由上面的同步接管新值。
+    setDraft(String(pageSize));
+  };
+
+  return (
+    <Input
+      aria-label={t("query.pageSize")}
+      title={t("query.pageSize")}
+      className={className}
+      inputMode="numeric"
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (stopKeyPropagation) event.stopPropagation();
+        if (event.key === "Enter") commit();
+      }}
+    />
+  );
+}
+
 interface TableEditorToolbarProps {
   hasEdits: boolean;
   submitting: boolean;
@@ -63,8 +114,11 @@ interface TableEditorToolbarProps {
   filterSortOpen: boolean;
   filterSortActive?: boolean;
   onToggleFilterSort: () => void;
+  pageSize: number;
+  /** 页大小可输入的范围,缺省 1–100000。 */
+  pageSizeRange?: { min: number; max: number };
+  onPageSizeChange: (value: number) => void;
   onSubmit: () => void;
-  onDiscard: () => void;
   onImport: () => void;
   onExport: () => void;
   onPreviewSql: () => void;
@@ -88,15 +142,16 @@ export function TableEditorToolbar({
   filterSortOpen,
   filterSortActive = false,
   onToggleFilterSort,
+  pageSize,
+  pageSizeRange = DEFAULT_PAGE_SIZE_RANGE,
+  onPageSizeChange,
   onSubmit,
-  onDiscard,
   onImport,
   onExport,
   onPreviewSql,
 }: TableEditorToolbarProps) {
   const { t } = useTranslation();
   const editActionDisabled = !hasEdits || submitting;
-
   return (
     <div className="flex items-center gap-1.5 shrink-0">
       <Button
@@ -124,15 +179,6 @@ export function TableEditorToolbar({
           <Button
             variant="ghost"
             size="icon-xs"
-            title={t("query.discardEdits")}
-            onClick={onDiscard}
-            disabled={editActionDisabled}
-          >
-            <Undo2 className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-xs"
             title={t("query.previewSql")}
             onClick={onPreviewSql}
             disabled={editActionDisabled}
@@ -147,6 +193,12 @@ export function TableEditorToolbar({
           <Upload className="h-3.5 w-3.5" />
         </Button>
       )}
+      <PageSizeField
+        pageSize={pageSize}
+        range={pageSizeRange}
+        onChange={onPageSizeChange}
+        className="h-6 w-[64px] px-1 text-center text-xs"
+      />
       <Select value={exportFormat} onValueChange={(value) => onExportFormatChange?.(value as TableExportFormat)}>
         <SelectTrigger size="sm" className="h-6 w-[74px] text-xs" title={t("query.exportFormat")} disabled={!canExport}>
           <SelectValue />
@@ -213,8 +265,6 @@ export function TableEditorToolbar({
   );
 }
 
-const DEFAULT_PAGE_SIZE_RANGE = { min: 1, max: 100000 };
-
 interface TableDataStatusBarProps {
   /** 驱动声明了表格编辑:新增 / 删除 / 应用 / 放弃修改才出现。 */
   gridEdit: boolean;
@@ -223,8 +273,11 @@ interface TableDataStatusBarProps {
   totalRows: number | null;
   page: number;
   totalPages: number | null;
-  pageSize: number;
   pageInput: string;
+  /** 仅 SQL 结果这类没有表格工具栏的视图传:有值时分页区末尾带一个页大小设置菜单。 */
+  pageSize?: number;
+  pageSizeRange?: { min: number; max: number };
+  onPageSizeChange?: (value: number) => void;
   hasPrev: boolean;
   hasNext: boolean;
   selectedRowCount: number;
@@ -238,14 +291,11 @@ interface TableDataStatusBarProps {
   elapsedMs?: number | null;
   /** 当前页行数:有值时中部显示「N 行」,取代页码 / 记录数文案(无总数的 SQL 结果用)。 */
   rowCount?: number | null;
-  /** 页大小可输入的范围,缺省 1–100000。 */
-  pageSizeRange?: { min: number; max: number };
   refreshTitle: string;
   onRefresh: () => void;
   onStopLoading: () => void;
   onPageInputChange: (value: string) => void;
   onPageInputConfirm: () => void;
-  onPageSizeChange: (value: number) => void;
   onFirstPage: () => void;
   onPreviousPage: () => void;
   onNextPage: () => void;
@@ -263,8 +313,10 @@ export function TableDataStatusBar({
   totalRows,
   page,
   totalPages,
-  pageSize,
   pageInput,
+  pageSize,
+  pageSizeRange = DEFAULT_PAGE_SIZE_RANGE,
+  onPageSizeChange,
   hasPrev,
   hasNext,
   selectedRowCount,
@@ -274,13 +326,11 @@ export function TableDataStatusBar({
   failed,
   elapsedMs,
   rowCount,
-  pageSizeRange = DEFAULT_PAGE_SIZE_RANGE,
   refreshTitle,
   onRefresh,
   onStopLoading,
   onPageInputChange,
   onPageInputConfirm,
-  onPageSizeChange,
   onFirstPage,
   onPreviousPage,
   onNextPage,
@@ -292,26 +342,6 @@ export function TableDataStatusBar({
 }: TableDataStatusBarProps) {
   const { t } = useTranslation();
   const hasPendingEdits = pendingEditCount > 0;
-  const [pageSizeDraft, setPageSizeDraft] = useState(String(pageSize));
-
-  // 外部改页大小时同步草稿输入框:渲染期对比上次值,替代 effect 里的同步 setState。
-  const [prevPageSize, setPrevPageSize] = useState(pageSize);
-  if (pageSize !== prevPageSize) {
-    setPrevPageSize(pageSize);
-    setPageSizeDraft(String(pageSize));
-  }
-
-  const commitPageSize = () => {
-    const next = Math.max(pageSizeRange.min, Math.min(pageSizeRange.max, Math.floor(Number(pageSizeDraft))));
-    if (!Number.isFinite(next)) {
-      setPageSizeDraft(String(pageSize));
-      return;
-    }
-    if (next !== pageSize) onPageSizeChange(next);
-    // 草稿回到实际页大小:被拦截(留在本页)时不残留被拒绝的值;真正生效时由上面的同步接管新值。
-    setPageSizeDraft(String(pageSize));
-  };
-
   const actionTone = "text-foreground disabled:text-muted-foreground disabled:opacity-35";
 
   return (
@@ -343,27 +373,6 @@ export function TableDataStatusBar({
             >
               <Minus className="h-3.5 w-3.5" />
             </Button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className={actionTone}
-              onClick={onApplyChanges}
-              disabled={!hasPendingEdits || loading || submitting}
-              title={t("query.applyChanges")}
-              data-testid="table-apply-changes"
-            >
-              <Check className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className={actionTone}
-              onClick={onDiscardChanges}
-              disabled={!hasPendingEdits || loading || submitting}
-              title={t("query.discardChanges")}
-            >
-              <X className="h-3.5 w-3.5" />
-            </Button>
           </>
         )}
         <Button
@@ -388,13 +397,33 @@ export function TableDataStatusBar({
         </Button>
       </div>
 
+      {gridEdit && hasPendingEdits && (
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className="text-xs font-medium text-foreground">
+            {t("query.pendingEditsCount", { count: pendingEditCount })}
+          </span>
+          <Button variant="ghost" size="xs" onClick={onDiscardChanges} disabled={loading || submitting}>
+            {t("query.discardAll")}
+          </Button>
+          <Button
+            variant="secondary"
+            size="xs"
+            onClick={onApplyChanges}
+            disabled={loading || submitting}
+            data-testid="table-apply-changes"
+          >
+            {t("query.previewAndCommit")}
+          </Button>
+        </div>
+      )}
+
       <div className="min-w-0 flex-1 text-center">
         {loadingPage != null ? (
           <span className="text-xs text-muted-foreground">{t("query.loadingPage", { page: loadingPage + 1 })}</span>
         ) : failed ? (
           <span className="text-xs text-destructive">{t("query.loadFailed")}</span>
         ) : sqlSummary ? (
-          <span className="block truncate font-mono text-[11px] text-foreground" title={sqlSummary}>
+          <span className="block truncate font-mono text-xs text-foreground" title={sqlSummary}>
             {sqlSummary}
           </span>
         ) : (
@@ -462,30 +491,27 @@ export function TableDataStatusBar({
             <ChevronsRight className="h-3.5 w-3.5" />
           </Button>
         )}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-xs" className={actionTone} title={t("query.tableFooterSettings")}>
-              <Settings2 className="h-3.5 w-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-52 p-3">
-            <label className="space-y-1.5">
-              <span className="text-xs font-medium text-muted-foreground">{t("query.pageSize")}</span>
-              <Input
-                aria-label={t("query.pageSize")}
-                className="h-7 text-xs"
-                inputMode="numeric"
-                value={pageSizeDraft}
-                onChange={(event) => setPageSizeDraft(event.target.value)}
-                onBlur={commitPageSize}
-                onKeyDown={(event) => {
-                  event.stopPropagation();
-                  if (event.key === "Enter") commitPageSize();
-                }}
-              />
-            </label>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {pageSize != null && onPageSizeChange && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon-xs" className={actionTone} title={t("query.tableFooterSettings")}>
+                <Settings2 className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52 p-3">
+              <label className="space-y-1.5">
+                <span className="text-xs font-medium text-muted-foreground">{t("query.pageSize")}</span>
+                <PageSizeField
+                  pageSize={pageSize}
+                  range={pageSizeRange}
+                  onChange={onPageSizeChange}
+                  className="h-7 text-xs"
+                  stopKeyPropagation
+                />
+              </label>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
     </div>
   );

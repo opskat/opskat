@@ -201,7 +201,7 @@ export function makeExtensionConfigSection(opts: Options) {
     // 保存校验（扩展的 validate_config）返回的逐字段错误，显示在对应字段下；用户改动该字段即清除。
     const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
     const [activeTab, setActiveTab] = useState(CONNECTION_TAB);
-    const { state, setState, patch } = useConfigSection<ExtensionFormState>({
+    const { state, patch, settle } = useConfigSection<ExtensionFormState>({
       ref,
       editAsset,
       onValidityChange,
@@ -370,19 +370,19 @@ export function makeExtensionConfigSection(opts: Options) {
             secrets.filter((f) => guestConfig[f] === undefined)
           );
           initialSecretsRef.current = Object.fromEntries(secrets.map((f) => [f, String(guestConfig[f] ?? "")]));
-          setState((s) => ({ ...s, config: guestConfig, status: "ready", proxyChain, tls, withheldSecrets }));
+          settle((s) => ({ ...s, config: guestConfig, status: "ready", proxyChain, tls, withheldSecrets }));
         })
         .catch((err) => {
           if (cancelled) return;
-          setState((s) => ({ ...s, status: "error" }));
+          settle((s) => ({ ...s, status: "error" }));
           toast.error(`${t("asset.extConfigDecryptFailed")}: ${errorMessage(err)}`);
         });
       return () => {
         cancelled = true;
       };
-    }, [editID, storedConfig, setState, t]);
+    }, [editID, storedConfig, settle, t]);
 
-    // 未就绪时不渲染表单：原因已经由壳在保存按钮旁显示（saveDisabledReason），失败另有 toast。
+    // 未就绪时不渲染表单：原因经 saveDisabledReason 交给壳，点保存被拒时由壳报出；失败另有 toast。
     if (!opts.schema?.properties || state.status !== "ready") return null;
     // 与内置类型同一套标签：只声明了 schema 字段的类型只有一组，ConfigTabs 退化成无标签面板。
     const groups: ConfigGroup[] = [

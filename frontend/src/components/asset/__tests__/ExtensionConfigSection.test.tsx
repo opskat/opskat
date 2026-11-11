@@ -83,6 +83,21 @@ describe("ExtensionConfigSection edit mode", () => {
     await expect(ref.current!.buildConfig(ctx)).rejects.toThrow();
   });
 
+  it("is not dirty once the decrypted config arrives unchanged", async () => {
+    vi.mocked(GetDecryptedExtensionConfig).mockResolvedValue(
+      JSON.stringify({ endpoint: "https://x", secret: "plain" })
+    );
+    const ref = createRef<AssetFormHandle>();
+    render(<Section ref={ref} editAsset={editAsset()} ctx={ctx} onValidityChange={() => {}} />);
+    await act(async () => {});
+
+    expect(screen.getByDisplayValue("plain")).toBeInTheDocument();
+    expect(ref.current!.isDirty!()).toBe(false);
+
+    fireEvent.change(screen.getByDisplayValue("https://x"), { target: { value: "https://y" } });
+    expect(ref.current!.isDirty!()).toBe(true);
+  });
+
   it("create mode is savable immediately without decrypting anything", () => {
     const onValidity = vi.fn();
     render(<Section ctx={{ ...ctx, isEdit: false }} onValidityChange={onValidity} />);

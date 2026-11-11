@@ -1,3 +1,5 @@
+import { errorMessage } from "@/lib/errorMessage";
+import { notifySuccess } from "@/lib/notify";
 import type { KafkaConnectorSummary, KafkaSchemaReference, KafkaTopicConfigMutation } from "@/stores/kafkaStore";
 
 export function parseSchemaReferences(value: string): KafkaSchemaReference[] | undefined {
@@ -84,4 +86,23 @@ export function parseRequiredNumber(value: string): number {
     throw new Error("value must be an integer");
   }
   return n;
+}
+
+/**
+ * 执行一次 Kafka 管理操作：成功给提示并返回 true；失败把完整原因交给 onError（由操作处的 ErrorNotice 显示）并返回 false。
+ * store 的管理操作只抛错、不写页头的加载错误，所以失败原因只出现在发起操作的地方。
+ */
+export async function runKafkaAction(
+  action: () => Promise<unknown>,
+  successMessage: string,
+  onError: (message: string) => void
+): Promise<boolean> {
+  try {
+    await action();
+  } catch (err) {
+    onError(errorMessage(err));
+    return false;
+  }
+  notifySuccess(successMessage);
+  return true;
 }

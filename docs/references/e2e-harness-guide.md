@@ -229,7 +229,9 @@ Only when the flow is genuinely core (§1). Conventions:
 
 - **Locators: `data-testid`.** Add a stable `data-testid` to the element you assert on
   (additive only — never change markup/behavior to test it). Existing ids: `app-root`,
-  `nav-<page>` / `nav-settings` (+ `data-active`), `asset-tree`, `add-asset-button`,
+  `nav-<page>` / `nav-settings` (+ `data-active`), the settings page's left navigation
+  `settings-nav-<section>` (+ `aria-current`; open one with `openSettingsSection` in
+  `e2e/fixtures/settings.ts`), `asset-tree`, `add-asset-button`,
   `asset-form-dialog`, `asset-form-name-input`, `asset-form-submit`, `ssh-host-input`,
   `asset-type-picker` / `asset-type-option-<type>`, `redis-host-input` / `redis-port-input`,
   `asset-context-detail` (the context menu's *Asset Details* tab) and the policy card's

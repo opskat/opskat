@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useResizeHandle, ConfirmDialog } from "@opskat/ui";
+import { ConfirmDialog } from "@opskat/ui";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { EtcdTreePane } from "@/components/etcd/EtcdTreePane";
 import { EtcdQueryBar } from "@/components/etcd/EtcdQueryBar";
@@ -68,14 +68,6 @@ export function EtcdPanel({ tabId }: EtcdPanelProps) {
     [requestConfirm]
   );
 
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  const { size: sidebarWidth, handleMouseDown } = useResizeHandle({
-    defaultSize: 260,
-    minSize: 180,
-    maxSize: 480,
-    targetRef: sidebarRef,
-  });
-
   if (!assetId) {
     return <div className="p-3 text-xs text-destructive">missing asset id</div>;
   }
@@ -87,34 +79,30 @@ export function EtcdPanel({ tabId }: EtcdPanelProps) {
   // 不要把 execCommand 折叠进 deleteKey 分支：payload 含 flag/value，套 "将删除 key {key}" 会错位。
   let dialogTitle = "";
   let dialogBody = "";
+  let dialogConfirm = "";
   switch (confirmRequest?.action) {
     case "saveKey":
       dialogTitle = t("etcd.detail.saveConfirmTitle");
       dialogBody = t("etcd.detail.saveConfirmBody", { key: confirmRequest.payload });
+      dialogConfirm = t("action.save");
       break;
     case "execCommand":
       dialogTitle = t("etcd.query.execConfirmTitle");
       dialogBody = t("etcd.query.execConfirmBody", { command: confirmRequest.payload });
+      dialogConfirm = t("etcd.query.execConfirmButton");
       break;
     case "deleteKey":
       dialogTitle = t("etcd.query.deleteConfirmTitle");
       dialogBody = t("etcd.query.deleteConfirmBody", { key: confirmRequest.payload });
+      dialogConfirm = t("action.delete");
       break;
   }
 
   return (
     <div className="flex h-full w-full flex-col" data-testid="etcd-panel">
       <div className="flex min-h-0 flex-1">
-        {/* Left: KV tree */}
-        <div ref={sidebarRef} className="shrink-0 border-r" style={{ width: sidebarWidth }}>
-          <EtcdTreePane assetId={assetId} onSelectKey={setSelectedKey} selectedKey={selectedKey} />
-        </div>
-
-        {/* Resize handle */}
-        <div
-          className="w-1 shrink-0 cursor-col-resize hover:bg-accent active:bg-accent"
-          onMouseDown={handleMouseDown}
-        />
+        {/* Left: KV tree (PanelSidebar shell incl. drag handle) */}
+        <EtcdTreePane assetId={assetId} onSelectKey={setSelectedKey} selectedKey={selectedKey} />
 
         {/* Right: tabs (tree-detail / query-table) */}
         <div className="flex min-w-0 flex-1 flex-col">
@@ -176,7 +164,7 @@ export function EtcdPanel({ tabId }: EtcdPanelProps) {
         title={dialogTitle}
         description={dialogBody}
         cancelText={t("action.cancel")}
-        confirmText={t("action.confirm")}
+        confirmText={dialogConfirm}
         onConfirm={() => settleConfirm(true)}
       />
     </div>

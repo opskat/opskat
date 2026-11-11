@@ -100,7 +100,7 @@ export function PermissionModeCard({ value, subject, parentGroupId, onChange }: 
         <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           {t("commandReview.mode.title")}
         </h3>
-        {saving && <span className="ml-auto text-[10px] text-muted-foreground">{t("action.saving")}</span>}
+        {saving && <span className="ml-auto text-xs text-muted-foreground">{t("action.saving")}</span>}
       </div>
       <p className="mb-2 text-xs text-muted-foreground">{t("commandReview.mode.desc")}</p>
       <Segmented
@@ -136,8 +136,7 @@ export function PermissionModeCard({ value, subject, parentGroupId, onChange }: 
               <button
                 type="button"
                 onClick={() => {
-                  useSettingsUiStore.getState().setActiveTab("ai");
-                  openSettingsTab(t("nav.settings"));
+                  openSettingsTab(t("nav.settings"), "ai");
                 }}
                 className="ml-1 font-medium underline-offset-2 hover:underline"
               >

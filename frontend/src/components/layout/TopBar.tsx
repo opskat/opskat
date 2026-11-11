@@ -10,6 +10,8 @@ import {
 import { Popover, PopoverContent, PopoverTrigger, Tooltip, TooltipContent, TooltipTrigger, cn } from "@opskat/ui";
 import { CommandPalette } from "@/components/command/CommandPalette";
 import { usePaletteFocusReturn } from "@/components/command/usePaletteFocusReturn";
+import { useShallow } from "zustand/shallow";
+import { selectWaitingApprovalConversationIds, useAIStore } from "@/stores/aiStore";
 import { useFullscreen } from "@/hooks/useFullscreen";
 import { usePlatform } from "@/hooks/usePlatform";
 import type { asset_entity } from "../../../wailsjs/go/models";
@@ -34,6 +36,7 @@ export function TopBar({
   onToggleAIPanel,
 }: TopBarProps) {
   const { t } = useTranslation();
+  const approvalCount = useAIStore(useShallow(selectWaitingApprovalConversationIds)).length;
   const isFullscreen = useFullscreen();
 
   const platform = usePlatform();
@@ -73,7 +76,7 @@ export function TopBar({
             >
               <Search className="h-4 w-4 shrink-0" />
               <span className="flex-1 truncate text-left">{t("topBar.searchPlaceholder")}</span>
-              <kbd className="hidden shrink-0 rounded bg-muted px-1 py-0.5 font-mono text-[10px] sm:inline-block">
+              <kbd className="hidden shrink-0 rounded bg-muted px-1 py-0.5 font-mono text-[11px] sm:inline-block">
                 {platform === "darwin" ? "⌘P" : "Ctrl+P"}
               </kbd>
             </button>
@@ -134,7 +137,7 @@ export function TopBar({
                 aria-pressed={!aiPanelCollapsed}
                 aria-label={aiPanelCollapsed ? t("topBar.showAIPanel") : t("topBar.hideAIPanel")}
                 className={cn(
-                  "flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-accent/50",
+                  "relative flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-accent/50",
                   aiPanelCollapsed ? "text-muted-foreground hover:text-foreground" : "text-foreground"
                 )}
               >
@@ -142,6 +145,16 @@ export function TopBar({
                   <IconLayoutSidebarRight className="h-4 w-4" stroke={1.75} />
                 ) : (
                   <IconLayoutSidebarRightFilled className="h-4 w-4" />
+                )}
+                {approvalCount > 0 && (
+                  <span
+                    data-testid="ai-panel-approval-badge"
+                    role="status"
+                    aria-label={t("topBar.pendingApprovals", { count: approvalCount })}
+                    className="absolute -right-1 -top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-warning px-1 text-[11px] font-medium leading-none text-warning-foreground"
+                  >
+                    {approvalCount}
+                  </span>
                 )}
               </button>
             </TooltipTrigger>

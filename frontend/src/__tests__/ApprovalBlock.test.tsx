@@ -63,7 +63,7 @@ describe("ApprovalBlock", () => {
   it("renders a cp approval with its remote path as the subject", () => {
     render(<ApprovalBlock block={cpBlock()} />);
 
-    expect(screen.getByText("CP")).toBeInTheDocument();
+    expect(screen.getByText("ai.approvalType.cp")).toBeInTheDocument();
     expect(screen.getByText("web-01")).toBeInTheDocument();
     expect(screen.getByText("/etc/cron.d/backup")).toBeInTheDocument();
   });
@@ -226,7 +226,7 @@ describe("ApprovalBlock", () => {
       approvalItems: [{ type: "oss", asset_id: 1, asset_name: "s3-prod", command: "object.read mybucket/logs/" }],
     });
 
-    const badge = screen.getByText("OSS").closest("span");
+    const badge = screen.getByText("ai.approvalType.oss").closest("span");
     expect(badge).not.toBeNull();
     const svg = badge!.querySelector("svg");
     expect(svg).not.toBeNull();
@@ -467,5 +467,55 @@ describe("ApprovalBlock 批量审批折叠（kind=batch，D17）", () => {
     expect(screen.getByTestId("approval-arg-body-size")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("approval-arg-body-toggle"));
     expect(screen.getByTestId("approval-arg-body").textContent).toBe(body);
+  });
+});
+
+describe("ApprovalBlock 可读性（规格 04）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("命令是正文色且不小于 12px，目标资产与命令同级可见", () => {
+    render(<ApprovalBlock block={cpBlock()} />);
+    const cmd = screen.getByTestId("ai-approval-command");
+    expect(cmd.className).not.toMatch(/text-muted-foreground/);
+    expect(cmd.className).toMatch(/text-xs|text-\[1[2-9]px\]/);
+    expect(screen.getByText("web-01").className).toMatch(/text-xs|text-\[1[2-9]px\]/);
+  });
+
+  it("徽标显示翻译名而不是大写类型名，且不小于 11px", () => {
+    renderApproval({
+      approvalKind: "single",
+      approvalItems: [{ type: "sql", asset_id: 1, asset_name: "db", command: "select 1" }],
+    });
+    const badge = screen.getByTestId("approval-type-badge");
+    expect(badge).toHaveTextContent("ai.approvalType.sql");
+    expect(badge.className).not.toMatch(/text-\[(8|9|10)px\]/);
+  });
+
+  it("批量项的命令、资产、徽标同样满足", () => {
+    renderApproval({ approvalKind: "batch", approvalItems: batchItems(2) });
+    const badge = screen.getAllByTestId("approval-type-badge")[0];
+    expect(badge).toHaveTextContent("ai.approvalType.cp");
+    expect(badge.className).not.toMatch(/text-\[(8|9|10)px\]/);
+    const cmd = screen.getByText("/var/log/app-0.log");
+    expect(cmd.className).not.toMatch(/text-muted-foreground|text-\[(8|9|10|11)px\]/);
+    expect(screen.getAllByText("web-01")[0].className).not.toMatch(/text-\[(8|9|10)px\]/);
+  });
+
+  it("按钮文案为 拒绝 / 记住并允许 / 仅本次允许", () => {
+    render(
+      <ApprovalBlock
+        block={
+          {
+            ...cpBlock(),
+            approvalItems: [{ type: "exec", asset_id: 1, asset_name: "w", command: "ls" }],
+          } as ContentBlock
+        }
+      />
+    );
+    expect(screen.getByTestId("ai-approval-deny")).toHaveTextContent("ai.approvalDeny");
+    expect(screen.getByTestId("ai-approval-remember")).toHaveTextContent("ai.approvalRememberAndAllow");
+    expect(screen.getByTestId("ai-approval-allow")).toHaveTextContent("ai.approvalAllowOnce");
   });
 });

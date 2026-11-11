@@ -2,7 +2,6 @@ import { useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { useWailsEvent } from "@/hooks/useWailsEvent";
-import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import { openSettingsTab } from "@/stores/tabStore";
 
 // 后端（command_review_svc 的 isConfigError）只对这几种设置问题发事件，每种只发一次。
@@ -21,8 +20,7 @@ export function CommandReviewConfigErrorListener() {
           action: {
             label: t("commandReview.configError.openSettings"),
             onClick: () => {
-              useSettingsUiStore.getState().setActiveTab("ai");
-              openSettingsTab(t("nav.settings"));
+              openSettingsTab(t("nav.settings"), "ai");
             },
           },
         });

@@ -2,6 +2,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { test, expect, type Page } from "@playwright/test";
 import { openAssetForm, assetTreeRow } from "../fixtures/assets";
 import { findAssetByName, findAssetPersistenceByName } from "../fixtures/db";
+import { openSettingsSection } from "../fixtures/settings";
 
 // A database driver provided by an extension is not a special species in the
 // frontend: the driver dropdown, the asset form, the query panel and its
@@ -87,8 +88,7 @@ async function pickExtensionDriver(page: Page): Promise<void> {
 }
 
 async function setExtensionEnabled(page: Page, enabled: boolean): Promise<void> {
-  await page.getByTestId("nav-settings").click();
-  await page.getByRole("tab", { name: "扩展" }).click();
+  await openSettingsSection(page, "extensions");
   const toggle = page.getByTestId(`extension-toggle-${EXT}`);
   await toggle.click();
   await expect(toggle).toHaveAttribute("data-state", enabled ? "checked" : "unchecked");

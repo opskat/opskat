@@ -84,7 +84,7 @@ export function PolicyTagEditor({
         <Icon className={cn("h-3.5 w-3.5", cfg.tagText)} />
         <span className={cn("text-xs font-medium", cfg.tagText)}>{label}</span>
         {items.length > 0 && (
-          <span className="text-[10px] text-muted-foreground ml-auto tabular-nums">{items.length}</span>
+          <span className="text-[11px] text-muted-foreground ml-auto tabular-nums">{items.length}</span>
         )}
       </div>
 

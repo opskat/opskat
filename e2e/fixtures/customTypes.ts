@@ -9,11 +9,7 @@
 import { expect, type Page } from "@playwright/test";
 
 import { findAssetByName } from "./db";
-
-async function openCustomTypesSettings(page: Page): Promise<void> {
-  await page.getByTestId("nav-settings").click();
-  await page.getByRole("tab", { name: "Custom types" }).click();
-}
+import { openSettingsSection } from "./settings";
 
 export interface CreateHttpCustomTypeOptions {
   name: string;
@@ -30,7 +26,7 @@ export interface CreateHttpCustomTypeOptions {
 
 /** Settings → Custom types → New type, execution mode HTTP request (the default). */
 export async function createHttpCustomTypeViaUI(page: Page, opts: CreateHttpCustomTypeOptions): Promise<void> {
-  await openCustomTypesSettings(page);
+  await openSettingsSection(page, "custom-types");
   await page.getByRole("button", { name: "New type" }).click();
 
   const dialog = page.getByRole("dialog");
@@ -72,7 +68,7 @@ export interface CreateCommandCustomTypeOptions {
 
 /** Settings → Custom types → New type, execution mode Local command, empty template. */
 export async function createCommandCustomTypeViaUI(page: Page, opts: CreateCommandCustomTypeOptions): Promise<void> {
-  await openCustomTypesSettings(page);
+  await openSettingsSection(page, "custom-types");
   await page.getByRole("button", { name: "New type" }).click();
 
   const dialog = page.getByRole("dialog");

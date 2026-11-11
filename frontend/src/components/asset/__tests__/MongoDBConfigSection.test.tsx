@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
+import { renderForSave } from "./rejectedSave";
 import { createRef } from "react";
 import { MongoDBConfigSection } from "@/components/asset/MongoDBConfigSection";
 import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
@@ -118,5 +119,31 @@ describe("MongoDBConfigSection ref 契约", () => {
     const built = await ref.current!.buildConfig(ctx);
     expect(built.configJSON).toContain('"credential_id":7');
     expect(built.configJSON).not.toContain('"password"');
+  });
+});
+
+describe("MongoDBConfigSection on a rejected save", () => {
+  it("shows a missing host under the host field in manual mode", () => {
+    const { rejectSave, reportShown, container } = renderForSave(
+      <MongoDBConfigSection ctx={ctx} onValidityChange={vi.fn()} />
+    );
+    rejectSave();
+    expect(screen.getByText("asset.generic.required")).toBeInTheDocument();
+    expect(container.querySelector('[aria-invalid="true"]')).not.toBeNull();
+    expect(reportShown).toHaveBeenCalled();
+  });
+
+  it("shows a missing URI under the URI field in URI mode", () => {
+    const editAsset = new asset_entity.Asset({
+      ID: 2,
+      Type: "mongodb",
+      Config: JSON.stringify({ connection_uri: "", host: "" }),
+    });
+    const { rejectSave } = renderForSave(
+      <MongoDBConfigSection editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "URI" }));
+    rejectSave();
+    expect(screen.getByText("asset.generic.required")).toBeInTheDocument();
   });
 });

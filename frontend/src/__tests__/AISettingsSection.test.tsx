@@ -42,7 +42,7 @@ describe("AISettingsSection", () => {
   it("opens the GitHub Releases page for manual opsctl CLI install", async () => {
     render(<AISettingsSection />);
 
-    await userEvent.click(screen.getByRole("button", { name: /GitHub Releases/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /GitHub Releases/i }));
 
     expect(BrowserOpenURL).toHaveBeenCalledWith("https://github.com/opskat/opskat/releases");
   });

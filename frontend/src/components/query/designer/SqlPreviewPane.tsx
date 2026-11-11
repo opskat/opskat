@@ -47,7 +47,7 @@ export function SqlPreviewPane({ preview, droppedColumns, droppedIndexes, onOpen
           <CircleAlert className="h-3.5 w-3.5" aria-hidden />
           {t("query.designer.sql.failed")}
         </div>
-        <code className="block font-mono text-[11px] break-all whitespace-pre-wrap text-muted-foreground select-text">
+        <code className="block font-mono text-xs break-all whitespace-pre-wrap text-muted-foreground select-text">
           {preview.error}
         </code>
       </div>

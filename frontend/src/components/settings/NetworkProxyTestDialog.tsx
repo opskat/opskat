@@ -117,7 +117,7 @@ export function NetworkProxyTestDialog({
               <div className="grid min-w-0 gap-1">
                 <span className="font-medium">{t("network.proxy.test.failed")}</span>
                 <span>{t(`network.proxy.test.reason.${test.result.reason}`)}</span>
-                <span className="break-all font-mono text-[11px] opacity-80">{test.result.detail}</span>
+                <span className="break-all font-mono text-xs opacity-80">{test.result.detail}</span>
               </div>
             </div>
           )}

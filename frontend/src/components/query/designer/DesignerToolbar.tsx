@@ -175,7 +175,7 @@ export function DesignToolbar({
         {errorCount > 0 && (
           <span
             data-testid="designer-issue-count"
-            className="flex items-center gap-1 rounded-md bg-destructive/10 px-2 py-0.5 text-[11px] text-destructive"
+            className="flex items-center gap-1 rounded-md bg-destructive/10 px-2 py-0.5 text-xs text-destructive"
           >
             <CircleAlert className="h-3 w-3" aria-hidden />
             {t("query.designer.issues.count", { count: errorCount })}
@@ -210,7 +210,7 @@ export function DesignToolbar({
         <Button data-testid="designer-save" size="xs" className="h-7 px-2.5" disabled={!canSave} onClick={onSave}>
           <Save aria-hidden />
           {saveLabel ?? t("action.save")}
-          <kbd className="font-sans text-[10px] opacity-70">{saveShortcut}</kbd>
+          <kbd className="font-sans text-[11px] opacity-70">{saveShortcut}</kbd>
         </Button>
       </div>
     </div>

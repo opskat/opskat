@@ -441,3 +441,64 @@ describe("AssetTree ungrouped virtual folder", () => {
     expect(screen.getByText("Ungrouped Server")).toBeTruthy();
   });
 });
+
+describe("AssetTree load states", () => {
+  const renderTree = () =>
+    render(
+      <TooltipProvider>
+        <AssetTree
+          collapsed={false}
+          onAddAsset={() => {}}
+          onAddGroup={() => {}}
+          onEditGroup={() => {}}
+          onGroupDetail={() => {}}
+          onEditAsset={() => {}}
+          onCopyAsset={() => {}}
+          onConnectAsset={() => {}}
+          onSelectAsset={() => {}}
+        />
+      </TooltipProvider>
+    );
+
+  beforeEach(() => {
+    localStorage.clear();
+    useAssetStore.setState({
+      assets: [],
+      groups: [],
+      selectedAssetId: null,
+      selectedGroupId: null,
+      collapsedGroupIds: [],
+      loading: false,
+      initialized: false,
+      loadErrors: { assets: null, groups: null },
+    });
+  });
+
+  it("shows a local loading state, not the empty state, before the first load returns", async () => {
+    vi.mocked(ListAssets).mockReturnValue(new Promise(() => {}));
+    vi.mocked(ListGroups).mockReturnValue(new Promise(() => {}));
+    renderTree();
+    expect(await screen.findByTestId("async-state-loading")).toBeTruthy();
+    expect(screen.queryByText("asset.emptyTitle")).toBeNull();
+  });
+
+  it("shows the failure reason with retry instead of the empty state, and retry recovers", async () => {
+    const user = userEvent.setup();
+    vi.mocked(ListAssets).mockRejectedValueOnce(new Error("db locked"));
+    vi.mocked(ListGroups).mockResolvedValue([]);
+    renderTree();
+    expect(await screen.findByText(/db locked/)).toBeTruthy();
+    expect(screen.queryByText("asset.emptyTitle")).toBeNull();
+
+    vi.mocked(ListAssets).mockResolvedValue([makeAsset(1, "ssh", "Recovered")]);
+    await user.click(screen.getByTestId("async-state-retry"));
+    expect(await screen.findByText("Recovered")).toBeTruthy();
+  });
+
+  it("shows the empty state after a successful empty load", async () => {
+    vi.mocked(ListAssets).mockResolvedValue([]);
+    vi.mocked(ListGroups).mockResolvedValue([]);
+    renderTree();
+    expect(await screen.findByText("asset.emptyTitle")).toBeTruthy();
+  });
+});

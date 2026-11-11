@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { ConnectionProgress } from "@/components/terminal/ConnectionProgress";
 import { useTerminalStore, type ConnectionState } from "@/stores/terminalStore";
 import { useAssetStore } from "@/stores/assetStore";
+import { useTabStore } from "@/stores/tabStore";
 import {
   CancelSSHConnect,
   RespondAuthChallenge,
@@ -262,5 +263,67 @@ describe("ConnectionProgress MFA 挑战", () => {
     await u.type(input, "pw123");
     await u.keyboard("{Enter}");
     expect(UpdateAssetPassword).toHaveBeenCalledWith(1, "pw123");
+  });
+});
+
+describe("ConnectionProgress 失败与取消后的操作", () => {
+  function seedSplitTab(connection: ConnectionState) {
+    useTabStore.setState({
+      tabs: [
+        {
+          id: "s1",
+          type: "terminal",
+          label: "Server 1",
+          meta: {
+            type: "terminal",
+            assetId: 1,
+            assetName: "Server 1",
+            assetIcon: "",
+            host: "10.0.0.1",
+            port: 22,
+            username: "root",
+          },
+        },
+      ],
+      activeTabId: "s1",
+    });
+    useTerminalStore.setState({
+      connections: { [connection.connectionId]: connection },
+      tabData: {
+        s1: {
+          splitTree: {
+            type: "split",
+            direction: "horizontal",
+            ratio: 0.5,
+            first: { type: "terminal", sessionId: "s1" },
+            second: { type: "connecting", connectionId: connection.connectionId },
+          },
+          activePaneId: connection.connectionId,
+          panes: { s1: { sessionId: "s1", transport: "ssh", connected: true, connectedAt: 1 } },
+          directoryFollowMode: "off",
+        },
+      },
+    });
+  }
+
+  it("取消后显示已取消、重新连接与关闭窗格", () => {
+    seedSplitTab(errorConnection({ status: "cancelled", error: undefined }));
+    render(<ConnectionProgress connectionId="conn-1" isTabActive isPaneActive />);
+
+    expect(screen.getByText("ssh.connectProgress.cancelled")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /ssh.connectProgress.retry/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /ssh.contextMenu.closePane/ })).toBeInTheDocument();
+  });
+
+  it("失败后点关闭窗格只移除该窗格,标签保留", async () => {
+    seedSplitTab(errorConnection());
+    const u = userEvent.setup();
+    render(<ConnectionProgress connectionId="conn-1" isTabActive isPaneActive />);
+
+    expect(screen.getByText("unable to authenticate")).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: /ssh.contextMenu.closePane/ }));
+
+    expect(useTerminalStore.getState().tabData.s1.splitTree).toEqual({ type: "terminal", sessionId: "s1" });
+    expect(useTabStore.getState().tabs.map((t) => t.id)).toEqual(["s1"]);
   });
 });

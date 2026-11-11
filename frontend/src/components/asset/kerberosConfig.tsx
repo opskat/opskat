@@ -81,15 +81,26 @@ export function resolveKrbPassword(state: KerberosFormFields, encrypt: (plaintex
   return state.krbPassword ? encrypt(state.krbPassword) : Promise.resolve(state.encryptedKrbPassword);
 }
 
-/** 选了 Kerberos 且设置不全时,返回要提示的 i18n 键(点名字段);完整则返回空串。 */
-export function kerberosInvalidReason(state: KerberosFormFields): string {
-  if (!/^[^@\s]+@[^@\s]+$/.test(state.krbPrincipal.trim())) return "asset.formKrbPrincipal";
-  if (kdcAddresses(state.krbKDC).length === 0) return "asset.formKrbKDC";
+/** 各字段自己的校验(i18n 键,空串 = 无错):字段据此把错误画在自己下面,kerberosInvalidReason 取第一条。 */
+function krbPrincipalError(state: KerberosFormFields): string {
+  return /^[^@\s]+@[^@\s]+$/.test(state.krbPrincipal.trim()) ? "" : "asset.formKrbPrincipal";
+}
+
+function krbKDCError(state: KerberosFormFields): string {
+  return kdcAddresses(state.krbKDC).length === 0 ? "asset.formKrbKDC" : "";
+}
+
+function krbCredentialError(state: KerberosFormFields): string {
   const hasCredential =
     state.krbCredentialSource === "keytab"
       ? !!state.krbKeytabFile.trim()
       : !!state.krbPassword || !!state.encryptedKrbPassword;
   return hasCredential ? "" : "asset.formKrbCredential";
+}
+
+/** 选了 Kerberos 且设置不全时,返回要提示的 i18n 键(点名字段);完整则返回空串。 */
+export function kerberosInvalidReason(state: KerberosFormFields): string {
+  return krbPrincipalError(state) || krbKDCError(state) || krbCredentialError(state);
 }
 
 /** Kerberos 字段组的表单控件:认证方式切换在前,其余字段只在选了 Kerberos 后显示。 */
@@ -113,6 +124,7 @@ export function kerberosFields<S extends KerberosFormFields>(): FieldDesc<S>[] {
       testid: "krb-principal",
       required: true,
       visibleWhen: on,
+      error: krbPrincipalError,
     },
     {
       kind: "segmented",
@@ -127,8 +139,9 @@ export function kerberosFields<S extends KerberosFormFields>(): FieldDesc<S>[] {
     {
       kind: "custom",
       visibleWhen: (s) => on(s) && s.krbCredentialSource === "password",
-      render: (s, patch) => (
-        <KerberosPasswordInput state={s} patch={patch as (p: Partial<KerberosFormFields>) => void} />
+      error: krbCredentialError,
+      render: (s, patch, error) => (
+        <KerberosPasswordInput state={s} patch={patch as (p: Partial<KerberosFormFields>) => void} error={error} />
       ),
     },
     {
@@ -137,7 +150,9 @@ export function kerberosFields<S extends KerberosFormFields>(): FieldDesc<S>[] {
       label: "asset.krbKeytabFile",
       placeholder: "/path/to/user.keytab",
       testid: "krb-keytab-file",
+      required: true,
       visibleWhen: (s) => on(s) && s.krbCredentialSource === "keytab",
+      error: krbCredentialError,
     },
     {
       kind: "text",
@@ -147,6 +162,7 @@ export function kerberosFields<S extends KerberosFormFields>(): FieldDesc<S>[] {
       testid: "krb-kdc",
       required: true,
       visibleWhen: on,
+      error: krbKDCError,
     },
     {
       kind: "text",

@@ -6,8 +6,9 @@ import type { UseAssetCredential } from "@/components/asset/useAssetCredential";
 import type { asset_entity } from "../../../wailsjs/go/models";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
 import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
-import type { ConnectionFormFields } from "@/components/asset/proxyConfig";
+import { proxyChainLayerErrors, type ConnectionFormFields } from "@/components/asset/proxyConfig";
 import type { ConfigGroup } from "@/components/asset/ConfigTabs";
+import { useShownError } from "@/components/asset/useConfigSection";
 
 /** password/tunnel 字段渲染所需的共享上下文。 */
 export interface FieldRenderCtx {
@@ -15,9 +16,17 @@ export interface FieldRenderCtx {
   editAsset?: asset_entity.Asset;
 }
 
-type WithVisibility<S> = { visibleWhen?: (s: S) => boolean };
+type WithRules<S> = {
+  visibleWhen?: (s: S) => boolean;
+  /**
+   * 该字段当前的校验错误(i18n key,空串 = 无错)。与 required 一样只在保存被拒后显示,并让所在
+   * 页签带标记;区块的 validate 应基于同一条规则,两边才不会说法不一。custom 字段经 render 的
+   * 第三个参数拿到要显示的错误文案,自己决定画在哪个控件下。
+   */
+  error?: (s: S) => string;
+};
 
-export type FieldDesc<S> = WithVisibility<S> &
+export type FieldDesc<S> = WithRules<S> &
   (
     | {
         kind: "text";
@@ -69,7 +78,7 @@ export type FieldDesc<S> = WithVisibility<S> &
         usernameKey?: keyof S;
       }
     | { kind: "tunnel"; excludeIds?: number[] }
-    | { kind: "custom"; render: (s: S, patch: (p: Partial<S>) => void) => ReactNode }
+    | { kind: "custom"; render: (s: S, patch: (p: Partial<S>) => void, error?: string) => ReactNode }
   );
 
 interface FieldsProps<S> {
@@ -77,6 +86,32 @@ interface FieldsProps<S> {
   state: S;
   patch: (p: Partial<S>) => void;
   ctx?: FieldRenderCtx;
+}
+
+/** 字段自身的错误 key:声明的 error 规则优先,其次是必填的文本/多行字段留空;不可见的字段没有错误。 */
+function fieldErrorKey<S>(field: FieldDesc<S>, state: S): string {
+  if (field.visibleWhen && !field.visibleWhen(state)) return "";
+  const declared = field.error?.(state);
+  if (declared) return declared;
+  if ((field.kind === "text" || field.kind === "textarea") && field.required) {
+    return String(state[field.key] ?? "").trim() === "" ? "asset.generic.required" : "";
+  }
+  return "";
+}
+
+/** 一组字段里有没有会在保存被拒时画在字段下的错误(不可见的字段不算)。 */
+function fieldsHaveError<S>(fields: FieldDesc<S>[], state: S): boolean {
+  return fields.some((f) => {
+    if (f.visibleWhen && !f.visibleWhen(state)) return false;
+    if (fieldErrorKey(f, state)) return true;
+    if (f.kind === "row") return fieldsHaveError(f.fields, state);
+    if (f.kind === "tunnel") {
+      // 与 ConnectionMethodFields 同一判定:只有代理链方式才显示(也才校验)各层的错误。
+      const conn = state as unknown as ConnectionFormFields;
+      return conn.connectionType !== "direct" && proxyChainLayerErrors(conn.proxyChainLayers ?? []).length > 0;
+    }
+    return false;
+  });
 }
 
 /** 把字段描述符数组渲染成竖直列(复刻各 section 的 `flex flex-col gap-4`)。 */
@@ -102,14 +137,18 @@ function FieldNode<S>({
   ctx?: FieldRenderCtx;
 }) {
   const { t } = useTranslation();
+  const errorKey = fieldErrorKey(field, state);
+  const invalid = useShownError(errorKey !== "");
   if (field.visibleWhen && !field.visibleWhen(state)) return null;
+  const error = invalid ? t(errorKey) : undefined;
 
   switch (field.kind) {
     case "text":
       return (
-        <Field label={t(field.label)} required={field.required} className={field.width}>
+        <Field label={t(field.label)} required={field.required} error={error} className={field.width}>
           <Input
             data-testid={field.testid}
+            aria-invalid={invalid || undefined}
             value={String(state[field.key] ?? "")}
             placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}
             onChange={(e) => patch({ [field.key]: e.target.value } as Partial<S>)}
@@ -121,9 +160,10 @@ function FieldNode<S>({
       const raw = state[field.key] as unknown as number;
       const display = field.blankWhenZero ? raw || "" : (raw ?? "");
       return (
-        <Field label={t(field.label)} className={field.width}>
+        <Field label={t(field.label)} error={error} className={field.width}>
           <Input
             data-testid={field.testid}
+            aria-invalid={invalid || undefined}
             className="[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
             type="number"
             min={field.min}
@@ -160,9 +200,9 @@ function FieldNode<S>({
 
     case "select":
       return (
-        <Field label={t(field.label)}>
+        <Field label={t(field.label)} error={error}>
           <Select value={String(state[field.key] ?? "")} onValueChange={(v) => patch({ [field.key]: v } as Partial<S>)}>
-            <SelectTrigger data-testid={field.testid} className="w-full">
+            <SelectTrigger data-testid={field.testid} aria-invalid={invalid || undefined} className="w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -190,9 +230,10 @@ function FieldNode<S>({
 
     case "textarea":
       return (
-        <Field label={t(field.label)} required={field.required}>
+        <Field label={t(field.label)} required={field.required} error={error}>
           <Textarea
             data-testid={field.testid}
+            aria-invalid={invalid || undefined}
             value={String(state[field.key] ?? "")}
             rows={field.rows}
             placeholder={field.placeholder ? t(field.placeholder, { defaultValue: field.placeholder }) : undefined}
@@ -224,6 +265,7 @@ function FieldNode<S>({
           credentialId={cred.value.passwordCredentialId}
           onCredentialIdChange={cred.setPasswordCredentialId}
           managedPasswords={cred.managedPasswords}
+          managedPasswordsLoad={cred.managedPasswordsLoad}
           hasExistingPassword={!!cred.value.encryptedPassword}
           editAssetId={ctx?.editAsset?.ID}
           onUsernameChange={(v) => patch({ [field.usernameKey ?? "username"]: v } as unknown as Partial<S>)}
@@ -246,13 +288,14 @@ function FieldNode<S>({
       );
 
     case "custom":
-      return <>{field.render(state, patch)}</>;
+      return <>{field.render(state, patch, error)}</>;
   }
 }
 
+/** error:逃逸口组(render)自己画字段错误时,用它让页签带标记、保存被拒时切过来;声明式组由字段规则推出。 */
 export type ConfigGroupSchema<S> =
   | { key: string; label: string; badge?: number; fields: FieldDesc<S>[] }
-  | { key: string; label: string; badge?: number; render: () => ReactNode };
+  | { key: string; label: string; badge?: number; error?: boolean; render: () => ReactNode };
 
 /** 把组级 schema 转成 <ConfigTabs> 吃的 ConfigGroup[]:声明式组包成 <Fields>,逃逸口组透传 render。
  *  纯函数(不调 hook);render 闭包在 ConfigTabs 渲染期被调用。 */
@@ -265,9 +308,16 @@ export function buildConfigGroups<S>(
     key: g.key,
     label: g.label,
     badge: g.badge,
+    error: "fields" in g ? fieldsHaveError(g.fields, args.state) : !!g.error,
     render:
       "render" in g
         ? g.render
         : () => <Fields fields={g.fields} state={args.state} patch={args.patch} ctx={args.ctx} />,
   }));
+}
+
+/** 端口取值规则(1–65535),供各区块的 validate 与端口字段的 error 规则共用。 */
+// eslint-disable-next-line react-refresh/only-export-components -- shared field rule co-located with the descriptors that use it
+export function portRangeError(port: number): string {
+  return Number.isInteger(port) && port > 0 && port <= 65535 ? "" : "network.proxy.error.portRange";
 }

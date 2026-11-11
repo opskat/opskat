@@ -6,7 +6,7 @@ export function OverviewView({ state }: { state: KafkaTabState }) {
   const { t } = useTranslation();
   const overview = state.overview;
   if (state.loadingOverview && !overview) return <LoadingBlock />;
-  if (!overview) return <EmptyState text={t("query.kafkaNoOverview")} />;
+  if (!overview) return <EmptyState text={t("query.kafkaNoOverview")} failed={!!state.error} />;
 
   const controller = state.brokers.find((broker) => broker.nodeId === overview.controllerId);
 

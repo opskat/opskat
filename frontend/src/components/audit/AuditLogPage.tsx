@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
+import { AsyncState, type AsyncStatus } from "@/components/common/AsyncState";
+import { errorMessage } from "@/lib/errorMessage";
 import { CheckCircle2, XCircle, ChevronLeft, ChevronRight, Info, RefreshCw, Unplug, Calendar } from "lucide-react";
 import {
   Button,
@@ -62,30 +65,38 @@ function AuditReview({ raw }: { raw: string }) {
   );
 }
 
-// 决策来源标签样式
-function decisionSourceBadge(source: string): { label: string; className: string } {
-  switch (source) {
-    case "policy_allow":
-      return { label: "policy", className: "bg-success/15 text-success" };
-    case "policy_deny":
-      return { label: "policy", className: "bg-destructive/15 text-destructive" };
-    case "user_allow":
-      return { label: "user", className: "bg-success/15 text-success" };
-    case "user_deny":
-      return { label: "user", className: "bg-destructive/15 text-destructive" };
-    case "grant_allow":
-      return { label: "grant", className: "bg-info/15 text-info" };
-    case "grant_deny":
-      return { label: "grant", className: "bg-destructive/15 text-destructive" };
-    case "assisted_allow":
-      return { label: "assisted", className: "bg-success/15 text-success" };
-    case "autopilot_allow":
-      return { label: "autopilot", className: "bg-success/15 text-success" };
-    case "autopilot_deny":
-      return { label: "autopilot", className: "bg-destructive/15 text-destructive" };
-    default:
-      return { label: source || "-", className: "bg-muted" };
-  }
+// 决策来源标签：id 对应 audit.decisionSources.<id> 的译文，样式按放行/拒绝区分
+const DECISION_SOURCES: Record<string, { id: string; className: string }> = {
+  policy_allow: { id: "policy", className: "bg-success/15 text-success" },
+  policy_deny: { id: "policy", className: "bg-destructive/15 text-destructive" },
+  user_allow: { id: "user", className: "bg-success/15 text-success" },
+  user_deny: { id: "user", className: "bg-destructive/15 text-destructive" },
+  grant_allow: { id: "grant", className: "bg-info/15 text-info" },
+  grant_deny: { id: "grant", className: "bg-destructive/15 text-destructive" },
+  assisted_allow: { id: "assisted", className: "bg-success/15 text-success" },
+  autopilot_allow: { id: "autopilot", className: "bg-success/15 text-success" },
+  autopilot_deny: { id: "autopilot", className: "bg-destructive/15 text-destructive" },
+  exec_unsupported_type: { id: "execUnsupportedType", className: "bg-destructive/15 text-destructive" },
+  exec_gate_blocked: { id: "execGateBlocked", className: "bg-destructive/15 text-destructive" },
+  exec_precheck_failed: { id: "execPrecheckFailed", className: "bg-destructive/15 text-destructive" },
+  exec_canonicalize_error: { id: "execCanonicalizeError", className: "bg-destructive/15 text-destructive" },
+  exec_type_mismatch: { id: "execTypeMismatch", className: "bg-destructive/15 text-destructive" },
+  exec_resolve_failed: { id: "execResolveFailed", className: "bg-destructive/15 text-destructive" },
+  exec_invalid_input: { id: "execInvalidInput", className: "bg-destructive/15 text-destructive" },
+  batch_complete: { id: "batchComplete", className: "bg-success/15 text-success" },
+  batch_partial_failure: { id: "batchPartialFailure", className: "bg-destructive/15 text-destructive" },
+  batch_failed: { id: "batchFailed", className: "bg-destructive/15 text-destructive" },
+};
+
+function decisionSourceBadge(source: string, t: TFunction): { label: string; className: string } {
+  const known = DECISION_SOURCES[source];
+  if (!known) return { label: source || "-", className: "bg-muted" };
+  return { label: t(`audit.decisionSources.${known.id}`), className: known.className };
+}
+
+// 决策（allow/deny）的译文；未知值原样显示
+function decisionLabel(decision: string, t: TFunction): string {
+  return decision === "allow" || decision === "deny" ? t(`audit.decisions.${decision}`) : decision || "-";
 }
 
 // 将 unix timestamp 按日期分组
@@ -124,6 +135,9 @@ export function AuditLogPage() {
   const [customEnd, setCustomEnd] = useState("");
   const [timePickerOpen, setTimePickerOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [logsError, setLogsError] = useState<string | null>(null);
+  const [poolStatus, setPoolStatus] = useState<AsyncStatus>("loading");
+  const [poolError, setPoolError] = useState<string | null>(null);
   const [detailLog, setDetailLog] = useState<audit_entity.AuditLog | null>(null);
   const [activeTab, setActiveTab] = useState("logs");
   const [poolEntries, setPoolEntries] = useState<sshpool.PoolEntryInfo[]>([]);
@@ -154,7 +168,9 @@ export function AuditLogPage() {
       .then((result) => {
         setLogs(result?.items || []);
         setTotal(result?.total || 0);
+        setLogsError(null);
       })
+      .catch((e) => setLogsError(errorMessage(e)))
       .finally(() => {
         setLoading(false);
       });
@@ -207,8 +223,15 @@ export function AuditLogPage() {
   // 拉取连接池:setState 在 promise 回调中,effect 与刷新按钮共用
   const fetchPool = useCallback(() => {
     return GetSSHPoolConnections().then(
-      (entries) => setPoolEntries(entries || []),
-      () => setPoolEntries([])
+      (entries) => {
+        setPoolEntries(entries || []);
+        setPoolError(null);
+        setPoolStatus("ready");
+      },
+      (e) => {
+        setPoolError(errorMessage(e));
+        setPoolStatus("error");
+      }
     );
   }, []);
 
@@ -429,60 +452,68 @@ export function AuditLogPage() {
                 </tr>
               </thead>
               <tbody className="select-text">
-                {logs.length === 0 && !loading && (
+                {(logs.length === 0 || logsError) && (
                   <tr>
-                    <td colSpan={7} className="px-4 py-12 text-center text-muted-foreground">
-                      {t("audit.empty")}
+                    <td colSpan={7}>
+                      <AsyncState
+                        status={loading ? "loading" : logsError ? "error" : "ready"}
+                        error={logsError}
+                        onRetry={() => void fetchLogs()}
+                        className="py-12"
+                        empty={t("audit.empty")}
+                      />
                     </td>
                   </tr>
                 )}
-                {logs.map((log) => {
-                  const badge = decisionSourceBadge(log.DecisionSource);
-                  const review = log.Review ? parseReviewInfo(log.Review) : null;
-                  return (
-                    <tr key={log.ID} className="border-b hover:bg-muted/50 transition-colors">
-                      <td className="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">
-                        {formatTime(log.Createtime)}
-                      </td>
-                      <td className="px-4 py-2 font-mono text-xs">{log.ToolName}</td>
-                      <td className="px-4 py-2">{log.AssetName || "-"}</td>
-                      <td className="px-4 py-2 font-mono text-xs max-w-48 truncate" title={log.Command}>
-                        {truncate(log.Command)}
-                      </td>
-                      <td className="px-4 py-2">
-                        {log.DecisionSource ? (
-                          <span
-                            className={`inline-block px-1.5 py-0.5 text-xs rounded font-mono ${badge.className}`}
-                            title={
-                              log.MatchedPattern ? `${t("audit.matchedPattern")}: ${log.MatchedPattern}` : undefined
-                            }
-                          >
-                            {log.Decision === "allow" ? "\u2713" : "\u2717"} {badge.label}
-                          </span>
-                        ) : (
-                          "-"
-                        )}
-                        {review && (
-                          <span className="ml-1">
-                            <ReviewMark review={review} />
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2 text-center">
-                        {log.Success === 1 ? (
-                          <CheckCircle2 aria-label={t("audit.success")} className="h-4 w-4 text-success mx-auto" />
-                        ) : (
-                          <XCircle aria-label={t("audit.failed")} className="h-4 w-4 text-destructive mx-auto" />
-                        )}
-                      </td>
-                      <td className="px-4 py-2">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDetailLog(log)}>
-                          <Info className="h-3.5 w-3.5" />
-                        </Button>
-                      </td>
-                    </tr>
-                  );
-                })}
+                {/* 加载失败时不再列出上一次的结果:换了筛选 / 页码后它们会被误当成这次的结果。 */}
+                {!logsError &&
+                  logs.map((log) => {
+                    const badge = decisionSourceBadge(log.DecisionSource, t);
+                    const review = log.Review ? parseReviewInfo(log.Review) : null;
+                    return (
+                      <tr key={log.ID} className="border-b hover:bg-muted/50 transition-colors">
+                        <td className="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap">
+                          {formatTime(log.Createtime)}
+                        </td>
+                        <td className="px-4 py-2 font-mono text-xs">{log.ToolName}</td>
+                        <td className="px-4 py-2">{log.AssetName || "-"}</td>
+                        <td className="px-4 py-2 font-mono text-xs max-w-48 truncate" title={log.Command}>
+                          {truncate(log.Command)}
+                        </td>
+                        <td className="px-4 py-2">
+                          {log.DecisionSource ? (
+                            <span
+                              className={`inline-block px-1.5 py-0.5 text-xs rounded font-mono ${badge.className}`}
+                              title={
+                                log.MatchedPattern ? `${t("audit.matchedPattern")}: ${log.MatchedPattern}` : undefined
+                              }
+                            >
+                              {log.Decision === "allow" ? "\u2713" : "\u2717"} {badge.label}
+                            </span>
+                          ) : (
+                            "-"
+                          )}
+                          {review && (
+                            <span className="ml-1">
+                              <ReviewMark review={review} />
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-2 text-center">
+                          {log.Success === 1 ? (
+                            <CheckCircle2 aria-label={t("audit.success")} className="h-4 w-4 text-success mx-auto" />
+                          ) : (
+                            <XCircle aria-label={t("audit.failed")} className="h-4 w-4 text-destructive mx-auto" />
+                          )}
+                        </td>
+                        <td className="px-4 py-2">
+                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDetailLog(log)}>
+                            <Info className="h-3.5 w-3.5" />
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>
@@ -527,28 +558,38 @@ export function AuditLogPage() {
               </tr>
             </thead>
             <tbody>
-              {poolEntries.length === 0 && (
+              {(poolEntries.length === 0 || poolStatus === "error") && (
                 <tr>
-                  <td colSpan={3} className="px-4 py-12 text-center text-muted-foreground">
-                    {t("audit.poolEmpty")}
+                  <td colSpan={3}>
+                    <AsyncState
+                      status={poolStatus}
+                      error={poolError}
+                      onRetry={() => {
+                        setPoolStatus("loading");
+                        void fetchPool();
+                      }}
+                      className="py-12"
+                      empty={t("audit.poolEmpty")}
+                    />
                   </td>
                 </tr>
               )}
-              {poolEntries.map((entry) => (
-                <tr key={entry.asset_id} className="border-b hover:bg-muted/50 transition-colors">
-                  <td className="px-4 py-2 font-mono">{entry.asset_id}</td>
-                  <td className="px-4 py-2">
-                    <span
-                      className={`inline-block px-1.5 py-0.5 text-xs rounded font-mono ${
-                        entry.ref_count > 0 ? "bg-success/15 text-success" : "bg-muted"
-                      }`}
-                    >
-                      {entry.ref_count}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2 text-xs text-muted-foreground">{formatTime(entry.last_used)}</td>
-                </tr>
-              ))}
+              {poolStatus !== "error" &&
+                poolEntries.map((entry) => (
+                  <tr key={entry.asset_id} className="border-b hover:bg-muted/50 transition-colors">
+                    <td className="px-4 py-2 font-mono">{entry.asset_id}</td>
+                    <td className="px-4 py-2">
+                      <span
+                        className={`inline-block px-1.5 py-0.5 text-xs rounded font-mono ${
+                          entry.ref_count > 0 ? "bg-success/15 text-success" : "bg-muted"
+                        }`}
+                      >
+                        {entry.ref_count}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2 text-xs text-muted-foreground">{formatTime(entry.last_used)}</td>
+                  </tr>
+                ))}
             </tbody>
           </table>
         </div>
@@ -580,11 +621,11 @@ export function AuditLogPage() {
                 </div>
                 <div>
                   <span className="text-muted-foreground">{t("audit.decision")}:</span>{" "}
-                  <span className="font-mono">{detailLog.Decision || "-"}</span>
+                  <span className="font-mono">{decisionLabel(detailLog.Decision, t)}</span>
                 </div>
                 <div>
                   <span className="text-muted-foreground">{t("audit.decisionSource")}:</span>{" "}
-                  <span className="font-mono">{detailLog.DecisionSource || "-"}</span>
+                  <span className="font-mono">{decisionSourceBadge(detailLog.DecisionSource, t).label}</span>
                 </div>
                 {detailLog.MatchedPattern && (
                   <div className="col-span-2">

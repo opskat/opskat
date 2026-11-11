@@ -1,3 +1,4 @@
+import { errorMessage } from "@/lib/errorMessage";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { asset_entity, group_entity } from "../../wailsjs/go/models";
@@ -23,6 +24,8 @@ interface AssetState {
   collapsedGroupIds: number[];
   loading: boolean;
   initialized: boolean;
+  /** Why the last asset / group list load failed; each is cleared by its own next successful load. */
+  loadErrors: { assets: string | null; groups: string | null };
 
   fetchAssets: (assetType?: string, groupId?: number) => Promise<void>;
   fetchGroups: () => Promise<void>;
@@ -51,6 +54,7 @@ export const useAssetStore = create<AssetState>()(
       collapsedGroupIds: [],
       loading: false,
       initialized: false,
+      loadErrors: { assets: null, groups: null },
 
       fetchAssets: async (assetType = "", groupId = 0) => {
         set({ loading: true });
@@ -62,20 +66,29 @@ export const useAssetStore = create<AssetState>()(
             return {
               assets,
               initialized: true,
+              loadErrors: { ...state.loadErrors, assets: null },
               collapsedGroupIds:
                 state.initialized && !hadUngroupedAssets && hasUngroupedAssets
                   ? state.collapsedGroupIds.filter((id) => id !== 0)
                   : state.collapsedGroupIds,
             };
           });
+        } catch (e) {
+          set((state) => ({ loadErrors: { ...state.loadErrors, assets: errorMessage(e) } }));
+          throw e;
         } finally {
           set({ loading: false });
         }
       },
 
       fetchGroups: async () => {
-        const groups = await ListGroups();
-        set({ groups: groups || [] });
+        try {
+          const groups = await ListGroups();
+          set((state) => ({ groups: groups || [], loadErrors: { ...state.loadErrors, groups: null } }));
+        } catch (e) {
+          set((state) => ({ loadErrors: { ...state.loadErrors, groups: errorMessage(e) } }));
+          throw e;
+        }
       },
 
       createAsset: async (asset) => {
@@ -135,6 +148,8 @@ export const useAssetStore = create<AssetState>()(
       isGroupCollapsed: (id) => get().collapsedGroupIds.includes(id),
 
       refresh: async () => {
+        // 重试时先清掉原因,界面回到加载中,而不是在请求途中继续挂着上次的错误。
+        set({ loadErrors: { assets: null, groups: null } });
         await Promise.all([get().fetchAssets(), get().fetchGroups()]);
       },
     }),
@@ -144,3 +159,6 @@ export const useAssetStore = create<AssetState>()(
     }
   )
 );
+
+/** 资产树要显示的加载失败原因:资产列表或分组列表任一失败即算失败。 */
+export const selectLoadError = (s: AssetState): string | null => s.loadErrors.assets ?? s.loadErrors.groups;

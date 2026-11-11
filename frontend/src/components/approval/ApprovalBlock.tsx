@@ -1,21 +1,7 @@
-import { memo, useState, type ComponentType } from "react";
+import { memo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  ShieldAlert,
-  Terminal,
-  Database,
-  Server,
-  Globe,
-  FolderOpen,
-  FileEdit,
-  FilePlus,
-  FileUp,
-  Usb,
-  Trash2,
-  Boxes,
-} from "lucide-react";
+import { ShieldAlert, Server, Globe, FolderOpen } from "lucide-react";
 import { Button, Textarea } from "@opskat/ui";
-import { S3Icon } from "@/components/asset/brand-icons";
 import { RespondAIApproval } from "../../../wailsjs/go/ai/AI";
 import { permission } from "../../../wailsjs/go/models";
 import type { ContentBlock } from "@/stores/aiStore";
@@ -26,7 +12,7 @@ import { ReviewNotice } from "./ReviewNotice";
 import { TruncatedText } from "./TruncatedText";
 import { RememberPatternEditor } from "./RememberPatternEditor";
 import { hasRememberPatternErrors, rememberPrefill } from "./rememberPattern";
-import { approvalTypePresentation, hasPinnedDetail } from "./approvalTypePresentation";
+import { approvalBadge, approvalTypePresentation, hasPinnedDetail } from "./approvalTypePresentation";
 
 interface ApprovalBlockProps {
   block: ContentBlock;
@@ -84,17 +70,17 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
     <div key={i} className="rounded-lg bg-warning/5 p-2.5 space-y-1.5">
       <div className="flex items-center gap-1.5">
         <TypeBadge type={item.type} command={item.command} compact />
-        {item.asset_name && <span className="text-[11px] text-warning">{item.asset_name}</span>}
+        {item.asset_name && <span className="text-xs text-warning">{item.asset_name}</span>}
       </div>
-      {item.review && <ReviewNotice review={item.review} className="text-[11px]" />}
+      {item.review && <ReviewNotice review={item.review} className="text-xs" />}
       <div className="rounded bg-warning/5 px-2 py-[5px]">
-        <code className="select-text block font-mono text-[10px] text-muted-foreground whitespace-pre-wrap break-all">
+        <code className="select-text block font-mono text-xs text-foreground whitespace-pre-wrap break-all">
           {item.command}
         </code>
       </div>
       {hasPinnedDetail(item) && (
         // 这一条自己的说明（通用资产的目标地址 / 程序名）批准时必须看到，与单条审批一样常驻。
-        <div className="text-[10px] text-muted-foreground/80">
+        <div className="text-xs text-muted-foreground/80">
           <div className="select-none">{t(detailSummaryKey(item))}</div>
           <DetailPre text={item.detail} structured={!!item.action} />
         </div>
@@ -151,10 +137,10 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                     : t("ai.approvalSingleTitle")}
           </span>
           {block.agentRole && (
-            <span className="text-[10px] text-muted-foreground bg-muted rounded px-1 py-0.5">{block.agentRole}</span>
+            <span className="text-[11px] text-muted-foreground bg-muted rounded px-1 py-0.5">{block.agentRole}</span>
           )}
         </div>
-        <span className="inline-flex items-center rounded-full bg-warning/15 h-5 px-2 text-[10px] font-semibold text-warning">
+        <span className="inline-flex items-center rounded-full bg-warning/15 h-5 px-2 text-xs font-semibold text-warning">
           {t("ai.approvalPending")}
         </span>
       </div>
@@ -167,7 +153,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
           <summary
             data-testid="ai-approval-batch-summary"
             data-count={items.length}
-            className="cursor-pointer select-none text-[11px] text-warning"
+            className="cursor-pointer select-none text-xs text-warning"
           >
             {t("ai.approvalBatchCollapsedSummary", { count: items.length })}
             {batchDetail && <span className="text-muted-foreground"> · {batchDetail}</span>}
@@ -195,22 +181,22 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   action={item.action}
                   resource={item.resource}
                   resources={item.resources}
-                  className="text-[11px]"
+                  className="text-xs"
                   labelClassName="text-warning"
                 />
-                {item.review && <ReviewNotice review={item.review} className="text-[11px]" />}
+                {item.review && <ReviewNotice review={item.review} className="text-xs" />}
                 {kind === "grant" ? (
                   <Textarea
                     value={editedCommands[i] || ""}
                     onChange={(e) => setEditedCommands((prev) => ({ ...prev, [i]: e.target.value }))}
-                    className="font-mono text-[11px] min-h-[32px] resize-y bg-background border-border"
+                    className="font-mono text-xs min-h-[32px] resize-y bg-background border-border"
                     rows={Math.max(1, (editedCommands[i] || "").split("\n").length)}
                   />
                 ) : (
                   <div className="rounded-md bg-warning/5 px-2.5 py-2">
                     <code
                       data-testid="ai-approval-command"
-                      className="select-text block font-mono text-[11px] text-muted-foreground whitespace-pre-wrap break-all"
+                      className="select-text block font-mono text-xs text-foreground whitespace-pre-wrap break-all"
                     >
                       <TruncatedText testId="ai-approval-command-text" text={item.command} />
                     </code>
@@ -220,12 +206,12 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                   (kind === "delete" || hasPinnedDetail(item) ? (
                     // 删除不可逆：警告不能藏在一次点击之后，常驻展示而不是 <details> 折叠。
                     // 这一条自己的说明（通用资产的目标地址 / 程序名）批准时必须看到，同样常驻。
-                    <div className="text-[10px] text-muted-foreground/80">
+                    <div className="text-xs text-muted-foreground/80">
                       <div className="select-none">{t(detailSummaryKey(item))}</div>
                       <DetailPre text={item.detail} structured={!!item.action} />
                     </div>
                   ) : (
-                    <details className="text-[10px] text-muted-foreground/80">
+                    <details className="text-xs text-muted-foreground/80">
                       <summary className="cursor-pointer select-none">{t(detailSummaryKey(item))}</summary>
                       <DetailPre text={item.detail} structured={!!item.action} />
                     </details>
@@ -239,8 +225,8 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
       {/* Reason (grant only, before buttons) */}
       {kind === "grant" && block.approvalDescription && (
         <div className="flex gap-1.5">
-          <span className="text-[11px] font-medium text-warning shrink-0">{t("ai.approvalReasonLabel")}</span>
-          <span className="select-text text-[11px] text-muted-foreground">{block.approvalDescription}</span>
+          <span className="text-xs font-medium text-warning shrink-0">{t("ai.approvalReasonLabel")}</span>
+          <span className="select-text text-xs text-muted-foreground">{block.approvalDescription}</span>
         </div>
       )}
 
@@ -250,26 +236,27 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
           items={items}
           values={rememberValues}
           onChange={(i, value) => setEditedCommands((prev) => ({ ...prev, [i]: value }))}
-          textClassName="text-[10px]"
-          inputClassName="text-[11px] h-8 bg-background border-border"
+          textClassName="text-xs"
+          inputClassName="text-xs h-8 bg-background border-border"
         />
       )}
       {kind === "local_tool" && rememberMode && (
         <div className="space-y-1.5 pt-0.5">
-          <div className="text-[10px] text-muted-foreground">{t("opsctlApproval.patternLabel")}</div>
+          <div className="text-[11px] text-muted-foreground">{t("opsctlApproval.patternLabel")}</div>
           <Textarea
             value={editedCommands[0] || ""}
             onChange={(e) => setEditedCommands((prev) => ({ ...prev, 0: e.target.value }))}
-            className="font-mono text-[11px] min-h-[60px] resize-y bg-background border-border"
+            className="font-mono text-xs min-h-[60px] resize-y bg-background border-border"
             rows={Math.max(2, (editedCommands[0] || "").split("\n").length)}
             placeholder={t("opsctlApproval.patternPlaceholder")}
           />
-          <div className="text-[10px] text-muted-foreground/70">{t("ai.approvalLocalToolPatternHint")}</div>
+          <div className="text-[11px] text-muted-foreground/70">{t("ai.approvalLocalToolPatternHint")}</div>
         </div>
       )}
 
-      {/* Action buttons */}
-      <div className="flex justify-end gap-2 pt-1">
+      {/* Action buttons：AI 面板很窄时换行而不是向左溢出——justify-end 的溢出落在起始侧，
+          最左边的「拒绝」会被挤出面板、压在主内容区下面点不到。 */}
+      <div className="flex flex-wrap justify-end gap-2 pt-1">
         {kind === "batch" ? (
           <>
             <Button
@@ -304,7 +291,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
               className="h-8 rounded-md px-4 text-xs bg-warning hover:bg-warning/90 text-warning-foreground font-semibold"
               onClick={() => respond("allow")}
             >
-              {t("ai.approvalApprove")}
+              {t("ai.approvalAllow")}
             </Button>
           </>
         ) : (
@@ -341,7 +328,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
                     setRememberMode(true);
                   }}
                 >
-                  {t("opsctlApproval.remember")}
+                  {t("ai.approvalRememberAndAllow")}
                 </Button>
               ))}
             <Button
@@ -350,7 +337,7 @@ export const ApprovalBlock = memo(function ApprovalBlock({ block }: ApprovalBloc
               className="h-8 rounded-md px-4 text-xs bg-warning hover:bg-warning/90 text-warning-foreground font-semibold"
               onClick={() => respond("allow")}
             >
-              {rememberMode ? t("ai.approvalOnlyOnce") : t("ai.approvalAllow")}
+              {kind === "single" || kind === "local_tool" ? t("ai.approvalAllowOnce") : t("ai.approvalAllow")}
             </Button>
           </>
         )}
@@ -401,39 +388,15 @@ function scopeName(item: { asset_id: number; asset_name: string; group_id?: numb
   return "";
 }
 
-// lucide 图标是 ForwardRefExoticComponent，S3Icon（brand-icons.tsx）是普通的 React.FC 包装
-// @iconify/react；这张表两种都装，因此按调用点唯一用到的形状（接收 className 的组件）来
-// 收窄类型，而不是逼 S3Icon 伪装成 lucide 的 ref-forwarding 形状。
-type IconComponent = ComponentType<{ className?: string }>;
-
 function TypeBadge({ type, command, compact }: { type: string; command: string; compact?: boolean }) {
   const { t } = useTranslation();
-  // 登记了操作类型的审批类型(通用资产:HTTP 请求 / 命令 / 取值)徽标显示操作而不是类型名。
-  const op = approvalTypePresentation(type).op?.(command);
-  const icons: Record<string, IconComponent> = {
-    exec: Terminal,
-    serial: Usb,
-    sql: Database,
-    redis: Server,
-    mongo: Database,
-    kafka: Database,
-    grant: Globe,
-    cp: FileUp,
-    local_bash: Terminal,
-    local_write: FilePlus,
-    local_edit: FileEdit,
-    delete: Trash2,
-    etcd: Database,
-    k8s: Boxes,
-    oss: S3Icon,
-  };
-  const Icon = op?.icon ?? icons[type] ?? Terminal;
-  const label = op ? t(op.labelKey) : type.toUpperCase();
+  const { icon: Icon, labelKey } = approvalBadge(type, command);
+  const label = labelKey ? t(labelKey) : type;
   if (compact) {
     return (
       <span
         data-testid="approval-type-badge"
-        className="inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-[18px] px-[5px] text-[8px] font-bold text-warning bg-background"
+        className="inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-5 px-1.5 text-[11px] font-bold text-warning bg-background"
       >
         <Icon className="h-[11px] w-[11px]" />
         {label}
@@ -443,7 +406,7 @@ function TypeBadge({ type, command, compact }: { type: string; command: string; 
   return (
     <span
       data-testid="approval-type-badge"
-      className="inline-flex items-center gap-1 rounded border border-warning/30 h-5 px-1.5 text-[9px] font-bold text-warning bg-background"
+      className="inline-flex items-center gap-1 rounded border border-warning/30 h-5 px-1.5 text-[11px] font-bold text-warning bg-background"
     >
       <Icon className="h-3 w-3" />
       {label}
@@ -458,7 +421,7 @@ function ScopeBadge({
 }) {
   const { t } = useTranslation();
   const cls =
-    "inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-[18px] px-[5px] text-[8px] font-semibold text-warning bg-background";
+    "inline-flex items-center gap-[3px] rounded-[3px] border border-warning/30 h-5 px-1.5 text-xs font-semibold text-warning bg-background";
   if (item.asset_id > 0) {
     return (
       <span className={cls}>

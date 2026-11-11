@@ -263,6 +263,40 @@
     box-shadow: inset 5px 0 0 oklch(0.58 0.18 82);
   }
 
+  /* 差异窗按侧着色：左侧本地（success 色相），右侧远端（info 色相），与合并窗的本地/远端改动一致 */
+  .external-edit-compare-line-local {
+    background-color: color-mix(in oklab, oklch(0.82 0.18 150) 46%, transparent);
+    box-shadow: inset 5px 0 0 oklch(0.46 0.19 150);
+  }
+
+  .external-edit-compare-line-remote {
+    background-color: color-mix(in oklab, oklch(0.78 0.18 245) 46%, transparent);
+    box-shadow: inset 5px 0 0 oklch(0.46 0.16 245);
+  }
+
+  .external-edit-compare-gutter-local {
+    background-color: oklch(0.46 0.19 150);
+  }
+
+  .external-edit-compare-gutter-remote {
+    background-color: oklch(0.46 0.16 245);
+  }
+
+  /* 按侧着色时去掉 Monaco 自带的增删红绿底色与 +/- 标记，颜色只由上面的侧色表达 */
+  .external-edit-compare-tone-by-side .monaco-editor .line-insert,
+  .external-edit-compare-tone-by-side .monaco-editor .line-delete,
+  .external-edit-compare-tone-by-side .monaco-editor .char-insert,
+  .external-edit-compare-tone-by-side .monaco-editor .char-delete,
+  .external-edit-compare-tone-by-side .monaco-editor .gutter-insert,
+  .external-edit-compare-tone-by-side .monaco-editor .gutter-delete {
+    background-color: transparent !important;
+  }
+
+  .external-edit-compare-tone-by-side .monaco-editor .line-insert,
+  .external-edit-compare-tone-by-side .monaco-editor .line-delete {
+    border: none !important;
+  }
+
   .external-edit-compare-line-current,
   .external-edit-diff-line-current {
     background-color: color-mix(in oklab, oklch(0.86 0.18 82) 68%, transparent);

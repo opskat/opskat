@@ -35,7 +35,7 @@ export function ColumnHeaderCard({ name, info, children }: { name: string; info?
             <div className="flex items-center gap-2">
               <span className="font-semibold break-all">{name}</span>
               {info.primaryKey && (
-                <span className="rounded bg-primary/15 px-1 text-[10px] text-primary">
+                <span className="rounded bg-primary/15 px-1 text-[11px] text-primary">
                   {t("query.columnInfoPrimaryKey")}
                 </span>
               )}

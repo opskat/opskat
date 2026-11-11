@@ -19,6 +19,7 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn(), warning: v
 // SettingsPage's other sections are not under test (and need their own backends).
 vi.mock("../../../components/settings/ShortcutSettings", () => ({ ShortcutSettings: () => null }));
 vi.mock("../../../components/settings/AISettingsSection", () => ({ AISettingsSection: () => null }));
+vi.mock("../../../components/settings/CommandReviewSection", () => ({ CommandReviewSection: () => null }));
 vi.mock("../../../components/settings/ImportSection", () => ({ ImportSection: () => null }));
 vi.mock("../../../components/settings/BackupSection", () => ({ BackupSection: () => null }));
 vi.mock("../../../components/settings/AppearanceSection", () => ({
@@ -169,7 +170,11 @@ describe("settings extensions tab badge", () => {
     render(<SettingsPage />);
     const badge = await screen.findByText("extension.updatesAvailable");
     expect(badge).toHaveClass("sr-only");
-    expect(screen.getByRole("tab", { name: /extension\.title/ })).toHaveTextContent("2");
+    expect(
+      within(screen.getByRole("navigation", { name: "settings.nav.label" })).getByRole("button", {
+        name: /extension\.title/,
+      })
+    ).toHaveTextContent("2");
 
     vi.mocked(ListStore).mockResolvedValue(state(card("kafka", { action: "installed" })) as never);
     await emit("ext:store-refreshed");

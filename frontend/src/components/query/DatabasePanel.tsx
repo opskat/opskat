@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { X, Table2, Code2, Database, Columns3, SquarePen } from "lucide-react";
 import { useQueryStore, type InnerTab } from "@/stores/queryStore";
@@ -14,7 +14,6 @@ import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
-  useResizeHandle,
 } from "@opskat/ui";
 import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
@@ -70,14 +69,6 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
   const openSqlTab = useQueryStore((s) => s.openSqlTab);
   const openCreateTableTab = useQueryStore((s) => s.openCreateTableTab);
 
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  const { size: sidebarWidth, handleMouseDown } = useResizeHandle({
-    defaultSize: 200,
-    minSize: 140,
-    maxSize: 400,
-    targetRef: sidebarRef,
-  });
-
   if (!dbState) return null;
 
   const { innerTabs, activeInnerTabId, closeRequest, dirtyInnerTabIds } = dbState;
@@ -109,20 +100,8 @@ export function DatabasePanel({ tabId }: DatabasePanelProps) {
 
   return (
     <div className="flex h-full w-full" data-testid="database-query-panel">
-      {/* Left sidebar: Database tree */}
-      <div
-        ref={sidebarRef}
-        className="shrink-0 border-r border-border bg-sidebar h-full overflow-hidden"
-        style={{ width: sidebarWidth }}
-      >
-        <DatabaseTree tabId={tabId} />
-      </div>
-
-      {/* Resize handle */}
-      <div
-        className="w-[3px] shrink-0 cursor-col-resize hover:bg-ring/40 active:bg-ring/60 transition-colors"
-        onMouseDown={handleMouseDown}
-      />
+      {/* Left sidebar: Database tree (shell + drag handle) */}
+      <DatabaseTree tabId={tabId} />
 
       {/* Right content area */}
       <div className="flex-1 min-w-0 flex flex-col h-full">

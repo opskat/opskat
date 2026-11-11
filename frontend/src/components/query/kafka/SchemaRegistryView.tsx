@@ -19,8 +19,9 @@ import {
   type KafkaTabState,
   useKafkaStore,
 } from "@/stores/kafkaStore";
-import { CompactSelect, EmptyState, LoadingBlock, Metric, StatusPill } from "./shared";
-import { parseSchemaReferences, formatSchema } from "./utils";
+import { errorMessage } from "@/lib/errorMessage";
+import { CompactSelect, EmptyState, ErrorNotice, LoadingBlock, Metric, StatusPill } from "./shared";
+import { parseSchemaReferences, formatSchema, runKafkaAction } from "./utils";
 
 export function SchemaRegistryView({ tabId, state }: { tabId: string; state: KafkaTabState }) {
   const { t } = useTranslation();
@@ -48,7 +49,7 @@ export function SchemaRegistryView({ tabId, state }: { tabId: string; state: Kaf
           {state.loadingSchemaSubjects && !state.schemaSubjects.length ? (
             <LoadingBlock />
           ) : state.schemaSubjects.length === 0 ? (
-            <EmptyState text={t("query.kafkaNoSchemaSubjects")} />
+            <EmptyState text={t("query.kafkaNoSchemaSubjects")} failed={!!state.error} />
           ) : (
             <SchemaSubjectTable
               subjects={state.schemaSubjects}
@@ -58,7 +59,7 @@ export function SchemaRegistryView({ tabId, state }: { tabId: string; state: Kaf
           )}
         </div>
         <div className="min-h-0 overflow-auto">
-          <SchemaDetailPanel tabId={tabId} state={state} />
+          <SchemaDetailPanel key={state.selectedSchemaSubject} tabId={tabId} state={state} />
         </div>
       </div>
       <RegisterSchemaDialog tabId={tabId} open={registerOpen} onOpenChange={setRegisterOpen} />
@@ -104,19 +105,30 @@ function SchemaDetailPanel({ tabId, state }: { tabId: string; state: KafkaTabSta
   const [deleteSubjectOpen, setDeleteSubjectOpen] = useState(false);
   const loadSchema = useKafkaStore((s) => s.loadSchema);
   const deleteSchema = useKafkaStore((s) => s.deleteSchema);
+  const [actionError, setActionError] = useState<string | null>(null);
   if (state.loadingSchemaDetail) return <LoadingBlock />;
   if (!state.selectedSchemaSubject) return <EmptyState text={t("query.kafkaSelectSchemaSubject")} />;
   const detail = state.schemaDetail;
   const versions = state.schemaVersions?.versions || [];
-  if (!detail) return <EmptyState text={t("query.kafkaNoSchemaDetail")} />;
+  if (!detail) return <EmptyState text={t("query.kafkaNoSchemaDetail")} failed={!!state.error} />;
 
-  const deleteVersion = async () => {
-    await deleteSchema(tabId, { subject: detail.subject, version: String(detail.version) });
+  const deleteVersion = () => {
     setDeleteVersionOpen(false);
+    setActionError(null);
+    void runKafkaAction(
+      () => deleteSchema(tabId, { subject: detail.subject, version: String(detail.version) }),
+      t("query.kafkaSchemaVersionDeleted", { subject: detail.subject, version: detail.version }),
+      setActionError
+    );
   };
-  const deleteSubject = async () => {
-    await deleteSchema(tabId, { subject: detail.subject });
+  const deleteSubject = () => {
     setDeleteSubjectOpen(false);
+    setActionError(null);
+    void runKafkaAction(
+      () => deleteSchema(tabId, { subject: detail.subject }),
+      t("query.kafkaSubjectDeleted", { subject: detail.subject }),
+      setActionError
+    );
   };
 
   return (
@@ -134,6 +146,7 @@ function SchemaDetailPanel({ tabId, state }: { tabId: string; state: KafkaTabSta
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
+      <ErrorNotice message={actionError} />
       <div className="grid grid-cols-3 gap-2">
         <Metric label="ID" value={detail.id} />
         <Metric label={t("query.kafkaSchemaVersion")} value={detail.version} />
@@ -229,6 +242,7 @@ function RegisterSchemaDialog({
   const [schema, setSchema] = useState("");
   const [references, setReferences] = useState("");
   const [compatibility, setCompatibility] = useState<KafkaSchemaCompatibilityResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const canSubmit = subject.trim() && schema.trim();
 
   const request = (): KafkaRegisterSchemaRequest => ({
@@ -239,12 +253,23 @@ function RegisterSchemaDialog({
   });
 
   const check = async () => {
-    const result = await checkSchemaCompatibility(tabId, { ...request(), version: "latest" });
-    setCompatibility(result || null);
+    setError(null);
+    try {
+      const result = await checkSchemaCompatibility(tabId, { ...request(), version: "latest" });
+      setCompatibility(result || null);
+    } catch (err) {
+      setError(errorMessage(err));
+    }
   };
 
   const submit = async () => {
-    await registerSchema(tabId, request());
+    setError(null);
+    const ok = await runKafkaAction(
+      () => registerSchema(tabId, request()),
+      t("query.kafkaSchemaRegistered", { subject: subject.trim() }),
+      setError
+    );
+    if (!ok) return;
     setSubject("");
     setSchema("");
     setReferences("");
@@ -292,6 +317,7 @@ function RegisterSchemaDialog({
               {compatibility.compatible ? t("query.kafkaSchemaCompatible") : t("query.kafkaSchemaIncompatible")}
             </div>
           )}
+          <ErrorNotice message={error} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -313,6 +339,7 @@ function RegisterSchemaDialog({
           description={t("query.kafkaRegisterSchemaConfirmDesc", { subject: subject.trim() })}
           cancelText={t("action.cancel")}
           confirmText={t("query.kafkaRegisterSchema")}
+          variant="default"
           onConfirm={submit}
         />
       </DialogContent>

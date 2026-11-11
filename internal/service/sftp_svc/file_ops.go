@@ -17,21 +17,37 @@ import (
 	"github.com/opskat/opskat/internal/pkg/sftpio"
 )
 
-// ClipboardItem describes a remote path captured by the file-manager clipboard.
-type ClipboardItem struct {
-	SessionID string `json:"sessionId"`
-	Path      string `json:"path"`
-	Name      string `json:"name"`
-	IsDir     bool   `json:"isDir"`
-	Size      int64  `json:"size"`
+// PasteItem is one clipboard entry to paste. TargetName is the exact name it lands
+// under in TargetDir: the caller has already resolved any same-name conflict (the
+// existing name means overwrite, the KeepBothPath name from StatTargets means keep
+// both, and skipped entries are simply not sent).
+type PasteItem struct {
+	SessionID  string `json:"sessionId"`
+	Path       string `json:"path"`
+	IsDir      bool   `json:"isDir"`
+	TargetName string `json:"targetName"`
 }
 
 // PasteRequest asks the backend to paste clipboard items into TargetDir.
 type PasteRequest struct {
-	TargetSessionID string          `json:"targetSessionId"`
-	TargetDir       string          `json:"targetDir"`
-	Mode            string          `json:"mode"` // "copy" | "cut"
-	Items           []ClipboardItem `json:"items"`
+	TargetSessionID string      `json:"targetSessionId"`
+	TargetDir       string      `json:"targetDir"`
+	Mode            string      `json:"mode"` // "copy" | "cut"
+	Items           []PasteItem `json:"items"`
+}
+
+// TargetStat reports whether a destination path is already taken, so the caller can
+// ask the user before overwriting it. Error is set when existence could not be
+// determined; such a target must not be written.
+type TargetStat struct {
+	Path    string `json:"path"`
+	Exists  bool   `json:"exists"`
+	IsDir   bool   `json:"isDir"`
+	Size    int64  `json:"size"`
+	ModTime int64  `json:"modTime"`
+	// KeepBothPath is the free _copy / _copy2 sibling used by "keep both"; set only when Exists.
+	KeepBothPath string `json:"keepBothPath,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 // FileProperties contains metadata displayed by the file-manager properties dialog.
@@ -98,8 +114,46 @@ func (s *Service) Rename(sessionID, oldPath, newPath string) error {
 	return client.Rename(oldPath, newPath)
 }
 
-// Paste copies or moves clipboard items into a target directory. Name conflicts are
-// resolved with _copy / _copy2 suffixes, including same-directory copy.
+// StatTargets checks each destination path on the session. Only a not-exist answer
+// counts as free; any other stat failure is reported per path in TargetStat.Error.
+func (s *Service) StatTargets(sessionID string, paths []string) ([]TargetStat, error) {
+	client, err := s.getSFTPClient(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]TargetStat, 0, len(paths))
+	for _, p := range paths {
+		result = append(result, statTarget(client, p))
+	}
+	return result, nil
+}
+
+func statTarget(client interface {
+	Stat(string) (os.FileInfo, error)
+}, p string) TargetStat {
+	stat := TargetStat{Path: p}
+	info, err := client.Stat(p)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			stat.Error = err.Error()
+		}
+		return stat
+	}
+	stat.Exists = true
+	stat.IsDir = info.IsDir()
+	stat.Size = info.Size()
+	stat.ModTime = info.ModTime().Unix()
+	keepBoth, err := keepBothPath(client, p)
+	if err != nil {
+		stat.Error = err.Error()
+		return stat
+	}
+	stat.KeepBothPath = keepBoth
+	return stat
+}
+
+// Paste copies or moves clipboard items into a target directory under each item's
+// TargetName. An existing target is overwritten; conflicts are decided by the caller.
 func (s *Service) Paste(ctx context.Context, req PasteRequest) error {
 	if req.TargetSessionID == "" || strings.TrimSpace(req.TargetDir) == "" {
 		return fmt.Errorf("target directory is required")
@@ -118,6 +172,9 @@ func (s *Service) Paste(ctx context.Context, req PasteRequest) error {
 		if item.SessionID == "" || item.Path == "" {
 			return fmt.Errorf("invalid clipboard item")
 		}
+		if !isBaseName(item.TargetName) {
+			return fmt.Errorf("invalid target name %q", item.TargetName)
+		}
 		srcClient, err := s.getSFTPClient(item.SessionID)
 		if err != nil {
 			return err
@@ -127,22 +184,16 @@ func (s *Service) Paste(ctx context.Context, req PasteRequest) error {
 			return err
 		}
 
-		name := item.Name
-		if name == "" {
-			name = pathpkg.Base(item.Path)
-		}
-		if req.Mode == "cut" && item.SessionID == req.TargetSessionID && sameRemotePath(pathpkg.Dir(item.Path), req.TargetDir) {
-			continue
-		}
-		dstPath, err := uniqueRemotePath(dstClient, pathpkg.Join(req.TargetDir, name))
-		if err != nil {
-			return err
-		}
-
-		if req.Mode == "cut" && item.SessionID == req.TargetSessionID {
-			if sameRemotePath(item.Path, dstPath) {
+		dstPath := pathpkg.Join(req.TargetDir, item.TargetName)
+		sameSession := item.SessionID == req.TargetSessionID
+		if sameSession && sameRemotePath(item.Path, dstPath) {
+			if req.Mode == "cut" {
 				continue
 			}
+			return fmt.Errorf("copy %s: source and destination are the same", item.Path)
+		}
+
+		if req.Mode == "cut" && sameSession {
 			if err := s.Rename(item.SessionID, item.Path, dstPath); err != nil {
 				return fmt.Errorf("move %s: %w", item.Path, err)
 			}
@@ -168,6 +219,10 @@ func (s *Service) Paste(ctx context.Context, req PasteRequest) error {
 		}
 	}
 	return nil
+}
+
+func isBaseName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.Contains(name, "/")
 }
 
 // 目录递归统计上限：超过这个上限或 ctx 取消时，countRemoteDir 提前返回，
@@ -330,16 +385,12 @@ func sameRemotePath(a, b string) bool {
 	return pathpkg.Clean(a) == pathpkg.Clean(b)
 }
 
-func uniqueRemotePath(client interface {
+// keepBothPath returns the first free _copy / _copy2 / ... sibling of an existing path.
+// Only a not-exist answer counts as free: a candidate whose check fails may well be an
+// existing file, and offering it would turn "keep both" into a silent overwrite.
+func keepBothPath(client interface {
 	Stat(string) (os.FileInfo, error)
 }, desired string) (string, error) {
-	if _, err := client.Stat(desired); err != nil {
-		if os.IsNotExist(err) {
-			return desired, nil
-		}
-		// Many SFTP servers return generic errors for missing paths; try the desired name first.
-		return desired, nil
-	}
 	dir := pathpkg.Dir(desired)
 	base := pathpkg.Base(desired)
 	ext := pathpkg.Ext(base)
@@ -350,9 +401,12 @@ func uniqueRemotePath(client interface {
 			suffix = fmt.Sprintf("_copy%d", i+1)
 		}
 		candidate := pathpkg.Join(dir, stem+suffix+ext)
-		if _, err := client.Stat(candidate); err != nil {
-			// Stat 失败视为"名字可用"：SFTP 服务端常返回通用错误而非 ENOENT。
-			return candidate, nil //nolint:nilerr
+		_, err := client.Stat(candidate)
+		if os.IsNotExist(err) {
+			return candidate, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("check %s: %w", candidate, err)
 		}
 	}
 	return "", fmt.Errorf("cannot find available copy name for %s", desired)

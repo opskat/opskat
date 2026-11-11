@@ -31,34 +31,14 @@ export function MongoDBPanel({ tabId }: MongoDBPanelProps) {
   const meta = tab?.meta as QueryTabMeta | undefined;
   const assetId = meta?.assetId ?? 0;
 
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  const { size: sidebarWidth, handleMouseDown } = useResizeHandle({
-    defaultSize: 200,
-    minSize: 140,
-    maxSize: 400,
-    targetRef: sidebarRef,
-  });
-
   if (!mongoState) return null;
 
   const { innerTabs, activeInnerTabId } = mongoState;
 
   return (
     <div className="flex h-full w-full">
-      {/* Left sidebar: Collection browser */}
-      <div
-        ref={sidebarRef}
-        className="shrink-0 border-r border-border bg-sidebar h-full overflow-hidden"
-        style={{ width: sidebarWidth }}
-      >
-        <MongoDBCollectionBrowser tabId={tabId} assetId={assetId} />
-      </div>
-
-      {/* Resize handle */}
-      <div
-        className="w-[3px] shrink-0 cursor-col-resize hover:bg-ring/40 active:bg-ring/60 transition-colors"
-        onMouseDown={handleMouseDown}
-      />
+      {/* Left sidebar: Collection browser (shell + drag handle) */}
+      <MongoDBCollectionBrowser tabId={tabId} assetId={assetId} />
 
       {/* Right content area */}
       <div className="flex-1 min-w-0 flex flex-col h-full">
@@ -614,7 +594,7 @@ function MongoQueryContent({ tabId, assetId, innerTab }: MongoQueryContentProps)
           </Select>
 
           {/* Parsed preview */}
-          <div className="flex-1 min-w-0 text-[11px] text-muted-foreground font-mono truncate">
+          <div className="flex-1 min-w-0 text-xs text-muted-foreground font-mono truncate">
             {parsePreview
               ? t("query.mongoshParsedAs", {
                   op: parsePreview.operation,

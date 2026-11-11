@@ -9,6 +9,8 @@ export interface LayoutState {
   leftPanelVisible: boolean;
   activeSidePanel: SidePanel;
   filterOpen: boolean;
+  /** 隐藏左侧工具条（页面导航栏）；独立持久化在 sidebar_hidden */
+  toolbarHidden: boolean;
 
   setLayout: (layout: TabBarLayout) => void;
   setPanelWidth: (w: number) => void;
@@ -16,6 +18,7 @@ export interface LayoutState {
   switchPanel: () => void;
   setActivePanel: (p: SidePanel) => void;
   setFilterOpen: (open: boolean) => void;
+  toggleToolbar: () => void;
   /** 打开 filter：侧边模式下顺带激活 tabs 面板并展开 */
   requestOpenFilter: () => void;
 }
@@ -39,6 +42,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   leftPanelVisible: true,
   activeSidePanel: "assets",
   filterOpen: false,
+  toolbarHidden: false,
 
   setLayout: (layout) => set({ tabBarLayout: layout, filterOpen: false }),
   setPanelWidth: (w) => set({ leftPanelWidth: clampWidth(w) }),
@@ -46,6 +50,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
   switchPanel: () => set((s) => ({ activeSidePanel: s.activeSidePanel === "assets" ? "tabs" : "assets" })),
   setActivePanel: (p) => set({ activeSidePanel: p }),
   setFilterOpen: (open) => set({ filterOpen: open }),
+  toggleToolbar: () => set((s) => ({ toolbarHidden: !s.toolbarHidden })),
   requestOpenFilter: () =>
     set((s) =>
       s.tabBarLayout === "left"
@@ -55,6 +60,7 @@ export const useLayoutStore = create<LayoutState>((set) => ({
 }));
 
 const STORAGE_KEY = "layout_store";
+const TOOLBAR_HIDDEN_KEY = "sidebar_hidden";
 
 interface SavedLayout {
   tabBarLayout: TabBarLayout;
@@ -67,6 +73,9 @@ let _persistReady = false;
 
 useLayoutStore.subscribe((state, prev) => {
   if (!_persistReady) return;
+  if (state.toolbarHidden !== prev.toolbarHidden) {
+    localStorage.setItem(TOOLBAR_HIDDEN_KEY, String(state.toolbarHidden));
+  }
   if (
     state.tabBarLayout !== prev.tabBarLayout ||
     state.leftPanelWidth !== prev.leftPanelWidth ||
@@ -85,6 +94,7 @@ useLayoutStore.subscribe((state, prev) => {
 
 (function restore() {
   try {
+    useLayoutStore.setState({ toolbarHidden: localStorage.getItem(TOOLBAR_HIDDEN_KEY) === "true" });
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const data = JSON.parse(raw) as Partial<SavedLayout>;

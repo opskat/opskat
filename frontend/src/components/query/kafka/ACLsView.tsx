@@ -12,7 +12,8 @@ import {
   Input,
 } from "@opskat/ui";
 import { type KafkaACL, type KafkaACLMutationRequest, type KafkaTabState, useKafkaStore } from "@/stores/kafkaStore";
-import { CompactSelect, EmptyState, LoadingBlock, StatusPill } from "./shared";
+import { CompactSelect, EmptyState, ErrorNotice, LoadingBlock, StatusPill } from "./shared";
+import { runKafkaAction } from "./utils";
 
 const ACL_RESOURCE_TYPES = ["any", "topic", "group", "cluster", "transactional_id", "delegation_token"];
 const ACL_MUTATION_RESOURCE_TYPES = ["topic", "group", "cluster", "transactional_id", "delegation_token"];
@@ -40,6 +41,7 @@ export function ACLsView({ tabId, state }: { tabId: string; state: KafkaTabState
   const { t } = useTranslation();
   const [createOpen, setCreateOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<KafkaACL | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const setACLFilters = useKafkaStore((s) => s.setACLFilters);
   const loadACLs = useKafkaStore((s) => s.loadACLs);
   const deleteACL = useKafkaStore((s) => s.deleteACL);
@@ -102,11 +104,12 @@ export function ACLsView({ tabId, state }: { tabId: string; state: KafkaTabState
           {t("query.kafkaCreateACL")}
         </Button>
       </div>
+      <ErrorNotice message={actionError} className="mx-4 mt-2 shrink-0" />
       <div className="min-h-0 flex-1 overflow-auto">
         {state.loadingACLs && !state.acls.length ? (
           <LoadingBlock />
         ) : state.acls.length === 0 ? (
-          <EmptyState text={t("query.kafkaNoACLs")} />
+          <EmptyState text={t("query.kafkaNoACLs")} failed={!!state.error} />
         ) : (
           <ACLTable acls={state.acls} onDelete={setDeleteTarget} />
         )}
@@ -127,10 +130,16 @@ export function ACLsView({ tabId, state }: { tabId: string; state: KafkaTabState
         })}
         cancelText={t("action.cancel")}
         confirmText={t("action.delete")}
-        onConfirm={async () => {
+        onConfirm={() => {
           if (!deleteTarget) return;
-          await deleteACL(tabId, deleteTarget);
+          const target = deleteTarget;
           setDeleteTarget(null);
+          setActionError(null);
+          void runKafkaAction(
+            () => deleteACL(tabId, target),
+            t("query.kafkaACLDeleted", { principal: target.principal }),
+            setActionError
+          );
         }}
       />
     </div>
@@ -156,7 +165,7 @@ function ACLTable({ acls, onDelete }: { acls: KafkaACL[]; onDelete: (acl: KafkaA
           <tr key={aclKey(acl)} className="border-t">
             <td className="max-w-[360px] px-3 py-2">
               <div className="truncate font-mono text-xs">{acl.resourceName || "-"}</div>
-              <div className="mt-0.5 flex flex-wrap gap-1 text-[10px] uppercase text-muted-foreground">
+              <div className="mt-0.5 flex flex-wrap gap-1 text-[11px] uppercase text-muted-foreground">
                 <span>{acl.resourceType}</span>
                 <span>{acl.patternType}</span>
               </div>
@@ -198,7 +207,7 @@ function CreateACLDialog({
   const { t } = useTranslation();
   const createACL = useKafkaStore((s) => s.createACL);
   const state = useKafkaStore((s) => s.states[tabId]);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<KafkaACLMutationRequest>({
     resourceType: "topic",
     resourceName: "",
@@ -219,12 +228,19 @@ function CreateACLDialog({
     (!resourceNameRequired || form.resourceName?.trim());
 
   const submit = async () => {
-    await createACL(tabId, {
-      ...form,
-      resourceName: form.resourceName?.trim(),
-      principal: form.principal.trim(),
-      host: form.host?.trim() || "*",
-    });
+    setError(null);
+    const ok = await runKafkaAction(
+      () =>
+        createACL(tabId, {
+          ...form,
+          resourceName: form.resourceName?.trim(),
+          principal: form.principal.trim(),
+          host: form.host?.trim() || "*",
+        }),
+      t("query.kafkaACLCreated", { principal: form.principal.trim() }),
+      setError
+    );
+    if (!ok) return;
     setForm({
       resourceType: "topic",
       resourceName: "",
@@ -289,28 +305,17 @@ function CreateACLDialog({
               items={ACL_MUTATION_PERMISSIONS}
             />
           </div>
+          <ErrorNotice message={error} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("action.cancel")}
           </Button>
-          <Button disabled={state?.aclAdminLoading || !canSubmit} onClick={() => setConfirmOpen(true)}>
+          <Button disabled={state?.aclAdminLoading || !canSubmit} onClick={submit}>
             {state?.aclAdminLoading && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
             {t("query.kafkaCreateACL")}
           </Button>
         </DialogFooter>
-        <ConfirmDialog
-          open={confirmOpen}
-          onOpenChange={setConfirmOpen}
-          title={t("query.kafkaCreateACL")}
-          description={t("query.kafkaCreateACLConfirmDesc", {
-            principal: form.principal.trim(),
-            resource: `${form.resourceType}:${form.resourceType === "cluster" ? "kafka-cluster" : form.resourceName}`,
-          })}
-          cancelText={t("action.cancel")}
-          confirmText={t("query.kafkaCreateACL")}
-          onConfirm={submit}
-        />
       </DialogContent>
     </Dialog>
   );

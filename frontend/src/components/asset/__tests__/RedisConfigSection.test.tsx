@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import { renderForSave } from "./rejectedSave";
 import { createRef } from "react";
 import { RedisConfigSection } from "@/components/asset/RedisConfigSection";
 import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
@@ -62,5 +63,25 @@ describe("RedisConfigSection ref 契约", () => {
     const ref = createRef<AssetFormHandle>();
     render(<RedisConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={onValidity} />);
     expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" });
+  });
+});
+
+describe("RedisConfigSection on a rejected save", () => {
+  it("shows missing sentinel nodes and master name under their fields", () => {
+    const editAsset = new asset_entity.Asset({
+      ID: 3,
+      Type: "redis",
+      Config: JSON.stringify({ mode: "sentinel", nodes: [], master_name: "" }),
+    });
+    const { rejectSave, reportShown } = renderForSave(
+      <RedisConfigSection editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />
+    );
+    rejectSave();
+    expect(screen.getByTestId("redis-nodes-textarea")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("asset.redisNodesRequired")).toBeInTheDocument();
+    expect(screen.getByTestId("redis-master-name-input")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("asset.redisMasterNameRequired")).toBeInTheDocument();
+    expect(screen.getByTestId("config-tab-error-connection")).toBeInTheDocument();
+    expect(reportShown).toHaveBeenCalled();
   });
 });

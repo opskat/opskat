@@ -143,13 +143,15 @@ describe("TableDataTab grid edits go through the driver", () => {
     await user.click(screen.getByTitle("query.addRow"));
     editCell("2:name", "cy");
 
-    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
     await user.click(await screen.findByText("query.confirmExecute"));
 
     await waitFor(() =>
       expect(executed()).toEqual(['INSERT users {"name":"cy"}', 'UPDATE users SET {"name":"bea"} WHERE {"id":2}'])
     );
-    await waitFor(() => expect(screen.getByTitle("query.applyChanges")).toBeDisabled());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "query.previewAndCommit" })).not.toBeInTheDocument()
+    );
   });
 
   it("keeps the failed and unmatched edits for a retry and clears only the successful ones", async () => {
@@ -164,7 +166,7 @@ describe("TableDataTab grid edits go through the driver", () => {
     await user.click(screen.getByTitle("query.addRow"));
     editCell("2:name", "cy");
 
-    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
     await user.click(await screen.findByText("query.confirmExecute"));
 
     await waitFor(() => expect(executed()).toHaveLength(3));
@@ -174,12 +176,12 @@ describe("TableDataTab grid edits go through the driver", () => {
     await waitFor(() => expect(cell("0:name")).toHaveTextContent("ada"));
     expect(cell("1:name")).toHaveTextContent("bea");
     expect(cell("2:name")).toHaveTextContent("cy");
-    expect(screen.getByTitle("query.applyChanges")).toBeEnabled();
+    expect(screen.getByRole("button", { name: "query.previewAndCommit" })).toBeEnabled();
 
     // 再提交只发剩下的两条。
     vi.mocked(ExecuteSQL).mockClear();
     vi.mocked(ExecuteSQL).mockResolvedValue(JSON.stringify({ affected_rows: 1 }));
-    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
     await user.click(await screen.findByText("query.confirmExecute"));
     await waitFor(() =>
       expect(executed()).toEqual(['INSERT users {"name":"cy"}', 'UPDATE users SET {"name":"bea"} WHERE {"id":2}'])
@@ -199,7 +201,7 @@ describe("TableDataTab grid edits go through the driver", () => {
     await user.click(screen.getByTitle("query.addRow"));
     editCell("3:name", "dee");
 
-    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
     await user.click(await screen.findByText("query.confirmExecute"));
 
     await waitFor(() => expect(cell("2:name")).toHaveTextContent("dee"));
@@ -225,7 +227,7 @@ describe("TableDataTab grid edits go through the driver", () => {
     editCell("0:name", "ally");
     editCell("1:name", "bea");
 
-    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
     await user.click(await screen.findByText("query.confirmExecute"));
 
     await waitFor(() => expect(cell("1:name")).toHaveTextContent("ally"));
@@ -234,7 +236,7 @@ describe("TableDataTab grid edits go through the driver", () => {
 
     vi.mocked(ExecuteSQL).mockClear();
     vi.mocked(ExecuteSQL).mockResolvedValue(JSON.stringify({ affected_rows: 1 }));
-    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
     await user.click(await screen.findByText("query.confirmExecute"));
     await waitFor(() => expect(executed()).toEqual(['UPDATE users SET {"name":"bea"} WHERE {"id":2}']));
   });
@@ -256,11 +258,11 @@ describe("TableDataTab grid edits go through the driver", () => {
     editCell("0:name", "ally");
     editCell("1:name", "bea");
 
-    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
     await user.click(await screen.findByText("query.confirmExecute"));
 
     await waitFor(() => expect(cell("1:name")).toHaveTextContent("cy"));
-    expect(screen.getByTitle("query.applyChanges")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "query.previewAndCommit" })).not.toBeInTheDocument();
   });
 
   it("shows a generation failure where errors show and opens no preview", async () => {
@@ -268,7 +270,7 @@ describe("TableDataTab grid edits go through the driver", () => {
     const user = await renderLoaded();
     editCell("0:name", "ally");
 
-    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('column "name" is not in table users'));
     expect(screen.queryByText("query.confirmExecute")).toBeNull();
@@ -287,13 +289,13 @@ describe("TableDataTab grid edits go through the driver", () => {
     vi.mocked(GetGridEditStatements).mockImplementationOnce(
       (...args) => new Promise((resolve) => (finishGeneration = () => resolve(generate(...args))))
     );
-    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
     editCell("0:name", "anna");
     await act(async () => finishGeneration());
 
     expect(screen.queryByRole("alertdialog")).toBeNull();
 
-    await user.click(screen.getByTitle("query.applyChanges"));
+    await user.click(screen.getByRole("button", { name: "query.previewAndCommit" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(previewed(dialog)).toEqual(['UPDATE users SET {"name":"anna"} WHERE {"id":1}']);
   });

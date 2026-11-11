@@ -41,6 +41,11 @@ function ProviderField({ state, patch }: { state: OSSFormState; patch: (p: Parti
   );
 }
 
+/** 桶名里不能有 "/":validate 与桶名字段共用。 */
+function ossBucketError(bucket: string): string {
+  return bucket.includes("/") ? "oss.error.bucketName" : "";
+}
+
 const OSS_GROUPS: ConfigGroupSchema<OSSFormState>[] = [
   {
     key: "connection",
@@ -55,8 +60,21 @@ const OSS_GROUPS: ConfigGroupSchema<OSSFormState>[] = [
         placeholder: "oss.form.endpointPlaceholder",
       },
       { kind: "text", key: "region", label: "oss.form.region", placeholder: "oss.form.regionPlaceholder" },
-      { kind: "text", key: "bucket", label: "oss.form.bucket", placeholder: "oss.form.bucketPlaceholder" },
-      { kind: "text", key: "accessKeyId", label: "oss.form.accessKeyId" },
+      {
+        kind: "text",
+        key: "bucket",
+        label: "oss.form.bucket",
+        placeholder: "oss.form.bucketPlaceholder",
+        testid: "oss-bucket-input",
+        error: (s) => ossBucketError(s.bucket),
+      },
+      {
+        kind: "text",
+        key: "accessKeyId",
+        label: "oss.form.accessKeyId",
+        required: true,
+        testid: "oss-access-key-input",
+      },
       { kind: "password", usernameKey: "accessKeyId", secretLabel: "oss.form.secretAccessKey" },
     ],
   },
@@ -84,7 +102,7 @@ export function OSSConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
     init: (a) => (a ? parseOSSConfig(a.Config) : { ...OSS_DEFAULTS }),
     validate: (s) => {
       const ok = s.endpoint.trim() !== "" && s.accessKeyId.trim() !== "";
-      const bucketError = s.bucket.includes("/") ? "oss.error.bucketName" : "";
+      const bucketError = ossBucketError(s.bucket);
       const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
       const canUse = ok && !bucketError && !proxyChainError;
       return {
@@ -113,6 +131,7 @@ export function OSSConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
       password: cred.value.password,
     }),
     deps: [cred.value],
+    dirtyExtra: [cred.value],
   });
 
   const groups = buildConfigGroups(OSS_GROUPS, { state, patch, ctx: { cred, editAsset } });

@@ -13,11 +13,9 @@ import { createPortal } from "react-dom";
 import {
   Database,
   Server,
-  RefreshCw,
   Loader2,
   Search,
   Key,
-  AlertCircle,
   AlertTriangle,
   Copy,
   Trash2,
@@ -34,6 +32,8 @@ import { toast } from "sonner";
 import { notifyCopied } from "@/lib/notify";
 import { cn } from "@/lib/utils";
 import { Button, Input, ConfirmDialog, computeContextMenuPosition } from "@opskat/ui";
+import { PanelSidebar, SidebarRefreshButton } from "@/components/common/PanelSidebar";
+import { AsyncState } from "@/components/common/AsyncState";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import {
@@ -231,7 +231,7 @@ function RedisFooterSelector({ value, options, disabled, onChange, menuTestId, f
               );
             })}
             {footnote ? (
-              <div className="border-t px-2 pb-1 pt-1.5 text-[10px] leading-4 text-muted-foreground">{footnote}</div>
+              <div className="border-t px-2 pb-1 pt-1.5 text-[11px] leading-4 text-muted-foreground">{footnote}</div>
             ) : null}
           </div>,
           document.body
@@ -568,38 +568,31 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
   ];
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Browser actions */}
-      <div className="flex items-center gap-1 border-b px-2 py-1.5">
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => setViewMode((v) => (v === "list" ? "tree" : "list"))}
-          title={viewMode === "list" ? t("query.treeView") : t("query.listView")}
-        >
-          {viewMode === "list" ? <FolderTree className="size-3.5" /> : <List className="size-3.5" />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => setCreateDialogOpen(true)}
-          title={t("query.createRedisKey")}
-        >
-          <Plus className="size-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          onClick={handleRefresh}
-          disabled={state.loadingKeys}
-          title={t("query.refreshTree")}
-        >
-          <RefreshCw className={`size-3.5 ${state.loadingKeys ? "animate-spin" : ""}`} />
-        </Button>
-      </div>
-
-      {/* Filter input */}
-      <div className="border-b px-2 py-1.5">
+    <PanelSidebar
+      panelType="redis"
+      title={t("query.redisKeys")}
+      actions={
+        <>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setViewMode((v) => (v === "list" ? "tree" : "list"))}
+            title={viewMode === "list" ? t("query.treeView") : t("query.listView")}
+          >
+            {viewMode === "list" ? <FolderTree className="size-3.5" /> : <List className="size-3.5" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setCreateDialogOpen(true)}
+            title={t("query.createRedisKey")}
+          >
+            <Plus className="size-3.5" />
+          </Button>
+          <SidebarRefreshButton onClick={handleRefresh} loading={state.loadingKeys} />
+        </>
+      }
+      filter={
         <div className="relative">
           <Search className="absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -610,8 +603,8 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
             onKeyDown={handleFilterKeyDown}
           />
         </div>
-      </div>
-
+      }
+    >
       {/* Key count */}
       <div className="flex items-center justify-between gap-2 border-b px-2 py-1 text-xs text-muted-foreground">
         <span>{t("query.keyCount", { count: visibleKeys.length })}</span>
@@ -621,7 +614,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
             data-scanned={state.scannedMasters ?? 0}
             data-total={state.totalMasters}
             data-partial={scanCoveragePartial ? "true" : "false"}
-            className={cn("shrink-0 font-mono text-[10px]", scanCoveragePartial && "text-warning")}
+            className={cn("shrink-0 font-mono text-[11px]", scanCoveragePartial && "text-warning")}
           >
             {t("query.redisScannedMasters", { scanned: state.scannedMasters ?? 0, total: state.totalMasters })}
           </span>
@@ -651,12 +644,14 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
         </div>
       )}
 
-      {/* Error message */}
-      {state.error && (
-        <div className="flex items-start gap-2 border-b border-destructive/20 bg-destructive/10 px-2 py-2 text-xs text-destructive">
-          <AlertCircle className="size-3.5 shrink-0 mt-0.5" />
-          <span className="break-all">{state.error}</span>
-        </div>
+      {/* 加载失败:原因 + 重试。已扫到的 key 仍列在下面。 */}
+      {state.error && !state.loadingKeys && (
+        <AsyncState
+          status="error"
+          error={state.error}
+          onRetry={handleRefresh}
+          className="items-start border-b px-2 py-2 text-left"
+        />
       )}
 
       {/* Virtualized key list / tree */}
@@ -746,7 +741,7 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
                     <span className="truncate font-mono">{row.name}</span>
                   </button>
                   {isFolder && (
-                    <span className="ml-auto shrink-0 text-muted-foreground text-[10px]">
+                    <span className="ml-auto shrink-0 text-muted-foreground text-[11px]">
                       {row.keyCount}
                       {treeCountsIncomplete ? "+" : ""}
                     </span>
@@ -782,10 +777,19 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
           })}
         </div>
 
-        {state.loadingKeys && (
-          <div className="flex items-center justify-center py-3">
-            <Loader2 className="size-4 animate-spin text-muted-foreground" />
-          </div>
+        {redisKeys.length === 0 ? (
+          // 首屏:扫描中转圈;扫描成功且确实没有 key(游标走完)才显示空态;失败由上方的错误块说明。
+          state.loadingKeys ? (
+            <AsyncState status="loading" />
+          ) : state.error ? null : (
+            <AsyncState status="ready" empty={state.hasMore ? undefined : t("query.noKeys")} />
+          )
+        ) : (
+          state.loadingKeys && (
+            <div className="flex items-center justify-center py-3">
+              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+            </div>
+          )
         )}
       </div>
 
@@ -871,6 +875,6 @@ export function RedisKeyBrowser({ tabId }: RedisKeyBrowserProps) {
         confirmText={t("action.delete")}
         onConfirm={confirmDelete}
       />
-    </div>
+    </PanelSidebar>
   );
 }

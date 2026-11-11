@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import i18next from "i18next";
 
 import zhCommon from "@/i18n/locales/zh-CN/common.json";
 import enCommon from "@/i18n/locales/en/common.json";
@@ -17,6 +18,15 @@ function flattenKeys(value: unknown, prefix = ""): string[] {
     const nextPrefix = prefix ? `${prefix}.${key}` : key;
     return flattenKeys(child, nextPrefix);
   });
+}
+
+function flattenLeafEntries(value: unknown, prefix = ""): [string, unknown][] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return prefix ? [[prefix, value]] : [];
+  }
+  return Object.entries(value as LocaleTree).flatMap(([key, child]) =>
+    flattenLeafEntries(child, prefix ? `${prefix}.${key}` : key)
+  );
 }
 
 function hasLocaleKey(locale: LocaleTree, key: string): boolean {
@@ -126,6 +136,29 @@ describe("i18n resources", () => {
         duplicates: [],
       });
     }
+  });
+
+  // 同一对象里既有扁平点号键（"panel.ai"）又有同前缀的嵌套对象（"panel": {...}）时，
+  // i18next 先按路径走进嵌套对象，扁平的兄弟键就再也查不到，界面显示原始 key。
+  it("resolves every key path through i18next to its own translation", async () => {
+    const unresolvedByLocale: Record<string, string[]> = {};
+    for (const [locale, resources] of [
+      ["zh-CN", zhCommon],
+      ["en", enCommon],
+    ] as const) {
+      const instance = i18next.createInstance();
+      await instance.init({
+        lng: locale,
+        resources: { [locale]: { common: resources } },
+        defaultNS: "common",
+        interpolation: { escapeValue: false },
+        returnObjects: false,
+      });
+      unresolvedByLocale[locale] = flattenLeafEntries(resources)
+        .filter(([key, value]) => instance.t(key, { interpolation: { skipOnVariables: true } }) !== value)
+        .map(([key]) => key);
+    }
+    expect(unresolvedByLocale).toEqual({ "zh-CN": [], en: [] });
   });
 
   it("covers static common translation calls", () => {

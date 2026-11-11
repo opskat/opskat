@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@opskat/ui";
 import { STRIP_FADE, revealScrollLeft, stripEdges } from "@/components/asset/configTabStrip";
+import { useSaveAttempt, useShownError } from "@/components/asset/useConfigSection";
 
 export interface ConfigGroup {
   /** 稳定标识,用于激活态匹配与 data-testid。 */
@@ -11,6 +12,8 @@ export interface ConfigGroup {
   label: string;
   /** 数量徽标(如 Connect 集群数);<=0 或 undefined 不显示。 */
   badge?: number;
+  /** 组里有字段在保存被拒时会把错误画在自己下面;保存被拒后标签带标记,并切到第一个这样的组。 */
+  error?: boolean;
   render: () => ReactNode;
 }
 
@@ -40,6 +43,21 @@ export function ConfigTabs({ groups, active: controlledActive, onActiveChange }:
   const [edges, setEdges] = useState({ left: false, right: false });
   const activeKey = (groups.find((g) => g.key === active) ?? groups[0])?.key;
   const hasTabs = groups.length > 1;
+
+  // 保存被拒(attempt 变了):切到第一个出错的组。自管模式在渲染期直接切;受控模式由下方 effect 通知父级。
+  const attempt = useSaveAttempt();
+  const errorShown = useShownError(groups.some((g) => g.error));
+  const [jump, setJump] = useState<{ attempt: number; key?: string }>({ attempt });
+  if (jump.attempt !== attempt) {
+    const key = groups.find((g) => g.error)?.key;
+    setJump({ attempt, key });
+    if (key) setOwnActive(key);
+  }
+  useEffect(() => {
+    if (jump.key) onActiveChange?.(jump.key);
+    // 只在一次新的跳转时通知;onActiveChange 的身份变化不算跳转。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jump]);
 
   // 标签条自身变宽窄、或标签文案变长短(切换语言)都会改变"哪一侧还有内容"。
   useEffect(() => {
@@ -113,8 +131,14 @@ export function ConfigTabs({ groups, active: controlledActive, onActiveChange }:
                   )}
                 >
                   {t(g.label)}
+                  {errorShown && g.error && (
+                    <span data-testid={`config-tab-error-${g.key}`} className="flex items-center">
+                      <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-destructive" />
+                      <span className="sr-only">{t("asset.formTabHasErrors")}</span>
+                    </span>
+                  )}
                   {g.badge !== undefined && g.badge > 0 && (
-                    <span className="rounded-full bg-primary/10 px-1.5 text-[10px] font-semibold text-primary">
+                    <span className="rounded-full bg-primary/10 px-1.5 text-[11px] font-semibold text-primary">
                       {g.badge}
                     </span>
                   )}

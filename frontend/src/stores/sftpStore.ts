@@ -1,12 +1,5 @@
 import { create } from "zustand";
-import { SFTPUpload } from "../../wailsjs/go/ssh/SSH";
-import {
-  SFTPUploadDir,
-  SFTPUploadFile,
-  SFTPDownload,
-  SFTPDownloadDir,
-  SFTPCancelTransfer,
-} from "../../wailsjs/go/ssh/SSH";
+import { SFTPUploadFile, SFTPDownload, SFTPDownloadDir, SFTPCancelTransfer } from "../../wailsjs/go/ssh/SSH";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import { registerTabCloseHook, registerTabReplaceHook } from "./tabStore";
 
@@ -23,7 +16,16 @@ export interface SFTPTransfer {
   speed: number;
   status: "active" | "done" | "error" | "cancelled";
   error?: string;
+  /** 下载落地的本地路径（文件或目录），由后端在终态事件里给出；上传无此值。 */
+  localPath?: string;
+  /** 重试所需参数；ZMODEM 这类前端驱动的传输没有，不可重试。 */
+  retry?: SFTPRetrySpec;
 }
+
+export type SFTPRetrySpec =
+  | { kind: "upload"; localPath: string; remotePath: string }
+  | { kind: "download"; remotePath: string }
+  | { kind: "downloadDir"; remotePath: string };
 
 export interface SFTPTransferTarget {
   tabId: string;
@@ -48,8 +50,7 @@ interface SFTPState {
   fileManagerPaths: Record<string, string>;
   fileManagerWidth: number;
 
-  startUpload: (target: SFTPTransferTarget, remotePath: string) => Promise<string | null>;
-  startUploadDir: (target: SFTPTransferTarget, remotePath: string) => Promise<string | null>;
+  /** 上传本地文件或目录到 remotePath（目标完整路径；同名冲突由调用方先决定）。 */
   startUploadFile: (target: SFTPTransferTarget, localPath: string, remotePath: string) => Promise<string | null>;
   startDownload: (target: SFTPTransferTarget, remotePath: string) => Promise<string | null>;
   startDownloadDir: (target: SFTPTransferTarget, remotePath: string) => Promise<string | null>;
@@ -61,6 +62,8 @@ interface SFTPState {
     onCancel: () => void
   ) => void;
   cancelTransfer: (transferId: string) => void;
+  /** 用同样的参数重新发起一次失败/已取消的传输；新行取代旧行（下载会重新询问保存位置）。 */
+  retryTransfer: (transferId: string) => Promise<string | null>;
   clearTransfer: (transferId: string) => void;
   clearCompleted: () => void;
   clearCompletedForSession: (sessionId: string) => void;
@@ -80,7 +83,8 @@ function subscribeProgress(
   target: SFTPTransferTarget,
   direction: "upload" | "download",
   set: (fn: (state: SFTPState) => Partial<SFTPState>) => void,
-  get: () => SFTPState
+  get: () => SFTPState,
+  retry?: SFTPRetrySpec
 ) {
   // Initialize transfer in store
   set((state) => ({
@@ -98,6 +102,7 @@ function subscribeProgress(
         bytesTotal: 0,
         speed: 0,
         status: "active",
+        retry,
       },
     },
   }));
@@ -115,6 +120,7 @@ function subscribeProgress(
       bytesTotal?: number;
       speed?: number;
       error?: string;
+      localPath?: string;
     }) => {
       const transfers = get().transfers;
       const existing = transfers[transferId];
@@ -141,24 +147,14 @@ function subscribeProgress(
           set((state) => ({
             transfers: {
               ...state.transfers,
-              [transferId]: { ...existing, status: "done" },
+              [transferId]: { ...existing, status: "done", localPath: event.localPath || existing.localPath },
             },
           }));
           cancelHandlers.delete(transferId);
           EventsOff(eventName);
-          // 5 秒后自动清除已完成的传输
-          setTimeout(() => {
-            const current = get().transfers[transferId];
-            if (current && current.status === "done") {
-              set((state) => {
-                const { [transferId]: _, ...rest } = state.transfers;
-                return { transfers: rest };
-              });
-            }
-          }, 5000);
           break;
         case "cancelled":
-          // ZMODEM 取消由后端显式发 "cancelled"（SFTP 则走下面 error 分支按消息推断）。
+          // 后端显式发 "cancelled"（SFTP 在 internal/app/ssh/sftp.go 里按 context.Canceled 映射）。
           set((state) => ({
             transfers: {
               ...state.transfers,
@@ -174,7 +170,7 @@ function subscribeProgress(
               ...state.transfers,
               [transferId]: {
                 ...existing,
-                status: event.error?.includes("context canceled") ? "cancelled" : "error",
+                status: "error",
                 error: event.error,
               },
             },
@@ -193,38 +189,24 @@ export const useSFTPStore = create<SFTPState>((set, get) => ({
   fileManagerPaths: {},
   fileManagerWidth: DEFAULT_FILE_MANAGER_WIDTH,
 
-  startUpload: async (target, remotePath) => {
-    const transferId = await SFTPUpload(target.sessionId, remotePath);
-    if (!transferId) return null;
-    subscribeProgress(transferId, target, "upload", set, get);
-    return transferId;
-  },
-
-  startUploadDir: async (target, remotePath) => {
-    const transferId = await SFTPUploadDir(target.sessionId, remotePath);
-    if (!transferId) return null;
-    subscribeProgress(transferId, target, "upload", set, get);
-    return transferId;
-  },
-
   startUploadFile: async (target, localPath, remotePath) => {
     const transferId = await SFTPUploadFile(target.sessionId, localPath, remotePath);
     if (!transferId) return null;
-    subscribeProgress(transferId, target, "upload", set, get);
+    subscribeProgress(transferId, target, "upload", set, get, { kind: "upload", localPath, remotePath });
     return transferId;
   },
 
   startDownload: async (target, remotePath) => {
     const transferId = await SFTPDownload(target.sessionId, remotePath);
     if (!transferId) return null;
-    subscribeProgress(transferId, target, "download", set, get);
+    subscribeProgress(transferId, target, "download", set, get, { kind: "download", remotePath });
     return transferId;
   },
 
   startDownloadDir: async (target, remotePath) => {
     const transferId = await SFTPDownloadDir(target.sessionId, remotePath);
     if (!transferId) return null;
-    subscribeProgress(transferId, target, "download", set, get);
+    subscribeProgress(transferId, target, "download", set, get, { kind: "downloadDir", remotePath });
     return transferId;
   },
 
@@ -240,6 +222,22 @@ export const useSFTPStore = create<SFTPState>((set, get) => ({
       return;
     }
     SFTPCancelTransfer(transferId);
+  },
+
+  retryTransfer: async (transferId) => {
+    const old = get().transfers[transferId];
+    if (!old?.retry) return null;
+    const target = { tabId: old.tabId, sessionId: old.sessionId };
+    const spec = old.retry;
+    const { startUploadFile, startDownload, startDownloadDir } = get();
+    const newId =
+      spec.kind === "upload"
+        ? await startUploadFile(target, spec.localPath, spec.remotePath)
+        : spec.kind === "download"
+          ? await startDownload(target, spec.remotePath)
+          : await startDownloadDir(target, spec.remotePath);
+    if (newId) get().clearTransfer(transferId);
+    return newId;
   },
 
   clearTransfer: (transferId) => {

@@ -193,6 +193,7 @@
     "selectAsset": "Select Asset",
     "rules": "Forward Rules",
     "addRule": "Add Rule",
+    "removeRule": "Remove rule",
     "port": "Port",
     "empty": "No forward configs yet. Click the button above to create one.",
     "running": "Running",
@@ -201,7 +202,22 @@
     "partial": "Partial",
     "processing": "Processing...",
     "deleteConfirmTitle": "Confirm Delete Config",
-    "deleteConfirmDesc": "Are you sure you want to delete forward config \"{{name}}\"? This cannot be undone."
+    "deleteConfirmDesc": "Are you sure you want to delete forward config \"{{name}}\"? This cannot be undone.",
+    "assetChangeFailed": "Failed to switch asset",
+    "deleteFailed": "Failed to delete forward config",
+    "saveFailed": "Failed to save forward config",
+    "saved": "Forward config saved",
+    "startFailed": "Failed to start forward",
+    "stopFailed": "Failed to stop forward",
+    "ruleError": {
+      "localPort": "Local port must be a number from 1 to 65535",
+      "remote": "Remote host and a remote port (1–65535) are required"
+    },
+    "type": {
+      "dynamic": "Dynamic (SOCKS5)",
+      "local": "Local forward",
+      "remote": "Remote forward"
+    }
   },
   "appQuit": {
     "activityTitle": "Tasks are still running",
@@ -310,7 +326,12 @@
     "moveLeft": "Move Left",
     "moveRight": "Move Right",
     "moveToStart": "Move to Start",
-    "moveToEnd": "Move to End"
+    "moveToEnd": "Move to End",
+    "closeConfirmAction": "Close tabs",
+    "closeConfirmDescBoth": "This will disconnect {{sessions}} session(s) and interrupt {{transfers}} transfer(s) in progress.",
+    "closeConfirmDescSessions": "This will disconnect {{sessions}} session(s).",
+    "closeConfirmDescTransfers": "This will interrupt {{transfers}} transfer(s) in progress.",
+    "closeConfirmTitle": "Close tabs?"
   },
   "theme": {
     "label": "Theme",
@@ -1011,7 +1032,15 @@
       "usageNotesHint": "Usage notes live on the type \"{{name}}\" and are shared by all its assets.",
       "viewUsageNotes": "View",
       "usageNotesTitle": "Usage notes · {{name}}"
-    }
+    },
+    "copyName": "{{name}} (copy)",
+    "copyTitle": "Copy {{type}}",
+    "discardConfirm": "Discard changes",
+    "discardDescription": "You have unsaved changes to this asset. If you leave now they will be lost.",
+    "discardKeepEditing": "Keep editing",
+    "discardTitle": "Discard changes?",
+    "formMissingUsername": "Enter a username.",
+    "formTabHasErrors": "Has errors"
   },
   "sshKey": {
     "title": "SSH Keys",
@@ -1162,7 +1191,8 @@
         "connect": "Connect",
         "auth": "Auth",
         "shell": "Shell"
-      }
+      },
+      "cancelled": "Connection cancelled"
     },
     "session": {
       "reconnect": "Reconnect",
@@ -1245,7 +1275,26 @@
     "reasoningEffortMedium": "Medium",
     "reasoningEffortHigh": "High",
     "reasoningEffortXHigh": "XHigh",
-    "reasoningEffortMax": "Max"
+    "reasoningEffortMax": "Max",
+    "group": {
+      "about": "About",
+      "ai": "AI",
+      "connection": "Connection",
+      "data": "Data",
+      "general": "General"
+    },
+    "nav": {
+      "ai": "Providers and command review",
+      "importBackup": "Import and backup",
+      "appearance": "Appearance and language",
+      "network": "Network proxy",
+      "update": "Updates",
+      "debugLogs": "Debugging and logs",
+      "label": "Settings sections"
+    },
+    "debugLogs": {
+      "desc": "Turn on detailed logging, open the logs folder, or report a bug"
+    }
   },
   "backup": {
     "title": "Backup",
@@ -1513,7 +1562,27 @@
       "syncing": "Linked",
       "referencedThisSession": "Referenced"
     },
-    "approvalGenericTarget": "Target"
+    "approvalGenericTarget": "Target",
+    "approvalAllowOnce": "Allow once",
+    "approvalType": {
+      "cp": "File transfer",
+      "delete": "Delete",
+      "etcd": "etcd",
+      "exec": "Command",
+      "grant": "Grant",
+      "k8s": "Kubernetes",
+      "kafka": "Kafka",
+      "local_bash": "Local command",
+      "local_edit": "Edit file",
+      "local_write": "Write file",
+      "mongo": "MongoDB",
+      "oss": "Object storage",
+      "redis": "Redis",
+      "serial": "Serial",
+      "sql": "SQL"
+    },
+    "approvalView": "View",
+    "approvalWaitingDesc": "Waiting for your approval"
   },
   "shortcut": {
     "title": "Shortcuts",
@@ -1544,6 +1613,7 @@
     "panel.sidebar": "Toggle Sidebar",
     "panel.switch": "Switch Assets / Tabs Panel",
     "panel.filter": "Find Tabs",
+    "panel.toolbar": "Show / Hide Toolbar",
     "terminal.copy": "Terminal Copy",
     "terminal.paste": "Terminal Paste",
     "terminal.selectAll": "Terminal Select All",
@@ -1561,7 +1631,8 @@
       "opened": "Open",
       "recent": "Recent",
       "assets": "Assets",
-      "snippets": "Snippets"
+      "snippets": "Snippets",
+      "actions": "Pages and actions"
     },
     "empty": {
       "noContent": "No items. Add an asset first.",
@@ -1590,7 +1661,8 @@
     "hideAssetTree": "Hide Asset Tree",
     "showAssetTree": "Show Asset Tree",
     "hideAIPanel": "Hide AI Chat",
-    "showAIPanel": "Show AI Chat"
+    "showAIPanel": "Show AI Chat",
+    "pendingApprovals": "{{count}} conversation(s) waiting for approval"
   },
   "sideTabs": {
     "title": "Open Tabs",
@@ -1862,7 +1934,10 @@
       "entry": "External Edit Pending",
       "title": "External Edit Pending Files",
       "description": "Conflicts, errors, and recovery files are handled here. Closing this dialog does not drop records.",
-      "empty": "No pending external edit files."
+      "empty": "No pending external edit files.",
+      "acceptRemoteConfirmDesc": "Edits in the local draft that haven't reached the remote file will be discarded in favour of the current remote content. This can't be undone.",
+      "acceptRemoteConfirmTitle": "Replace your local changes with the remote version?",
+      "overwriteRecoveryDesc": "The remote file will be replaced with the local draft, discarding the current remote version. This can't be undone."
     },
     "state": {
       "clean": "Synced",
@@ -1910,20 +1985,24 @@
       "next": "Next conflict",
       "closeDirtyTitle": "Discard unsaved merge draft?",
       "closeDirtyDesc": "Closing keeps the conflict record, but the unsaved final draft edits in this dialog will be lost.",
-      "closeDirtyConfirm": "Discard and Close"
+      "closeDirtyConfirm": "Discard and Close",
+      "blockRow": "Difference {{index}}",
+      "takeBlockUnlocated": "The lines around this difference were edited in the final draft, so it can't be replaced automatically. Edit the final draft directly.",
+      "takeLocal": "Use local",
+      "takeLocalHint": "Replace difference {{index}} in the final draft with the local version",
+      "takeRemote": "Use remote",
+      "takeRemoteHint": "Replace difference {{index}} in the final draft with the remote version"
     },
     "compare": {
       "title": "Read-only Diff",
-      "localDraft": "Local Draft",
-      "remoteSnapshot": "Remote Snapshot",
       "readOnly": "Read-only",
       "projectView": "Conflict Files",
       "status": "Read-only diff workbench",
-      "remoteLeftLocalRight": "Left remote / right local",
       "previous": "Previous difference",
       "next": "Next difference",
       "loadFailed": "Diff view failed to load",
-      "helper": "Remote on the left, local on the right, with line numbers and synced scrolling for inspection."
+      "localLeftHelper": "Local on the left, remote on the right, with line numbers and synced scrolling for inspection.",
+      "localLeftRemoteRight": "Left local / right remote"
     },
     "settings": {
       "tab": "External Edit",
@@ -1949,6 +2028,10 @@
       "noArgs": "No launch args",
       "editorUnavailable": "Unavailable until the executable path is fixed",
       "saved": "External edit settings saved"
+    },
+    "side": {
+      "local": "Local (my changes)",
+      "remote": "Remote (on the server)"
     }
   },
   "integration": {
@@ -2081,11 +2164,13 @@
     "batchDescription": "The following {{count}} operations require your approval",
     "batchCollapsedSummary": "{{count}} approval items collapsed — click to expand and review each one",
     "alwaysAllow": "Always Allow",
-    "approve": "Approve",
     "scopeAll": "All Assets",
     "genericHttp": "HTTP request",
     "genericCommand": "Command",
-    "genericSecret": "Secret read"
+    "genericSecret": "Secret read",
+    "queuePosition": "{{current}} of {{total}}",
+    "rememberCancel": "Don't remember",
+    "respondFailed": "Your answer didn't go through"
   },
   "audit": {
     "title": "Audit Log",
@@ -2131,7 +2216,28 @@
     "sessionGroupThisWeek": "This week",
     "sessionGroupEarlier": "Earlier",
     "sessionOps": "{{count}} ops",
-    "sessionPatterns": "Session approved patterns"
+    "sessionPatterns": "Session approved patterns",
+    "decisionSources": {
+      "assisted": "Assisted",
+      "autopilot": "Autopilot",
+      "grant": "Grant",
+      "policy": "Policy",
+      "user": "You",
+      "execUnsupportedType": "Type can't run commands",
+      "execGateBlocked": "Usage guide not loaded",
+      "execPrecheckFailed": "Precondition not met",
+      "execCanonicalizeError": "Invalid command",
+      "execTypeMismatch": "Type mismatch",
+      "execResolveFailed": "Asset not found or ambiguous",
+      "execInvalidInput": "Invalid input",
+      "batchComplete": "Batch succeeded",
+      "batchPartialFailure": "Batch partly failed",
+      "batchFailed": "Batch failed"
+    },
+    "decisions": {
+      "allow": "Allowed",
+      "deny": "Denied"
+    }
   },
   "zmodem": {
     "downloadComplete": "Received {{name}}",
@@ -2274,7 +2380,9 @@
       "accessDenied": "The target directory cannot be accessed",
       "remoteFailed": "The terminal rejected the directory change",
       "nonceFailed": "Could not start a verified directory change"
-    }
+    },
+    "clearCompleted": "Clear completed",
+    "showInFolder": "Show in folder"
   },
   "error": {
     "boundary": {
@@ -2347,7 +2455,6 @@
     "listView": "List view",
     "collections": "Collections",
     "mongoDatabase": "Database",
-    "mongoCollections": "Collection List",
     "mongoDocuments": "Documents",
     "mongoFilter": "Query Filter",
     "mongoPipeline": "Aggregation Pipeline",
@@ -2418,7 +2525,6 @@
     "kafkaACLPermission": "Permission",
     "kafkaCreateACL": "Create ACL",
     "kafkaDeleteACL": "Delete ACL",
-    "kafkaCreateACLConfirmDesc": "Create ACL for {{principal}} on {{resource}}.",
     "kafkaDeleteACLConfirmDesc": "Delete ACL for {{principal}} on {{resource}}. This cannot be undone.",
     "kafkaNoSchemaSubjects": "No schema subjects",
     "kafkaSchemaSubjectTotal": "{{count}} subject(s)",
@@ -2462,8 +2568,6 @@
     "kafkaResumeConnector": "Resume",
     "kafkaRestartConnector": "Restart",
     "kafkaDeleteConnector": "Delete Connector",
-    "kafkaPauseConnectorConfirmDesc": "Pause connector {{name}}.",
-    "kafkaResumeConnectorConfirmDesc": "Resume connector {{name}}.",
     "kafkaDeleteConnectorConfirmDesc": "Delete connector {{name}}. This cannot be undone.",
     "kafkaRestartConnectorTasks": "Restart tasks",
     "kafkaRestartConnectorOnlyFailed": "Only failed tasks",
@@ -2511,8 +2615,6 @@
     "kafkaMessageValue": "Value",
     "kafkaHeaders": "Headers",
     "kafkaHeadersPlaceholder": "[{\"key\":\"trace\",\"value\":\"abc\",\"encoding\":\"text\"}]",
-    "kafkaProduceConfirmTitle": "Confirm Produce",
-    "kafkaProduceConfirmDesc": "Write one message to topic {{topic}}.",
     "kafkaSendMessage": "Send",
     "kafkaTruncated": "truncated",
     "noKeySelected": "Select a key to view details",
@@ -2807,6 +2909,8 @@
     "filterTables": "Filter tables...",
     "filterCollections": "Filter collections...",
     "noMatch": "No match",
+    "noDatabases": "No databases",
+    "noKeys": "No keys",
     "expandEdit": {
       "title": "Expanded editor",
       "menu": "Expand to Edit",
@@ -3083,9 +3187,6 @@
     "sqlPreviewDesc": "The following {{count}} SQL statement(s) will be executed:",
     "confirmExecute": "Execute",
     "pendingEdits": "{{count}} pending edit(s)",
-    "applyChanges": "Apply Changes",
-    "discardChanges": "Discard Changes",
-    "discardEdits": "Discard",
     "previewSql": "Preview SQL",
     "submitEdits": "Submit Changes",
     "insertRequiredFields": "Fill required fields first: {{fields}}",
@@ -3286,7 +3387,37 @@
       "label": "New",
       "in": "in {{name}}",
       "database": "New database…"
-    }
+    },
+    "deleteEntryConfirmDesc": "Entry {{id}} will be removed from the stream. This can't be undone.",
+    "deleteEntryConfirmTitle": "Delete stream entry?",
+    "discardAll": "Discard all",
+    "discardAllDesc": "{{count}} unsaved changes will be lost. This cannot be undone.",
+    "discardAllTitle": "Discard unsaved changes?",
+    "kafkaACLCreated": "ACL created for {{principal}}",
+    "kafkaConnectorPaused": "Connector {{name}} paused",
+    "kafkaConnectorResumed": "Connector {{name}} resumed",
+    "kafkaMessageSent": "Message sent to {{topic}}",
+    "kafkaTopicCreated": "Topic {{name}} created",
+    "kafkaTopicDeleted": "Topic {{name}} deleted",
+    "kafkaTopicConfigUpdated": "Configuration of topic {{topic}} updated",
+    "kafkaPartitionsIncreased": "Topic {{topic}} now has {{count}} partitions",
+    "kafkaRecordsDeleted": "Records deleted from topic {{topic}}",
+    "kafkaOffsetReset": "Offsets of consumer group {{group}} reset",
+    "kafkaConsumerGroupDeleted": "Consumer group {{group}} deleted",
+    "kafkaACLDeleted": "ACL for {{principal}} deleted",
+    "kafkaSchemaRegistered": "Schema registered under {{subject}}",
+    "kafkaSchemaVersionDeleted": "Version {{version}} of {{subject}} deleted",
+    "kafkaSubjectDeleted": "Subject {{subject}} deleted",
+    "kafkaConnectorCreated": "Connector {{name}} created",
+    "kafkaConnectorUpdated": "Configuration of connector {{name}} updated",
+    "kafkaConnectorRestarted": "Connector {{name}} restarted",
+    "kafkaConnectorDeleted": "Connector {{name}} deleted",
+    "mongo": {
+      "noCollections": "No collections",
+      "noDatabases": "No databases"
+    },
+    "pendingEditsCount": "{{count}} unsaved changes",
+    "previewAndCommit": "Preview and commit"
   },
   "systemStatus": {
     "title": "Status",
@@ -3601,13 +3732,14 @@
       "deleteSelected": "Delete",
       "deleteConfirmTitle": "Confirm delete",
       "deleteConfirmOne": "Delete object {{key}}?",
-      "deleteConfirmMany": "Delete {{count}} objects?",
       "deleteSuccess": "Deleted",
       "deleteFailed": "Delete failed",
       "newFolder": "New folder",
       "newFolderPrompt": "Folder name",
       "newFolderSuccess": "Folder created",
-      "deleteFolderConfirm": "Delete folder {{name}} and all objects below it?"
+      "deleteFolderConfirm": "Delete folder {{name}} and all objects below it?",
+      "deleteConfirmManyIrreversible": "Permanently delete {{count}} objects? This can't be undone.",
+      "sidebarTitle": "Buckets"
     },
     "transfer": {
       "upload": "Upload",
@@ -3616,9 +3748,6 @@
       "clearCompleted": "Clear completed",
       "cancel": "Cancel",
       "clear": "Clear",
-      "statusActive": "Transfer in progress",
-      "statusDone": "Transfer completed",
-      "statusFailed": "Transfer failed",
       "dropHint": "Drop files to upload",
       "uploadFailed": "Upload failed",
       "downloadFailed": "Download failed",
@@ -3690,9 +3819,9 @@
     },
     "tree": {
       "filterPlaceholder": "Filter key",
-      "truncated": "+{{count}} hidden, limit={{limit}}",
-      "loadFailed": "Failed to load keyspace",
-      "refresh": "Refresh keyspace"
+      "truncated": "Only the first {{limit}} entries are listed. Use the Query tab with a key prefix to narrow it down.",
+      "empty": "No keys",
+      "title": "Keyspace"
     },
     "view": {
       "kv": "KV Browse"
@@ -3710,11 +3839,11 @@
       "execSuccess": "Success",
       "execFailed": "Failed",
       "elapsed": "{{ms}}ms",
-      "noResult": "No results yet. Enter a command and execute."
+      "noResult": "No results yet. Enter a command and execute.",
+      "execConfirmButton": "Run"
     },
     "detail": {
       "selectKey": "Select a key on the left to view details",
-      "loading": "Loading…",
       "empty": "No data",
       "metaModRev": "MOD REV",
       "metaCreateRev": "CREATE REV",
@@ -3914,5 +4043,25 @@
     "scores": "Scores",
     "retried": "Retried automatically: {{attempts}} requests in total",
     "reviewedBy": "Judged by the command reviewer of {{name}} {{version}}"
+  },
+  "asyncState": {
+    "loadFailed": "Couldn't load",
+    "loading": "Loading…"
+  },
+  "fileConflict": {
+    "applyToRest": "Do the same for the remaining conflicts ({{count}})",
+    "checkFailed": "Couldn't check whether {{path}} already exists, so it was left untouched: {{error}}",
+    "duplicateTarget": "{{path}} is the destination of another item in this batch, so this one was skipped",
+    "existing": "Already there",
+    "folder": "Folder",
+    "incoming": "Incoming",
+    "keepBoth": "Keep both",
+    "keepBothHint": "Keep both saves the incoming item as {{name}}",
+    "overwrite": "Overwrite",
+    "progress": "{{current}} of {{total}}",
+    "renameTitle": "Replace the existing item?",
+    "skip": "Skip",
+    "title": "An item with this name already exists",
+    "unknown": "—"
   }
 }

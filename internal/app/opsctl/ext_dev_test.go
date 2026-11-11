@@ -67,7 +67,7 @@ type recordingApprover struct {
 	during  func() // runs while the dialog is "open"
 }
 
-func (a *recordingApprover) ask(req approval.ApprovalRequest) approval.ApprovalResponse {
+func (a *recordingApprover) ask(_ context.Context, req approval.ApprovalRequest) approval.ApprovalResponse {
 	a.prompts = append(a.prompts, req)
 	if a.during != nil {
 		a.during()
@@ -119,7 +119,7 @@ func TestHandleExtDevInstallRefusedWithoutApproval(t *testing.T) {
 	o := newDevOpsctl(installer, approver)
 	dir := devExtensionDir(t, "oss", "read")
 
-	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
+	resp := o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir})
 
 	require.False(t, resp.Approved)
 	require.Contains(t, resp.Reason, "denied")
@@ -133,7 +133,7 @@ func TestHandleExtDevInstallInstallsAfterApproval(t *testing.T) {
 	o := newDevOpsctl(installer, approver)
 	dir := devExtensionDir(t, "oss", "read")
 
-	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
+	resp := o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir})
 
 	require.True(t, resp.Approved, resp.Reason)
 	require.Equal(t, "oss", resp.Extension)
@@ -156,7 +156,7 @@ func TestHandleExtDevInstallPromptSaysWhenNothingIsOverwritten(t *testing.T) {
 	approver := &recordingApprover{approve: true}
 	o := newDevOpsctl(&recordingDevInstaller{}, approver)
 
-	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")})
+	resp := o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")})
 
 	require.True(t, resp.Approved, resp.Reason)
 	require.Contains(t, approver.prompts[0].Detail, "new install")
@@ -172,7 +172,7 @@ func TestHandleExtDevInstallInstallsTheApprovedSnapshot(t *testing.T) {
 	}}
 	o := newDevOpsctl(installer, approver)
 
-	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
+	resp := o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir})
 
 	require.True(t, resp.Approved, resp.Reason)
 	require.NotNil(t, installer.manifest)
@@ -188,17 +188,17 @@ func TestHandleExtDevInstallRemembersApprovalForSameDirAndName(t *testing.T) {
 	o := newDevOpsctl(installer, approver)
 	dir := devExtensionDir(t, "oss", "read")
 
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir}).Approved)
 	require.Len(t, approver.prompts, 1, "a rebuild of the approved directory must not re-prompt")
 	require.Len(t, installer.installs, 2)
 
 	other := devExtensionDir(t, "oss", "read")
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: other}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: other}).Approved)
 	require.Len(t, approver.prompts, 2, "a different directory must prompt again")
 
 	writeDevExtension(t, dir, "redis-ext", "read")
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir}).Approved)
 	require.Len(t, approver.prompts, 3, "a different extension from the same directory must prompt again")
 }
 
@@ -208,9 +208,9 @@ func TestHandleExtDevInstallPromptsAgainWhenCapabilitiesChange(t *testing.T) {
 	o := newDevOpsctl(&recordingDevInstaller{}, approver)
 	dir := devExtensionDir(t, "oss", "")
 
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir}).Approved)
 	writeDevExtension(t, dir, "oss", "read")
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir}).Approved)
 
 	require.Len(t, approver.prompts, 2)
 }
@@ -221,9 +221,9 @@ func TestHandleExtDevInstallDoesNotRememberADenial(t *testing.T) {
 	o := newDevOpsctl(installer, approver)
 	dir := devExtensionDir(t, "oss", "")
 
-	require.False(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+	require.False(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir}).Approved)
 	approver.approve = true
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir}).Approved)
 
 	require.Len(t, approver.prompts, 2)
 	require.Len(t, installer.installs, 1)
@@ -233,7 +233,7 @@ func TestHandleExtDevInstallReportsInstallFailure(t *testing.T) {
 	approver := &recordingApprover{approve: true}
 	o := newDevOpsctl(&recordingDevInstaller{err: errors.New("snippet category already registered")}, approver)
 
-	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")})
+	resp := o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")})
 
 	require.False(t, resp.Approved)
 	require.Contains(t, resp.Reason, "snippet category already registered")
@@ -246,7 +246,7 @@ func TestHandleExtDevInstallRejectsAnInvalidManifestBeforePrompting(t *testing.T
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"oss"}`), 0o600))
 
-	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
+	resp := o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir})
 
 	require.False(t, resp.Approved)
 	require.Empty(t, approver.prompts, "the user is never asked about something that cannot install")
@@ -259,7 +259,7 @@ func TestHandleExtDevInstallNeedsAnAbsolutePath(t *testing.T) {
 		approver := &recordingApprover{approve: true}
 		o := newDevOpsctl(installer, approver)
 
-		resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: path})
+		resp := o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: path})
 
 		require.False(t, resp.Approved, path)
 		require.Empty(t, approver.prompts, path)
@@ -270,7 +270,7 @@ func TestHandleExtDevInstallNeedsAnAbsolutePath(t *testing.T) {
 func TestHandleExtDevInstallWithoutExtensionSystem(t *testing.T) {
 	o := newDevOpsctl(nil, &recordingApprover{approve: true})
 
-	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: "/src/oss/dist"})
+	resp := o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: "/src/oss/dist"})
 
 	require.False(t, resp.Approved)
 	require.Contains(t, resp.Reason, "extension system")
@@ -284,7 +284,7 @@ func TestHandleExtDevInstallShowsAssetEndpointCapability(t *testing.T) {
 	o := newDevOpsctl(&recordingDevInstaller{}, approver)
 	dir := devExtensionDir(t, "oss", "")
 
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir}).Approved)
 	require.NotContains(t, approver.prompts[0].Detail, "network.assetEndpoint")
 
 	manifest := `{
@@ -293,7 +293,7 @@ func TestHandleExtDevInstallShowsAssetEndpointCapability(t *testing.T) {
   "permissions": {"credentials": "", "network": {"http": ["https://api.example.com/"], "assetEndpoint": true}}
 }`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir}).Approved)
 
 	require.Len(t, approver.prompts, 2, "declaring network.assetEndpoint must prompt again")
 	require.Contains(t, approver.prompts[1].Detail, "network.assetEndpoint: true")
@@ -314,7 +314,7 @@ func TestHandleExtDevInstallRefusesUnsupportedHostABI(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "main.wasm"), []byte("wasm"), 0o600))
 
-	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
+	resp := o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir})
 
 	require.False(t, resp.Approved)
 	require.Contains(t, resp.Reason, "hostABI 2.5")
@@ -329,8 +329,8 @@ func TestHandleExtDevInstallLeadsWithCredentialsReadWarning(t *testing.T) {
 	approver := &recordingApprover{approve: true}
 	o := newDevOpsctl(&recordingDevInstaller{}, approver)
 
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "read")}).Approved)
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "plain", "")}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "read")}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: devExtensionDir(t, "plain", "")}).Approved)
 
 	require.Len(t, approver.prompts, 2)
 	withRead := strings.SplitN(approver.prompts[0].Detail, "\n", 2)[0]
@@ -358,7 +358,7 @@ func TestHandleExtDevInstallRejectsIncompatibleExtension(t *testing.T) {
 			dir := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(tc.manifest), 0o600))
 
-			resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
+			resp := o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir})
 
 			require.False(t, resp.Approved)
 			require.Contains(t, resp.Reason, tc.want)
@@ -379,7 +379,7 @@ func TestHandleExtDevInstallIgnoresMinAppVersionOnDevBuild(t *testing.T) {
 	manifest := `{"name":"oss","version":"1.0.0","hostABI":"1.0","minAppVersion":"9.0.0","backend":{"runtime":"wasm","binary":"main.wasm"}}`
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(manifest), 0o600))
 
-	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: dir})
+	resp := o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir})
 
 	require.True(t, resp.Approved, resp.Reason)
 }
@@ -407,7 +407,7 @@ func TestHandleExtDevInstallListsDatabaseDriversWithPlaintextWarning(t *testing.
 	approver := &recordingApprover{approve: true}
 	o := newDevOpsctl(&recordingDevInstaller{}, approver)
 
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeDriverExtension(t, "vmysql", "vmysql", "vmaria")}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: writeDriverExtension(t, "vmysql", "vmysql", "vmaria")}).Approved)
 
 	detail := approver.prompts[0].Detail
 	first := strings.SplitN(detail, "\n", 2)[0]
@@ -427,7 +427,7 @@ func TestHandleExtDevInstallMarksNewDriversOnOverwrite(t *testing.T) {
 	}
 	o := newDevOpsctl(installer, approver)
 
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeDriverExtension(t, "vmysql", "vmysql", "vmaria")}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: writeDriverExtension(t, "vmysql", "vmysql", "vmaria")}).Approved)
 
 	detail := approver.prompts[0].Detail
 	require.Contains(t, detail, "overwrites installed: vmysql 1.0.0")
@@ -441,7 +441,7 @@ func TestHandleExtDevInstallDetailWithoutDriversIsUnchanged(t *testing.T) {
 		added: map[string][]extension_svc.CapabilityGrant{"oss": {{Kind: extension_svc.CapHTTP, Value: "https://api.example.com/"}}}}
 	o := newDevOpsctl(installer, approver)
 
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")}).Approved)
 
 	require.Equal(t, "extension: oss 1.2.3\noverwrites installed: oss 1.0.0\npermissions:\n  network.http: https://api.example.com/ (new)",
 		approver.prompts[0].Detail)
@@ -483,7 +483,7 @@ func TestHandleExtDevInstallKerberosNewMark(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			approver := &recordingApprover{approve: true}
 			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, added: tc.added}, approver)
-			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeKerberosExtension(t)}).Approved)
+			require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: writeKerberosExtension(t)}).Approved)
 			detail := approver.prompts[0].Detail
 			require.Contains(t, detail, "kerberos: true")
 			require.Contains(t, detail, "may fetch Kerberos tickets with the Kerberos credentials stored in the asset")
@@ -512,7 +512,7 @@ func TestHandleExtDevInstallAssetRouteNewMark(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			approver := &recordingApprover{approve: true}
 			o := newDevOpsctl(&recordingDevInstaller{installed: tc.installed, added: tc.added}, approver)
-			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: writeRedirectExtension(t)}).Approved)
+			require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: writeRedirectExtension(t)}).Approved)
 			detail := approver.prompts[0].Detail
 			require.Contains(t, detail, "network.assetRoute: true")
 			// 与桌面端确认一样说明这项能力的含义，而不只列出键。
@@ -555,7 +555,7 @@ func TestHandleExtDevInstallListsEveryPermissionAndMarksHighRiskAndNew(t *testin
 	}
 	o := newDevOpsctl(installer, approver)
 
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir}).Approved)
 
 	lines := map[string]string{}
 	for _, l := range strings.Split(approver.prompts[0].Detail, "\n") {
@@ -592,7 +592,7 @@ func TestHandleExtDevInstallMarksExactlyTheConfirmsAdded(t *testing.T) {
 	}
 	o := newDevOpsctl(installer, approver)
 
-	require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "read")}).Approved)
+	require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "read")}).Approved)
 
 	detail := approver.prompts[0].Detail
 	require.Contains(t, detail, "overwrites installed: oss 1.1.0")
@@ -609,7 +609,7 @@ func TestHandleExtDevInstallReportsCommitRefusedAfterApproval(t *testing.T) {
 	refused := errors.New(`cannot install "oss": the installed version changed from "1.0.0" to "3.0.0" while awaiting confirmation`)
 	o := newDevOpsctl(&recordingDevInstaller{installed: map[string]string{"oss": "1.0.0"}, err: refused}, approver)
 
-	resp := o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")})
+	resp := o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")})
 
 	require.False(t, resp.Approved)
 	require.Len(t, approver.prompts, 1)
@@ -634,7 +634,7 @@ func TestHandleExtDevInstallOutcomeLogsCarryTheOverwrite(t *testing.T) {
 	} {
 		installer := &recordingDevInstaller{installed: map[string]string{"oss": "1.0.0"}, err: tc.err}
 		o := newDevOpsctl(installer, &recordingApprover{approve: true})
-		o.handleExtDevInstall(approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")})
+		o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: devExtensionDir(t, "oss", "")})
 
 		entries := logs.FilterMessage(tc.message).All()
 		require.Len(t, entries, 1, tc.message)
@@ -665,7 +665,7 @@ func TestHandleExtDevInstallCommandReviewerAndSettingsEndpoint(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			approver := &recordingApprover{approve: true}
 			o := newDevOpsctl(&recordingDevInstaller{installed: tc.inst, added: tc.added}, approver)
-			require.True(t, o.handleExtDevInstall(approval.ApprovalRequest{Path: dir}).Approved)
+			require.True(t, o.handleExtDevInstall(context.Background(), approval.ApprovalRequest{Path: dir}).Approved)
 			detail := approver.prompts[0].Detail
 			require.Contains(t, detail, "network.settingsEndpoint: true")
 			require.Contains(t, detail, "commandReviewer: true")

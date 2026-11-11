@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@opskat/ui";
 import { AssetSelect } from "@/components/asset/AssetSelect";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
-import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
+import { buildConfigGroups, portRangeError, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { Field } from "@/components/asset/fields";
 import { ServerIdentityPrompt } from "@/components/remote/ServerIdentityPrompt";
 import { useConfigSection } from "@/components/asset/useConfigSection";
@@ -189,14 +189,11 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
     onValidityChange,
     init: (a) => (a ? parseVNCConfig(a.Config) : { ...VNC_DEFAULTS }),
     validate: (s) => {
-      const baseOk = !!s.host.trim() && s.port > 0 && s.port <= 65535;
-      const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
-      const canUse = baseOk && !proxyChainError;
-      return {
-        canTest: canUse,
-        canSave: canUse,
-        saveDisabledReason: baseOk ? proxyChainError : "asset.formMissingHost",
-      };
+      const reason =
+        (!s.host.trim() && "asset.formMissingHost") ||
+        portRangeError(s.port) ||
+        proxyChainValidationKey(s.proxyChainLayers);
+      return { canTest: !reason, canSave: !reason, saveDisabledReason: reason };
     },
     build: async (s, ctx) => ({
       configJSON: await buildVNCConfig(
@@ -217,6 +214,7 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
       };
     },
     deps: [cred.value],
+    dirtyExtra: [cred.value],
   });
 
   useImperativeHandle(
@@ -225,6 +223,8 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
       buildConfig: (ctx) => baseHandleRef.current!.buildConfig(ctx),
       buildTestConfig: (ctx) => baseHandleRef.current!.buildTestConfig!(ctx),
       startTest: () => startTemporaryTest(state),
+      commonFields: () => baseHandleRef.current!.commonFields!(),
+      isDirty: () => baseHandleRef.current!.isDirty!(),
     }),
     [state, startTemporaryTest]
   );
@@ -275,6 +275,7 @@ export function VNCConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
               width: "w-[110px] shrink-0",
               placeholder: String(VNC_DEFAULTS.port),
               testid: "vnc-port-input",
+              error: (s) => portRangeError(s.port),
             },
           ],
         },

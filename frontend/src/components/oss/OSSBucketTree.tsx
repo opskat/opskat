@@ -1,5 +1,6 @@
 import { useTranslation } from "react-i18next";
-import { ChevronRight, ChevronDown, Folder, Database, Loader2 } from "lucide-react";
+import { ChevronRight, ChevronDown, Folder, Database } from "lucide-react";
+import { AsyncState } from "@/components/common/AsyncState";
 import type { oss_svc } from "../../../wailsjs/go/models";
 import type { OssPrefixRow } from "@/lib/ossPrefixTree";
 
@@ -7,7 +8,9 @@ export interface OSSBucketTreeProps {
   buckets: oss_svc.BucketItem[] | null;
   currentBucket: string;
   rows: OssPrefixRow[];
-  loadingBuckets: boolean;
+  /** Bucket-list failure reason (null = none). */
+  error?: string | null;
+  onRetryBuckets?: () => void;
   onSelectBucket: (bucket: string) => void;
   onToggleExpand: (prefix: string) => void;
   onNavigatePrefix: (prefix: string) => void;
@@ -17,7 +20,8 @@ export function OSSBucketTree({
   buckets,
   currentBucket,
   rows,
-  loadingBuckets,
+  error,
+  onRetryBuckets,
   onSelectBucket,
   onToggleExpand,
   onNavigatePrefix,
@@ -25,18 +29,16 @@ export function OSSBucketTree({
   const { t } = useTranslation();
   const customButtonClass = "cursor-pointer rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring/45";
 
-  if (loadingBuckets && buckets === null) {
+  const status = error ? "error" : buckets === null ? "loading" : "ready";
+  if (status !== "ready" || buckets?.length === 0) {
     return (
-      <div className="flex items-center gap-1 p-3 text-xs text-muted-foreground" data-testid="oss-buckets-loading">
-        <Loader2 className="size-3 animate-spin" /> {t("oss.browser.loading")}
-      </div>
-    );
-  }
-  if (buckets !== null && buckets.length === 0) {
-    return (
-      <div className="p-3 text-xs text-muted-foreground" data-testid="oss-buckets-empty">
-        {t("oss.browser.noBuckets")}
-      </div>
+      <AsyncState
+        status={status}
+        error={error}
+        onRetry={onRetryBuckets}
+        empty={buckets?.length === 0 ? t("oss.browser.noBuckets") : undefined}
+        className="flex-1"
+      />
     );
   }
 

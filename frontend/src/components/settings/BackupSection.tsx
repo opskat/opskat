@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { AsyncState, type AsyncStatus } from "@/components/common/AsyncState";
 import { useTranslation } from "react-i18next";
 import {
   Button,
@@ -21,15 +22,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@opskat/ui";
-import { useAssetStore } from "@/stores/assetStore";
-import { SelectImportFile } from "../../../wailsjs/go/system/System";
 import {
+  SelectImportFile,
+  PreviewImportFile,
+  ExecuteImportFile,
   StartGitHubDeviceFlow,
   WaitGitHubDeviceAuth,
   CancelGitHubAuth,
   GetGitHubUser,
   ExportToGist,
   ListBackupGists,
+  PreviewGistBackup,
   ImportFromGist,
   GetGitHubToken,
   GetStoredGitHubUser,
@@ -41,11 +44,12 @@ import {
   TestWebDAVConfig,
   ListWebDAVBackups,
   ExportToWebDAV,
+  PreviewWebDAVBackup,
   ImportFromWebDAV,
 } from "../../../wailsjs/go/system/System";
 import { backup_svc } from "../../../wailsjs/go/models";
 import { ExportDialog, type WebDAVExportDefaults } from "@/components/settings/ExportDialog";
-import { BackupImportDialog } from "@/components/settings/BackupImportDialog";
+import { BackupImportDialog, type BackupImportSource } from "@/components/settings/BackupImportDialog";
 import {
   Download,
   Upload,
@@ -63,8 +67,6 @@ import {
 import { toast } from "sonner";
 import { notifyCopied, notifySuccess } from "@/lib/notify";
 import { BrowserOpenURL } from "../../../wailsjs/runtime/runtime";
-import { useShortcutStore } from "@/stores/shortcutStore";
-import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
 import { SecretInput } from "@/components/SecretInput";
 import { errorMessage } from "@/lib/errorMessage";
 
@@ -121,15 +123,15 @@ function PasswordInput({
 
 export function BackupSection() {
   const { t } = useTranslation();
-  const { refresh } = useAssetStore();
 
   // File backup
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [exportDialogMode, setExportDialogMode] = useState<"file" | "gist" | "webdav">("file");
-  const [backupImportOpen, setBackupImportOpen] = useState(false);
-  const [backupImportFilePath, setBackupImportFilePath] = useState("");
-  const [backupImportEncrypted, setBackupImportEncrypted] = useState(false);
-  const [backupImportSummary, setBackupImportSummary] = useState<backup_svc.BackupSummary | null>(null);
+
+  // Import / restore (file, Gist, WebDAV share one dialog)
+  const [importSource, setImportSource] = useState<BackupImportSource | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importSeq, setImportSeq] = useState(0);
 
   // GitHub
   const [ghToken, setGhToken] = useState("");
@@ -140,11 +142,16 @@ export function BackupSection() {
 
   // Gist
   const [gists, setGists] = useState<backup_svc.GistInfo[]>([]);
+  const [gistLoad, setGistLoad] = useState<{ status: AsyncStatus; error: string | null }>({
+    status: "loading",
+    error: null,
+  });
+  const [webdavLoad, setWebDAVLoad] = useState<{ status: AsyncStatus; error: string | null }>({
+    status: "loading",
+    error: null,
+  });
   const [selectedGistId, setSelectedGistId] = useState("");
   const [gistPushing, setGistPushing] = useState(false);
-  const [gistPulling, setGistPulling] = useState(false);
-  const [gistPullPasswordOpen, setGistPullPasswordOpen] = useState(false);
-  const [gistPullPassword, setGistPullPassword] = useState("");
 
   // WebDAV
   const [webdavConfigured, setWebDAVConfigured] = useState(false);
@@ -158,9 +165,6 @@ export function BackupSection() {
   const [webdavSaving, setWebDAVSaving] = useState(false);
   const [webdavTesting, setWebDAVTesting] = useState(false);
   const [webdavPushing, setWebDAVPushing] = useState(false);
-  const [webdavPulling, setWebDAVPulling] = useState(false);
-  const [webdavPullPasswordOpen, setWebDAVPullPasswordOpen] = useState(false);
-  const [webdavPullPassword, setWebDAVPullPassword] = useState("");
   const [webDAVExportDefaults, setWebDAVExportDefaults] = useState<WebDAVExportDefaults>(emptyWebDAVExportDefaults);
 
   // Load GitHub token on mount
@@ -196,8 +200,10 @@ export function BackupSection() {
     try {
       const list = await ListBackupGists(ghToken);
       setGists(list || []);
-    } catch {
+      setGistLoad({ status: "ready", error: null });
+    } catch (e: unknown) {
       setGists([]);
+      setGistLoad({ status: "error", error: errorMessage(e) });
     }
   }, [ghToken]);
 
@@ -208,35 +214,50 @@ export function BackupSection() {
     })();
   }, [loadGists]);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const cfg = await GetWebDAVConfig();
-        if (!cfg) return;
-        setWebDAVURL(cfg.url || "");
-        const known: ReadonlyArray<"none" | "basic" | "bearer"> = ["none", "basic", "bearer"];
-        const incoming = cfg.authType ?? "";
-        setWebDAVAuthType(
-          known.includes(incoming as "none" | "basic" | "bearer") ? (incoming as "none" | "basic" | "bearer") : "basic"
-        );
-        setWebDAVUsername(cfg.username || "");
-        setWebDAVPassword(cfg.password || "");
-        setWebDAVToken(cfg.token || "");
-        setWebDAVConfigured(!!cfg.configured);
-        setWebDAVExportDefaults({
-          configured: !!cfg.exportDefaultsConfigured,
-          password: cfg.exportPassword || "",
-          includeCredentials: !!cfg.exportIncludeCredentials,
-          includeForwards: cfg.exportDefaultsConfigured ? !!cfg.exportIncludeForwards : true,
-          includePolicyGroups: cfg.exportDefaultsConfigured ? !!cfg.exportIncludePolicyGroups : true,
-          includeShortcuts: !!cfg.exportIncludeShortcuts,
-          includeThemes: !!cfg.exportIncludeThemes,
-        });
-      } catch {
-        /* not configured */
-      }
-    })();
+  // 未配置时后端照常返回(configured=false);抛错是真失败(如密码解密失败),要显示出来,不能当成未配置。
+  const [webdavConfigLoad, setWebDAVConfigLoad] = useState<{ status: AsyncStatus; error: string | null }>({
+    status: "loading",
+    error: null,
+  });
+  const loadWebDAVConfig = useCallback(async () => {
+    try {
+      const cfg = await GetWebDAVConfig();
+      setWebDAVURL(cfg.url || "");
+      const known: ReadonlyArray<"none" | "basic" | "bearer"> = ["none", "basic", "bearer"];
+      const incoming = cfg.authType ?? "";
+      setWebDAVAuthType(
+        known.includes(incoming as "none" | "basic" | "bearer") ? (incoming as "none" | "basic" | "bearer") : "basic"
+      );
+      setWebDAVUsername(cfg.username || "");
+      setWebDAVPassword(cfg.password || "");
+      setWebDAVToken(cfg.token || "");
+      setWebDAVConfigured(!!cfg.configured);
+      setWebDAVExportDefaults({
+        configured: !!cfg.exportDefaultsConfigured,
+        password: cfg.exportPassword || "",
+        includeCredentials: !!cfg.exportIncludeCredentials,
+        includeForwards: cfg.exportDefaultsConfigured ? !!cfg.exportIncludeForwards : true,
+        includePolicyGroups: cfg.exportDefaultsConfigured ? !!cfg.exportIncludePolicyGroups : true,
+        includeShortcuts: !!cfg.exportIncludeShortcuts,
+        includeThemes: !!cfg.exportIncludeThemes,
+      });
+      setWebDAVConfigLoad({ status: "ready", error: null });
+    } catch (e: unknown) {
+      setWebDAVConfigLoad({ status: "error", error: errorMessage(e) });
+    }
   }, []);
+
+  useEffect(() => {
+    // 加载体的 setState 均在 await 之后,经 async 边界调用避免 effect 内同步 setState
+    void (async () => {
+      await loadWebDAVConfig();
+    })();
+  }, [loadWebDAVConfig]);
+
+  const retryWebDAVConfig = () => {
+    setWebDAVConfigLoad({ status: "loading", error: null });
+    void loadWebDAVConfig();
+  };
 
   const loadWebDAVBackups = useCallback(async () => {
     if (!webdavConfigured) return;
@@ -247,9 +268,11 @@ export function BackupSection() {
       setSelectedWebDAVBackup((current) =>
         current && backups.some((backup) => backup.name === current) ? current : (backups[0]?.name ?? "")
       );
-    } catch {
+      setWebDAVLoad({ status: "ready", error: null });
+    } catch (e: unknown) {
       setWebDAVBackups([]);
       setSelectedWebDAVBackup("");
+      setWebDAVLoad({ status: "error", error: errorMessage(e) });
     }
   }, [webdavConfigured]);
 
@@ -260,41 +283,20 @@ export function BackupSection() {
     })();
   }, [loadWebDAVBackups]);
 
-  const applyImportResult = useCallback(
-    async (result: backup_svc.ImportResult) => {
-      if (result.shortcuts) {
-        try {
-          const parsed = JSON.parse(result.shortcuts);
-          localStorage.setItem("keyboard_shortcuts", JSON.stringify(parsed));
-          const store = useShortcutStore.getState();
-          store.resetAll();
-          for (const [action, binding] of Object.entries(parsed)) {
-            store.updateShortcut(action as never, binding as never);
-          }
-        } catch {
-          // ignore parse errors
-        }
-      }
+  const retryGists = () => {
+    setGistLoad({ status: "loading", error: null });
+    void loadGists();
+  };
+  const retryWebDAVBackups = () => {
+    setWebDAVLoad({ status: "loading", error: null });
+    void loadWebDAVBackups();
+  };
 
-      if (result.custom_themes) {
-        try {
-          const themes = JSON.parse(result.custom_themes);
-          const store = useTerminalThemeStore.getState();
-          for (const theme of themes) {
-            if (theme?.id) {
-              store.removeCustomTheme(theme.id);
-            }
-            store.addCustomTheme(theme);
-          }
-        } catch {
-          // ignore parse errors
-        }
-      }
-
-      await refresh();
-    },
-    [refresh]
-  );
+  const openImport = (source: BackupImportSource) => {
+    setImportSource(source);
+    setImportSeq((n) => n + 1);
+    setImportOpen(true);
+  };
 
   // --- File backup ---
   const handleFileExport = () => {
@@ -306,10 +308,16 @@ export function BackupSection() {
     try {
       const info = await SelectImportFile();
       if (!info || !info.filePath) return;
-      setBackupImportFilePath(info.filePath);
-      setBackupImportEncrypted(info.encrypted);
-      setBackupImportSummary(info.summary ?? null);
-      setBackupImportOpen(true);
+      const { filePath } = info;
+      openImport({
+        title: t("backup.importTitle"),
+        passwordPrompt: t("backup.encryptedFile"),
+        successMessage: t("backup.importSuccess"),
+        encrypted: info.encrypted,
+        initialSummary: info.summary ?? null,
+        preview: (password) => PreviewImportFile(filePath, password),
+        execute: (password, opts) => ExecuteImportFile(filePath, password, opts),
+      });
     } catch (e: unknown) {
       toast.error(errorMessage(e));
     }
@@ -376,40 +384,22 @@ export function BackupSection() {
     }
   };
 
-  const handleGistPull = async () => {
+  const handleGistPull = () => {
     if (!selectedGistId || selectedGistId === "__new__") {
       toast.error(t("backup.gistNoBackup"));
       return;
     }
-    setGistPullPassword("");
-    setGistPullPasswordOpen(true);
-  };
-
-  const doGistPull = async () => {
-    if (!gistPullPassword) {
-      toast.error(t("backup.passwordRequired"));
-      return;
-    }
-    setGistPullPasswordOpen(false);
-    setGistPulling(true);
-    try {
-      const opts = new backup_svc.ImportOptions({
-        import_assets: true,
-        import_credentials: true,
-        import_forwards: true,
-        import_policy_groups: true,
-        import_shortcuts: true,
-        import_themes: true,
-        mode: "replace",
-      });
-      const result = await ImportFromGist(selectedGistId, gistPullPassword, ghToken, opts);
-      await applyImportResult(result);
-      notifySuccess(t("backup.gistPullSuccess"));
-    } catch (e: unknown) {
-      toast.error(errorMessage(e));
-    } finally {
-      setGistPulling(false);
-    }
+    const gistId = selectedGistId;
+    const token = ghToken;
+    openImport({
+      title: t("backup.gistPull"),
+      passwordPrompt: t("backup.enterPassword"),
+      successMessage: t("backup.gistPullSuccess"),
+      encrypted: true,
+      initialSummary: null,
+      preview: (password) => PreviewGistBackup(gistId, password, token),
+      execute: (password, opts) => ImportFromGist(gistId, password, token, opts),
+    });
   };
 
   // --- WebDAV ---
@@ -506,40 +496,21 @@ export function BackupSection() {
     }
   };
 
-  const handleWebDAVPull = async () => {
+  const handleWebDAVPull = () => {
     if (!selectedWebDAVBackup) {
       toast.error(t("backup.webdavNoBackup"));
       return;
     }
-    setWebDAVPullPassword("");
-    setWebDAVPullPasswordOpen(true);
-  };
-
-  const doWebDAVPull = async () => {
-    if (!webdavPullPassword) {
-      toast.error(t("backup.passwordRequired"));
-      return;
-    }
-    setWebDAVPullPasswordOpen(false);
-    setWebDAVPulling(true);
-    try {
-      const opts = new backup_svc.ImportOptions({
-        import_assets: true,
-        import_credentials: true,
-        import_forwards: true,
-        import_policy_groups: true,
-        import_shortcuts: true,
-        import_themes: true,
-        mode: "replace",
-      });
-      const result = await ImportFromWebDAV(selectedWebDAVBackup, webdavPullPassword, opts);
-      await applyImportResult(result);
-      notifySuccess(t("backup.webdavPullSuccess"));
-    } catch (e: unknown) {
-      toast.error(errorMessage(e));
-    } finally {
-      setWebDAVPulling(false);
-    }
+    const name = selectedWebDAVBackup;
+    openImport({
+      title: t("backup.webdavPull"),
+      passwordPrompt: t("backup.enterPassword"),
+      successMessage: t("backup.webdavPullSuccess"),
+      encrypted: true,
+      initialSummary: null,
+      preview: (password) => PreviewWebDAVBackup(name, password),
+      execute: (password, opts) => ImportFromWebDAV(name, password, opts),
+    });
   };
 
   return (
@@ -586,37 +557,39 @@ export function BackupSection() {
                   {t("backup.gistLogout")}
                 </Button>
               </div>
-              <div className="grid gap-2">
-                <Label>{t("backup.gistSelect")}</Label>
-                <Select value={selectedGistId} onValueChange={setSelectedGistId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder={t("backup.gistSelect")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__new__">{t("backup.gistCreateNew")}</SelectItem>
-                    {gists.map((g) => (
-                      <SelectItem key={g.id} value={g.id}>
-                        {t("backup.gistUpdate", { desc: g.description })}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex gap-2">
-                <Button onClick={handleGistPush} disabled={gistPushing} variant="outline" className="gap-1">
-                  <Upload className="h-4 w-4" />
-                  {gistPushing ? t("backup.gistPushing") : t("backup.gistPush")}
-                </Button>
-                <Button
-                  onClick={handleGistPull}
-                  disabled={gistPulling || !selectedGistId || selectedGistId === "__new__"}
-                  variant="outline"
-                  className="gap-1"
-                >
-                  <Download className="h-4 w-4" />
-                  {gistPulling ? t("backup.gistPulling") : t("backup.gistPull")}
-                </Button>
-              </div>
+              <AsyncState status={gistLoad.status} error={gistLoad.error} onRetry={retryGists}>
+                <div className="grid gap-2">
+                  <Label>{t("backup.gistSelect")}</Label>
+                  <Select value={selectedGistId} onValueChange={setSelectedGistId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={t("backup.gistSelect")} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__new__">{t("backup.gistCreateNew")}</SelectItem>
+                      {gists.map((g) => (
+                        <SelectItem key={g.id} value={g.id}>
+                          {t("backup.gistUpdate", { desc: g.description })}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex gap-2">
+                  <Button onClick={handleGistPush} disabled={gistPushing} variant="outline" className="gap-1">
+                    <Upload className="h-4 w-4" />
+                    {gistPushing ? t("backup.gistPushing") : t("backup.gistPush")}
+                  </Button>
+                  <Button
+                    onClick={handleGistPull}
+                    disabled={!selectedGistId || selectedGistId === "__new__"}
+                    variant="outline"
+                    className="gap-1"
+                  >
+                    <Download className="h-4 w-4" />
+                    {t("backup.gistPull")}
+                  </Button>
+                </div>
+              </AsyncState>
             </>
           )}
         </CardContent>
@@ -632,113 +605,122 @@ export function BackupSection() {
           <CardDescription>{t("backup.webdavDesc")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3">
-            <div className="grid gap-1.5">
-              <Label>{t("backup.webdavURL")}</Label>
-              <Input
-                value={webdavURL}
-                onChange={(e) => setWebDAVURL(e.target.value)}
-                placeholder={t("backup.webdavURLPlaceholder")}
-              />
-              <p className="text-xs text-muted-foreground">{t("backup.webdavDefaultDirectory", { dir: "opskat" })}</p>
-            </div>
-            <div className="grid gap-1.5">
-              <Label>{t("backup.webdavAuthType")}</Label>
-              <Select value={webdavAuthType} onValueChange={(v) => setWebDAVAuthType(v as "none" | "basic" | "bearer")}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">{t("backup.webdavAuthNone")}</SelectItem>
-                  <SelectItem value="basic">{t("backup.webdavAuthBasic")}</SelectItem>
-                  <SelectItem value="bearer">{t("backup.webdavAuthBearer")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {webdavAuthType === "basic" && (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="grid gap-1.5">
-                  <Label>{t("backup.webdavUsername")}</Label>
-                  <Input
-                    value={webdavUsername}
-                    onChange={(e) => setWebDAVUsername(e.target.value)}
-                    placeholder={t("backup.webdavUsernamePlaceholder")}
-                  />
-                </div>
-                <div className="grid gap-1.5">
-                  <Label>{t("backup.webdavPassword")}</Label>
-                  <PasswordInput value={webdavPassword} onChange={(e) => setWebDAVPassword(e.target.value)} />
-                </div>
-              </div>
-            )}
-            {webdavAuthType === "bearer" && (
+          <AsyncState status={webdavConfigLoad.status} error={webdavConfigLoad.error} onRetry={retryWebDAVConfig}>
+            <div className="grid gap-3">
               <div className="grid gap-1.5">
-                <Label>{t("backup.webdavToken")}</Label>
-                <PasswordInput value={webdavToken} onChange={(e) => setWebDAVToken(e.target.value)} />
+                <Label>{t("backup.webdavURL")}</Label>
+                <Input
+                  value={webdavURL}
+                  onChange={(e) => setWebDAVURL(e.target.value)}
+                  placeholder={t("backup.webdavURLPlaceholder")}
+                />
+                <p className="text-xs text-muted-foreground">{t("backup.webdavDefaultDirectory", { dir: "opskat" })}</p>
               </div>
-            )}
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={handleWebDAVSave} disabled={webdavSaving} variant="outline" className="gap-1">
-                {webdavSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                {t("backup.webdavSave")}
-              </Button>
-              <Button
-                onClick={handleWebDAVTest}
-                disabled={webdavTesting || !webdavURL.trim()}
-                variant="outline"
-                className="gap-1"
-              >
-                {webdavTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                {t("backup.webdavTest")}
-              </Button>
-              {webdavConfigured && (
-                <Button onClick={handleWebDAVClear} variant="ghost" className="gap-1 text-muted-foreground">
-                  <Trash2 className="h-4 w-4" />
-                  {t("backup.webdavClear")}
-                </Button>
-              )}
-            </div>
-          </div>
-
-          {webdavConfigured && (
-            <>
-              <div className="grid gap-2">
-                <Label>{t("backup.webdavSelect")}</Label>
-                <div className="flex gap-2">
-                  <Select value={selectedWebDAVBackup} onValueChange={setSelectedWebDAVBackup}>
-                    <SelectTrigger className="flex-1">
-                      <SelectValue placeholder={t("backup.webdavNoBackup")} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {webdavBackups.map((backup) => (
-                        <SelectItem key={backup.name} value={backup.name}>
-                          {t("backup.webdavBackupItem", { name: backup.name, size: backup.size })}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button onClick={loadWebDAVBackups} variant="outline" size="icon">
-                    <RefreshCw className="h-4 w-4" />
-                  </Button>
+              <div className="grid gap-1.5">
+                <Label>{t("backup.webdavAuthType")}</Label>
+                <Select
+                  value={webdavAuthType}
+                  onValueChange={(v) => setWebDAVAuthType(v as "none" | "basic" | "bearer")}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">{t("backup.webdavAuthNone")}</SelectItem>
+                    <SelectItem value="basic">{t("backup.webdavAuthBasic")}</SelectItem>
+                    <SelectItem value="bearer">{t("backup.webdavAuthBearer")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {webdavAuthType === "basic" && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid gap-1.5">
+                    <Label>{t("backup.webdavUsername")}</Label>
+                    <Input
+                      value={webdavUsername}
+                      onChange={(e) => setWebDAVUsername(e.target.value)}
+                      placeholder={t("backup.webdavUsernamePlaceholder")}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label>{t("backup.webdavPassword")}</Label>
+                    <PasswordInput value={webdavPassword} onChange={(e) => setWebDAVPassword(e.target.value)} />
+                  </div>
                 </div>
-              </div>
-              <div className="flex gap-2">
-                <Button onClick={handleWebDAVPush} disabled={webdavPushing} variant="outline" className="gap-1">
-                  <Upload className="h-4 w-4" />
-                  {webdavPushing ? t("backup.webdavPushing") : t("backup.webdavPush")}
+              )}
+              {webdavAuthType === "bearer" && (
+                <div className="grid gap-1.5">
+                  <Label>{t("backup.webdavToken")}</Label>
+                  <PasswordInput value={webdavToken} onChange={(e) => setWebDAVToken(e.target.value)} />
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={handleWebDAVSave} disabled={webdavSaving} variant="outline" className="gap-1">
+                  {webdavSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                  {t("backup.webdavSave")}
                 </Button>
                 <Button
-                  onClick={handleWebDAVPull}
-                  disabled={webdavPulling || !selectedWebDAVBackup}
+                  onClick={handleWebDAVTest}
+                  disabled={webdavTesting || !webdavURL.trim()}
                   variant="outline"
                   className="gap-1"
                 >
-                  <Download className="h-4 w-4" />
-                  {webdavPulling ? t("backup.webdavPulling") : t("backup.webdavPull")}
+                  {webdavTesting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                  {t("backup.webdavTest")}
                 </Button>
+                {webdavConfigured && (
+                  <Button onClick={handleWebDAVClear} variant="ghost" className="gap-1 text-muted-foreground">
+                    <Trash2 className="h-4 w-4" />
+                    {t("backup.webdavClear")}
+                  </Button>
+                )}
               </div>
-            </>
-          )}
+            </div>
+
+            {webdavConfigured && (
+              <>
+                <AsyncState status={webdavLoad.status} error={webdavLoad.error} onRetry={retryWebDAVBackups}>
+                  <div className="grid gap-4">
+                    <div className="grid gap-2">
+                      <Label>{t("backup.webdavSelect")}</Label>
+                      <div className="flex gap-2">
+                        <Select value={selectedWebDAVBackup} onValueChange={setSelectedWebDAVBackup}>
+                          <SelectTrigger className="flex-1">
+                            <SelectValue placeholder={t("backup.webdavNoBackup")} />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {webdavBackups.map((backup) => (
+                              <SelectItem key={backup.name} value={backup.name}>
+                                {t("backup.webdavBackupItem", { name: backup.name, size: backup.size })}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button onClick={retryWebDAVBackups} variant="outline" size="icon">
+                          <RefreshCw className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button onClick={handleWebDAVPush} disabled={webdavPushing} variant="outline" className="gap-1">
+                        <Upload className="h-4 w-4" />
+                        {webdavPushing ? t("backup.webdavPushing") : t("backup.webdavPush")}
+                      </Button>
+                      <Button
+                        onClick={handleWebDAVPull}
+                        disabled={!selectedWebDAVBackup}
+                        variant="outline"
+                        className="gap-1"
+                      >
+                        <Download className="h-4 w-4" />
+                        {t("backup.webdavPull")}
+                      </Button>
+                    </div>
+                  </div>
+                </AsyncState>
+              </>
+            )}
+          </AsyncState>
         </CardContent>
       </Card>
 
@@ -752,14 +734,10 @@ export function BackupSection() {
         webDAVDefaults={webDAVExportDefaults}
       />
 
-      {/* Backup import dialog */}
-      <BackupImportDialog
-        open={backupImportOpen}
-        onOpenChange={setBackupImportOpen}
-        filePath={backupImportFilePath}
-        encrypted={backupImportEncrypted}
-        initialSummary={backupImportSummary}
-      />
+      {/* Backup import / restore dialog */}
+      {importSource && (
+        <BackupImportDialog key={importSeq} open={importOpen} onOpenChange={setImportOpen} source={importSource} />
+      )}
 
       {/* GitHub Device Flow dialog */}
       <Dialog open={deviceFlowOpen}>
@@ -798,58 +776,6 @@ export function BackupSection() {
           <DialogFooter>
             <Button variant="outline" onClick={handleCancelDeviceFlow}>
               {t("action.cancel")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Gist pull password dialog */}
-      <Dialog open={gistPullPasswordOpen} onOpenChange={setGistPullPasswordOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{t("backup.gistPull")}</DialogTitle>
-            <DialogDescription>{t("backup.enterPassword")}</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-1.5">
-            <Label>{t("backup.password")}</Label>
-            <PasswordInput
-              value={gistPullPassword}
-              onChange={(e) => setGistPullPassword(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && doGistPull()}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setGistPullPasswordOpen(false)}>
-              {t("action.cancel")}
-            </Button>
-            <Button onClick={doGistPull} disabled={!gistPullPassword}>
-              {t("backup.gistPull")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* WebDAV pull password dialog */}
-      <Dialog open={webdavPullPasswordOpen} onOpenChange={setWebDAVPullPasswordOpen}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle>{t("backup.webdavPull")}</DialogTitle>
-            <DialogDescription>{t("backup.enterPassword")}</DialogDescription>
-          </DialogHeader>
-          <div className="grid gap-1.5">
-            <Label>{t("backup.password")}</Label>
-            <PasswordInput
-              value={webdavPullPassword}
-              onChange={(e) => setWebDAVPullPassword(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && doWebDAVPull()}
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setWebDAVPullPasswordOpen(false)}>
-              {t("action.cancel")}
-            </Button>
-            <Button onClick={doWebDAVPull} disabled={!webdavPullPassword}>
-              {t("backup.webdavPull")}
             </Button>
           </DialogFooter>
         </DialogContent>

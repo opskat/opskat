@@ -135,6 +135,17 @@ OpsKat ships **no webfonts** — the type system is the platform's own fonts, de
 
 > **No `@font-face`, no bundled webfont.** The mono families are **family *references*** — if `JetBrains Mono` / `Fira Code` aren't installed on the OS, the stack falls back to `Menlo` / `monospace`. (An unused `nunito-*.woff2` sits in [`assets/fonts/`](../frontend/src/assets/fonts/) but is not referenced — don't treat it as wired-up.) The in-pane code editor and terminal are Monaco / xterm, which carry their own font config. If a brand font ever becomes a real requirement, self-host it (woff2, local `@font-face`, never a CDN) and update this table. The `@tailwindcss/typography` plugin is loaded for prose blocks (e.g. AI markdown).
 
+### Type size floor
+
+Text is never smaller than **11px**. `no-restricted-syntax` in `frontend/eslint.config.js` rejects any arbitrary size below it (`text-[8px]`, `text-[9px]`, `text-[10px]`, `text-[10.5px]` …) in `src/` and `packages/ui/src`, with no exemption list (guard test: `frontend/src/__tests__/eslint-harness.test.ts`). Pick by what the text says, not by what fits:
+
+| Size | Use |
+| --- | --- |
+| `text-xs` (12px) | Anything the user must read to decide or recover: error / failure reasons, commands and SQL, target asset names / hosts / paths, status words |
+| `text-[11px]` | Auxiliary information only: timestamps, counts, shortcut hints, secondary metadata, field hints |
+
+Raising a size inside a fixed-height container (toolbar `h-6` / `h-7`, table row, badge, narrow column) means checking it still fits — adjust padding / line-height minimally, or keep `11px` when the text is genuinely auxiliary. A raw pixel size is only acceptable where a canvas / Monaco / xterm API takes a number (the same places §3.1 allows raw colors); Tailwind classes are never exempt.
+
 ### Radius
 
 `--radius: 0.5rem` (8px) is the base; five steps are derived via `calc` in `@theme inline`:
@@ -222,6 +233,8 @@ These project blocks already solve picker / credential / icon / form-field probl
 | `PasswordSourceField` | [`components/asset/PasswordSourceField.tsx`](../frontend/src/components/asset/PasswordSourceField.tsx) | Inline-password vs managed-credential selector; lazy-decrypts an existing secret via backend |
 | `IconPicker` | [`components/asset/IconPicker.tsx`](../frontend/src/components/asset/IconPicker.tsx) | Icon + custom color picker; value is `"name"` or `"name#hexcolor"`; also exports `getIconComponent` / `getIconColor` (§8) |
 | `Segmented` | [`components/asset/fields.tsx`](../frontend/src/components/asset/fields.tsx) | Pill segmented control (radiogroup, floating active pill) — prefer it over a `Select` for a 2–4 option toggle (auth type, key source, connection method) |
+| `AsyncState` | [`components/common/AsyncState.tsx`](../frontend/src/components/common/AsyncState.tsx) | Loading / empty / error+retry block for a region backed by one request (`status` `loading` / `error` / `ready`, `error`, `onRetry`, `empty`); the empty state shows only after a successful empty result (§10) |
+| `PanelSidebar` | [`components/common/PanelSidebar.tsx`](../frontend/src/components/common/PanelSidebar.tsx) | Left sidebar shell of the data panels: title + icon-action header (`<SidebarRefreshButton>` spins and disables while loading), optional `filter` row, content slot and drag handle; width persisted per `panelType` (§7) |
 | Asset config-form fields | [`fields.tsx`](../frontend/src/components/asset/fields.tsx) · [`configFields.tsx`](../frontend/src/components/asset/configFields.tsx) · [`ConfigTabs.tsx`](../frontend/src/components/asset/ConfigTabs.tsx) | `Field` / `FieldLabel` label+control primitives plus the schema-driven field/tab renderer (`ConfigGroupSchema` → underline-tab groups) the asset form is built from; the wiring hook is in [`adding-an-asset-type.md` §F3](./references/adding-an-asset-type.md#f3-configsection-and-pure-configts-serialization) |
 
 ### 6.4 Toast (`notify` + sonner)
@@ -242,7 +255,7 @@ Errors / warnings / info stay on the **raw sonner API at the default bottom-righ
 ### 6.5 Selection guidance
 
 - **Confirmation:** dangerous / irreversible → `ConfirmDialog` (or `AlertDialog`). State the blast radius in the copy ("Delete asset *web-01* and its sessions? This cannot be undone.").
-- **Confirm vs. act-immediately:** a modal confirm interrupts *every* time — reserve it for the genuinely irreversible or wide-blast (delete an asset, drop a table, overwrite a remote file). For easily reversible actions, prefer acting immediately. Destructive query results (UPDATE/DELETE) keep their preview/confirm step — don't go straight-to-execute.
+- **Confirm vs. act-immediately:** a modal confirm interrupts *every* time — reserve it for the genuinely irreversible or wide-blast (delete an asset, drop a table, overwrite a remote file). Three tiers: **reversible and small** (pause/resume, create a topic / ACL, send a message) → act immediately and report with `notifySuccess`, and show a failure's full reason in place (an `alert` region wrapping the text, never a truncated header line); **irreversible** (delete a stream entry, topic, ACL, object) → confirm; **wide-blast** (batch delete, close-all) → confirm and state the count. Confirm buttons are **verbs** naming the action ("Delete", "Save", "Run"), never a generic "Confirm"; a confirm that isn't destructive passes `variant="default"` (`ConfirmDialog` defaults to destructive red). Destructive query results (UPDATE/DELETE) keep their preview/confirm step — don't go straight-to-execute.
 - **Transient panels:** side detail / assistant → a dedicated panel (§7); small anchored layer → `Popover` / `DropdownMenu`; right-click → `ContextMenu`.
 - **Feedback:** transient success → `notify`; errors → `toast.error`; persistent / in-pane → §10 state patterns.
 
@@ -285,6 +298,10 @@ The shell layout mode lives in [`layoutStore`](../frontend/src/stores/layoutStor
 ### Resizable split panes
 
 Splitting is **custom — no resizable-panel library.** [`terminal/SplitPane.tsx`](../frontend/src/components/terminal/SplitPane.tsx) renders a recursive split tree (`vertical` / `horizontal`, a `ratio`, and `first` / `second` children) as nested flex rows/cols; a `w-1`/`h-1` divider (`bg-border`, `hover:bg-primary/50`) drags to update the ratio (`flex` transitions `150ms ease-out`, suppressed while dragging). The tree and ratios persist per tab. The asset tree, left panel, DatabasePanel sidebar, and AI panel resize the same way — drag handlers + localStorage, not a lib. **Reuse this pattern** (and the divider styling) for any new split surface.
+
+### Data-panel sidebar
+
+The data panels (SQL, Redis, MongoDB, and the panels that follow them) build their left sidebar on [`PanelSidebar`](../frontend/src/components/common/PanelSidebar.tsx) — `<PanelSidebar panelType title actions filter?>` — instead of hand-rolling a header and drag bar. It renders the sidebar plus its 3px drag handle as two siblings, so put it directly in the panel's horizontal flex row. The header is the title (left, `text-xs`) and icon actions (right); the refresh action is `<SidebarRefreshButton>`, whose icon spins and is disabled while the request runs. One width range applies everywhere (160–420px, default 220px) and the dragged width persists per panel kind under `${panelType}_sidebar_width`, and while dragging a full-page overlay keeps the pointer from being captured by the content underneath. Pass `filter` only for a panel that already filters — the shell doesn't add filtering, and omitting it renders no filter row. Load / empty / error inside the content slot use `AsyncState` (§10).
 
 ### Visibility, not unmount
 
@@ -359,13 +376,13 @@ UI state is Zustand, **one store per domain** in [`frontend/src/stores/`](../fro
 
 ## 10. State patterns
 
-Every async flow covers the states below. **OpsKat does not ship shared state components** (no `StateScreen` / `EmptyState` / `LoadingState` / `Skeleton` / `Progress` primitive) — the convention is composed inline from primitives and `notify`. Follow the convention consistently; if a state block starts repeating across panes, extract one shared component (and document it here) rather than copy-pasting a third time.
+Every async flow covers the states below. **A region backed by one request uses the shared [`AsyncState`](../frontend/src/components/common/AsyncState.tsx) block** (§6.3): `status="loading"` → spinner; `status="error"` → the failure reason (monospace, 12px) plus a Retry button wired to `onRetry`; `status="ready"` → the `empty` content when it is passed (pass it only for a successful empty result), otherwise the children. A failed load must never fall through to the empty state — "nothing here" after an error hides the failure once the toast fades. There is no `Skeleton` / `Progress` primitive; other states are composed inline from primitives and `notify`. If another state block starts repeating across panes, extract it into a shared component (and document it here) rather than copy-pasting a third time.
 
 | State | Standard presentation |
 | --- | --- |
 | **Loading** | A `Loader2` (`lucide-react`, `animate-spin`, usually `text-primary`/`text-muted-foreground`) sized to context — inline `size-4` in a button/row, larger when a pane is still empty. Keep the pane's shape stable; show the spinner where content will land, don't collapse the layout. |
-| **Empty** | A centered `muted-foreground` icon + a short title + (optional) primary CTA, composed inline. Reuse a neighboring pane's empty block for the same surface rather than re-styling. |
-| **Error** | An inline message with the failure cause; for transient failures raise `toast.error(...)` (bottom-right, §6.4) with specific, actionable copy. Put raw error detail in a `font-mono` block, not the headline. |
+| **Empty** | A centered `muted-foreground` icon + a short title + (optional) primary CTA — passed as `AsyncState`'s `empty` for a request-backed region. Reuse a neighboring pane's empty block for the same surface rather than re-styling. |
+| **Error** | A failed load stays on screen as `AsyncState`'s error block (cause + Retry); for transient failures of an action raise `toast.error(...)` (bottom-right, §6.4) with specific, actionable copy. Put raw error detail in a `font-mono` block, not the headline. |
 | **Success** | `notifySuccess(...)` / `notifyCopied(...)` (top-center, §6.4) for transient confirmation; for a result that stays on screen, render it in place. |
 | **In-progress** | Stream the work (terminal output, query rows, transfer progress) with per-item status, and disable the triggering control with an inline spinner while it runs. |
 
@@ -425,6 +442,7 @@ When building a new tab, pane, or dialog, run this checklist to stay consistent:
 - [ ] **Surface type:** is it a tab (`terminal` / `query` / `ai` / `page` / `info`)? Open it via `tabStore.openTab(...)`, not by mounting it directly (§7).
 - [ ] **Shell:** live inside the existing frame (Sidebar rail → tab area → MainPanel); don't add new window chrome. Resizable regions reuse the `SplitPane` drag pattern + `border-panel-divider`/`bg-border` divider (§7).
 - [ ] **Color** entirely from tokens (`bg-card` / `text-foreground` / `border-border` / `text-primary` / `bg-primary` …), no literals, verified on both themes (Constraints 1–2, §3–4).
+- [ ] **Type size** at least `11px`; error reasons, commands, target names and status words `text-xs` (§5).
 - [ ] **Components** reuse first — `@opskat/ui` primitives + the shared composites (`AssetSelect` / `GroupSelect` / `ConfirmDialog` / `PasswordSourceField` / `IconPicker` …); variants via CVA, classes via `cn()`, icons via `lucide-react` + `brand-icons` (Constraint 6, §6, §8).
 - [ ] **Asset-type logic** goes through the `assetTypes` registry (`getAssetType` / `getIconComponent`), never a `switch` on a type string (§8).
 - [ ] **State:** loading / empty / error / success / in-progress all covered, never silent; spinners are `Loader2 + animate-spin`; success via `notify`, errors via `toast.error` (§6.4, §10).

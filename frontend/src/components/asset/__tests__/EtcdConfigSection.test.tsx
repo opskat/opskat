@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import { renderForSave } from "./rejectedSave";
 import { createRef } from "react";
 import { EtcdConfigSection } from "@/components/asset/EtcdConfigSection";
 import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
@@ -51,5 +52,17 @@ describe("EtcdConfigSection ref 契约", () => {
     const ref = createRef<AssetFormHandle>();
     render(<EtcdConfigSection ref={ref} editAsset={editAsset} ctx={ctx} onValidityChange={onValidity} />);
     expect(onValidity).toHaveBeenLastCalledWith({ canTest: true, canSave: true, saveDisabledReason: "" });
+  });
+});
+
+describe("EtcdConfigSection on a rejected save", () => {
+  it("shows endpoints that parse to nothing under the endpoints field", () => {
+    const editAsset = new asset_entity.Asset({ ID: 2, Type: "etcd", Config: JSON.stringify({ endpoints: [] }) });
+    const { rejectSave, reportShown } = renderForSave(
+      <EtcdConfigSection editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />
+    );
+    rejectSave();
+    expect(screen.getByText("etcd.error.endpointsRequired")).toBeInTheDocument();
+    expect(reportShown).toHaveBeenCalled();
   });
 });

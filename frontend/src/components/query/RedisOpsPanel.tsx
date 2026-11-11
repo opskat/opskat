@@ -195,7 +195,7 @@ function ClusterNodeRow({
         <span className={cn("inline-flex items-center gap-1.5", indent && "pl-5 text-muted-foreground")}>
           <span className={cn("size-1.5 shrink-0 rounded-full", failed ? "bg-destructive" : "bg-success")} />
           {node.addr}
-          <span className="text-[10px] text-muted-foreground">{node.id.slice(0, 8)}</span>
+          <span className="text-[11px] text-muted-foreground">{node.id.slice(0, 8)}</span>
         </span>
       </td>
       <td className="border-b px-2 py-2">

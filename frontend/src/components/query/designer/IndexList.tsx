@@ -61,7 +61,7 @@ export function IndexListHeader({
 export function IndexTypeBadge({ descriptor, type }: { descriptor: DriverDescriptor | undefined; type: string }) {
   const { t } = useTranslation();
   return (
-    <span className={cn("rounded px-1.5 py-0.5 text-[10px]", TYPE_STYLE[type] ?? "bg-muted text-muted-foreground")}>
+    <span className={cn("rounded px-1.5 py-0.5 text-[11px]", TYPE_STYLE[type] ?? "bg-muted text-muted-foreground")}>
       {indexTypeLabel(descriptor, type, t)}
     </span>
   );
@@ -90,7 +90,7 @@ export function IndexColumnChips({ index, struck }: { index: DesignerIndex; stru
         </span>
       ))}
       {index.include.length > 0 && (
-        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+        <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
           INCLUDE ({index.include.join(", ")})
         </span>
       )}
@@ -158,7 +158,7 @@ export function IndexList({ indexes, descriptor, notEditableNotice, updateDriver
             <span role="cell" className="flex min-w-0 flex-wrap items-center gap-1 px-2 py-1">
               <IndexColumnChips index={index} />
               {index.readOnlyReason && (
-                <span className="ml-1 truncate text-[10px] text-muted-foreground" title={index.readOnlyReason}>
+                <span className="ml-1 truncate text-xs text-muted-foreground" title={index.readOnlyReason}>
                   {index.readOnlyReason}
                 </span>
               )}

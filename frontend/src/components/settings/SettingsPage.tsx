@@ -1,19 +1,9 @@
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@opskat/ui";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, cn } from "@opskat/ui";
 import {
   Bot,
   Palette,
-  HardDrive,
   Import,
   Keyboard,
   MonitorDot,
@@ -23,6 +13,8 @@ import {
   PencilLine,
   Blocks,
   Globe,
+  Bug,
+  type LucideIcon,
 } from "lucide-react";
 import { ShortcutSettings } from "@/components/settings/ShortcutSettings";
 import { CustomTypeSection } from "@/components/settings/CustomTypeSection";
@@ -33,12 +25,23 @@ import { BackupSection } from "@/components/settings/BackupSection";
 import { AppearanceSection, TerminalSection } from "@/components/settings/AppearanceSection";
 import { ConnectionSection } from "@/components/settings/ConnectionSection";
 import { UpdateSection } from "@/components/settings/UpdateSection";
+import { DebugSection } from "@/components/settings/DebugSection";
 import { SystemStatusSection } from "@/components/settings/SystemStatusSection";
 import { ExtensionSection } from "@/components/settings/ExtensionSection";
 import { NetworkSection } from "@/components/settings/NetworkSection";
 import { ExternalEditSection } from "@/components/settings/ExternalEditSection";
 import { useExtensionUpdates, useExtensionUpdateSync } from "@/components/settings/extensionUpdates";
 import { useSettingsUiStore, type SettingsTab } from "@/stores/settingsUiStore";
+
+interface NavItem {
+  /** 导航项的 id，也是它打开时写入 store 的 SettingsTab。 */
+  id: SettingsTab;
+  /** 该项承载的全部 SettingsTab id；旧入口按这些 id 落到本项。 */
+  tabs: SettingsTab[];
+  icon: LucideIcon;
+  label: string;
+  badge?: ReactNode;
+}
 
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -47,142 +50,135 @@ export function SettingsPage() {
   useExtensionUpdateSync();
   const updateCount = useExtensionUpdates((s) => Object.keys(s.updates).length);
 
+  const groups: { id: string; label: string; items: NavItem[] }[] = [
+    {
+      id: "general",
+      label: t("settings.group.general"),
+      items: [
+        { id: "appearance", tabs: ["appearance"], icon: Palette, label: t("settings.nav.appearance") },
+        { id: "shortcuts", tabs: ["shortcuts"], icon: Keyboard, label: t("shortcut.title") },
+      ],
+    },
+    {
+      id: "connection",
+      label: t("settings.group.connection"),
+      items: [
+        { id: "terminal", tabs: ["terminal"], icon: MonitorDot, label: t("terminal.title") },
+        { id: "network", tabs: ["network"], icon: Globe, label: t("settings.nav.network") },
+        { id: "external-edit", tabs: ["external-edit"], icon: PencilLine, label: t("externalEdit.settings.tab") },
+      ],
+    },
+    {
+      id: "ai",
+      label: t("settings.group.ai"),
+      items: [{ id: "ai", tabs: ["ai"], icon: Bot, label: t("settings.nav.ai") }],
+    },
+    {
+      id: "data",
+      label: t("settings.group.data"),
+      items: [
+        { id: "import", tabs: ["import", "backup"], icon: Import, label: t("settings.nav.importBackup") },
+        { id: "custom-types", tabs: ["custom-types"], icon: Blocks, label: t("customType.tabTitle") },
+        {
+          id: "extensions",
+          tabs: ["extensions"],
+          icon: Puzzle,
+          label: t("extension.title"),
+          badge:
+            updateCount > 0 ? (
+              <span className="rounded-full bg-primary/15 px-1.5 text-[11px] font-medium leading-4 text-primary">
+                <span aria-hidden>{updateCount}</span>
+                <span className="sr-only">{t("extension.updatesAvailable", { count: updateCount })}</span>
+              </span>
+            ) : null,
+        },
+      ],
+    },
+    {
+      id: "about",
+      label: t("settings.group.about"),
+      items: [
+        { id: "about", tabs: ["about"], icon: Info, label: t("settings.nav.update") },
+        { id: "status", tabs: ["status"], icon: Activity, label: t("systemStatus.title") },
+        { id: "debug", tabs: ["debug"], icon: Bug, label: t("settings.nav.debugLogs") },
+      ],
+    },
+  ];
+
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 py-3 border-b">
         <h2 className="font-semibold">{t("nav.settings")}</h2>
       </div>
-      <div className="flex-1 overflow-y-auto p-4 scroll-stable">
-        <Tabs
-          value={activeTab}
-          onValueChange={(v) => setActiveTab(v as SettingsTab)}
-          className="space-y-4 max-w-4xl mx-auto"
-        >
-          <TabsList>
-            <TabsTrigger value="ai" className="gap-1">
-              <Bot className="h-3.5 w-3.5" />
-              AI
-            </TabsTrigger>
-            <TabsTrigger value="import" className="gap-1">
-              <Import className="h-3.5 w-3.5" />
-              {t("import.title")}
-            </TabsTrigger>
-            <TabsTrigger value="backup" className="gap-1">
-              <HardDrive className="h-3.5 w-3.5" />
-              {t("backup.title")}
-            </TabsTrigger>
-            <TabsTrigger value="shortcuts" className="gap-1">
-              <Keyboard className="h-3.5 w-3.5" />
-              {t("shortcut.title")}
-            </TabsTrigger>
-            <TabsTrigger value="terminal" className="gap-1">
-              <MonitorDot className="h-3.5 w-3.5" />
-              {t("terminal.title")}
-            </TabsTrigger>
-            <TabsTrigger value="network" className="gap-1">
-              <Globe className="h-3.5 w-3.5" />
-              {t("network.title")}
-            </TabsTrigger>
-            <TabsTrigger value="external-edit" className="gap-1">
-              <PencilLine className="h-3.5 w-3.5" />
-              {t("externalEdit.settings.tab")}
-            </TabsTrigger>
-            <TabsTrigger value="appearance" className="gap-1">
-              <Palette className="h-3.5 w-3.5" />
-              {t("nav.appearance")}
-            </TabsTrigger>
-            <TabsTrigger value="custom-types" className="gap-1">
-              <Blocks className="h-3.5 w-3.5" />
-              {t("customType.tabTitle")}
-            </TabsTrigger>
-            <TabsTrigger value="status" className="gap-1">
-              <Activity className="h-3.5 w-3.5" />
-              {t("systemStatus.title")}
-            </TabsTrigger>
-            <TabsTrigger value="extensions" className="gap-1">
-              <Puzzle className="h-3.5 w-3.5" />
-              {t("extension.title")}
-              {updateCount > 0 && (
-                <span className="rounded-full bg-primary/15 px-1.5 text-[10px] font-medium leading-4 text-primary">
-                  <span aria-hidden>{updateCount}</span>
-                  <span className="sr-only">{t("extension.updatesAvailable", { count: updateCount })}</span>
-                </span>
-              )}
-            </TabsTrigger>
-            <TabsTrigger value="about" className="gap-1">
-              <Info className="h-3.5 w-3.5" />
-              {t("appUpdate.title")}
-            </TabsTrigger>
-          </TabsList>
-
-          {/* AI Provider */}
-          <TabsContent value="ai" className="space-y-4">
-            <AISettingsSection />
-            <CommandReviewSection />
-          </TabsContent>
-
-          {/* Import */}
-          <TabsContent value="import" className="space-y-4">
-            <ImportSection />
-          </TabsContent>
-
-          {/* Backup */}
-          <TabsContent value="backup" className="space-y-4">
-            <BackupSection />
-          </TabsContent>
-
-          {/* Shortcuts */}
-          <TabsContent value="shortcuts" className="space-y-4">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">{t("shortcut.title")}</CardTitle>
-                <CardDescription>{t("shortcut.desc")}</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ShortcutSettings />
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* Terminal */}
-          <TabsContent value="terminal" className="space-y-4">
-            <TerminalSection />
-            <ConnectionSection />
-          </TabsContent>
-
-          <TabsContent value="network" className="space-y-4">
-            <NetworkSection />
-          </TabsContent>
-
-          <TabsContent value="external-edit" className="space-y-4">
-            <ExternalEditSection />
-          </TabsContent>
-
-          {/* Appearance and Language */}
-          <TabsContent value="appearance" className="space-y-4">
-            <AppearanceSection />
-          </TabsContent>
-
-          {/* Custom types */}
-          <TabsContent value="custom-types" className="space-y-4">
-            <CustomTypeSection />
-          </TabsContent>
-
-          {/* About & Update */}
-          <TabsContent value="about" className="space-y-4">
-            <UpdateSection />
-          </TabsContent>
-
-          {/* System Status */}
-          <TabsContent value="status" className="space-y-4">
-            <SystemStatusSection />
-          </TabsContent>
-
-          {/* Extensions */}
-          <TabsContent value="extensions" className="space-y-4">
-            <ExtensionSection />
-          </TabsContent>
-        </Tabs>
+      <div className="flex flex-1 min-h-0">
+        <nav aria-label={t("settings.nav.label")} className="w-44 shrink-0 overflow-y-auto border-r p-2 space-y-3">
+          {groups.map((group) => (
+            <div key={group.id} role="group" aria-label={group.label} className="space-y-0.5">
+              <div className="px-2 py-1 text-xs font-medium text-muted-foreground">{group.label}</div>
+              {group.items.map((item) => {
+                const current = item.tabs.includes(activeTab);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    data-testid={`settings-nav-${item.id}`}
+                    aria-current={current ? "page" : undefined}
+                    onClick={() => setActiveTab(item.id)}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                      current ? "bg-accent text-accent-foreground font-medium" : "hover:bg-accent/50"
+                    )}
+                  >
+                    <item.icon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                    {item.badge}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </nav>
+        <div className="flex-1 min-w-0 overflow-y-auto p-4 scroll-stable">
+          <div className="space-y-4 max-w-4xl mx-auto">
+            {activeTab === "ai" && (
+              <>
+                <AISettingsSection />
+                <CommandReviewSection />
+              </>
+            )}
+            {(activeTab === "import" || activeTab === "backup") && (
+              <>
+                <ImportSection />
+                <BackupSection />
+              </>
+            )}
+            {activeTab === "shortcuts" && (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">{t("shortcut.title")}</CardTitle>
+                  <CardDescription>{t("shortcut.desc")}</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ShortcutSettings />
+                </CardContent>
+              </Card>
+            )}
+            {activeTab === "terminal" && (
+              <>
+                <TerminalSection />
+                <ConnectionSection />
+              </>
+            )}
+            {activeTab === "network" && <NetworkSection />}
+            {activeTab === "external-edit" && <ExternalEditSection />}
+            {activeTab === "appearance" && <AppearanceSection />}
+            {activeTab === "custom-types" && <CustomTypeSection />}
+            {activeTab === "about" && <UpdateSection />}
+            {activeTab === "status" && <SystemStatusSection />}
+            {activeTab === "debug" && <DebugSection />}
+            {activeTab === "extensions" && <ExtensionSection />}
+          </div>
+        </div>
       </div>
     </div>
   );

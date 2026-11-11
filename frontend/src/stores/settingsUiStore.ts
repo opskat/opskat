@@ -12,7 +12,8 @@ export type SettingsTab =
   | "custom-types"
   | "status"
   | "extensions"
-  | "about";
+  | "about"
+  | "debug";
 
 interface SettingsUiState {
   activeTab: SettingsTab;

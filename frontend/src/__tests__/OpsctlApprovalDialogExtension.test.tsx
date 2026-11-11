@@ -61,7 +61,7 @@ describe("OpsctlApprovalDialog — 分类审批的「记住」编辑器", () => 
     render(<OpsctlApprovalDialog />);
     fireClassifiedApproval(handlers);
 
-    fireEvent.click(screen.getByText("opsctlApproval.remember"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-remember"));
 
     const input = screen.getByTestId("approval-remember-pattern");
     expect(input).toHaveValue("delete:logs-app");
@@ -73,8 +73,8 @@ describe("OpsctlApprovalDialog — 分类审批的「记住」编辑器", () => 
     render(<OpsctlApprovalDialog />);
     fireClassifiedApproval(handlers);
 
-    fireEvent.click(screen.getByText("opsctlApproval.remember"));
-    fireEvent.click(screen.getByText("opsctlApproval.approve"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-remember"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-allow-all"));
 
     const response = vi.mocked(RespondOpsctlApproval).mock.calls[0]?.[1];
     expect(response?.decision).toBe("allowAll");
@@ -86,9 +86,9 @@ describe("OpsctlApprovalDialog — 分类审批的「记住」编辑器", () => 
     render(<OpsctlApprovalDialog />);
     fireClassifiedApproval(handlers);
 
-    fireEvent.click(screen.getByText("opsctlApproval.remember"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-remember"));
     fireEvent.change(screen.getByTestId("approval-remember-pattern"), { target: { value: "delete:logs-*" } });
-    fireEvent.click(screen.getByText("opsctlApproval.approve"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-allow-all"));
 
     const response = vi.mocked(RespondOpsctlApproval).mock.calls[0]?.[1];
     expect(response?.decision).toBe("allowAll");
@@ -106,13 +106,13 @@ describe("OpsctlApprovalDialog — 分类审批的「记住」编辑器", () => 
     render(<OpsctlApprovalDialog />);
     fireClassifiedApproval(handlers);
 
-    fireEvent.click(screen.getByText("opsctlApproval.remember"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-remember"));
     fireEvent.change(screen.getByTestId("approval-remember-pattern"), { target: { value } });
 
     expect(screen.getByTestId("approval-remember-pattern-error")).toHaveTextContent(
       'opsctlApproval.classificationPatternActionRequired({"action":"delete"})'
     );
-    const approve = screen.getByText("opsctlApproval.approve");
+    const approve = screen.getByTestId("opsctl-approval-allow-all");
     expect(approve).toBeDisabled();
     fireEvent.click(approve);
     expect(RespondOpsctlApproval).not.toHaveBeenCalled();
@@ -131,7 +131,7 @@ describe("OpsctlApprovalDialog — 分类审批的「记住」编辑器", () => 
       remember_pattern: "",
     });
 
-    fireEvent.click(screen.getByText("opsctlApproval.remember"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-remember"));
 
     expect(screen.getByTestId("approval-remember-pattern")).toHaveValue("cat /var/log/app.log");
     expect(screen.getByText("opsctlApproval.patternLabel")).toBeInTheDocument();
@@ -169,9 +169,9 @@ describe("OpsctlApprovalDialog — 多资源与超长参数", () => {
     render(<OpsctlApprovalDialog />);
     fireMultiResource(handlers, { resources: ["logs-a", "logs-b"], remember_pattern: "delete:logs-*" });
 
-    fireEvent.click(screen.getByText("opsctlApproval.remember"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-remember"));
     expect(screen.getByTestId("approval-remember-pattern")).toHaveValue("delete:logs-*");
-    fireEvent.click(screen.getByText("opsctlApproval.approve"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-allow-all"));
 
     const response = vi.mocked(RespondOpsctlApproval).mock.calls[0]?.[1];
     expect(response?.decision).toBe("allowAll");
@@ -183,14 +183,14 @@ describe("OpsctlApprovalDialog — 多资源与超长参数", () => {
     render(<OpsctlApprovalDialog />);
     fireMultiResource(handlers);
 
-    fireEvent.click(screen.getByText("opsctlApproval.remember"));
+    fireEvent.click(screen.getByTestId("opsctl-approval-remember"));
     expect(screen.getByTestId("approval-remember-pattern")).toHaveValue("delete");
     expect(screen.queryByTestId("approval-remember-pattern-error")).not.toBeInTheDocument();
-    expect(screen.getByText("opsctlApproval.approve")).toBeEnabled();
+    expect(screen.getByTestId("opsctl-approval-allow-all")).toBeEnabled();
 
     fireEvent.change(screen.getByTestId("approval-remember-pattern"), { target: { value: "get" } });
     expect(screen.getByTestId("approval-remember-pattern-error")).toBeInTheDocument();
-    expect(screen.getByText("opsctlApproval.approve")).toBeDisabled();
+    expect(screen.getByTestId("opsctl-approval-allow-all")).toBeDisabled();
   });
 
   it("超长参数值截断显示并标出总大小，可展开看全文", () => {

@@ -2,6 +2,7 @@ import { render, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ConnectionMethodFields } from "@/components/asset/ConnectionMethodFields";
 import { CONNECTION_DEFAULTS, sshProxyLayer, socks5ProxyLayer } from "@/components/asset/proxyConfig";
+import { AssetFormErrorsContext } from "@/components/asset/useConfigSection";
 
 // react-i18next is mocked in src/__tests__/setup.ts so `t(key)` returns the key verbatim.
 function renderChain(over: Record<string, unknown> = {}, onChange = vi.fn()) {
@@ -61,5 +62,28 @@ describe("ConnectionMethodFields", () => {
     // toggle back to chain -> previous layers restored
     fireEvent.click(getByRole("radio", { name: "asset.connectionTunnelProxy" }));
     expect(onChange.mock.calls.at(-1)![0].proxyChainLayers).toEqual([layer]);
+  });
+});
+
+describe("ConnectionMethodFields on a rejected save", () => {
+  it("opens the first failing hop so its field error is visible, and reports it as shown", () => {
+    const reportShown = vi.fn();
+    const value = {
+      ...CONNECTION_DEFAULTS,
+      connectionType: "jumphost" as const,
+      proxyChainLayers: [sshProxyLayer(42, "Bastion"), { ...socks5ProxyLayer(), id: "s1", name: "Proxy A", host: "" }],
+    };
+    const tree = (attempt: number) => (
+      <AssetFormErrorsContext value={{ attempt, reportShown }}>
+        <ConnectionMethodFields value={value} onChange={vi.fn()} />
+      </AssetFormErrorsContext>
+    );
+    const { queryByText, rerender } = render(tree(0));
+    expect(queryByText("asset.proxyChainProxyHostRequired")).toBeNull();
+    expect(reportShown).not.toHaveBeenCalled();
+
+    rerender(tree(1));
+    expect(queryByText("asset.proxyChainProxyHostRequired")).not.toBeNull();
+    expect(reportShown).toHaveBeenCalled();
   });
 });

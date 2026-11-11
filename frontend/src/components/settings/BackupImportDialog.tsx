@@ -14,8 +14,6 @@ import {
   Switch,
   Separator,
 } from "@opskat/ui";
-import { PreviewImportFile } from "../../../wailsjs/go/system/System";
-import { ExecuteImportFile } from "../../../wailsjs/go/system/System";
 import { backup_svc } from "../../../wailsjs/go/models";
 import { SecretInput } from "@/components/SecretInput";
 import { useAssetStore } from "@/stores/assetStore";
@@ -23,27 +21,64 @@ import { useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
 import { errorMessage } from "@/lib/errorMessage";
 
+/** Where a backup comes from (local file, Gist, WebDAV): how to decrypt-preview it and how to import it. */
+export interface BackupImportSource {
+  title: string;
+  /** Shown above the password field while the backup is still encrypted. */
+  passwordPrompt: string;
+  successMessage: string;
+  encrypted: boolean;
+  /** Summary already known without a password (unencrypted file). */
+  initialSummary: backup_svc.BackupSummary | null;
+  preview: (password: string) => Promise<backup_svc.BackupSummary>;
+  execute: (password: string, opts: backup_svc.ImportOptions) => Promise<backup_svc.ImportResult>;
+}
+
 interface BackupImportDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  filePath: string;
-  encrypted: boolean;
-  initialSummary?: backup_svc.BackupSummary | null;
+  /** Mount a fresh dialog (new `key`) per import so password, summary and toggles start from the defaults. */
+  source: BackupImportSource;
 }
 
-export function BackupImportDialog({
-  open,
-  onOpenChange,
-  filePath,
-  encrypted,
-  initialSummary,
-}: BackupImportDialogProps) {
+async function applyImportResult(result: backup_svc.ImportResult) {
+  if (result.shortcuts) {
+    try {
+      const parsed = JSON.parse(result.shortcuts);
+      localStorage.setItem("keyboard_shortcuts", JSON.stringify(parsed));
+      const store = useShortcutStore.getState();
+      store.resetAll();
+      for (const [action, binding] of Object.entries(parsed)) {
+        store.updateShortcut(action as never, binding as never);
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+
+  if (result.custom_themes) {
+    try {
+      const themes = JSON.parse(result.custom_themes);
+      const store = useTerminalThemeStore.getState();
+      for (const theme of themes) {
+        // 已有同 id 的主题就原地更新:先删再加会把正在使用的主题切回默认。
+        if (store.customThemes.some((existing) => existing.id === theme.id)) store.updateCustomTheme(theme);
+        else store.addCustomTheme(theme);
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }
+}
+
+export function BackupImportDialog({ open, onOpenChange, source }: BackupImportDialogProps) {
   const { t } = useTranslation();
   const { refresh } = useAssetStore();
 
   const [password, setPassword] = useState("");
   const [decrypting, setDecrypting] = useState(false);
-  const [summary, setSummary] = useState<backup_svc.BackupSummary | null>(initialSummary ?? null);
+  const [decryptError, setDecryptError] = useState("");
+  const [summary, setSummary] = useState<backup_svc.BackupSummary | null>(source.initialSummary);
   const [importing, setImporting] = useState(false);
 
   // module toggles
@@ -55,15 +90,15 @@ export function BackupImportDialog({
   const [importThemes, setImportThemes] = useState(false);
   const [mode, setMode] = useState<"merge" | "replace">("merge");
 
-  const needsDecrypt = encrypted && !summary;
+  const needsDecrypt = source.encrypted && !summary;
 
   const handleDecrypt = async () => {
     setDecrypting(true);
+    setDecryptError("");
     try {
-      const result = await PreviewImportFile(filePath, password);
-      setSummary(result);
+      setSummary(await source.preview(password));
     } catch (e) {
-      toast.error(errorMessage(e));
+      setDecryptError(errorMessage(e));
     } finally {
       setDecrypting(false);
     }
@@ -81,37 +116,8 @@ export function BackupImportDialog({
         import_themes: importThemes,
         mode,
       });
-      const result = await ExecuteImportFile(filePath, password, opts);
-
-      // restore shortcuts
-      if (result.shortcuts) {
-        try {
-          const parsed = JSON.parse(result.shortcuts);
-          localStorage.setItem("keyboard_shortcuts", JSON.stringify(parsed));
-          // reload store
-          const store = useShortcutStore.getState();
-          store.resetAll();
-          for (const [action, binding] of Object.entries(parsed)) {
-            store.updateShortcut(action as never, binding as never);
-          }
-        } catch {
-          // ignore parse errors
-        }
-      }
-
-      // restore custom themes
-      if (result.custom_themes) {
-        try {
-          const themes = JSON.parse(result.custom_themes);
-          const store = useTerminalThemeStore.getState();
-          for (const theme of themes) {
-            store.addCustomTheme(theme);
-          }
-        } catch {
-          // ignore parse errors
-        }
-      }
-
+      const result = await source.execute(password, opts);
+      await applyImportResult(result);
       await refresh();
 
       const parts: string[] = [];
@@ -121,7 +127,7 @@ export function BackupImportDialog({
       if (result.policy_groups_imported > 0) parts.push(`${result.policy_groups_imported} policy groups`);
       if (result.forwards_imported > 0) parts.push(`${result.forwards_imported} forwards`);
       if (result.custom_types_imported > 0) parts.push(`${result.custom_types_imported} custom types`);
-      notifySuccess(t("backup.importSuccess") + (parts.length > 0 ? `: ${parts.join(", ")}` : ""));
+      notifySuccess(source.successMessage + (parts.length > 0 ? `: ${parts.join(", ")}` : ""));
 
       onOpenChange(false);
     } catch (e) {
@@ -131,19 +137,11 @@ export function BackupImportDialog({
     }
   };
 
-  const handleOpenChange = (v: boolean) => {
-    if (!v) {
-      setPassword("");
-      setSummary(initialSummary ?? null);
-    }
-    onOpenChange(v);
-  };
-
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{t("backup.importTitle")}</DialogTitle>
+          <DialogTitle>{source.title}</DialogTitle>
         </DialogHeader>
 
         {/* Decrypt step */}
@@ -151,16 +149,20 @@ export function BackupImportDialog({
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Lock className="h-4 w-4" />
-              <span>{t("backup.encryptedFile")}</span>
+              <span>{source.passwordPrompt}</span>
             </div>
             <div className="flex items-center gap-2">
               <SecretInput
                 wrapperClassName="flex-1"
                 placeholder={t("backup.password")}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                aria-invalid={decryptError ? true : undefined}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  setDecryptError("");
+                }}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && password) handleDecrypt();
+                  if (e.key === "Enter" && password && !decrypting) handleDecrypt();
                 }}
               />
               <Button onClick={handleDecrypt} disabled={decrypting || !password}>
@@ -168,6 +170,11 @@ export function BackupImportDialog({
                 {t("backup.decryptPreview")}
               </Button>
             </div>
+            {decryptError && (
+              <p role="alert" className="text-xs text-destructive">
+                {decryptError}
+              </p>
+            )}
           </div>
         )}
 
@@ -187,14 +194,14 @@ export function BackupImportDialog({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Server className="h-4 w-4 text-muted-foreground" />
-                    <Label className="text-sm">
+                    <Label htmlFor="backup-import-assets" className="text-sm">
                       {t("backup.importAssets")}
                       <span className="ml-1 text-xs text-muted-foreground">
                         ({summary.asset_count} assets, {summary.group_count} groups)
                       </span>
                     </Label>
                   </div>
-                  <Switch checked={importAssets} onCheckedChange={setImportAssets} />
+                  <Switch id="backup-import-assets" checked={importAssets} onCheckedChange={setImportAssets} />
                 </div>
               )}
 
@@ -203,14 +210,18 @@ export function BackupImportDialog({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Shield className="h-4 w-4 text-muted-foreground" />
-                    <Label className="text-sm">
+                    <Label htmlFor="backup-import-credentials" className="text-sm">
                       {t("backup.importCredentials")}
                       <span className="ml-1 text-xs text-muted-foreground">
                         ({summary.credential_count} credentials)
                       </span>
                     </Label>
                   </div>
-                  <Switch checked={importCredentials} onCheckedChange={setImportCredentials} />
+                  <Switch
+                    id="backup-import-credentials"
+                    checked={importCredentials}
+                    onCheckedChange={setImportCredentials}
+                  />
                 </div>
               )}
 
@@ -219,12 +230,12 @@ export function BackupImportDialog({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Network className="h-4 w-4 text-muted-foreground" />
-                    <Label className="text-sm">
+                    <Label htmlFor="backup-import-forwards" className="text-sm">
                       {t("backup.importForwards")}
                       <span className="ml-1 text-xs text-muted-foreground">({summary.forward_count} configs)</span>
                     </Label>
                   </div>
-                  <Switch checked={importForwards} onCheckedChange={setImportForwards} />
+                  <Switch id="backup-import-forwards" checked={importForwards} onCheckedChange={setImportForwards} />
                 </div>
               )}
 
@@ -247,12 +258,16 @@ export function BackupImportDialog({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Settings2 className="h-4 w-4 text-muted-foreground" />
-                    <Label className="text-sm">
+                    <Label htmlFor="backup-import-policy-groups" className="text-sm">
                       {t("backup.importPolicyGroups")}
                       <span className="ml-1 text-xs text-muted-foreground">({summary.policy_group_count} groups)</span>
                     </Label>
                   </div>
-                  <Switch checked={importPolicyGroups} onCheckedChange={setImportPolicyGroups} />
+                  <Switch
+                    id="backup-import-policy-groups"
+                    checked={importPolicyGroups}
+                    onCheckedChange={setImportPolicyGroups}
+                  />
                 </div>
               )}
 
@@ -261,9 +276,11 @@ export function BackupImportDialog({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Keyboard className="h-4 w-4 text-muted-foreground" />
-                    <Label className="text-sm">{t("backup.importShortcuts")}</Label>
+                    <Label htmlFor="backup-import-shortcuts" className="text-sm">
+                      {t("backup.importShortcuts")}
+                    </Label>
                   </div>
-                  <Switch checked={importShortcuts} onCheckedChange={setImportShortcuts} />
+                  <Switch id="backup-import-shortcuts" checked={importShortcuts} onCheckedChange={setImportShortcuts} />
                 </div>
               )}
 
@@ -272,9 +289,11 @@ export function BackupImportDialog({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <Palette className="h-4 w-4 text-muted-foreground" />
-                    <Label className="text-sm">{t("backup.importThemes")}</Label>
+                    <Label htmlFor="backup-import-themes" className="text-sm">
+                      {t("backup.importThemes")}
+                    </Label>
                   </div>
-                  <Switch checked={importThemes} onCheckedChange={setImportThemes} />
+                  <Switch id="backup-import-themes" checked={importThemes} onCheckedChange={setImportThemes} />
                 </div>
               )}
             </div>
@@ -305,11 +324,15 @@ export function BackupImportDialog({
         )}
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => handleOpenChange(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("action.cancel")}
           </Button>
           {summary && (
-            <Button onClick={handleImport} disabled={importing}>
+            <Button
+              variant={mode === "replace" ? "destructive" : "default"}
+              onClick={handleImport}
+              disabled={importing}
+            >
               {importing && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
               {importing ? t("backup.importing") : t("backup.import")}
             </Button>

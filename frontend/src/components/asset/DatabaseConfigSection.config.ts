@@ -154,6 +154,16 @@ export function buildDatabaseConfig(
   return JSON.stringify(cfg);
 }
 
+/** SQLite 文件路径必填:validate 与路径字段共用。 */
+export function sqlitePathError(path: string): string {
+  return path.trim() ? "" : "asset.formMissingPath";
+}
+
+/** 远端 SQLite 文件必须选 SSH 资产:validate 与 SSH 资产字段共用。 */
+export function sqliteSSHError(sshTunnelId: number): string {
+  return sshTunnelId > 0 ? "" : "asset.formMissingSQLiteSSH";
+}
+
 /** 这份表单是否按 Kerberos 认证提交:驱动声明了 Kerberos 字段组且用户选了 Kerberos。 */
 export function kerberosActive(state: KerberosFormFields, driver: DriverDescriptor): boolean {
   return state.authMethod === "kerberos" && driverUsesField(driver, "kerberos");

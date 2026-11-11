@@ -14,6 +14,11 @@ import {
 } from "./EtcdConfigSection.config";
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
 
+/** 至少要能解析出一个 endpoint:validate 与 endpoints 字段共用。 */
+function etcdEndpointsError(endpoints: string): string {
+  return parseEtcdEndpoints(endpoints).length > 0 ? "" : "etcd.error.endpointsRequired";
+}
+
 const ETCD_GROUPS: ConfigGroupSchema<EtcdFormState>[] = [
   {
     key: "connection",
@@ -24,6 +29,7 @@ const ETCD_GROUPS: ConfigGroupSchema<EtcdFormState>[] = [
         key: "endpoints",
         label: "etcd.form.endpoints",
         required: true,
+        error: (s) => etcdEndpointsError(s.endpoints),
         mono: true,
         rows: 3,
         placeholder: "10.0.0.1:2379\n10.0.0.2:2379",
@@ -72,13 +78,14 @@ export function EtcdConfigSection({ editAsset, onValidityChange, ref }: ConfigSe
     onValidityChange,
     init: (a) => (a ? parseEtcdConfig(a.Config, a.sshTunnelId || 0) : { ...ETCD_DEFAULTS }),
     validate: (s) => {
-      const ok = parseEtcdEndpoints(s.endpoints).length > 0;
+      const endpointsError = etcdEndpointsError(s.endpoints);
+      const ok = !endpointsError;
       const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
       const canUse = ok && !proxyChainError;
       return {
         canTest: canUse,
         canSave: canUse,
-        saveDisabledReason: ok ? proxyChainError : "etcd.error.endpointsRequired",
+        saveDisabledReason: endpointsError || proxyChainError,
       };
     },
     build: async (s, ctx) => ({
@@ -105,6 +112,7 @@ export function EtcdConfigSection({ editAsset, onValidityChange, ref }: ConfigSe
       password: cred.value.password,
     }),
     deps: [cred.value],
+    dirtyExtra: [cred.value],
   });
 
   const groups = buildConfigGroups(ETCD_GROUPS, { state, patch, ctx: { cred, editAsset } });

@@ -35,7 +35,7 @@ export function DesignerLoadError({ error, onRetry, onClose }: DesignerLoadError
     <div role="alert" className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
       <CircleAlert className="h-8 w-8 text-destructive/70" aria-hidden />
       <div className="text-sm">{t("query.designer.loadFailed")}</div>
-      <code className="max-w-lg rounded-md bg-muted px-3 py-2 text-left font-mono text-[11px] break-all text-muted-foreground select-text">
+      <code className="max-w-lg rounded-md bg-muted px-3 py-2 text-left font-mono text-xs break-all text-muted-foreground select-text">
         {error}
       </code>
       <div className="flex gap-2">

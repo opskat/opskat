@@ -142,6 +142,7 @@ function fakeCred(): UseAssetCredential {
   return {
     value: { password: "", encryptedPassword: "", passwordSource: "inline", passwordCredentialId: 0 },
     managedPasswords: [],
+    managedPasswordsLoad: { status: "ready", error: null, reload: () => {} },
     setPassword: () => {},
     setPasswordSource: () => {},
     setPasswordCredentialId: () => {},

@@ -58,7 +58,7 @@ export function StatementList({ items, className, listTestId, itemTestId }: Stat
           <div className="min-w-0 flex-1 space-y-1">
             <pre className="font-mono text-xs break-all whitespace-pre-wrap select-text">{statement}</pre>
             {error && (
-              <div className="rounded bg-destructive/10 px-2 py-1 text-[11px] break-all whitespace-pre-wrap text-destructive select-text">
+              <div className="rounded bg-destructive/10 px-2 py-1 text-xs break-all whitespace-pre-wrap text-destructive select-text">
                 {error}
               </div>
             )}
@@ -84,7 +84,7 @@ export function DropWarning({
   const { t } = useTranslation();
   if (droppedColumns.length === 0 && droppedIndexes.length === 0) return null;
   return (
-    <div data-testid={testId} className={cn("flex items-start gap-2 text-[11px] text-destructive", className)}>
+    <div data-testid={testId} className={cn("flex items-start gap-2 text-xs text-destructive", className)}>
       <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
       <div className="space-y-0.5">
         {droppedColumns.length > 0 && <NameList label={t("query.designer.sql.dropColumns")} names={droppedColumns} />}

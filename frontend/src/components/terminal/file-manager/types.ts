@@ -20,6 +20,8 @@ export interface ClipboardItem {
   name: string;
   isDir: boolean;
   size: number;
+  /** Unix 秒，与 sftp_svc.FileEntry.modTime 一致。 */
+  modTime: number;
 }
 
 export interface ClipboardState {

@@ -97,7 +97,7 @@ export function IndexEditor({
       <div className="flex h-8 shrink-0 items-center gap-2 border-b border-border px-3 text-xs">
         <span className="font-medium">{isNew ? t("query.designer.newIndex") : t("query.designer.editIndex")}</span>
         {indexStatus(draft, index) === "modified" && (
-          <span className="text-[10px] text-warning">{t("query.designer.indexModified")}</span>
+          <span className="text-xs text-warning">{t("query.designer.indexModified")}</span>
         )}
         <Button
           variant="ghost"
@@ -136,9 +136,9 @@ export function IndexEditor({
               value={index.name}
               onChange={(e) => onChange(key, { name: e.target.value })}
             />
-            {nameError && <p className="text-[11px] text-destructive">{issueMessage(t, nameError)}</p>}
+            {nameError && <p className="text-xs text-destructive">{issueMessage(t, nameError)}</p>}
             {nameWarning && (
-              <p className="flex items-start gap-1 text-[11px] text-warning">
+              <p className="flex items-start gap-1 text-xs text-warning">
                 <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
                 {issueMessage(t, nameWarning)}
               </p>
@@ -159,7 +159,7 @@ export function IndexEditor({
                 }))}
               />
             </div>
-            {typeError && <p className="text-[11px] text-destructive">{issueMessage(t, typeError)}</p>}
+            {typeError && <p className="text-xs text-destructive">{issueMessage(t, typeError)}</p>}
           </div>
           <div className="space-y-1">
             <div className="text-[11px] text-muted-foreground">{t("query.designer.indexColumnsHint")}</div>
@@ -170,7 +170,7 @@ export function IndexEditor({
                   data-testid="index-editor-column"
                   className="flex h-7 items-center gap-1 rounded-md border border-border bg-background pr-1 pl-2"
                 >
-                  <span className="w-4 text-[10px] text-muted-foreground tabular-nums">{i + 1}</span>
+                  <span className="w-4 text-[11px] text-muted-foreground tabular-nums">{i + 1}</span>
                   <span data-testid="index-editor-column-name" className="min-w-0 flex-1 truncate font-mono">
                     {indexColumnName(draft, column)}
                   </span>
@@ -180,7 +180,7 @@ export function IndexEditor({
                       aria-label={t("query.designer.descending")}
                       aria-pressed={column.descending}
                       title={t("query.designer.descending")}
-                      className="rounded border border-border px-1 text-[10px] text-muted-foreground hover:bg-accent"
+                      className="rounded border border-border px-1 text-[11px] text-muted-foreground hover:bg-accent"
                       onClick={() => updateColumnAt(i, { descending: !column.descending })}
                     >
                       {column.descending ? "DESC" : "ASC"}
@@ -193,7 +193,7 @@ export function IndexEditor({
                       aria-label={t("query.designer.prefixLength")}
                       title={t("query.designer.prefixLength")}
                       placeholder={t("query.designer.prefix")}
-                      className="h-5 w-12 rounded border border-border bg-transparent px-1 text-[10px]"
+                      className="h-5 w-12 rounded border border-border bg-transparent px-1 text-[11px]"
                       value={column.prefixLength > 0 ? column.prefixLength : ""}
                       onChange={(e) => {
                         const n = Number.parseInt(e.target.value, 10);
@@ -243,7 +243,7 @@ export function IndexEditor({
                   ])
                 }
               />
-              {columnsError && <p className="text-[11px] text-destructive">{issueMessage(t, columnsError)}</p>}
+              {columnsError && <p className="text-xs text-destructive">{issueMessage(t, columnsError)}</p>}
             </div>
           </div>
           {(editing?.options ?? []).map((option) => {
@@ -288,7 +288,7 @@ export function IndexEditor({
                     </Select>
                   </>
                 )}
-                {error && <p className="text-[11px] text-destructive">{issueMessage(t, error)}</p>}
+                {error && <p className="text-xs text-destructive">{issueMessage(t, error)}</p>}
               </div>
             );
           })}
@@ -305,7 +305,7 @@ export function IndexEditor({
             </div>
           )}
           {!isNew && (
-            <p className="flex items-start gap-1 rounded-md bg-info/10 px-2 py-1.5 text-[10px] leading-4 text-info">
+            <p className="flex items-start gap-1 rounded-md bg-info/10 px-2 py-1.5 text-[11px] leading-4 text-info">
               <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
               {t("query.designer.indexRebuildNote")}
             </p>
@@ -394,9 +394,9 @@ function ColumnPicker({
               >
                 <span className="w-3">{taken && <Check className="h-3 w-3" aria-hidden />}</span>
                 {c.name}
-                <span className="ml-auto text-[10px] text-muted-foreground"> {c.type}</span>
+                <span className="ml-auto text-[11px] text-muted-foreground"> {c.type}</span>
                 {c.isNew && (
-                  <span className="font-sans text-[10px] text-success"> {t("query.designer.newColumn")}</span>
+                  <span className="font-sans text-[11px] text-success"> {t("query.designer.newColumn")}</span>
                 )}
               </button>
             );

@@ -137,7 +137,7 @@ export function SecretDetailView({ secret }: { secret?: SecretListItem }) {
                 <div key={key}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs text-muted-foreground font-medium">{key}</span>
-                    <span className="text-[10px] text-muted-foreground">{decoded.length}B</span>
+                    <span className="text-[11px] text-muted-foreground">{decoded.length}B</span>
                   </div>
                   <K8sCodeBlock code={decoded} maxHeight="max-h-32" />
                 </div>

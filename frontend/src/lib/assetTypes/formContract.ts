@@ -38,6 +38,13 @@ export interface AssetTestAttempt {
   errorMessage?: (error: unknown) => string | undefined;
 }
 
+/** 各类型表单共有、切换资产类型时值得带过去的连接字段;section 的 state 里有同名字段就参与。 */
+export interface CommonFields {
+  host?: string;
+  port?: number;
+  username?: string;
+}
+
 /** 每个 ConfigSection 经 useImperativeHandle 暴露的命令式句柄。 */
 export interface AssetFormHandle {
   buildConfig: (ctx: AssetFormContext) => Promise<AssetConfigBuildResult>;
@@ -45,6 +52,10 @@ export interface AssetFormHandle {
   buildTestConfig: ((ctx: AssetFormContext) => Promise<AssetTestConfig>) | null;
   /** 协议需要前后端协同测试时提供；父壳不识别具体资产类型。 */
   startTest?: (ctx: AssetFormContext) => AssetTestAttempt;
+  /** 当前 state 里用户填过的通用连接字段(仍是本类型默认值的不算);壳在切换类型时取走,交给新区块预填。 */
+  commonFields?: () => CommonFields;
+  /** state 是否已偏离挂载时的初始值;壳据此决定关闭前要不要确认。 */
+  isDirty?: () => boolean;
 }
 
 export interface SectionValidity {

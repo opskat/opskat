@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { Loader2, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
-import { Button, Input, ScrollArea } from "@opskat/ui";
+import { Button, ConfirmDialog, Input, ScrollArea } from "@opskat/ui";
 import { useQueryStore, RedisKeyInfo, RedisStreamEntry } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { RedisStreamAdd } from "../../../wailsjs/go/redis/Redis";
@@ -37,6 +37,7 @@ export function RedisStreamViewer({
   const [value, setValue] = useState("");
   const [adding, setAdding] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
   const { scrollRef, virtualizer } = useRedisValueVirtualizer(entries.length);
 
@@ -125,7 +126,7 @@ export function RedisStreamViewer({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                onClick={() => handleDeleteEntry(selectedEntry.id)}
+                onClick={() => setPendingDeleteId(selectedEntry.id)}
                 disabled={deletingId === selectedEntry.id}
                 title={t("query.deleteEntry")}
               >
@@ -181,6 +182,20 @@ export function RedisStreamViewer({
           {adding ? <Loader2 className="size-3 animate-spin" /> : <Plus className="size-3" />}
         </Button>
       </div>
+      <ConfirmDialog
+        open={pendingDeleteId !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteId(null);
+        }}
+        title={t("query.deleteEntryConfirmTitle")}
+        description={t("query.deleteEntryConfirmDesc", { id: pendingDeleteId ?? "" })}
+        cancelText={t("action.cancel")}
+        confirmText={t("action.delete")}
+        onConfirm={() => {
+          if (pendingDeleteId) void handleDeleteEntry(pendingDeleteId);
+          setPendingDeleteId(null);
+        }}
+      />
     </div>
   );
 }

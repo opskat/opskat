@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import { renderForSave } from "./rejectedSave";
 import { createRef } from "react";
 import { OSSConfigSection } from "@/components/asset/OSSConfigSection";
 import type { AssetFormHandle, AssetFormContext } from "@/lib/assetTypes/formContract";
@@ -68,5 +69,28 @@ describe("OSSConfigSection ref 契约", () => {
       canSave: false,
       saveDisabledReason: "oss.error.bucketName",
     });
+  });
+});
+
+describe("OSSConfigSection on a rejected save", () => {
+  it("shows a missing Access Key ID and a bad bucket name under their fields", () => {
+    const editAsset = new asset_entity.Asset({
+      ID: 2,
+      Type: "oss",
+      Config: JSON.stringify({ provider: "aws", endpoint: "s3.amazonaws.com", bucket: "a/b" }),
+    });
+    const { rejectSave, reportShown } = renderForSave(
+      <OSSConfigSection editAsset={editAsset} ctx={ctx} onValidityChange={vi.fn()} />
+    );
+    expect(screen.queryByText("asset.generic.required")).toBeNull();
+
+    rejectSave();
+
+    expect(screen.getByTestId("oss-access-key-input")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("asset.generic.required")).toBeInTheDocument();
+    expect(screen.getByTestId("oss-bucket-input")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("oss.error.bucketName")).toBeInTheDocument();
+    expect(screen.getByTestId("config-tab-error-connection")).toBeInTheDocument();
+    expect(reportShown).toHaveBeenCalled();
   });
 });

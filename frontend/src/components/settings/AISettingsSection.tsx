@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { AsyncState, type AsyncStatus } from "@/components/common/AsyncState";
 import { useTranslation } from "react-i18next";
 import {
   Button,
@@ -91,16 +92,26 @@ function IntegrationSection() {
   const [dataDir, setDataDir] = useState("");
   const [appVersion, setAppVersion] = useState("");
 
+  const [opsctlLoad, setOpsctlLoad] = useState<{ status: AsyncStatus; error: string | null }>({
+    status: "loading",
+    error: null,
+  });
+
   const detect = useCallback(async () => {
     try {
-      const [info, skills, dir, dd, ver] = await Promise.all([
-        DetectOpsctl(),
+      const info = await DetectOpsctl();
+      setOpsctlInfo(info);
+      setOpsctlLoad({ status: "ready", error: null });
+    } catch (e: unknown) {
+      setOpsctlLoad({ status: "error", error: errorMessage(e) });
+    }
+    try {
+      const [skills, dir, dd, ver] = await Promise.all([
         DetectSkills(),
         GetOpsctlInstallDir(),
         GetDataDir(),
         GetAppVersion(),
       ]);
-      setOpsctlInfo(info);
       setSkillInfo(skills || null);
       setInstallDir(dir);
       setDataDir(dd);
@@ -109,6 +120,11 @@ function IntegrationSection() {
       // detection is optional
     }
   }, []);
+
+  const retryDetect = () => {
+    setOpsctlLoad({ status: "loading", error: null });
+    void detect();
+  };
 
   useEffect(() => {
     // 挂载时探测:detect 的 setState 均在 await 之后,经 async 边界调用避免 effect 内同步 setState
@@ -203,106 +219,109 @@ function IntegrationSection() {
               <CardDescription>{t("integration.cliDesc")}</CardDescription>
             </div>
             <div className="flex items-center gap-2">
-              {opsctlInfo.installed ? (
-                <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
-                  <Check className="h-3.5 w-3.5" />
-                  {t("integration.installed")}
-                </span>
-              ) : (
-                <span className="text-xs text-muted-foreground">{t("integration.notInstalled")}</span>
-              )}
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={detect}>
+              {opsctlLoad.status === "ready" &&
+                (opsctlInfo.installed ? (
+                  <span className="inline-flex items-center gap-1 text-xs font-medium text-success">
+                    <Check className="h-3.5 w-3.5" />
+                    {t("integration.installed")}
+                  </span>
+                ) : (
+                  <span className="text-xs text-muted-foreground">{t("integration.notInstalled")}</span>
+                ))}
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={retryDetect}>
                 <RefreshCw className="h-3.5 w-3.5" />
               </Button>
             </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          {opsctlInfo.installed && (
-            <div className="space-y-3">
-              <div className="grid gap-1.5 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">{t("integration.version")}</span>
-                  <span className="select-text font-mono text-xs">{opsctlInfo.version || "unknown"}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">{t("integration.path")}</span>
-                  <span className="select-text font-mono text-xs truncate max-w-[300px]">{opsctlInfo.path}</span>
-                </div>
-              </div>
-              {appVersion && opsctlInfo.version && opsctlInfo.version !== appVersion && (
-                <div className="flex items-center gap-2 rounded-md bg-warning/15 border border-warning/30 px-3 py-2 text-xs text-warning">
-                  <Info className="h-3.5 w-3.5 shrink-0" />
-                  <span>{t("integration.versionMismatch", { appVersion, cliVersion: opsctlInfo.version })}</span>
-                </div>
-              )}
-              {opsctlInfo.embedded && (
-                <div className="space-y-2">
-                  <div className="grid gap-1.5">
-                    <Label className="text-sm">{t("integration.installDir")}</Label>
-                    <Input
-                      value={installDir}
-                      onChange={(e) => setInstallDir(e.target.value)}
-                      className="font-mono text-xs h-8"
-                    />
+          <AsyncState status={opsctlLoad.status} error={opsctlLoad.error} onRetry={retryDetect}>
+            {opsctlInfo.installed && (
+              <div className="space-y-3">
+                <div className="grid gap-1.5 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">{t("integration.version")}</span>
+                    <span className="select-text font-mono text-xs">{opsctlInfo.version || "unknown"}</span>
                   </div>
-                  <Button onClick={handleInstallCLI} disabled={installing} size="sm" variant="outline">
-                    {installing ? (
-                      <>
-                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                        {t("integration.installing")}
-                      </>
-                    ) : (
-                      t("integration.reinstall")
-                    )}
-                  </Button>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">{t("integration.path")}</span>
+                    <span className="select-text font-mono text-xs truncate max-w-[300px]">{opsctlInfo.path}</span>
+                  </div>
                 </div>
-              )}
-            </div>
-          )}
+                {appVersion && opsctlInfo.version && opsctlInfo.version !== appVersion && (
+                  <div className="flex items-center gap-2 rounded-md bg-warning/15 border border-warning/30 px-3 py-2 text-xs text-warning">
+                    <Info className="h-3.5 w-3.5 shrink-0" />
+                    <span>{t("integration.versionMismatch", { appVersion, cliVersion: opsctlInfo.version })}</span>
+                  </div>
+                )}
+                {opsctlInfo.embedded && (
+                  <div className="space-y-2">
+                    <div className="grid gap-1.5">
+                      <Label className="text-sm">{t("integration.installDir")}</Label>
+                      <Input
+                        value={installDir}
+                        onChange={(e) => setInstallDir(e.target.value)}
+                        className="font-mono text-xs h-8"
+                      />
+                    </div>
+                    <Button onClick={handleInstallCLI} disabled={installing} size="sm" variant="outline">
+                      {installing ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                          {t("integration.installing")}
+                        </>
+                      ) : (
+                        t("integration.reinstall")
+                      )}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            )}
 
-          {!opsctlInfo.installed && (
-            <div className="space-y-3">
-              {opsctlInfo.embedded ? (
-                <div className="space-y-2">
-                  <div className="grid gap-1.5">
-                    <Label className="text-sm">{t("integration.installDir")}</Label>
-                    <Input
-                      value={installDir}
-                      onChange={(e) => setInstallDir(e.target.value)}
-                      className="font-mono text-xs h-8"
-                    />
+            {!opsctlInfo.installed && (
+              <div className="space-y-3">
+                {opsctlInfo.embedded ? (
+                  <div className="space-y-2">
+                    <div className="grid gap-1.5">
+                      <Label className="text-sm">{t("integration.installDir")}</Label>
+                      <Input
+                        value={installDir}
+                        onChange={(e) => setInstallDir(e.target.value)}
+                        className="font-mono text-xs h-8"
+                      />
+                    </div>
+                    <Button onClick={handleInstallCLI} disabled={installing} size="sm">
+                      {installing ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                          {t("integration.installing")}
+                        </>
+                      ) : (
+                        t("integration.install")
+                      )}
+                    </Button>
                   </div>
-                  <Button onClick={handleInstallCLI} disabled={installing} size="sm">
-                    {installing ? (
-                      <>
-                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                        {t("integration.installing")}
-                      </>
-                    ) : (
-                      t("integration.install")
-                    )}
+                ) : (
+                  <p className="text-sm text-muted-foreground">{t("integration.noEmbedded")}</p>
+                )}
+                <Separator />
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">{t("integration.manualInstall")}</p>
+                  <p className="text-xs text-muted-foreground">{t("integration.manualInstallHint")}</p>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-auto p-0 text-xs"
+                    onClick={() => BrowserOpenURL("https://github.com/opskat/opskat/releases")}
+                  >
+                    <ExternalLink className="h-3 w-3 mr-1" />
+                    GitHub Releases
                   </Button>
                 </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">{t("integration.noEmbedded")}</p>
-              )}
-              <Separator />
-              <div className="space-y-1">
-                <p className="text-sm font-medium">{t("integration.manualInstall")}</p>
-                <p className="text-xs text-muted-foreground">{t("integration.manualInstallHint")}</p>
-                <Button
-                  variant="link"
-                  size="sm"
-                  className="h-auto p-0 text-xs"
-                  onClick={() => BrowserOpenURL("https://github.com/opskat/opskat/releases")}
-                >
-                  <ExternalLink className="h-3 w-3 mr-1" />
-                  GitHub Releases
-                </Button>
               </div>
-            </div>
-          )}
+            )}
+          </AsyncState>
 
           <Separator />
           <div className="space-y-1">

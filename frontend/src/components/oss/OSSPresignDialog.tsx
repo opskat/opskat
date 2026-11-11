@@ -122,7 +122,7 @@ export function OSSPresignDialog({
               <span className="truncate text-[13px] font-medium" title={objectKey}>
                 {prefixLeafName(objectKey)}
               </span>
-              <span className="truncate font-mono text-[10px] text-muted-foreground" title={pathCrumb}>
+              <span className="truncate font-mono text-xs text-muted-foreground" title={pathCrumb}>
                 {pathCrumb}
               </span>
             </div>
@@ -182,7 +182,7 @@ export function OSSPresignDialog({
                 <>
                   <span
                     data-testid="oss-share-url"
-                    className="min-w-0 break-all font-mono text-[11px] leading-relaxed text-info"
+                    className="min-w-0 break-all font-mono text-xs leading-relaxed text-info"
                   >
                     {url}
                   </span>
@@ -204,7 +204,7 @@ export function OSSPresignDialog({
           </div>
 
           {/* 过期提示 */}
-          <div className="flex items-center gap-1.5 text-[11px] text-warning">
+          <div className="flex items-center gap-1.5 text-xs text-warning">
             <Hourglass className="size-3 shrink-0" />
             <span>{t("oss.share.warning", { duration: t(currentExpiryKey) })}</span>
           </div>

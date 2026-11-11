@@ -6,7 +6,7 @@ import { Trash2 } from "lucide-react";
 import { useResizeHandle, ConfirmDialog, Button } from "@opskat/ui";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { useOssBrowserStore } from "@/stores/ossBrowserStore";
-import { useOssTransferStore } from "@/stores/ossTransferStore";
+import { useOssTransferStore, type ResolveKeys } from "@/stores/ossTransferStore";
 import { useAssetStore } from "@/stores/assetStore";
 import { flattenPrefixTree } from "@/lib/ossPrefixTree";
 import { formatBytes } from "@/lib/formatBytes";
@@ -19,7 +19,9 @@ import { OSSObjectDetail } from "@/components/oss/OSSObjectDetail";
 import { OSSPresignDialog } from "@/components/oss/OSSPresignDialog";
 import { OSSTransferDock } from "@/components/oss/OSSTransferDock";
 import { useOssFileDrop } from "@/components/oss/useOssFileDrop";
+import { ossObjectSide, useOssTargetResolver } from "@/components/oss/useOssTargetResolver";
 import { parseOSSConfig } from "@/components/asset/OSSConfigSection.config";
+import { PanelSidebar, SidebarRefreshButton } from "@/components/common/PanelSidebar";
 import { NameDialog } from "@/components/common/NameDialog";
 import { errorMessage } from "@/lib/errorMessage";
 
@@ -69,21 +71,19 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
   const assetConfig = useAssetStore((s) => s.assets.find((a) => a.ID === assetId)?.Config);
   const defaultBucket = useMemo(() => parseOSSConfig(assetConfig ?? "").bucket, [assetConfig]);
 
+  // The failure is kept in the tab state and shown in the sidebar, so no toast here.
+  const reloadBuckets = useCallback(() => {
+    if (assetId) void loadBuckets(tabId, assetId, defaultBucket).catch(() => undefined);
+  }, [assetId, tabId, defaultBucket, loadBuckets]);
+
   useEffect(() => {
-    if (assetId) void loadBuckets(tabId, assetId, defaultBucket).catch(fail);
-  }, [assetId, tabId, defaultBucket, loadBuckets, fail]);
+    reloadBuckets();
+  }, [reloadBuckets]);
 
   const rows = useMemo(() => (state ? flattenPrefixTree(state.tree, state.expanded, "") : []), [state]);
 
   const focusedObject = useMemo(() => state?.listing?.objects.find((o) => o.key === state.focusedKey) ?? null, [state]);
 
-  const sidebarRef = useRef<HTMLDivElement>(null);
-  const { size: sidebarWidth, handleMouseDown } = useResizeHandle({
-    defaultSize: 260,
-    minSize: 180,
-    maxSize: 480,
-    targetRef: sidebarRef,
-  });
   const detailRef = useRef<HTMLDivElement>(null);
   const { size: detailWidth, handleMouseDown: handleDetailResize } = useResizeHandle({
     defaultSize: 320,
@@ -93,17 +93,19 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     targetRef: detailRef,
   });
 
+  // Listing failures are kept in listingError and shown in place of the listing, so no toast.
   const onNavigate = useCallback(
-    (prefix: string) => void navigateToPrefix(tabId, prefix).catch(fail),
-    [navigateToPrefix, tabId, fail]
+    (prefix: string) => void navigateToPrefix(tabId, prefix).catch(() => undefined),
+    [navigateToPrefix, tabId]
   );
   const onExpand = useCallback(
     (prefix: string) => void expandNode(tabId, prefix).catch(fail),
     [expandNode, tabId, fail]
   );
+  const onRetryListing = useCallback(() => void refresh(tabId).catch(() => undefined), [refresh, tabId]);
   const onSelectBucket = useCallback(
-    (bucket: string) => void selectBucket(tabId, bucket).catch(fail),
-    [selectBucket, tabId, fail]
+    (bucket: string) => void selectBucket(tabId, bucket).catch(() => undefined),
+    [selectBucket, tabId]
   );
 
   const onDetailDownload = useCallback(() => {
@@ -113,6 +115,8 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     );
   }, [assetId, state, startDownload, tabId, t]);
 
+  const { resolveTargets, conflictDialog } = useOssTargetResolver(assetId ?? 0, state?.currentBucket ?? "");
+
   const promptDestination = useCallback(
     async (mode: "copy" | "move" | "rename") => {
       if (!state?.focusedKey) return;
@@ -121,14 +125,21 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
       const destination = window.prompt(t(`oss.detail.${mode}Prompt`), defaultKey)?.trim();
       if (!destination || destination === source) return;
       try {
-        if (mode === "copy") await copyObject(tabId, source, destination);
-        else await moveObject(tabId, source, destination);
+        // 重命名也是移动，同样先检查目标；它的对话框只给「取消 / 覆盖」。
+        const sourceObject = state.listing?.objects.find((o) => o.key === source);
+        const [finalKey] = await resolveTargets(
+          [{ key: destination, incoming: sourceObject ? ossObjectSide(sourceObject) : {} }],
+          mode === "rename" ? "rename" : "transfer"
+        );
+        if (finalKey === null) return;
+        if (mode === "copy") await copyObject(tabId, source, finalKey);
+        else await moveObject(tabId, source, finalKey);
         notifySuccess(t(`oss.detail.${mode}Success`));
       } catch (error) {
         toast.error(errorMessage(error));
       }
     },
-    [copyObject, moveObject, state, tabId, t]
+    [copyObject, moveObject, resolveTargets, state, tabId, t]
   );
 
   const confirmDetailDelete = async () => {
@@ -142,6 +153,8 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     }
   };
 
+  const resolveKeys: ResolveKeys = resolveTargets;
+
   const contentRef = useRef<HTMLDivElement>(null);
   const isDragOver = useOssFileDrop({
     dropRef: contentRef,
@@ -150,14 +163,15 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
     bucket: state?.currentBucket ?? "",
     prefix: state?.currentPrefix ?? "",
     active: !!assetId && !!state?.currentBucket,
+    resolveKeys,
   });
 
   const onUpload = useCallback(() => {
     if (!assetId || !state?.currentBucket) return;
-    void startUpload(tabId, assetId, state.currentBucket, state.currentPrefix).catch(() =>
+    void startUpload(tabId, assetId, state.currentBucket, state.currentPrefix, resolveKeys).catch(() =>
       toast.error(t("oss.transfer.uploadFailed"))
     );
-  }, [assetId, state, startUpload, tabId, t]);
+  }, [assetId, state, startUpload, tabId, t, resolveKeys]);
 
   const onDownload = useCallback(
     (key: string) => {
@@ -197,29 +211,28 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
   const confirmBody =
     selectionCount === 1
       ? t("oss.browser.deleteConfirmOne", { key: Array.from(state?.selection ?? [])[0] })
-      : t("oss.browser.deleteConfirmMany", { count: selectionCount });
+      : t("oss.browser.deleteConfirmManyIrreversible", { count: selectionCount });
 
   return (
     <div className="flex h-full w-full flex-col" data-testid="oss-browser-panel">
       <div className="flex min-h-0 flex-1">
         {/* Left: bucket list + lazy prefix tree */}
-        <div ref={sidebarRef} className="shrink-0 border-r" style={{ width: sidebarWidth }}>
+        <PanelSidebar
+          panelType="oss"
+          title={t("oss.browser.sidebarTitle")}
+          actions={<SidebarRefreshButton onClick={reloadBuckets} loading={state?.loading.buckets ?? false} />}
+        >
           <OSSBucketTree
             buckets={state?.buckets ?? null}
             currentBucket={state?.currentBucket ?? ""}
             rows={rows}
-            loadingBuckets={state?.loading.buckets ?? false}
+            error={state?.bucketsError}
+            onRetryBuckets={reloadBuckets}
             onSelectBucket={onSelectBucket}
             onToggleExpand={onExpand}
             onNavigatePrefix={onNavigate}
           />
-        </div>
-
-        {/* Resize handle */}
-        <div
-          className="w-1 shrink-0 cursor-col-resize hover:bg-accent active:bg-accent"
-          onMouseDown={handleMouseDown}
-        />
+        </PanelSidebar>
 
         {/* Right: breadcrumb + (selection bar) + object list */}
         <div
@@ -261,6 +274,8 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                   objects={state.listing?.objects ?? []}
                   focusedKey={state.focusedKey}
                   loading={state.loading.listing}
+                  error={state.listingError}
+                  onRetry={onRetryListing}
                   loadingPage={state.loading.page}
                   truncated={state.listing?.truncated ?? false}
                   thumbnails={state.thumbnails}
@@ -276,6 +291,8 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
                   objects={state.listing?.objects ?? []}
                   selection={state.selection}
                   loading={state.loading.listing}
+                  error={state.listingError}
+                  onRetry={onRetryListing}
                   loadingPage={state.loading.page}
                   truncated={state.listing?.truncated ?? false}
                   focusedKey={state.focusedKey}
@@ -351,6 +368,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
           </>
         )}
       </div>
+      {conflictDialog}
       <NameDialog
         open={newFolderOpen}
         title={t("oss.browser.newFolder")}
@@ -370,7 +388,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
         title={t("oss.browser.deleteConfirmTitle")}
         description={confirmBody}
         cancelText={t("action.cancel")}
-        confirmText={t("action.confirm")}
+        confirmText={t("action.delete")}
         onConfirm={() => void confirmDelete()}
       />
 
@@ -390,7 +408,7 @@ export function OSSBrowserPanel({ tabId }: OSSBrowserPanelProps) {
         title={t("oss.browser.deleteConfirmTitle")}
         description={t("oss.browser.deleteConfirmOne", { key: state?.focusedKey ?? "" })}
         cancelText={t("action.cancel")}
-        confirmText={t("action.confirm")}
+        confirmText={t("action.delete")}
         onConfirm={() => void confirmDetailDelete()}
       />
     </div>

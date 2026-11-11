@@ -1,5 +1,6 @@
 import { createRef } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { renderForSave } from "./rejectedSave";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VNCConfigSection } from "@/components/asset/VNCConfigSection";
@@ -177,5 +178,26 @@ describe("VNCConfigSection 测试连接凭据", () => {
 
     attempt.cancel();
     await expect(attempt.result).rejects.toMatchObject({ code: "cancelled" });
+  });
+});
+
+describe("VNCConfigSection on a rejected save", () => {
+  const vncWithPort = (port: number) =>
+    new asset_entity.Asset({ ID: 4, Type: "vnc", Config: JSON.stringify({ host: "vnc.example.com", port }) });
+
+  it("reports an out-of-range port as a port problem and shows it under the port field", () => {
+    const onValidity = vi.fn();
+    const { rejectSave } = renderForSave(
+      <VNCConfigSection editAsset={vncWithPort(70000)} ctx={ctx} onValidityChange={onValidity} />
+    );
+    expect(onValidity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ canSave: false, saveDisabledReason: "network.proxy.error.portRange" })
+    );
+
+    rejectSave();
+
+    expect(screen.getByTestId("vnc-port-input")).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByText("network.proxy.error.portRange")).toBeInTheDocument();
+    expect(screen.getByTestId("config-tab-error-connection")).toBeInTheDocument();
   });
 });

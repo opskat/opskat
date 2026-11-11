@@ -174,7 +174,7 @@ export function CodeEditor({
         style={{ height }}
       >
         <div className="text-destructive">{t("codeEditor.loadFailed")}</div>
-        <div className="font-mono text-[11px] opacity-70 max-w-full truncate">{message}</div>
+        <div className="font-mono text-xs opacity-70 max-w-full truncate">{message}</div>
         <button
           type="button"
           onClick={handleRetryLoad}

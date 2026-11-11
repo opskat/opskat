@@ -1,17 +1,40 @@
 import type { ComponentType } from "react";
-import { Globe, KeyRound, SquareTerminal } from "lucide-react";
+import {
+  Boxes,
+  Database,
+  FileEdit,
+  FilePlus,
+  FileUp,
+  Globe,
+  KeyRound,
+  Puzzle,
+  Server,
+  SquareTerminal,
+  Terminal,
+  Trash2,
+  Usb,
+} from "lucide-react";
+import { S3Icon } from "@/components/asset/brand-icons";
+
+// lucide 图标是 ForwardRefExoticComponent，S3Icon 是普通的 React.FC：按徽标唯一用到的形状
+// （接收 className 的组件）收窄类型。
+type IconComponent = ComponentType<{ className?: string }>;
 
 /** 审批项徽标上的操作:图标 + 文案 key。 */
 export interface ApprovalOp {
-  icon: ComponentType<{ className?: string }>;
+  icon: IconComponent;
   labelKey: string;
 }
 
 /**
  * 一种审批类型(后端 permission.ApprovalTypeFor)在审批界面上与默认呈现的差异。审批组件按类型查
- * 这张表,自己不认识具体类型;没登记的类型全部走默认呈现(类型名大写的徽标、detail 可折叠)。
+ * 这张表,自己不认识具体类型;没登记的类型全部走默认呈现(原始类型名的徽标、detail 可折叠)。
  */
 export interface ApprovalTypePresentation {
+  /** 徽标上的类型名(翻译 key);没登记的类型(扩展的动态资产类型)显示原始类型名。 */
+  labelKey?: string;
+  /** 徽标图标;缺省为终端图标。 */
+  icon?: IconComponent;
   /** 徽标显示操作类型而不是类型名。 */
   op?: (command: string) => ApprovalOp;
   /**
@@ -21,15 +44,47 @@ export interface ApprovalTypePresentation {
   pinnedDetailLabelKey?: string;
 }
 
+const typeIcons: Record<string, IconComponent> = {
+  exec: Terminal,
+  serial: Usb,
+  sql: Database,
+  redis: Server,
+  mongo: Database,
+  kafka: Database,
+  grant: Globe,
+  cp: FileUp,
+  local_bash: Terminal,
+  local_write: FilePlus,
+  local_edit: FileEdit,
+  delete: Trash2,
+  etcd: Database,
+  k8s: Boxes,
+  oss: S3Icon,
+};
+
 const presentations: Record<string, ApprovalTypePresentation> = {
+  ...Object.fromEntries(
+    Object.entries(typeIcons).map(([type, icon]) => [type, { labelKey: `ai.approvalType.${type}`, icon }])
+  ),
   // 通用资产(permission.ApprovalTypeFor("generic"))。
   generic: { op: genericApprovalOp, pinnedDetailLabelKey: "ai.approvalGenericTarget" },
+  ext_dev_install: { icon: Puzzle },
 };
 
 const defaultPresentation: ApprovalTypePresentation = {};
 
 export function approvalTypePresentation(type: string): ApprovalTypePresentation {
   return presentations[type] ?? defaultPresentation;
+}
+
+/**
+ * 审批项徽标的图标与文案 key:登记了操作类型的(通用资产)显示操作,其余显示类型名;
+ * labelKey 缺省时调用方显示原始类型名。AI 审批块与 opsctl 审批框共用,两处不各自维护一张表。
+ */
+export function approvalBadge(type: string, command: string): { icon: IconComponent; labelKey?: string } {
+  const presentation = approvalTypePresentation(type);
+  const op = presentation.op?.(command);
+  return { icon: op?.icon ?? presentation.icon ?? Terminal, labelKey: op?.labelKey ?? presentation.labelKey };
 }
 
 /** 这一条的 detail 是否要逐条常驻展示(见 ApprovalTypePresentation.pinnedDetailLabelKey)。 */

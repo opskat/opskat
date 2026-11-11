@@ -86,7 +86,7 @@ export function AssetTypeFilterButton({
             {builtin.map(renderRow)}
             {extensions.length > 0 && (
               <>
-                <div className="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                <div className="px-3 pt-2 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
                   {t("asset.filterExtensions")}
                 </div>
                 {extensions.map(renderRow)}

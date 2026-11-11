@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Trash2 } from "lucide-react";
 import { Button, Input, Label, Switch } from "@opskat/ui";
-import { Field, Segmented } from "@/components/asset/fields";
+import { CheckedField, Field, Segmented } from "@/components/asset/fields";
 import { ConfigTabs } from "@/components/asset/ConfigTabs";
 import { buildConfigGroups, type ConfigGroupSchema } from "@/components/asset/configFields";
 import { PasswordSourceField } from "@/components/asset/PasswordSourceField";
@@ -11,12 +11,13 @@ import { resolveTLSKey, tlsCertFields } from "./tlsCertConfig";
 import { proxyChainValidationKey, resolveSaveProxyChainSecrets, resolveSaveProxyPassword } from "./proxyConfig";
 import { credential_entity } from "../../../wailsjs/go/models";
 import type { ConfigSectionProps } from "@/lib/assetTypes/formContract";
+import type { ListLoad } from "@/hooks/useAsyncList";
 import { useAssetCredential } from "./useAssetCredential";
 import { resolveSaveCredential, resolveTestCredential } from "./credentialConfig";
 import {
   appendKafkaCredential,
   buildKafkaBaseConfig,
-  kafkaBrokers,
+  kafkaBrokersError,
   kafkaCompanionPlainSecretFromConfig,
   kafkaCompanionUsernameFromConfig,
   KAFKA_DEFAULTS,
@@ -162,36 +163,64 @@ function applyKafkaCompanionTLS(
   if (form.tlsKeyFile.trim()) cfg.tls_key_file = form.tlsKeyFile.trim();
 }
 
-/** 翻译函数最小签名(throw 文案用)。 */
-type Translate = (key: string, opts?: Record<string, unknown>) => string;
-
-/** bearer 伴随必须有 token,否则 throw(handleSubmit 的 catch 统一 toast)。镜像旧 validateKafkaCompanionAuth。 */
-function validateKafkaCompanionAuth(form: KafkaCompanionAuthForm, t: Translate) {
-  if (form.authType !== "bearer") return;
+/** bearer 伴随必须有 token。 */
+function companionAuthError(form: KafkaCompanionAuthForm): string {
+  if (form.authType !== "bearer") return "";
   const hasToken =
     form.passwordSource === "managed" ? form.credentialId > 0 : !!form.password.trim() || !!form.encryptedPassword;
-  if (!hasToken) throw new Error(t("asset.kafkaBearerTokenRequired"));
+  return hasToken ? "" : "asset.kafkaBearerTokenRequired";
 }
 
-/** 伴随 URL/auth 校验:非法即 throw(handleSubmit 的 catch 统一 toast 该 i18n 文案)。镜像旧 validateKafkaCompanions。 */
-function validateKafkaCompanions(
+interface KafkaClusterErrors {
+  name: string;
+  url: string;
+  auth: string;
+}
+
+/** 伴随(Schema Registry / Connect)各字段的错误(i18n key,空串 = 无错)与区块级原因 reason(首个错误)。 */
+interface KafkaCompanionErrors {
+  schemaRegistryURL: string;
+  schemaRegistryAuth: string;
+  /** Connect 启用却一个集群也没有:没有字段可挂,挂在「添加集群」下。 */
+  connectEmpty: string;
+  clusters: Record<string, KafkaClusterErrors>;
+  reason: string;
+}
+
+/** 伴随校验:validate 据此拒绝保存,各字段据此画错误;buildConfig 也据此拒绝(直接调用时)。 */
+function kafkaCompanionErrors(
   schemaRegistry: KafkaSchemaRegistryForm,
   connectEnabled: boolean,
-  connectClusters: KafkaConnectClusterForm[],
-  t: Translate
-) {
-  if (schemaRegistry.enabled && !schemaRegistry.url.trim()) {
-    throw new Error(t("asset.kafkaSchemaRegistryURLRequired"));
-  }
-  if (schemaRegistry.enabled) validateKafkaCompanionAuth(schemaRegistry, t);
+  connectClusters: KafkaConnectClusterForm[]
+): KafkaCompanionErrors {
+  const out: KafkaCompanionErrors = {
+    schemaRegistryURL:
+      schemaRegistry.enabled && !schemaRegistry.url.trim() ? "asset.kafkaSchemaRegistryURLRequired" : "",
+    schemaRegistryAuth: schemaRegistry.enabled ? companionAuthError(schemaRegistry) : "",
+    connectEmpty: "",
+    clusters: {},
+    reason: "",
+  };
+  let connectReason = "";
   if (connectEnabled) {
-    const clusters = connectClusters.filter((cluster) => cluster.name.trim() || cluster.url.trim());
-    if (clusters.length === 0) throw new Error(t("asset.kafkaConnectClusterRequired"));
-    if (clusters.some((cluster) => !cluster.name.trim() || !cluster.url.trim())) {
-      throw new Error(t("asset.kafkaConnectClusterInvalid"));
+    // 名称和 URL 都空的集群视为未填,不参与保存;一个已填的都没有时,第一个集群的两项都要填。
+    const filled = connectClusters.filter((c) => c.name.trim() || c.url.trim());
+    const checked = filled.length > 0 ? filled : connectClusters.slice(0, 1);
+    if (connectClusters.length === 0) out.connectEmpty = "asset.kafkaConnectClusterRequired";
+    for (const c of checked) {
+      out.clusters[c.id] = {
+        name: c.name.trim() ? "" : "asset.generic.required",
+        url: c.url.trim() ? "" : "asset.generic.required",
+        auth: companionAuthError(c),
+      };
     }
-    clusters.forEach((cluster) => validateKafkaCompanionAuth(cluster, t));
+    const errs = Object.values(out.clusters);
+    if (filled.length === 0) connectReason = "asset.kafkaConnectClusterRequired";
+    else if (errs.some((e) => e.name || e.url)) connectReason = "asset.kafkaConnectClusterInvalid";
+    else connectReason = errs.find((e) => e.auth)?.auth ?? "";
   }
+  out.reason = out.schemaRegistryURL || out.schemaRegistryAuth || connectReason;
+  return out;
 }
 
 /** schema_registry 伴随 config(enabled 才构建;auth/TLS 注入)。镜像旧 buildKafkaSchemaRegistryConfig。 */
@@ -260,14 +289,10 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
     }
   });
 
-  const schemaRegistryInvalid = schemaRegistry.enabled && !schemaRegistry.url.trim();
+  const companionErrors = kafkaCompanionErrors(schemaRegistry, connectEnabled, connectClusters);
+  const schemaRegistryInvalid = !!(companionErrors.schemaRegistryURL || companionErrors.schemaRegistryAuth);
   const connectInvalid =
-    connectEnabled &&
-    (() => {
-      const clusters = connectClusters.filter((c) => c.name.trim() || c.url.trim());
-      if (clusters.length === 0) return true;
-      return clusters.some((c) => !c.name.trim() || !c.url.trim());
-    })();
+    !!companionErrors.connectEmpty || Object.values(companionErrors.clusters).some((e) => e.name || e.url || e.auth);
 
   const { state, patch } = useConfigSection<KafkaFormState>({
     ref,
@@ -275,27 +300,13 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
     onValidityChange,
     init: (a) => (a ? parseKafkaConfig(a.Config, a.sshTunnelId || 0) : { ...KAFKA_DEFAULTS }),
     validate: (s) => {
-      const brokersOk = kafkaBrokers(s.brokersText).length > 0;
-      const proxyChainError = proxyChainValidationKey(s.proxyChainLayers);
-      let saveDisabledReason = "";
-      if (!brokersOk) {
-        saveDisabledReason = "asset.formMissingKafkaBrokers";
-      } else if (proxyChainError) {
-        saveDisabledReason = proxyChainError;
-      } else if (schemaRegistryInvalid) {
-        saveDisabledReason = "asset.kafkaSchemaRegistryURLRequired";
-      } else if (connectInvalid) {
-        saveDisabledReason = "asset.kafkaConnectClusterInvalid";
-      }
-      return {
-        canTest: brokersOk && !proxyChainError,
-        canSave: brokersOk && !proxyChainError && !schemaRegistryInvalid && !connectInvalid,
-        saveDisabledReason,
-      };
+      const connectionReason = kafkaBrokersError(s.brokersText) || proxyChainValidationKey(s.proxyChainLayers);
+      const reason = connectionReason || companionErrors.reason;
+      return { canTest: !connectionReason, canSave: !reason, saveDisabledReason: reason };
     },
-    validityDeps: [schemaRegistryInvalid, connectInvalid],
+    validityDeps: [companionErrors.reason],
     build: async (s, ctx) => {
-      validateKafkaCompanions(schemaRegistry, connectEnabled, connectClusters, t); // 非法 throw → handleSubmit toast
+      if (companionErrors.reason) throw new Error(t(companionErrors.reason));
       const [proxyPassword, proxyChainSecrets] = await Promise.all([
         resolveSaveProxyPassword(s, ctx.encryptPassword),
         resolveSaveProxyChainSecrets(s.proxyChainLayers, ctx.encryptPassword),
@@ -332,6 +343,7 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
       return { assetType: "kafka", configJSON: JSON.stringify(cfg), password: cred.value.password };
     },
     deps: [cred.value, schemaRegistry, connectEnabled, connectClusters, t],
+    dirtyExtra: [cred.value, schemaRegistry, connectEnabled, connectClusters],
   });
 
   const KAFKA_GROUPS: ConfigGroupSchema<KafkaFormState>[] = [
@@ -344,6 +356,7 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
           key: "brokersText",
           label: "asset.kafkaBrokers",
           required: true,
+          error: (s) => kafkaBrokersError(s.brokersText),
           mono: true,
           rows: 3,
           placeholder: "192.168.100.50:9092",
@@ -383,6 +396,7 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
     {
       key: "schema_registry",
       label: "asset.tabSchemaRegistry",
+      error: schemaRegistryInvalid,
       render: () => (
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between gap-3">
@@ -395,17 +409,27 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
           </div>
           {schemaRegistry.enabled && (
             <>
-              <Field label={t("asset.kafkaSchemaRegistryURL")} required>
-                <Input
-                  value={schemaRegistry.url}
-                  onChange={(e) => setSchemaRegistry({ url: e.target.value })}
-                  placeholder="http://schema-registry.example.com:8081"
-                />
-              </Field>
+              <CheckedField
+                label={t("asset.kafkaSchemaRegistryURL")}
+                required
+                error={companionErrors.schemaRegistryURL}
+              >
+                {(invalid) => (
+                  <Input
+                    data-testid="kafka-sr-url-input"
+                    aria-invalid={invalid || undefined}
+                    value={schemaRegistry.url}
+                    onChange={(e) => setSchemaRegistry({ url: e.target.value })}
+                    placeholder="http://schema-registry.example.com:8081"
+                  />
+                )}
+              </CheckedField>
               <KafkaCompanionAuthFields
+                authError={companionErrors.schemaRegistryAuth}
                 value={schemaRegistry}
                 onChange={setSchemaRegistry}
                 managedPasswords={cred.managedPasswords}
+                managedPasswordsLoad={cred.managedPasswordsLoad}
               />
             </>
           )}
@@ -416,6 +440,7 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
       key: "connect",
       label: "asset.tabConnect",
       badge: connectEnabled ? connectClusters.length : undefined,
+      error: connectInvalid,
       render: () => (
         <div className="flex flex-col gap-4">
           <div className="flex items-center justify-between gap-3">
@@ -436,6 +461,7 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
                 <KafkaConnectClusterEditor
                   key={cluster.id}
                   index={index}
+                  errors={companionErrors.clusters[cluster.id]}
                   value={cluster}
                   onChange={(p) =>
                     setConnectClusters(
@@ -444,18 +470,23 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
                   }
                   onRemove={() => setConnectClusters(connectClusters.filter((_, itemIndex) => itemIndex !== index))}
                   managedPasswords={cred.managedPasswords}
+                  managedPasswordsLoad={cred.managedPasswordsLoad}
                 />
               ))}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 w-fit gap-1.5"
-                onClick={() => setConnectClusters([...connectClusters, newKafkaConnectCluster()])}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                {t("asset.kafkaConnectAddCluster")}
-              </Button>
+              <CheckedField error={companionErrors.connectEmpty}>
+                {() => (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 w-fit gap-1.5"
+                    onClick={() => setConnectClusters([...connectClusters, newKafkaConnectCluster()])}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    {t("asset.kafkaConnectAddCluster")}
+                  </Button>
+                )}
+              </CheckedField>
             </div>
           )}
         </div>
@@ -510,13 +541,18 @@ export function KafkaConfigSection({ editAsset, onValidityChange, ref }: ConfigS
 }
 
 function KafkaCompanionAuthFields({
+  authError,
   value,
   onChange,
   managedPasswords,
+  managedPasswordsLoad,
 }: {
+  /** bearer 缺 token 等认证错误(i18n key,空串 = 无错),画在凭据字段下。 */
+  authError: string;
   value: KafkaCompanionAuthForm;
   onChange: (patch: Partial<KafkaCompanionAuthForm>) => void;
   managedPasswords: credential_entity.Credential[];
+  managedPasswordsLoad: ListLoad;
 }) {
   const { t } = useTranslation();
   const authEnabled = value.authType !== "none";
@@ -542,19 +578,24 @@ function KafkaCompanionAuthFields({
               <Input value={value.username} onChange={(e) => onChange({ username: e.target.value })} />
             </Field>
           )}
-          <PasswordSourceField
-            source={value.passwordSource}
-            onSourceChange={(passwordSource) => onChange({ passwordSource })}
-            password={value.password}
-            onPasswordChange={(password) => onChange({ password })}
-            credentialId={value.credentialId}
-            onCredentialIdChange={(credentialId) => onChange({ credentialId })}
-            managedPasswords={managedPasswords}
-            hasExistingPassword={!!value.encryptedPassword}
-            secretLabel={value.authType === "bearer" ? t("asset.kafkaBearerToken") : undefined}
-            selectSecretLabel={value.authType === "bearer" ? t("asset.kafkaBearerToken") : undefined}
-            onUsernameChange={(username) => onChange({ username })}
-          />
+          <CheckedField error={authError}>
+            {() => (
+              <PasswordSourceField
+                source={value.passwordSource}
+                onSourceChange={(passwordSource) => onChange({ passwordSource })}
+                password={value.password}
+                onPasswordChange={(password) => onChange({ password })}
+                credentialId={value.credentialId}
+                onCredentialIdChange={(credentialId) => onChange({ credentialId })}
+                managedPasswords={managedPasswords}
+                managedPasswordsLoad={managedPasswordsLoad}
+                hasExistingPassword={!!value.encryptedPassword}
+                secretLabel={value.authType === "bearer" ? t("asset.kafkaBearerToken") : undefined}
+                selectSecretLabel={value.authType === "bearer" ? t("asset.kafkaBearerToken") : undefined}
+                onUsernameChange={(username) => onChange({ username })}
+              />
+            )}
+          </CheckedField>
         </>
       )}
       <div className="flex items-center justify-between">
@@ -592,16 +633,21 @@ function kafkaCompanionAuthTypePatch(value: KafkaCompanionAuthForm, authType: st
 
 function KafkaConnectClusterEditor({
   index,
+  errors,
   value,
   onChange,
   onRemove,
   managedPasswords,
+  managedPasswordsLoad,
 }: {
   index: number;
+  /** 该集群各字段的错误;不参与保存的空集群没有。 */
+  errors?: KafkaClusterErrors;
   value: KafkaConnectClusterForm;
   onChange: (patch: Partial<KafkaConnectClusterForm>) => void;
   onRemove: () => void;
   managedPasswords: credential_entity.Credential[];
+  managedPasswordsLoad: ListLoad;
 }) {
   const { t } = useTranslation();
 
@@ -614,18 +660,36 @@ function KafkaConnectClusterEditor({
         </Button>
       </div>
       <div className="flex items-end gap-3">
-        <Field label={t("asset.kafkaConnectClusterName")} required className="flex-1">
-          <Input value={value.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="primary" />
-        </Field>
-        <Field label={t("asset.kafkaConnectClusterURL")} required className="flex-1">
-          <Input
-            value={value.url}
-            onChange={(e) => onChange({ url: e.target.value })}
-            placeholder="http://connect.example.com:8083"
-          />
-        </Field>
+        <CheckedField label={t("asset.kafkaConnectClusterName")} required error={errors?.name ?? ""} className="flex-1">
+          {(invalid) => (
+            <Input
+              data-testid={`kafka-connect-name-input-${index}`}
+              aria-invalid={invalid || undefined}
+              value={value.name}
+              onChange={(e) => onChange({ name: e.target.value })}
+              placeholder="primary"
+            />
+          )}
+        </CheckedField>
+        <CheckedField label={t("asset.kafkaConnectClusterURL")} required error={errors?.url ?? ""} className="flex-1">
+          {(invalid) => (
+            <Input
+              data-testid={`kafka-connect-url-input-${index}`}
+              aria-invalid={invalid || undefined}
+              value={value.url}
+              onChange={(e) => onChange({ url: e.target.value })}
+              placeholder="http://connect.example.com:8083"
+            />
+          )}
+        </CheckedField>
       </div>
-      <KafkaCompanionAuthFields value={value} onChange={onChange} managedPasswords={managedPasswords} />
+      <KafkaCompanionAuthFields
+        authError={errors?.auth ?? ""}
+        value={value}
+        onChange={onChange}
+        managedPasswords={managedPasswords}
+        managedPasswordsLoad={managedPasswordsLoad}
+      />
     </div>
   );
 }

@@ -30,7 +30,14 @@ const MONGODB_GROUPS: ConfigGroupSchema<MongoDBFormState>[] = [
         kind: "row",
         visibleWhen: (s) => s.connectionMode === "manual",
         fields: [
-          { kind: "text", key: "host", label: "asset.host", placeholder: "example.com", width: "flex-1" },
+          {
+            kind: "text",
+            key: "host",
+            label: "asset.host",
+            required: true,
+            placeholder: "example.com",
+            width: "flex-1",
+          },
           {
             kind: "number",
             key: "port",
@@ -45,6 +52,7 @@ const MONGODB_GROUPS: ConfigGroupSchema<MongoDBFormState>[] = [
         kind: "text",
         key: "connectionURI",
         label: "asset.mongoUri",
+        required: true,
         placeholder: "asset.mongoUriPlaceholder",
         visibleWhen: (s) => s.connectionMode === "uri",
       },
@@ -128,6 +136,7 @@ export function MongoDBConfigSection({ editAsset, onValidityChange, ref }: Confi
       password: cred.value.password,
     }),
     deps: [cred.value],
+    dirtyExtra: [cred.value],
   });
 
   const groups = buildConfigGroups(MONGODB_GROUPS, { state, patch, ctx: { cred, editAsset } });

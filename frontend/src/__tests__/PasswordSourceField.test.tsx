@@ -24,6 +24,7 @@ function renderField(overrides: Partial<React.ComponentProps<typeof PasswordSour
     credentialId: 0,
     onCredentialIdChange: vi.fn(),
     managedPasswords: [makeCred(1, "alice"), makeCred(2, ""), makeCred(3, "bob")],
+    managedPasswordsLoad: { status: "ready", error: null, reload: vi.fn() },
     onUsernameChange: vi.fn(),
     ...overrides,
   };
@@ -69,5 +70,30 @@ describe("PasswordSourceField username 联动", () => {
     const onUsernameChange = vi.fn();
     renderField({ credentialId: 1, onUsernameChange });
     expect(onUsernameChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("PasswordSourceField managed list load state", () => {
+  it("shows the failure with retry instead of the empty hint when the list failed to load", async () => {
+    const reload = vi.fn();
+    const { user } = renderField({
+      managedPasswords: [],
+      managedPasswordsLoad: { status: "error", error: "vault locked", reload },
+    });
+    expect(screen.getByText(/vault locked/)).toBeInTheDocument();
+    expect(screen.queryByText("asset.noManagedPasswords")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("async-state-retry"));
+    expect(reload).toHaveBeenCalled();
+  });
+
+  it("shows loading instead of the empty hint while the list is pending", () => {
+    renderField({ managedPasswords: [], managedPasswordsLoad: { status: "loading", error: null, reload: vi.fn() } });
+    expect(screen.getByTestId("async-state-loading")).toBeInTheDocument();
+    expect(screen.queryByText("asset.noManagedPasswords")).not.toBeInTheDocument();
+  });
+
+  it("shows the empty hint only after a successful empty load", () => {
+    renderField({ managedPasswords: [], managedPasswordsLoad: { status: "ready", error: null, reload: vi.fn() } });
+    expect(screen.getByText("asset.noManagedPasswords")).toBeInTheDocument();
   });
 });

@@ -573,7 +573,7 @@ export const SqlEditorTab = memo(function SqlEditorTab({ tabId, innerTabId }: Sq
             >
               {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
               {loading ? t("query.executing") : t("query.execute")}
-              {!loading && <span className="text-[10px] opacity-70">{formatModKey("Enter")}</span>}
+              {!loading && <span className="text-[11px] opacity-70">{formatModKey("Enter")}</span>}
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

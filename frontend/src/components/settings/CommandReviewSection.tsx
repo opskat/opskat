@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { AsyncState } from "@/components/common/AsyncState";
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from "@opskat/ui";
 import { AlertTriangle, Loader2, Save, Settings2 } from "lucide-react";
 import { toast } from "sonner";
@@ -38,14 +39,31 @@ export function CommandReviewSection() {
   }, []);
   const reloadState = useCallback(() => GetCommandReviewState().then(setState), []);
 
-  useEffect(() => {
-    GetCommandReviewState()
-      .then(setState)
-      .catch((e: unknown) => toast.error(errorMessage(e)));
-    GetCommandReviewSettings()
-      .then(applySettings)
-      .catch((e: unknown) => toast.error(errorMessage(e)));
+  // 两个读取合成一个加载状态：任一失败都显示原因并可重试，不会停在转圈。
+  const [loadStatus, setLoadStatus] = useState<"loading" | "error" | "ready">("loading");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const load = useCallback(() => {
+    Promise.all([GetCommandReviewState(), GetCommandReviewSettings()]).then(
+      ([st, se]) => {
+        setState(st);
+        applySettings(se);
+        setLoadStatus("ready");
+      },
+      (e: unknown) => {
+        setLoadError(errorMessage(e));
+        setLoadStatus("error");
+      }
+    );
   }, [applySettings]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+  const retry = () => {
+    setLoadStatus("loading");
+    setLoadError(null);
+    load();
+  };
 
   // 后端在失败出现或恢复时推送最新状态：打开着也能实时更新，不动正在编辑的超时。
   // 订阅之后的每次变化都有事件，所以收到过事件就以最近一次为准——读取设置的回包可能是
@@ -84,8 +102,8 @@ export function CommandReviewSection() {
   if (!state || !settings) {
     return (
       <Card>
-        <CardContent className="flex justify-center py-6">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <CardContent>
+          <AsyncState status={loadStatus} error={loadError} onRetry={retry} />
         </CardContent>
       </Card>
     );

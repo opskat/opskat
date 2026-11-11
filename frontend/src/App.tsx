@@ -8,6 +8,7 @@ import { AssetTree } from "@/components/layout/AssetTree";
 import { MainPanel } from "@/components/layout/MainPanel";
 import { SideAssistantPanel } from "@/components/ai/SideAssistantPanel";
 import { WindowControls } from "@/components/layout/WindowControls";
+import { useApprovalNotice } from "@/hooks/useApprovalNotice";
 import { TopBar } from "@/components/layout/TopBar";
 import { CommandPaletteDialog } from "@/components/command/CommandPaletteDialog";
 import { SnippetAssetDrawer } from "@/components/snippet/SnippetAssetDrawer";
@@ -20,6 +21,7 @@ import { CommandReviewConfigErrorListener } from "@/components/settings/CommandR
 import { openGroupDetail, openInfoTab } from "@/lib/infoTab";
 import { OpsctlMFADialog } from "@/components/approval/OpsctlMFADialog";
 import { ExtensionInstallConfirmDialog } from "@/extension";
+import { TabCloseConfirmHost } from "@/components/layout/TabCloseConfirmHost";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ActiveTasksQuitDialog, type QuitActivity } from "@/components/ActiveTasksQuitDialog";
 
@@ -31,7 +33,7 @@ import { useAssetStore } from "@/stores/assetStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { getAssetType, pageTabPrefix } from "@/lib/assetTypes";
-import { useTabStore } from "@/stores/tabStore";
+import { openPageTab, openSettingsTab, useTabStore } from "@/stores/tabStore";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { bootstrapExtensions } from "@/extension/init";
 import { openAssetConnection } from "@/lib/openAsset";
@@ -136,20 +138,7 @@ function App() {
       toastFn(message, {
         action: {
           label: t("systemStatus.showDetail"),
-          onClick: () => {
-            const tabStore = useTabStore.getState();
-            const existing = tabStore.tabs.find((tab) => tab.id === "settings");
-            if (existing) {
-              tabStore.activateTab("settings");
-            } else {
-              tabStore.openTab({
-                id: "settings",
-                type: "page",
-                label: "settings",
-                meta: { type: "page", pageId: "settings" },
-              });
-            }
-          },
+          onClick: () => openSettingsTab(t("nav.settings"), "status"),
         },
       });
     });
@@ -181,7 +170,8 @@ function App() {
     return () => window.removeEventListener("dblclick", handleDblClick);
   }, []);
 
-  const [sidebarHidden, setSidebarHidden] = useState(() => localStorage.getItem("sidebar_hidden") === "true");
+  const sidebarHidden = useLayoutStore((s) => s.toolbarHidden);
+  const toggleSidebarHidden = useLayoutStore((s) => s.toggleToolbar);
   const [assetTreeCollapsed, setAssetTreeCollapsed] = useState(
     () => localStorage.getItem("sidebar_collapsed") === "true"
   );
@@ -204,16 +194,15 @@ function App() {
     });
   }, []);
 
+  const expandAIPanel = useCallback(() => {
+    localStorage.setItem("ai_panel_collapsed", "false");
+    setAiPanelCollapsed(false);
+  }, []);
+  useApprovalNotice(aiPanelCollapsed, expandAIPanel);
+
   const toggleSidebar = useCallback(() => {
     setAssetTreeCollapsed((prev) => {
       localStorage.setItem("sidebar_collapsed", String(!prev));
-      return !prev;
-    });
-  }, []);
-
-  const toggleSidebarHidden = useCallback(() => {
-    setSidebarHidden((prev) => {
-      localStorage.setItem("sidebar_hidden", String(!prev));
       return !prev;
     });
   }, []);
@@ -282,7 +271,7 @@ function App() {
       const copied = new asset_entity.Asset({
         ...fullAsset,
         ID: 0,
-        Name: `${fullAsset.Name} - 副本`,
+        Name: t("asset.copyName", { name: fullAsset.Name }),
       });
       setEditingAsset(copied);
       setAssetFormOpen(true);
@@ -350,18 +339,7 @@ function App() {
       tabStore.activateTab(homeTab?.id || tabStore.tabs[0]?.id || "");
       return;
     }
-    // Page tabs: settings, forward, sshkeys, audit, snippets
-    const existing = tabStore.tabs.find((t) => t.id === page);
-    if (existing) {
-      tabStore.activateTab(page);
-    } else {
-      tabStore.openTab({
-        id: page,
-        type: "page",
-        label: page,
-        meta: { type: "page", pageId: page },
-      });
-    }
+    openPageTab(page);
   }, []);
 
   const tabBarLayout = useLayoutStore((s) => s.tabBarLayout);
@@ -509,6 +487,7 @@ function App() {
                 open={assetFormOpen}
                 onOpenChange={setAssetFormOpen}
                 editAsset={editingAsset}
+                copy={!!editingAsset && !editingAsset.ID}
                 defaultGroupId={defaultGroupId}
               />
             )}
@@ -521,6 +500,7 @@ function App() {
           <CommandReviewConfigErrorListener />
           <OpsctlMFADialog />
           <ExtensionInstallConfirmDialog />
+          <TabCloseConfirmHost />
           <ActiveTasksQuitDialog
             open={quitActivities !== null}
             activities={quitActivities ?? []}

@@ -19,7 +19,7 @@ export function DefaultValue({ value }: { value: DesignerDefault }) {
     case "expression":
       return (
         <span className="inline-flex min-w-0 items-center gap-1">
-          <span className="rounded bg-info/15 px-1 font-sans text-[10px] text-info">ƒx</span>
+          <span className="rounded bg-info/15 px-1 font-sans text-[11px] text-info">ƒx</span>
           <span className="truncate">{value.text}</span>
         </span>
       );
@@ -41,7 +41,7 @@ export function PrimaryKeyMark({ primaryKey }: { primaryKey: boolean }) {
 export function AutoIncrementBadge() {
   const { t } = useTranslation();
   return (
-    <span className="shrink-0 rounded bg-muted px-1 font-sans text-[10px] text-muted-foreground">
+    <span className="shrink-0 rounded bg-muted px-1 font-sans text-[11px] text-muted-foreground">
       {t("query.designer.autoIncrement")}
     </span>
   );
