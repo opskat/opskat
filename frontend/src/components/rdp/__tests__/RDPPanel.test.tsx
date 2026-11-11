@@ -11,7 +11,8 @@ import {
   SetRDPClipboardEnabled,
   SetRDPClipboardFilesFromLocal,
 } from "../../../../wailsjs/go/rdp/RDP";
-import { ClipboardGetText, ClipboardSetText, EventsOn } from "../../../../wailsjs/runtime/runtime";
+import { ClipboardSetText, EventsOn } from "../../../../wailsjs/runtime/runtime";
+import { ReadClipboardText } from "../../../../wailsjs/go/system/System";
 import type { asset_entity } from "../../../../wailsjs/go/models";
 import { useActiveAssetIds } from "@/hooks/useActiveAssetIds";
 import { useTabStore } from "@/stores/tabStore";
@@ -82,7 +83,7 @@ beforeEach(() => {
   vi.mocked(SetRDPClipboard).mockReset().mockResolvedValue(undefined);
   vi.mocked(SetRDPClipboardEnabled).mockReset().mockResolvedValue(undefined);
   vi.mocked(SetRDPClipboardFilesFromLocal).mockReset().mockResolvedValue(0);
-  vi.mocked(ClipboardGetText).mockReset().mockResolvedValue("");
+  vi.mocked(ReadClipboardText).mockReset().mockResolvedValue("");
   vi.mocked(ClipboardSetText).mockReset().mockResolvedValue(true);
   vi.mocked(EventsOn)
     .mockReset()
@@ -546,7 +547,7 @@ describe("RDPPanel", () => {
   });
 
   it("reads the native local clipboard before sending Ctrl+V to the remote desktop", async () => {
-    vi.mocked(ClipboardGetText).mockResolvedValue("fresh local text");
+    vi.mocked(ReadClipboardText).mockResolvedValue("fresh local text");
     await renderConnected();
     const canvas = screen.getByTestId("rdp-canvas");
 
@@ -571,7 +572,7 @@ describe("RDPPanel", () => {
   });
 
   it("refreshes the remote clipboard before using the remote right-click menu", async () => {
-    vi.mocked(ClipboardGetText).mockResolvedValue("fresh context-menu text");
+    vi.mocked(ReadClipboardText).mockResolvedValue("fresh context-menu text");
     await renderConnected();
     const canvas = screen.getByTestId("rdp-canvas");
 
@@ -585,14 +586,14 @@ describe("RDPPanel", () => {
 
   it("offers copied local files before sending Ctrl+V to the remote desktop", async () => {
     vi.mocked(SetRDPClipboardFilesFromLocal).mockResolvedValue(2);
-    vi.mocked(ClipboardGetText).mockResolvedValue("stale text");
+    vi.mocked(ReadClipboardText).mockResolvedValue("stale text");
     await renderConnected();
     const canvas = screen.getByTestId("rdp-canvas");
 
     fireEvent.keyDown(canvas, { key: "v", metaKey: true });
 
     await waitFor(() => expect(SetRDPClipboardFilesFromLocal).toHaveBeenCalledWith("sess-1"));
-    expect(ClipboardGetText).not.toHaveBeenCalled();
+    expect(ReadClipboardText).not.toHaveBeenCalled();
     expect(SetRDPClipboard).not.toHaveBeenCalled();
     expect(SendRDPInput).toHaveBeenCalledWith({
       sessionId: "sess-1",

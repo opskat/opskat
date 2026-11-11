@@ -4,7 +4,8 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { notifySuccess } from "@/lib/notify";
 import { useRDPStore } from "@/stores/rdpStore";
-import { ClipboardGetText, ClipboardSetText, EventsOn } from "../../../wailsjs/runtime/runtime";
+import { ClipboardSetText, EventsOn } from "../../../wailsjs/runtime/runtime";
+import { ReadClipboardText } from "../../../wailsjs/go/system/System";
 import {
   CloseRDP,
   ConnectRDP,
@@ -489,7 +490,7 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
     const fileCount = await SetRDPClipboardFilesFromLocal(sessionId);
     if (fileCount > 0) return { kind: "files", count: fileCount };
 
-    const text = await ClipboardGetText();
+    const text = await ReadClipboardText();
     if (!text) return null;
     await SetRDPClipboard(sessionId, text);
     return { kind: "text" };

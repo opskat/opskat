@@ -19,7 +19,8 @@ import {
   TrustVNCServerKey,
 } from "../../../wailsjs/go/vnc/VNC";
 import { DisconnectSSH, OpenSFTPSession } from "../../../wailsjs/go/ssh/SSH";
-import { ClipboardGetText, ClipboardSetText } from "../../../wailsjs/runtime";
+import { ClipboardSetText } from "../../../wailsjs/runtime";
+import { ReadClipboardText } from "../../../wailsjs/go/system/System";
 import { FileManagerPanel } from "@/components/terminal/FileManagerPanel";
 import { WailsRfbChannel } from "@/lib/wailsRfbChannel";
 import { decodeVNCClipboardText, pasteVNCClipboardText } from "@/lib/vncClipboard";
@@ -304,7 +305,7 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
 
   const pasteToVNC = async () => {
     try {
-      const text = await ClipboardGetText();
+      const text = await ReadClipboardText();
       await pasteTextToVNC(text);
     } catch (e) {
       toast.error(errorMessage(e));

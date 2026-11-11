@@ -5,13 +5,8 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { toast } from "sonner";
-import {
-  BrowserOpenURL,
-  EventsOn,
-  EventsOff,
-  ClipboardGetText,
-  ClipboardSetText,
-} from "../../../wailsjs/runtime/runtime";
+import { BrowserOpenURL, EventsOn, EventsOff, ClipboardSetText } from "../../../wailsjs/runtime/runtime";
+import { ReadClipboardText } from "../../../wailsjs/go/system/System";
 import { bytesToBase64 } from "@/lib/terminalEncode";
 import { useTerminalStore, TRANSPORTS, type TerminalTransport } from "@/stores/terminalStore";
 import { useShortcutStore } from "@/stores/shortcutStore";
@@ -341,13 +336,13 @@ export function pasteIntoTerminal(sessionId: string, text: string): void {
   registry.get(sessionId)?.term.paste(text);
 }
 
-// 右键菜单粘贴：从系统剪贴板取文本再喂给终端。必须走 Wails 原生 ClipboardGetText
-// （Go 侧直接读系统剪贴板），不能用 navigator.clipboard.readText()：macOS 的 WKWebView
+// 右键菜单粘贴：从系统剪贴板取文本再喂给终端。必须走 Go 侧的 ReadClipboardText
+// （直接读系统剪贴板），不能用 navigator.clipboard.readText()：macOS 的 WKWebView
 // 对 JS 读剪贴板有隐私保护，会在光标处弹出系统原生「粘贴」按钮要求再点一次，而不是
 // 直接粘贴。取到文本后复用 pasteIntoTerminal，保持 #146 的 CRLF 归一化。
 export async function pasteFromClipboard(sessionId: string, opts?: { suppressNativePaste?: boolean }): Promise<void> {
   if (opts?.suppressNativePaste) registry.get(sessionId)?.suppressNextNativePaste();
-  const text = await ClipboardGetText();
+  const text = await ReadClipboardText();
   if (text) pasteIntoTerminal(sessionId, text);
 }
 

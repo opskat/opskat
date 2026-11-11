@@ -94,6 +94,21 @@ export default tseslint.config(
             "用 src/lib/notify.ts 的 notifySuccess/notifyCopied（top-center）——底部成功 toast 会遮挡输出（#135，见 AGENTS.md）。",
         },
       ],
+      // 读剪贴板统一走 Go 侧 System.ReadClipboardText：Wails 的 ClipboardGetText 在 Windows 上
+      // 把"剪贴板里没有文本"报成 "The operation completed successfully" 错误（#367）。
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["**/wailsjs/runtime", "**/wailsjs/runtime/runtime"],
+              importNames: ["ClipboardGetText"],
+              message:
+                "用 wailsjs/go/system/System 的 ReadClipboardText——Wails ClipboardGetText 在 Windows 上把空剪贴板报成错误（#367）。",
+            },
+          ],
+        },
+      ],
     },
   },
   {

@@ -11,7 +11,8 @@ import {
   TrustVNCServerKey,
 } from "../../wailsjs/go/vnc/VNC";
 import { DisconnectSSH, OpenSFTPSession } from "../../wailsjs/go/ssh/SSH";
-import { ClipboardGetText, ClipboardSetText } from "../../wailsjs/runtime";
+import { ClipboardSetText } from "../../wailsjs/runtime";
+import { ReadClipboardText } from "../../wailsjs/go/system/System";
 import { VNCPanel } from "@/components/vnc/VNCPanel";
 import { toast } from "sonner";
 
@@ -124,7 +125,7 @@ describe("VNCPanel", () => {
       .mockResolvedValue(undefined as never);
     vi.mocked(DisconnectSSH).mockReset();
     vi.mocked(OpenSFTPSession).mockReset().mockResolvedValue("sftp-session");
-    vi.mocked(ClipboardGetText).mockReset().mockResolvedValue("");
+    vi.mocked(ReadClipboardText).mockReset().mockResolvedValue("");
     vi.mocked(ClipboardSetText).mockReset().mockResolvedValue(true);
     vi.mocked(toast.error).mockReset();
     vi.mocked(EncodeVNCClipboardText)
@@ -342,7 +343,7 @@ describe("VNCPanel", () => {
   });
 
   it("sends mixed Chinese and English through one GBK clipboard message", async () => {
-    vi.mocked(ClipboardGetText).mockResolvedValue("abc中文XYZ");
+    vi.mocked(ReadClipboardText).mockResolvedValue("abc中文XYZ");
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
     render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
@@ -377,7 +378,7 @@ describe("VNCPanel", () => {
   });
 
   it("waits for clipboard encoding before forwarding Ctrl+V to VNC", async () => {
-    vi.mocked(ClipboardGetText).mockResolvedValue("abc中文XYZ");
+    vi.mocked(ReadClipboardText).mockResolvedValue("abc中文XYZ");
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
     const { container } = render(<VNCPanel tabId="vnc-1" asset={asset} />);
 
@@ -390,7 +391,7 @@ describe("VNCPanel", () => {
   });
 
   it("does not forward Ctrl+V when the text was typed directly via keysym fallback", async () => {
-    vi.mocked(ClipboardGetText).mockResolvedValue("😀");
+    vi.mocked(ReadClipboardText).mockResolvedValue("😀");
     vi.mocked(EncodeVNCClipboardText).mockRejectedValue(new Error("not representable in GBK"));
     const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
     render(<VNCPanel tabId="vnc-1" asset={asset} />);

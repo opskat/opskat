@@ -53,6 +53,27 @@ describe("harness: 成功 toast 必须走 notify helper（AGENTS.md，#135）", 
   });
 });
 
+describe("harness: 读剪贴板走 System.ReadClipboardText（#367）", { timeout: eslintTimeout }, () => {
+  it.each(["../../../wailsjs/runtime", "../../../wailsjs/runtime/runtime"])(
+    "从 %s 导入 ClipboardGetText 被拦截",
+    async (from) => {
+      const ids = await ruleIds(
+        "src/components/harness-fixture.tsx",
+        `import { ClipboardGetText } from "${from}";\nexport const f = () => ClipboardGetText();\n`
+      );
+      expect(ids).toContain("no-restricted-imports");
+    }
+  );
+
+  it("ReadClipboardText 与 runtime 的其他导出（ClipboardSetText）不被误报", async () => {
+    const ids = await ruleIds(
+      "src/components/harness-fixture.tsx",
+      `import { ClipboardSetText } from "../../../wailsjs/runtime/runtime";\nimport { ReadClipboardText } from "../../../wailsjs/go/system/System";\nexport const f = async () => ClipboardSetText(await ReadClipboardText());\n`
+    );
+    expect(ids).not.toContain("no-restricted-imports");
+  });
+});
+
 describe("harness: 任意字号不得小于 11px（DESIGN.md §5）", { timeout: eslintTimeout }, () => {
   it.each(["text-[8px]", "text-[9px]", "text-[10px]", "text-[10.5px]"])("%s 被拦截", async (cls) => {
     const ids = await ruleIds(
