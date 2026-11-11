@@ -520,52 +520,108 @@ describe("SideAssistantPanel", () => {
   });
 });
 
-// issue #366：侧栏宽度只受窗口限制——大屏能拉过 520px，缩小窗口时随之收窄、放大后恢复用户拖出的宽度。
+// issue #366：侧栏宽度只受窗口限制——大屏能拉过 520px，缩小窗口时随之收窄、放大后恢复用户拖出的宽度；
+// 不论左侧栏多宽，侧栏都不会超出窗口，主区域始终留有可见宽度。
 describe("SideAssistantPanel width bound", () => {
   const originalInnerWidth = window.innerWidth;
+  const OriginalResizeObserver = globalThis.ResizeObserver;
+  // 模拟应用布局：一行里 [左侧栏 leftColumns px][主区域][AI 侧栏]，行宽 = 窗口宽。
+  let layout = { windowWidth: 0, leftColumns: 0 };
+  let observers: Set<() => void>;
 
-  function setWindowWidth(width: number) {
-    Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: width });
+  function rect(left: number, right: number) {
+    return {
+      x: left,
+      y: 0,
+      top: 0,
+      bottom: 800,
+      left,
+      right,
+      width: right - left,
+      height: 800,
+      toJSON() {},
+    } as DOMRect;
   }
 
-  function resizeWindow(width: number) {
-    setWindowWidth(width);
+  function renderInLayout(windowWidth: number, leftColumns: number) {
+    resizeLayout(windowWidth, leftColumns, false);
+    const { container } = render(
+      <div data-testid="layout-row">
+        <div data-testid="layout-main" />
+        <SideAssistantPanel collapsed={false} onToggle={() => {}} />
+      </div>
+    );
+    return container.querySelector('[data-testid="layout-main"]')!.nextElementSibling as HTMLElement;
+  }
+
+  function resizeLayout(windowWidth: number, leftColumns: number, notify = true) {
+    layout = { windowWidth, leftColumns };
+    Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: windowWidth });
+    if (!notify) return;
     act(() => {
       window.dispatchEvent(new Event("resize"));
+      observers.forEach((notifyObserver) => notifyObserver());
     });
   }
 
   beforeEach(() => {
     localStorage.clear();
     useAIStore.setState({ configured: false, sidebarTabs: [], activeSidebarTabId: null });
+    observers = new Set();
+    globalThis.ResizeObserver = class {
+      private readonly notify: () => void;
+      constructor(callback: ResizeObserverCallback) {
+        this.notify = () => callback([], this as unknown as ResizeObserver);
+      }
+      observe() {
+        observers.add(this.notify);
+      }
+      unobserve() {}
+      disconnect() {
+        observers.delete(this.notify);
+      }
+    } as unknown as typeof ResizeObserver;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      const testId = (this as HTMLElement).dataset?.testid;
+      if (testId === "layout-row") return rect(0, layout.windowWidth);
+      if (testId === "layout-main") return rect(layout.leftColumns, layout.windowWidth);
+      return rect(0, 0);
+    });
   });
 
   afterEach(() => {
     cleanup();
-    setWindowWidth(originalInnerWidth);
+    vi.restoreAllMocks();
+    globalThis.ResizeObserver = OriginalResizeObserver;
+    Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: originalInnerWidth });
   });
 
   it("keeps a saved width wider than 520px on a wide window", () => {
-    setWindowWidth(2560);
     localStorage.setItem("ai_sidebar_width", "1200");
 
-    const { container } = render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
+    const panel = renderInLayout(2560, 280);
 
-    expect((container.firstChild as HTMLElement).style.width).toBe("1200px");
+    expect(panel.style.width).toBe("1200px");
   });
 
   it("narrows with the window so the main area stays visible, and restores the width when the window grows back", () => {
-    setWindowWidth(2560);
     localStorage.setItem("ai_sidebar_width", "1200");
-    const { container } = render(<SideAssistantPanel collapsed={false} onToggle={() => {}} />);
-    const outer = container.firstChild as HTMLElement;
+    const panel = renderInLayout(2560, 280);
 
-    resizeWindow(1000);
-    const narrowed = parseInt(outer.style.width, 10);
-    expect(narrowed).toBeLessThan(1000);
-    expect(narrowed).toBeGreaterThanOrEqual(280);
+    resizeLayout(1000, 280);
+    // 1000 窗口 − 280 左侧栏 − 360 主区域保留
+    expect(panel.style.width).toBe("360px");
 
-    resizeWindow(2560);
-    expect(outer.style.width).toBe("1200px");
+    resizeLayout(2560, 280);
+    expect(panel.style.width).toBe("1200px");
+  });
+
+  it("never extends past the window when the left columns are wide", () => {
+    localStorage.setItem("ai_sidebar_width", "2000");
+
+    // 左侧栏（侧边导航 + 拉到最宽的资产树）占 536px
+    const panel = renderInLayout(2560, 536);
+
+    expect(panel.style.width).toBe(`${2560 - 536 - 360}px`);
   });
 });

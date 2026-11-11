@@ -1712,7 +1712,7 @@ function expandToAPIMessages(messages: ChatMessage[], includeThinking: boolean):
           })
         );
       }
-      // approval / agent / error 块不参与 LLM 历史还原，跳过。
+      // approval / agent / error / interjected 块不参与 LLM 历史还原，跳过。
       // error 块的归类标签和原始错误正文是 UI 显示用，不应作为历史 prompt 影响 LLM。
     }
     // blocks 里没有 text block 但 content 有值（少见：最终回复只落在 content 上）时，
