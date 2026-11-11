@@ -2464,9 +2464,17 @@ describe("interjectQueuedMessage", () => {
       calls.push(`remove:${id}`);
       return true;
     }) as any);
-    // 与真实后端一致：被取消的一轮先发 stopped，随后仍会补发终态 done（cago cancelPartial + emitDone）。
+    // 与真实后端一致：工具执行中被取消时，cago 先等工具返回（ctx 取消 → 工具报错，作为 tool_result 发出），
+    // 再发 stopped，随后仍会补发终态 done（agent/loop.go 工具批次后的 ctx.Err 检查 → cancelPartial + emitDone）。
     vi.mocked(StopAIGeneration).mockImplementation((async () => {
       calls.push("stop");
+      callbacks.at(-1)?.({
+        type: "tool_result",
+        tool_name: "exec",
+        tool_call_id: "call-1",
+        content: "context canceled",
+        is_error: true,
+      });
       callbacks.at(-1)?.({ type: "stopped" });
       callbacks.at(-1)?.({ type: "done" });
     }) as any);
