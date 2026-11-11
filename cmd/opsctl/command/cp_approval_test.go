@@ -282,6 +282,23 @@ func TestCmdCpRequiresApproval(t *testing.T) {
 			So(calls[0]["recursive"], ShouldBeFalse)
 		})
 
+		// #364：目的端以 "/" 结尾是目录，单源落到 <目录>/<源文件名>。审批的与交给工具的
+		// 必须是同一条具体落点——审批一个目录、写一个文件名，用户批的就不是实际发生的那件事。
+		Convey("单源目的端以 / 结尾：审批与传输都落在目录下的源文件名", func() {
+			cpApprovalFn = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {
+				seen = append(seen, req)
+				return ApprovalResult{Decision: aictx.Allow, SessionID: "sess-cp"}, nil
+			}
+
+			exitCode := cmdCp(context.Background(), handlers, []string{localPath, "1:/tmp/"}, "")
+
+			So(exitCode, ShouldEqual, 0)
+			So(seen, ShouldHaveLength, 1)
+			So(seen[0].Command, ShouldEqual, "/tmp/payload")
+			So(calls, ShouldHaveLength, 1)
+			So(calls[0]["dst"], ShouldEqual, "1:/tmp/payload")
+		})
+
 		Convey("远端 home 路径在审批和传输前展开为同一个绝对路径", func() {
 			resetCpFakeRemote(t)
 			cpApprovalFn = func(_ context.Context, req approval.ApprovalRequest) (ApprovalResult, error) {

@@ -159,6 +159,7 @@ opsctl cp -r ./dist s3-prod:/releases/v2/                   # directory tree
 opsctl cp 'web-01:/var/log/*.log' ./logs/                   # remote glob: quote it
 ```
 
+- **Destination ending with `/`** is a directory: a single file lands at `<destination>/<file name>` (`opsctl cp ./a.json web-01:/tmp/` → `/tmp/a.json`). Without it, the destination is the file to write.
 - **Recursive, glob, or several sources**: the destination must end with `/`, and each entry lands at `<destination>/<path relative to the source base>`. Quote remote globs — an unquoted one is expanded by the local shell first.
 - **Approval**: every asset endpoint is authorized separately under that asset's own policy, before any byte is transferred. Recursive/glob transfers approve the source and destination directory/object-prefix scopes before listing; files inside those scopes do not generate per-file approval items.
 - Symlinks encountered during expansion are skipped and reported; the first failure aborts the rest.
