@@ -32,13 +32,15 @@ import { useAssetStore } from "./assetStore";
 import { stripMentionTags, extractMentions } from "@/lib/mentionXml";
 import { tabToAssetRef } from "@/lib/tabAsset";
 import { classifyError, type ErrorKind } from "@/lib/aiError";
+import { errorMessage } from "@/lib/errorMessage";
 import type { ReviewInfo } from "@/lib/commandReview";
 
 // 内容块：文本、工具调用、Sub Agent、审批、错误（持久化字段）。
 // "error" 块由 EventError 推入，或在 retry 中途退出落盘时由 retryStatus 物化而来。
 // 不会作为历史回放发给 LLM —— ToAgentMessages 后端侧需过滤。
 export interface ContentBlock {
-  type: "text" | "tool" | "agent" | "approval" | "thinking" | "error";
+  // interjected：被「立即插话」中断的回复末尾的标注，只供界面显示，不进入发给模型的历史。
+  type: "text" | "tool" | "agent" | "approval" | "thinking" | "error" | "interjected";
   content: string;
   toolName?: string;
   toolInput?: string;
@@ -421,6 +423,9 @@ function loadInitialSidebarState() {
 // 模块级 per-conversation 事件监听管理（不放 zustand，因为含函数引用）
 const conversationListeners = new Map<number, { cancel: (() => void) | null; generation: number }>();
 const conversationStopRequests = new Set<number>();
+// 正在「立即插话」的会话 → 被点的排队消息 id。点击时登记，由该轮的终态事件取走：
+// stopped 时按插话处理，done / error 说明这一轮在停止生效前已自行结束，登记作废。
+const conversationInterjections = new Map<number, string>();
 
 const conversationRenameVersions = new Map<number, number>();
 const conversationRenameInFlight = new Set<number>();
@@ -1113,9 +1118,32 @@ function drainQueue(convId: number) {
   }, 0);
 }
 
+// 插话中断后的续发：只把被点的那条作为新一轮发出；其余排队消息在新一轮开始后重新交给后端排队
+// （cago 取消时已丢弃它们，前端队列里的条目一直保留显示）。
+async function sendInterjection(convId: number, queueId: string) {
+  const streaming = useAIStore.getState().conversationStreaming[convId];
+  const item = streaming?.pendingQueue.find((queued) => queued.id === queueId);
+  if (!streaming || !item) {
+    drainQueue(convId);
+    return;
+  }
+  const rest = streaming.pendingQueue.filter((queued) => queued.id !== queueId);
+  updateConversation(convId, { pendingQueue: rest });
+
+  await _sendForConversation(convId, item.text);
+  for (const queued of rest) {
+    // 新一轮若已结束，drainQueue 已把它们发出并清出队列——只重排仍留在队列里的条目，避免重复发送。
+    const current = useAIStore.getState().conversationStreaming[convId];
+    if (!current?.sending || !current.pendingQueue.some((q) => q.id === queued.id)) continue;
+    // 失败（运行器恰好结束）时条目仍留在前端队列里，由这一轮的终态 drainQueue 发出。
+    await QueueAIMessage(convId, queued.id, queued.text).catch(() => undefined);
+  }
+}
+
 // replay 前先让旧 listener 和 pending queue 失效，避免 stop 产生的迟到事件回放到新分支。
 function prepareConversationForReplay(convId: number) {
   conversationStopRequests.delete(convId);
+  conversationInterjections.delete(convId);
   invalidateConvListenerForReplay(convId);
   updateConversation(convId, { sending: false, pendingQueue: [] });
 }
@@ -1451,6 +1479,8 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
 
     case "stopped": {
       cleanupStreamBuffer(convId);
+      const interjectionId = conversationInterjections.get(convId);
+      conversationInterjections.delete(convId);
       const updated = updateLastAssistant(msgs, (msg) => {
         const newBlocks = msg.blocks.map((b) => {
           if (b.type === "tool" && b.status === "running") {
@@ -1470,6 +1500,7 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
           }
           return b;
         });
+        if (interjectionId) newBlocks.push({ type: "interjected", content: "" });
         return { ...msg, blocks: newBlocks, streaming: false };
       });
       if (updated) {
@@ -1483,7 +1514,13 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
       useAIStore.getState().fetchConversations();
 
       if (hasConversationHosts(convId)) {
-        drainQueue(convId);
+        if (interjectionId) {
+          setTimeout(() => {
+            void sendInterjection(convId, interjectionId);
+          }, 0);
+        } else {
+          drainQueue(convId);
+        }
       } else {
         cleanupConversationIfUnused(convId);
       }
@@ -1509,6 +1546,8 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
 
     case "done": {
       cleanupStreamBuffer(convId);
+      // 这一轮在插话的停止生效前已自行结束：被点的消息还在队列里，随下面的 drainQueue 发出。
+      conversationInterjections.delete(convId);
       const updated = updateLastAssistant(msgs, (msg) => {
         const newBlocks = msg.blocks.map((b) =>
           b.type === "tool" && (b.status === "running" || b.status === "pending_confirm")
@@ -1556,6 +1595,7 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
 
     case "error": {
       cleanupStreamBuffer(convId);
+      conversationInterjections.delete(convId);
       const { kind, message } = classifyError(event.error);
       const errBlock: ContentBlock = {
         type: "error",
@@ -1854,6 +1894,8 @@ interface AIState {
   regenerateConversation: (convId: number, messageIndex: number) => Promise<void>;
   removeFromQueue: (convId: number, index: number) => Promise<void>;
   clearQueue: (convId: number) => Promise<void>;
+  // 立即插话：中断当前步骤，只把这条排队消息作为新一轮发出，其余继续排队（issue #366）。
+  interjectQueuedMessage: (convId: number, queueId: string) => Promise<void>;
 
   // Tab 管理 (delegates to tabStore)
   openConversationTab: (conversationId: number) => Promise<string>;
@@ -2603,6 +2645,35 @@ export const useAIStore = create<AIState>((set, get) => {
       const current = get().conversationStreaming[convId];
       if (!current) return;
       updateConversation(convId, { pendingQueue: current.pendingQueue.filter((queued) => queued.id !== item.id) });
+    },
+
+    interjectQueuedMessage: async (convId: number, queueId: string) => {
+      const streaming = get().conversationStreaming[convId];
+      if (!streaming?.sending || conversationInterjections.has(convId)) return;
+      if (!streaming.pendingQueue.some((item) => item.id === queueId)) return;
+      // 先登记再移除：移除期间这一轮若自行结束，done / error 会清掉登记，下面据此放弃停止。
+      conversationInterjections.set(convId, queueId);
+      let removed: boolean;
+      try {
+        // 必须在停止之前：StopAIGeneration 会释放运行器，之后就无法从后端队列里取出这条了。
+        removed = await RemoveQueuedAIMessage(convId, queueId);
+      } catch (e) {
+        conversationInterjections.delete(convId);
+        toast.error(`${i18n.t("ai.interjectFailed")}: ${errorMessage(e)}`);
+        return;
+      }
+      // 没移除成功 = 已在安全点注入（消息已生效）或这一轮已结束，都不必再中断。
+      if (!removed || conversationInterjections.get(convId) !== queueId) {
+        conversationInterjections.delete(convId);
+        return;
+      }
+      try {
+        await StopAIGeneration(convId);
+      } catch (e) {
+        // 停止失败时这条仍在前端队列里，会在这一轮结束时随队列发出。
+        conversationInterjections.delete(convId);
+        toast.error(`${i18n.t("ai.interjectFailed")}: ${errorMessage(e)}`);
+      }
     },
 
     clearQueue: async (convId: number) => {

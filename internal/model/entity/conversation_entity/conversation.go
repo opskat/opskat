@@ -96,7 +96,7 @@ func (Message) TableName() string {
 // 历史回放（internal/ai/message_convert.go ToAgentMessages）必须跳过 type="error"，
 // 否则错误正文会作为 assistant 历史发回给 LLM。
 type ContentBlock struct {
-	Type       string `json:"type"` // "text" | "tool" | "agent" | "approval" | "thinking" | "error"
+	Type       string `json:"type"` // "text" | "tool" | "agent" | "approval" | "thinking" | "error" | "interjected"
 	Content    string `json:"content"`
 	ToolName   string `json:"toolName,omitempty"`
 	ToolInput  string `json:"toolInput,omitempty"`

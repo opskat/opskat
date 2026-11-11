@@ -3,6 +3,7 @@ import { useShallow } from "zustand/shallow";
 import {
   Loader2,
   CornerDownLeft,
+  CornerLeftUp,
   Square,
   RefreshCw,
   X,
@@ -150,6 +151,7 @@ export function AIChatContent({
     regenerateConversation,
     removeFromQueue,
     clearQueue,
+    interjectQueuedMessage,
     editAndResendConversation,
     setSidebarTabInputDraft,
     setSidebarTabEditTarget,
@@ -162,6 +164,7 @@ export function AIChatContent({
       regenerateConversation: s.regenerateConversation,
       removeFromQueue: s.removeFromQueue,
       clearQueue: s.clearQueue,
+      interjectQueuedMessage: s.interjectQueuedMessage,
       editAndResendConversation: s.editAndResendConversation,
       setSidebarTabInputDraft: s.setSidebarTabInputDraft,
       setSidebarTabEditTarget: s.setSidebarTabEditTarget,
@@ -548,7 +551,7 @@ export function AIChatContent({
             <div className="max-w-3xl mx-auto">
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-xs text-muted-foreground">
-                  {t("ai.pendingMessages")} ({pendingQueue.length})
+                  {t("ai.pendingMessages")} ({pendingQueue.length}) · {t("ai.pendingMessagesHint")}
                 </span>
                 <Button
                   variant="ghost"
@@ -562,23 +565,45 @@ export function AIChatContent({
                   {t("ai.clearQueue")}
                 </Button>
               </div>
-              <div className="space-y-1">
-                {pendingQueue.map((item, i) => (
-                  <div key={i} className="flex items-center gap-1.5 text-xs bg-background rounded px-2 py-1.5 border">
-                    <span className="truncate flex-1 text-muted-foreground">
-                      {item.text.length > 50 ? item.text.slice(0, 50) + "…" : item.text}
-                    </span>
-                    <button
-                      className="shrink-0 text-muted-foreground/50 hover:text-destructive transition-colors"
-                      onClick={() => {
-                        if (conversationId != null) removeFromQueue(conversationId, i);
-                      }}
+              <TooltipProvider delayDuration={200}>
+                <div className="space-y-1">
+                  {pendingQueue.map((item, i) => (
+                    <div
+                      key={item.id}
+                      className="flex items-center gap-1.5 text-xs bg-background rounded px-2 py-1.5 border"
                     >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
-              </div>
+                      <span className="truncate flex-1 text-muted-foreground">
+                        {item.text.length > 50 ? item.text.slice(0, 50) + "…" : item.text}
+                      </span>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            aria-label={t("ai.interjectHint")}
+                            className="shrink-0 rounded p-0.5 -m-0.5 text-muted-foreground/50 hover:bg-accent hover:text-primary transition-colors"
+                            onClick={() => {
+                              if (conversationId != null) interjectQueuedMessage(conversationId, item.id);
+                            }}
+                          >
+                            <CornerLeftUp className="h-3 w-3" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" align="end" className="text-xs">
+                          {t("ai.interjectHint")}
+                        </TooltipContent>
+                      </Tooltip>
+                      <button
+                        className="shrink-0 text-muted-foreground/50 hover:text-destructive transition-colors"
+                        onClick={() => {
+                          if (conversationId != null) removeFromQueue(conversationId, i);
+                        }}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </TooltipProvider>
             </div>
           </div>
         )}
@@ -894,6 +919,17 @@ export const AssistantMessage = memo(function AssistantMessage({
   );
 });
 
+// 被「立即插话」中断的回复末尾的标注（issue #366）；图标与队列里的插话按钮一致。
+function InterjectedNotice() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+      <CornerLeftUp className="h-3 w-3 shrink-0" />
+      {t("ai.interjected")}
+    </div>
+  );
+}
+
 const BubbleSegment = memo(function BubbleSegment({
   blocks,
   streaming,
@@ -921,6 +957,8 @@ const BubbleSegment = memo(function BubbleSegment({
           <AgentBlock key={idx} block={block} />
         ) : block.type === "error" ? (
           <ErrorBlockView key={idx} block={block} />
+        ) : block.type === "interjected" ? (
+          <InterjectedNotice key={idx} />
         ) : (
           <ToolBlock key={idx} block={block} />
         )
