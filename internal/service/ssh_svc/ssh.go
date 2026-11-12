@@ -713,14 +713,36 @@ func (m *Manager) dial(cfg ConnectConfig, sshConfig *ssh.ClientConfig, targetAdd
 // newClientLayer 在已建立的 conn 上完成一个 SSH 层握手。cfg.Agent 非 nil 时经
 // Agent 认证工厂（精确签名器 + MFA + 主机密钥契约）；否则用常规 ssh.NewClientConn。
 func newClientLayer(ctx context.Context, cfg ConnectConfig, sshConfig *ssh.ClientConfig, conn net.Conn, addr string) (*ssh.Client, error) {
-	if cfg.Agent != nil {
-		return AgentClientConn(ctx, cfg.Agent, cfg.Username, MakeAgentHostKeyCallback(cfg.Host, cfg.Port, cfg.HostKeyVerifyFunc), conn, addr)
+	return handshakeUntilCanceled(ctx, conn, func() (*ssh.Client, error) {
+		if cfg.Agent != nil {
+			return AgentClientConn(ctx, cfg.Agent, cfg.Username, MakeAgentHostKeyCallback(cfg.Host, cfg.Port, cfg.HostKeyVerifyFunc), conn, addr)
+		}
+		c, chans, reqs, err := ssh.NewClientConn(conn, addr, sshConfig)
+		if err != nil {
+			return nil, err
+		}
+		return ssh.NewClient(c, chans, reqs), nil
+	})
+}
+
+// handshakeUntilCanceled 在 conn 上执行一次 SSH 握手，ctx 先结束时关闭 conn 打断它。
+// ssh.NewClientConn 本身不看 ctx：对端接受 TCP 却不回应握手时会一直等下去，调用方
+// （如 AI 工具）停止也无济于事。不另设握手超时——握手含认证，可能在等用户输入 MFA；
+// 不带取消的调用方（终端标签页）行为不变。握手完成后才取消的 ctx 不影响已建立的连接。
+func handshakeUntilCanceled(ctx context.Context, conn net.Conn, handshake func() (*ssh.Client, error)) (*ssh.Client, error) {
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	client, err := handshake()
+	if stop() {
+		return client, err
 	}
-	c, chans, reqs, err := ssh.NewClientConn(conn, addr, sshConfig)
-	if err != nil {
-		return nil, err
+	// ctx 在握手期间结束，conn 已被关闭：即使握手恰好完成，这个连接也不可用。
+	if client != nil {
+		_ = client.Close()
 	}
-	return ssh.NewClient(c, chans, reqs), nil
+	if err == nil {
+		return nil, ctx.Err()
+	}
+	return nil, errors.Join(ctx.Err(), err)
 }
 
 // dialTCP 建立到 addr 的底层 TCP 连接，并按 sshtuning 配置施加 TCP_NODELAY /
@@ -806,7 +828,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 			return nil, nil, fmt.Errorf("跳板机认证配置失败: %w", err)
 		}
 
-		conn, err := currentClient.Dial("tcp", jumpAddr)
+		conn, err := currentClient.DialContext(ctx, "tcp", jumpAddr)
 		if err != nil {
 			for _, c := range closers {
 				if closeErr := c.Close(); closeErr != nil {
@@ -835,7 +857,7 @@ func (m *Manager) dialViaJumpHosts(cfg ConnectConfig, targetConfig *ssh.ClientCo
 	// 通过最后一个跳板机连接目标
 	emitProgress(&cfg, "connect", fmt.Sprintf("正在通过跳板机连接目标 %s...", targetAddr))
 
-	conn, err := currentClient.Dial("tcp", targetAddr)
+	conn, err := currentClient.DialContext(ctx, "tcp", targetAddr)
 	if err != nil {
 		for _, c := range closers {
 			if closeErr := c.Close(); closeErr != nil {
@@ -887,14 +909,16 @@ func buildJumpHostConfig(cfg ConnectConfig, j JumpHostEntry) (*ssh.ClientConfig,
 // newJumpClientLayer 在已建立的 conn 上完成一个跳板层握手。j.Agent 非 nil 时经
 // Agent 认证工厂；否则用常规 ssh.NewClientConn。
 func newJumpClientLayer(ctx context.Context, cfg ConnectConfig, j JumpHostEntry, config *ssh.ClientConfig, conn net.Conn, addr string) (*ssh.Client, error) {
-	if j.Agent != nil {
-		return AgentClientConn(ctx, j.Agent, j.Username, MakeAgentHostKeyCallback(j.Host, j.Port, cfg.HostKeyVerifyFunc), conn, addr)
-	}
-	c, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
-	if err != nil {
-		return nil, err
-	}
-	return ssh.NewClient(c, chans, reqs), nil
+	return handshakeUntilCanceled(ctx, conn, func() (*ssh.Client, error) {
+		if j.Agent != nil {
+			return AgentClientConn(ctx, j.Agent, j.Username, MakeAgentHostKeyCallback(j.Host, j.Port, cfg.HostKeyVerifyFunc), conn, addr)
+		}
+		c, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+		if err != nil {
+			return nil, err
+		}
+		return ssh.NewClient(c, chans, reqs), nil
+	})
 }
 
 // buildClientConfig 构建目标层的 ClientConfig。Agent 模式走认证工厂（host key 回调
