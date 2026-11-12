@@ -737,7 +737,10 @@ func (a *AI) StopAIGeneration(convID int64) error {
 	}
 	e := v.(*runnerEntry)
 	// 先登记到 stopping 再移出 runners，让并发开始的新一轮在任一时刻都能找到并截断它。
-	a.stopping.Store(convID, e)
+	// 已登记的就是这一轮 = 另一次停止（连点）正在处理它，登记由那一次撤销，这里不能动。
+	if prev, loaded := a.stopping.Swap(convID, e); loaded && prev == e {
+		return nil
+	}
 	defer a.stopping.CompareAndDelete(convID, e)
 	if !a.runners.CompareAndDelete(convID, e) {
 		return nil // 已被新一轮替换，由 replaceRunner 停止

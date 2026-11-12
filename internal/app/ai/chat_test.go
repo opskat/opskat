@@ -171,6 +171,49 @@ func TestNewTurnDuringStopGraceKeepsTheAbandonedTerminalAway(t *testing.T) {
 	}
 }
 
+// 连点停止（两次 StopAIGeneration 并发）时，没抢到这一轮的那次不能撤掉另一次在宽限里的登记，
+// 否则宽限中开始的新一轮找不到旧一轮，宽限超时后代发的收尾会落到新一轮上。两次并发停止都读到
+// 这一轮的交错要靠多会话并发碰出来。
+func TestNewTurnDuringStopGraceAfterConcurrentStopsKeepsTheAbandonedTerminalAway(t *testing.T) {
+	old := stopGrace
+	stopGrace = time.Second // 宽限要盖过 1500 个 goroutine 的调度延迟，新一轮才一定开始在宽限内
+	t.Cleanup(func() { stopGrace = old })
+	a := &AI{}
+
+	const convs = 500
+	leaked := make(chan struct{}, convs)
+	var wg sync.WaitGroup
+	for i := range convs {
+		stuck, events := recordingEntry(t)
+		stuck.convID = int64(1000 + i)
+		a.runners.Store(stuck.convID, stuck)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start := make(chan struct{})
+			returned := make(chan struct{}, 2)
+			for range 2 {
+				go func() {
+					<-start
+					_ = a.StopAIGeneration(stuck.convID)
+					returned <- struct{}{}
+				}()
+			}
+			close(start)
+			<-returned // 没抢到这一轮的那次先返回，抢到的那次还在宽限里
+			a.replaceRunner(stuck.convID)
+			<-returned
+			if len(events()) > 0 {
+				leaked <- struct{}{}
+			}
+		}()
+	}
+	wg.Wait()
+	if n := len(leaked); n > 0 {
+		t.Fatalf("%d of %d conversations: the abandoned turn's terminal reached the new turn's listener", n, convs)
+	}
+}
+
 func TestActiveTasksReturnsStableConversationIDs(t *testing.T) {
 	a := &AI{}
 	a.runners.Store(int64(9), &runnerEntry{})

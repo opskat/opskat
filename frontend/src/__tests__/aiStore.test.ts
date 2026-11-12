@@ -1547,7 +1547,7 @@ describe("sidebar and main tab multi-host behavior", () => {
     callbacks[0]?.({ type: "stopped" });
     await waitForStoreCondition(() => cancels[0]?.mock.calls.length === 1);
 
-    expect(useAIStore.getState().conversationStreaming[60]).toEqual({
+    expect(useAIStore.getState().conversationStreaming[60]).toMatchObject({
       sending: false,
       pendingQueue: [
         { id: "q1", text: "queued-1" },
@@ -2691,6 +2691,36 @@ describe("stop while a tool does not respond", () => {
     expect(useAIStore.getState().conversationStreaming[convId].pendingQueue).toEqual([]);
 
     await useAIStore.getState().stopGeneration(tabId);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(SendAIMessage).toHaveBeenCalledTimes(1);
+    expect(useAIStore.getState().conversationStreaming[convId].sending).toBe(false);
+  });
+
+  // 停止前后端已收下的排队消息：停止后后端随这一轮把它丢弃、运行表里也没有这一轮了，后端删除恒为
+  // false。停止宽限里用户点 × 仍要能删除，且这一轮结束后不再随队列发出。
+  it("removes a message the backend took before the stop while the stop is still winding down", async () => {
+    vi.mocked(QueueAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(RemoveQueuedAIMessage).mockResolvedValue(false as any);
+    let finishStop!: () => void;
+    vi.mocked(StopAIGeneration).mockImplementation(
+      (() =>
+        new Promise<void>((resolve) => {
+          finishStop = () => {
+            callbacks.at(-1)?.({ type: "stopped" });
+            callbacks.at(-1)?.({ type: "done" });
+            resolve();
+          };
+        })) as any
+    );
+    await useAIStore.getState().sendToTab(tabId, "换个思路");
+    await new Promise((r) => setTimeout(r, 0));
+
+    const stopping = useAIStore.getState().stopGeneration(tabId);
+    await useAIStore.getState().removeFromQueue(convId, 0);
+    expect(useAIStore.getState().conversationStreaming[convId].pendingQueue).toEqual([]);
+
+    finishStop();
+    await stopping;
     await new Promise((r) => setTimeout(r, 0));
     expect(SendAIMessage).toHaveBeenCalledTimes(1);
     expect(useAIStore.getState().conversationStreaming[convId].sending).toBe(false);

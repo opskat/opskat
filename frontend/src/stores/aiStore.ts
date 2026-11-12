@@ -118,7 +118,7 @@ export interface ChatMessage {
 export interface PendingQueueItem {
   id: string;
   text: string;
-  // 后端没收下（这一轮已不在，例如刚点停止、正在收尾）：只在前端队列里，删除不经后端，
+  // 只在前端队列里（后端没收下，或已随停止的这一轮丢弃）：删除不经后端，
   // 由这一轮终态后的 drainQueue 发出。
   heldLocally?: boolean;
 }
@@ -437,6 +437,9 @@ const conversationUserStops = new Set<number>();
 
 async function requestStop(convId: number) {
   conversationUserStops.add(convId);
+  // 停止的这一轮收尾时，后端连同它已收下的排队消息一起丢弃（运行表里也立即没有这一轮）：队列此后
+  // 只在前端，删除 / 清空 / 插话不再经后端，由终态后的 drainQueue 发出。
+  holdQueueLocally(convId);
   try {
     await StopAIGeneration(convId);
   } catch (e) {
@@ -1117,6 +1120,14 @@ function setQueuedHeldLocally(convId: number, queueId: string, heldLocally: bool
     pendingQueue: current.pendingQueue.map((item) =>
       item.id === queueId ? { ...item, heldLocally: heldLocally || undefined } : item
     ),
+  });
+}
+
+function holdQueueLocally(convId: number) {
+  const current = useAIStore.getState().conversationStreaming[convId];
+  if (!current?.pendingQueue.some((item) => !item.heldLocally)) return;
+  updateConversation(convId, {
+    pendingQueue: current.pendingQueue.map((item) => ({ ...item, heldLocally: true })),
   });
 }
 
