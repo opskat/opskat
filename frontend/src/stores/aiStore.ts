@@ -1765,13 +1765,9 @@ async function _sendForConversation(convId: number, content: string) {
       updateConversation(convId, {
         pendingQueue: [...streaming.pendingQueue, { id: queueID, text }],
       });
-      QueueAIMessage(convId, queueID, text).catch(() => {
-        const current = useAIStore.getState().conversationStreaming[convId];
-        if (!current?.pendingQueue.some((item) => item.id === queueID)) return;
-        updateConversation(convId, {
-          pendingQueue: current.pendingQueue.filter((item) => item.id !== queueID),
-        });
-      });
+      // 后端没收下（这一轮已不在，例如刚点停止、正在收尾）时仍留在本地队列：这一轮的终态
+      // （后端保证停止后一定会发出）到达后由 drainQueue 照常发出，不丢消息。
+      QueueAIMessage(convId, queueID, text).catch(() => undefined);
     }
     return;
   }
