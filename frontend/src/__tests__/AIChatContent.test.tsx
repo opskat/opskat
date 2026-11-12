@@ -56,6 +56,7 @@ const defaultAIActions = {
   regenerateConversation: useAIStore.getState().regenerateConversation,
   removeFromQueue: useAIStore.getState().removeFromQueue,
   clearQueue: useAIStore.getState().clearQueue,
+  interjectQueuedMessage: useAIStore.getState().interjectQueuedMessage,
 };
 
 const editButtonName = /ai\.editMessage|编辑消息|Edit message/i;
@@ -164,6 +165,7 @@ describe("AIChatContent", () => {
       regenerateConversation: defaultAIActions.regenerateConversation,
       removeFromQueue: defaultAIActions.removeFromQueue,
       clearQueue: defaultAIActions.clearQueue,
+      interjectQueuedMessage: defaultAIActions.interjectQueuedMessage,
     });
   });
 
@@ -704,5 +706,55 @@ describe("AIChatContent", () => {
 
     await waitFor(() => expect(onSendOverride).toHaveBeenCalledWith("queued question"));
     expect(viewport!.scrollTop).toBe(120);
+  });
+
+  // issue #366：每条排队消息都能单独「立即插话」，被中断的回复下方有标注。
+  it("interjects the clicked queued message only", async () => {
+    const user = userEvent.setup();
+    const interjectQueuedMessage = vi.fn().mockResolvedValue(undefined);
+    useAIStore.setState({
+      interjectQueuedMessage,
+      conversationMessages: { 77: [{ role: "user", content: "检查磁盘", blocks: [] }] },
+      conversationStreaming: {
+        77: {
+          sending: true,
+          pendingQueue: [
+            { id: "q1", text: "只看 /var/log" },
+            { id: "q2", text: "顺便看下 docker 镜像" },
+          ],
+        },
+      },
+    });
+
+    render(<AIChatContent conversationId={77} />);
+    const buttons = screen.getAllByRole("button", { name: /ai\.interjectHint|立即插话/ });
+    expect(buttons).toHaveLength(2);
+
+    await user.click(buttons[1]);
+
+    expect(interjectQueuedMessage).toHaveBeenCalledWith(77, "q2");
+  });
+
+  it("marks a reply that was cut short by an interjection", () => {
+    useAIStore.setState({
+      conversationMessages: {
+        78: [
+          { role: "user", content: "检查磁盘", blocks: [] },
+          {
+            role: "assistant",
+            content: "",
+            blocks: [
+              { type: "text", content: "我先统计各目录大小" },
+              { type: "interjected", content: "" },
+            ],
+          },
+        ],
+      },
+      conversationStreaming: { 78: { sending: false, pendingQueue: [] } },
+    });
+
+    render(<AIChatContent conversationId={78} />);
+
+    expect(screen.getByText(/ai\.interjected|已被插话中断/)).toBeInTheDocument();
   });
 });

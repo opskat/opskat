@@ -19,6 +19,7 @@ import {
   UpdateConversationTitle,
   RemoveQueuedAIMessage,
   ClearQueuedAIMessages,
+  QueueAIMessage,
 } from "../../wailsjs/go/ai/AI";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 
@@ -2391,5 +2392,198 @@ describe("AI 会话块递归安全持久化（嵌套 agent child blocks）", () 
     expect(toolAssistant.tool_calls[0].function.arguments).toBe('{"password":"next-round-credential-sentinel"}');
     const toolMsg = apiMsgs.find((m) => m.role === "tool");
     expect(toolMsg.content).toBe(`{"rows":1,"token":"next-round-credential-sentinel"}`);
+  });
+});
+
+// issue #366：排队消息「立即插话」——中断当前步骤，只发出被点的那一条，其余继续排队。
+describe("interjectQueuedMessage", () => {
+  const convId = 120;
+  const tabId = "ai-120";
+  let callbacks: Array<(event: any) => void>;
+  let calls: string[];
+
+  async function startRunningTurn() {
+    useTabStore.setState({
+      tabs: [{ id: tabId, type: "ai", label: "t", meta: { type: "ai", conversationId: convId, title: "t" } }],
+      activeTabId: tabId,
+    });
+    useAIStore.setState({
+      tabStates: { [tabId]: createTabState() },
+      conversationMessages: { [convId]: [] },
+      conversationStreaming: { [convId]: { sending: false, pendingQueue: [] } },
+    });
+    await useAIStore.getState().sendToTab(tabId, "web-01 磁盘快满了");
+    // 当前这一步：一个正在执行的工具
+    const msgs = useAIStore.getState().conversationMessages[convId];
+    useAIStore.setState({
+      conversationMessages: {
+        [convId]: [
+          msgs[0],
+          {
+            ...msgs[1],
+            blocks: [
+              {
+                type: "tool",
+                content: "",
+                toolName: "exec",
+                toolInput: '{"command":"du -xh /"}',
+                toolCallId: "call-1",
+                status: "running",
+              },
+            ],
+          },
+        ],
+      },
+      conversationStreaming: {
+        [convId]: {
+          sending: true,
+          pendingQueue: [
+            { id: "q1", text: "只看 /var/log 和 /data" },
+            { id: "q2", text: "顺便看下 docker 镜像" },
+          ],
+        },
+      },
+    });
+    calls.length = 0;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    callbacks = [];
+    calls = [];
+    vi.mocked(EventsOn).mockImplementation(((_eventName: string, handler: (event: any) => void) => {
+      callbacks.push(handler);
+      return () => {};
+    }) as any);
+    vi.mocked(SendAIMessage).mockImplementation((async () => {
+      calls.push("send");
+    }) as any);
+    vi.mocked(SaveConversationMessages).mockResolvedValue(undefined as any);
+    vi.mocked(RemoveQueuedAIMessage).mockImplementation((async (_conv: number, id: string) => {
+      calls.push(`remove:${id}`);
+      return true;
+    }) as any);
+    // 与真实后端一致：工具执行中被取消时，cago 先等工具返回（ctx 取消 → 工具报错，作为 tool_result 发出），
+    // 再发 stopped，随后仍会补发终态 done（agent/loop.go 工具批次后的 ctx.Err 检查 → cancelPartial + emitDone）。
+    vi.mocked(StopAIGeneration).mockImplementation((async () => {
+      calls.push("stop");
+      callbacks.at(-1)?.({
+        type: "tool_result",
+        tool_name: "exec",
+        tool_call_id: "call-1",
+        content: "context canceled",
+        is_error: true,
+      });
+      callbacks.at(-1)?.({ type: "stopped" });
+      callbacks.at(-1)?.({ type: "done" });
+    }) as any);
+    vi.mocked(QueueAIMessage).mockImplementation((async (_conv: number, id: string) => {
+      calls.push(`queue:${id}`);
+    }) as any);
+  });
+
+  it("removes the item from the backend queue before stopping, then sends only that item and re-queues the rest", async () => {
+    await startRunningTurn();
+
+    await useAIStore.getState().interjectQueuedMessage(convId, "q1");
+    await waitForStoreCondition(() => calls.includes("queue:q2"));
+
+    expect(calls).toEqual(["remove:q1", "stop", "send", "queue:q2"]);
+    expect(QueueAIMessage).toHaveBeenCalledWith(convId, "q2", "顺便看下 docker 镜像");
+
+    const msgs = useAIStore.getState().conversationMessages[convId];
+    expect(msgs.map((m) => [m.role, m.content])).toEqual([
+      ["user", "web-01 磁盘快满了"],
+      ["assistant", ""],
+      ["user", "只看 /var/log 和 /data"],
+      ["assistant", ""],
+    ]);
+    const interrupted = msgs[1].blocks;
+    expect(interrupted[0]).toMatchObject({ type: "tool", status: "cancelled" });
+    expect(interrupted.at(-1)?.type).toBe("interjected");
+    expect(useAIStore.getState().conversationStreaming[convId]).toEqual({
+      sending: true,
+      pendingQueue: [{ id: "q2", text: "顺便看下 docker 镜像" }],
+    });
+
+    const sent = vi.mocked(SendAIMessage).mock.calls.at(-1)![1] as Array<{ role: string; content: string }>;
+    expect(sent.at(-1)).toMatchObject({ role: "user", content: "只看 /var/log 和 /data" });
+    expect(sent.filter((m) => m.role === "user").map((m) => m.content)).toEqual([
+      "web-01 磁盘快满了",
+      "只看 /var/log 和 /data",
+    ]);
+
+    // 标注随会话落盘，重新打开仍可见
+    const saved = vi.mocked(SaveConversationMessages).mock.calls.flatMap((c) => c[2] as any[]);
+    expect(saved.some((m) => m.blocks?.some((b: any) => b.type === "interjected"))).toBe(true);
+  });
+
+  it("does not stop or resend when the item was already consumed at a safe point", async () => {
+    await startRunningTurn();
+    vi.mocked(RemoveQueuedAIMessage).mockImplementation((async (_conv: number, id: string) => {
+      calls.push(`remove:${id}`);
+      return false;
+    }) as any);
+
+    await useAIStore.getState().interjectQueuedMessage(convId, "q1");
+
+    expect(calls).toEqual(["remove:q1"]);
+    expect(StopAIGeneration).not.toHaveBeenCalled();
+  });
+
+  it("does not stop when the turn finished on its own while the removal was in flight", async () => {
+    await startRunningTurn();
+    vi.mocked(RemoveQueuedAIMessage).mockImplementation((async (_conv: number, id: string) => {
+      calls.push(`remove:${id}`);
+      callbacks.at(-1)?.({ type: "done" });
+      return true;
+    }) as any);
+
+    await useAIStore.getState().interjectQueuedMessage(convId, "q1");
+    await waitForStoreCondition(() => calls.includes("send"));
+
+    expect(StopAIGeneration).not.toHaveBeenCalled();
+    const msgs = useAIStore.getState().conversationMessages[convId];
+    expect(msgs[1].blocks.some((b) => b.type === "interjected")).toBe(false);
+    const sent = vi.mocked(SendAIMessage).mock.calls.at(-1)![1] as Array<{ role: string; content: string }>;
+    expect(sent.filter((m) => m.role === "user").map((m) => m.content)).toEqual([
+      "web-01 磁盘快满了",
+      "只看 /var/log 和 /data",
+      "顺便看下 docker 镜像",
+    ]);
+  });
+
+  it("a manual stop adds no interjection notice", async () => {
+    await startRunningTurn();
+
+    await useAIStore.getState().stopGeneration(tabId);
+    await waitForStoreCondition(() => calls.includes("send"));
+
+    const msgs = useAIStore.getState().conversationMessages[convId];
+    expect(msgs[1].blocks.some((b) => b.type === "interjected")).toBe(false);
+  });
+
+  // 手动停止与插话中断的是同一个工具：都按已取消显示，不能一个标失败（会话状态随之变成 error）一个标取消；
+  // 停止只作用于被停的那一轮，下一轮真正失败的工具仍是失败。
+  it("a manual stop marks the interrupted tool cancelled, and later failures in the next round stay failed", async () => {
+    await startRunningTurn();
+
+    await useAIStore.getState().stopGeneration(tabId);
+    await waitForStoreCondition(() => calls.includes("send"));
+
+    let msgs = useAIStore.getState().conversationMessages[convId];
+    expect(msgs[1].blocks[0]).toMatchObject({ type: "tool", status: "cancelled" });
+
+    callbacks.at(-1)?.({ type: "tool_start", tool_name: "exec", tool_input: "{}", tool_call_id: "call-2" });
+    callbacks.at(-1)?.({
+      type: "tool_result",
+      tool_name: "exec",
+      tool_call_id: "call-2",
+      content: "exit status 1",
+      is_error: true,
+    });
+    msgs = useAIStore.getState().conversationMessages[convId];
+    expect(msgs.at(-1)?.blocks.find((b) => b.toolCallId === "call-2")).toMatchObject({ status: "error" });
   });
 });
