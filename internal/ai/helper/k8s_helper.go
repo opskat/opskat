@@ -3,7 +3,6 @@ package helper
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -184,8 +183,7 @@ func ExecuteK8sCommandLocal(ctx context.Context, kubeconfig string, args []strin
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	// ErrWaitDelay 且未取消 = kubectl 已正常退出（退出码 0），只是后台子进程还握着输出管道。
-	if err := cmd.Run(); err != nil && (ctx.Err() != nil || !errors.Is(err, exec.ErrWaitDelay)) {
+	if err := cmd.Run(); err != nil && !exitedWithPipesHeld(ctx, err) {
 		if stderr.Len() > 0 {
 			return "", fmt.Errorf("kubectl command failed: %s", strings.TrimSpace(stderr.String()))
 		}
