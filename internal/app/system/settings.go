@@ -1200,6 +1200,11 @@ var standaloneDefs = []skillTargetDef{
 			return err == nil
 		},
 	},
+	{
+		"antigravity", "Antigravity", installSkill,
+		antigravitySkillDir,
+		skillInstalledAt,
+	},
 }
 
 const pluginRegistryName = "opskat"
@@ -1209,6 +1214,11 @@ const pluginVersion = "1.1.0"
 // claudePluginDir 返回 Claude Code 插件目录（marketplace 内的插件根目录）
 func claudePluginDir(home string) string {
 	return filepath.Join(home, ".claude", "plugins", "marketplaces", pluginRegistryName, pluginName)
+}
+
+// antigravitySkillDir 返回 Google Antigravity 全局 Skill 目录（~/.gemini/config/skills/opsctl）
+func antigravitySkillDir(home string) string {
+	return filepath.Join(home, ".gemini", "config", "skills", pluginName)
 }
 
 // pathTraversesSymlink 检测 path 自身或其任一祖先是否为软链接。
@@ -1619,7 +1629,7 @@ func (s *System) InstallSkills() error {
 	return nil
 }
 
-// InstallSkillTarget 单独安装指定目标（universal / claude-code / opencode）
+// InstallSkillTarget 单独安装指定目标（universal / claude-code / antigravity）
 func (s *System) InstallSkillTarget(key string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
