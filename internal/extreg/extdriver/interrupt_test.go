@@ -178,6 +178,10 @@ func TestClassificationTimeout(t *testing.T) {
 	})
 	require.ErrorIs(t, waitOp(t, stuck, p.classifyTimeout+driverInterruptBound), context.DeadlineExceeded)
 
+	// The shortened timeout is only for cutting off the stuck call: a healthy
+	// classification instantiates a fresh module, which on a loaded CI runner
+	// takes well over 100ms.
+	p.classifyTimeout = defaultClassifyTimeout
 	got, err := p.ClassifyStatements(context.Background(), "fixturedb", "SELECT 1")
 	require.NoError(t, err)
 	assert.Len(t, got, 1)
