@@ -2653,4 +2653,31 @@ describe("stop while a tool does not respond", () => {
     expect(SendAIMessage).toHaveBeenCalledTimes(2);
     expect(QueueAIMessage).not.toHaveBeenCalled();
   });
+
+  // 停止后的终态是 stopped 再 done，两者之间有间隔（实测 16–82ms）。队列若在 stopped 时就
+  // 发出，新一轮与旧一轮共用事件名，旧一轮随后的 done 会被当成新一轮的终态。
+  it("sends the queue only once the stopped turn's done arrives, and that done does not end the next turn", async () => {
+    vi.mocked(StopAIGeneration).mockImplementation((async () => {
+      callbacks.at(-1)?.({ type: "stopped" });
+    }) as any);
+    await useAIStore.getState().sendToTab(tabId, "换个思路");
+    await Promise.resolve();
+
+    await useAIStore.getState().stopGeneration(tabId);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(SendAIMessage).toHaveBeenCalledTimes(1);
+    expect(useAIStore.getState().conversationStreaming[convId].pendingQueue.map((q) => q.text)).toEqual(["换个思路"]);
+
+    callbacks.at(-1)?.({ type: "done" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(SendAIMessage).toHaveBeenCalledTimes(2);
+
+    callbacks.at(-1)?.({ type: "tool_start", tool_name: "exec", tool_input: "{}", tool_call_id: "call-2" });
+    const s = useAIStore.getState();
+    expect(s.conversationStreaming[convId]).toMatchObject({ sending: true, pendingQueue: [] });
+    expect(s.conversationMessages[convId].at(-1)?.blocks.at(-1)).toMatchObject({
+      toolCallId: "call-2",
+      status: "running",
+    });
+  });
 });

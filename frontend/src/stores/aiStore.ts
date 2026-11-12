@@ -1534,10 +1534,10 @@ function handleStreamEvent(convId: number, event: StreamEventData) {
       persistConversationSnapshot(convId);
       useAIStore.getState().fetchConversations();
 
-      if (hasConversationHosts(convId)) {
-        // 插话：等这一轮的终态 done 再续发，见 conversationInterjections。
-        if (!interjection) drainQueue(convId);
-      } else {
+      // 排队消息（含插话）一律等这一轮随后的 done 再发出（cago 取消与后端停止宽限兜底都保证
+      // stopped 之后跟 done）：新一轮与这一轮共用事件名，若在这里就开始新一轮，这一轮的 done
+      // 会落到新一轮上，把它误判为已结束。
+      if (!hasConversationHosts(convId)) {
         conversationInterjections.delete(convId);
         cleanupConversationIfUnused(convId);
       }
