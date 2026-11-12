@@ -298,8 +298,8 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/ncruces/julianday v1.0.0 h1:fH0OKwa7NWvniGQtxdJRxAgkBMolni2BjDHaWTxqt7M=
 github.com/ncruces/julianday v1.0.0/go.mod h1:Dusn2KvZrrovOMJuOt0TNXL6tB7U2E8kvza5fFc9G7g=
-github.com/opskat/gopher-rdp v0.0.0-20261105074210-e501ef089065 h1:aGgtw6iNdzcXxiHOgFn4lLbgeCmhWHNyMsYLFw58xck=
-github.com/opskat/gopher-rdp v0.0.0-20261105074210-e501ef089065/go.mod h1:9We1wOmmq02Ubigr2zNbmsNJ/NudFAAj6lW85y+cPds=
+github.com/opskat/gopher-rdp v0.0.0-20261112054432-7717ec6da048 h1:qEn4kpcOUNQGwQhoxA37EyyyEClxdeDpnECJudktGwM=
+github.com/opskat/gopher-rdp v0.0.0-20261112054432-7717ec6da048/go.mod h1:9We1wOmmq02Ubigr2zNbmsNJ/NudFAAj6lW85y+cPds=
 github.com/paulmach/orb v0.13.0 h1:r7n7mQGGF+cj/CbcivEj9J3HGK+XR+yXnvzRdq9saIw=
 github.com/paulmach/orb v0.13.0/go.mod h1:6scRWINywA2Jf05dcjOfLfxrUIMECvTSG2MVbRLxu/k=
 github.com/pelletier/go-toml/v2 v2.4.3 h1:GTRvJQutkOSftxIFD5xw9aepkYNuPWmVJpffdDPYVpY=
