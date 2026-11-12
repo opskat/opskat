@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"go.uber.org/mock/gomock"
 
+	"github.com/opskat/opskat/internal/ai/runner"
 	"github.com/opskat/opskat/internal/repository/custom_type_repo"
 	"github.com/opskat/opskat/internal/repository/custom_type_repo/mock_custom_type_repo"
 )
@@ -27,6 +30,97 @@ func TestFinishRunnerRemovesOnlyCompletedEntry(t *testing.T) {
 	a.finishRunner(7, completed)
 	if got := a.ActiveTaskCount(); got != 1 {
 		t.Fatalf("stale completion removed replacement runner: got %d", got)
+	}
+}
+
+// recordingEntry 返回一个「这一轮还没收尾」的 runnerEntry（done 不关闭，模拟卡住的工具），
+// 以及它发往前端的事件记录。
+func recordingEntry(t *testing.T) (*runnerEntry, func() []string) {
+	t.Helper()
+	var mu sync.Mutex
+	var got []string
+	e := &runnerEntry{
+		convID: 42,
+		done:   make(chan struct{}),
+		emitFn: func(ev runner.StreamEvent) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, ev.Type)
+		},
+	}
+	return e, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), got...)
+	}
+}
+
+func shortStopGrace(t *testing.T) {
+	t.Helper()
+	old := stopGrace
+	stopGrace = 50 * time.Millisecond
+	t.Cleanup(func() { stopGrace = old })
+}
+
+func TestStopEntryEmitsStoppedThenDoneWhenTurnDoesNotWindDown(t *testing.T) {
+	shortStopGrace(t)
+	e, events := recordingEntry(t)
+	e.deliver(runner.StreamEvent{Type: "tool_start"})
+
+	(&AI{}).stopEntry(e)
+
+	if got := strings.Join(events(), ","); got != "tool_start,stopped,done" {
+		t.Fatalf("events after stop grace: got %q, want tool_start,stopped,done", got)
+	}
+
+	// 卡住的工具迟迟返回后，这一轮自己的收尾不能再到达前端（否则会结束同会话的新一轮）。
+	e.deliver(runner.StreamEvent{Type: "tool_result"})
+	e.deliver(runner.StreamEvent{Type: "stopped"})
+	e.deliver(runner.StreamEvent{Type: "done"})
+	if got := strings.Join(events(), ","); got != "tool_start,stopped,done" {
+		t.Fatalf("late events leaked from abandoned turn: got %q", got)
+	}
+}
+
+func TestStopEntryOnlyAddsDoneWhenStoppedAlreadyDelivered(t *testing.T) {
+	shortStopGrace(t)
+	e, events := recordingEntry(t)
+	e.deliver(runner.StreamEvent{Type: "stopped"})
+
+	(&AI{}).stopEntry(e)
+
+	if got := strings.Join(events(), ","); got != "stopped,done" {
+		t.Fatalf("got %q, want stopped,done", got)
+	}
+}
+
+func TestStopEntryAddsNothingWhenTurnAlreadyFinished(t *testing.T) {
+	shortStopGrace(t)
+	for _, terminal := range []string{"done", "error"} {
+		e, events := recordingEntry(t)
+		e.deliver(runner.StreamEvent{Type: terminal})
+
+		(&AI{}).stopEntry(e)
+
+		if got := strings.Join(events(), ","); got != terminal {
+			t.Fatalf("after %s: got %q, want no synthetic events", terminal, got)
+		}
+	}
+}
+
+func TestStopEntryAddsNothingWhenTurnWindsDownInTime(t *testing.T) {
+	shortStopGrace(t)
+	e, events := recordingEntry(t)
+	go func() {
+		e.deliver(runner.StreamEvent{Type: "stopped"})
+		e.deliver(runner.StreamEvent{Type: "done"})
+		close(e.done)
+	}()
+
+	(&AI{}).stopEntry(e)
+
+	if got := strings.Join(events(), ","); got != "stopped,done" {
+		t.Fatalf("got %q, want the turn's own stopped,done only", got)
 	}
 }
 
