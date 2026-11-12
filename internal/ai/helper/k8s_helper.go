@@ -3,6 +3,7 @@ package helper
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
@@ -160,9 +160,6 @@ func hasNamespaceFlag(args []string) bool {
 	return false
 }
 
-// localCommandWaitDelay 是本地命令被取消后，等待其子进程释放输出管道的上限。
-const localCommandWaitDelay = time.Second
-
 // ExecuteK8sCommandLocal 在本机执行 kubectl（要求本机已安装 kubectl）。
 func ExecuteK8sCommandLocal(ctx context.Context, kubeconfig string, args []string) (string, error) {
 	kubectlPath, env, err := resolveLocalExecutable("kubectl")
@@ -181,13 +178,14 @@ func ExecuteK8sCommandLocal(ctx context.Context, kubeconfig string, args []strin
 	cmd.Env = append(env, "KUBECONFIG="+kubeconfigPath)
 	// 取消时 kubectl 被结束，但它启动的 kubeconfig 凭据插件（如等待浏览器登录的 kubelogin）
 	// 继承了输出管道；不设 WaitDelay 时 Run 会一直等到插件自己退出，停止形同无效。
-	cmd.WaitDelay = localCommandWaitDelay
+	cmd.WaitDelay = commandPipeDrainTimeout
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	// ErrWaitDelay 且未取消 = kubectl 已正常退出（退出码 0），只是后台子进程还握着输出管道。
+	if err := cmd.Run(); err != nil && (ctx.Err() != nil || !errors.Is(err, exec.ErrWaitDelay)) {
 		if stderr.Len() > 0 {
 			return "", fmt.Errorf("kubectl command failed: %s", strings.TrimSpace(stderr.String()))
 		}

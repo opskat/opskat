@@ -124,6 +124,26 @@ func TestStopEntryAddsNothingWhenTurnWindsDownInTime(t *testing.T) {
 	}
 }
 
+// 开始新一轮时旧一轮还登记着（例如前端重载后状态丢失）：前端已为新一轮换上同一事件名的监听，
+// 旧一轮的任何事件——包括宽限超时后的收尾——都会被当成新一轮的，必须一律不送达。
+func TestReplaceRunnerKeepsStuckOldTurnAwayFromTheNewTurn(t *testing.T) {
+	shortStopGrace(t)
+	old, events := recordingEntry(t)
+	a := &AI{}
+	a.runners.Store(old.convID, old)
+
+	a.replaceRunner(old.convID)
+
+	old.deliver(runner.StreamEvent{Type: "tool_result"})
+	old.deliver(runner.StreamEvent{Type: "done"})
+	if got := strings.Join(events(), ","); got != "" {
+		t.Fatalf("replaced turn reached the new turn's listener: got %q", got)
+	}
+	if got := a.ActiveTaskCount(); got != 0 {
+		t.Fatalf("replaced runner remains registered: got %d", got)
+	}
+}
+
 func TestActiveTasksReturnsStableConversationIDs(t *testing.T) {
 	a := &AI{}
 	a.runners.Store(int64(9), &runnerEntry{})

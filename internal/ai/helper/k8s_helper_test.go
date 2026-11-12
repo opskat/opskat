@@ -145,6 +145,28 @@ func TestExecuteK8sCommandLocalReturnsPromptlyOnCancelWhenChildHoldsOutput(t *te
 	}
 }
 
+// 不停止时结果不变：kubectl 正常退出、只剩后台子进程还占着输出管道，仍按成功返回它的输出，
+// 不能因为管道收尾的上限到了就报失败。
+func TestExecuteK8sCommandLocalSucceedsWhenChildOutlivesKubectl(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake kubectl is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\necho pod-a\nsleep 3 &\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake kubectl: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+"/usr/bin:/bin")
+
+	out, err := ExecuteK8sCommandLocal(context.Background(), "apiVersion: v1\nkind: Config\n", []string{"get", "pods"})
+	if err != nil {
+		t.Fatalf("kubectl exited 0 but got error: %v", err)
+	}
+	if !strings.Contains(out, "pod-a") {
+		t.Fatalf("output lost: %q", out)
+	}
+}
+
 func firstExistingExecutable(paths ...string) string {
 	for _, path := range paths {
 		info, err := os.Stat(path)

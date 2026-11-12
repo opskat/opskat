@@ -53,7 +53,7 @@ type runnerEntry struct {
 	// emitFn 把这一轮的事件发往前端；一律经 deliver 调用，以便停止宽限超时后截断。
 	emitFn    func(runner.StreamEvent)
 	emitMu    sync.Mutex
-	abandoned bool // 停止宽限内没收尾，已由 abandon 代发终态；之后的事件全部丢弃
+	abandoned bool // 已由 abandon（宽限超时，代发终态）或 detach（被新一轮替换）截断；之后的事件全部丢弃
 	stopped   bool // 已发出 stopped
 	finished  bool // 已发出 done / error
 }
@@ -77,6 +77,13 @@ func (e *runnerEntry) deliver(ev runner.StreamEvent) {
 		e.finished = true
 	}
 	e.emitFn(ev)
+}
+
+// detach 让这一轮此后的事件全部丢弃，且不代发终态。
+func (e *runnerEntry) detach() {
+	e.emitMu.Lock()
+	defer e.emitMu.Unlock()
+	e.abandoned = true
 }
 
 // abandon 在停止宽限超时后结束这一轮在前端的生命周期：按 cago 正常取消的形态补发
@@ -270,6 +277,17 @@ func (a *AI) stopEntry(e *runnerEntry) {
 		}
 	}
 	releaseRunnerEntry(e)
+}
+
+// replaceRunner 在同会话开始新一轮前取消并释放仍登记着的旧一轮（例如前端重载后状态丢失）。
+// 前端此时已为新一轮换上同一事件名的监听，旧一轮的任何事件（含宽限超时后代发的终态）都会被
+// 当成新一轮的，所以先截断它再停止。
+func (a *AI) replaceRunner(convID int64) {
+	if v, ok := a.runners.LoadAndDelete(convID); ok {
+		old := v.(*runnerEntry)
+		old.detach()
+		a.stopEntry(old)
+	}
 }
 
 // finishRunner removes a naturally completed runner without deleting a newer
@@ -592,10 +610,7 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	// 等于把"安全"寄托在读者不会误以为 nil 是合法状态上。
 	chatCtx = permission.WithPolicyChecker(chatCtx, a.policyChecker)
 
-	// 旧 entry 若存在，先取消并释放。
-	if v, ok := a.runners.LoadAndDelete(convID); ok {
-		a.stopEntry(v.(*runnerEntry))
-	}
+	a.replaceRunner(convID)
 
 	// 按会话选定的 Provider 组装本次发送配置（#246：可与全局激活 Provider 不同）。
 	cfg := a.buildSendConfig(ctx, conv)
