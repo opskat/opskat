@@ -118,6 +118,9 @@ export interface ChatMessage {
 export interface PendingQueueItem {
   id: string;
   text: string;
+  // 后端没收下（这一轮已不在，例如刚点停止、正在收尾）：只在前端队列里，删除不经后端，
+  // 由这一轮终态后的 drainQueue 发出。
+  heldLocally?: boolean;
 }
 
 interface StreamEventData {
@@ -1106,6 +1109,17 @@ function updateConversation(
   });
 }
 
+// 记录排队消息是否只在前端（后端拒收），见 PendingQueueItem.heldLocally。
+function setQueuedHeldLocally(convId: number, queueId: string, heldLocally: boolean) {
+  const current = useAIStore.getState().conversationStreaming[convId];
+  if (!current?.pendingQueue.some((item) => item.id === queueId)) return;
+  updateConversation(convId, {
+    pendingQueue: current.pendingQueue.map((item) =>
+      item.id === queueId ? { ...item, heldLocally: heldLocally || undefined } : item
+    ),
+  });
+}
+
 function drainQueue(convId: number) {
   const streaming = useAIStore.getState().conversationStreaming[convId];
   if (!streaming || streaming.pendingQueue.length === 0) return;
@@ -1152,7 +1166,10 @@ async function sendInterjection(convId: number, queueId: string) {
     const current = useAIStore.getState().conversationStreaming[convId];
     if (!current?.sending || !current.pendingQueue.some((q) => q.id === queued.id)) continue;
     // 失败（运行器恰好结束）时条目仍留在前端队列里，由这一轮的终态 drainQueue 发出。
-    await QueueAIMessage(convId, queued.id, queued.text).catch(() => undefined);
+    await QueueAIMessage(convId, queued.id, queued.text).then(
+      () => setQueuedHeldLocally(convId, queued.id, false),
+      () => setQueuedHeldLocally(convId, queued.id, true)
+    );
   }
 }
 
@@ -1767,7 +1784,7 @@ async function _sendForConversation(convId: number, content: string) {
       });
       // 后端没收下（这一轮已不在，例如刚点停止、正在收尾）时仍留在本地队列：这一轮的终态
       // （后端保证停止后一定会发出）到达后由 drainQueue 照常发出，不丢消息。
-      QueueAIMessage(convId, queueID, text).catch(() => undefined);
+      QueueAIMessage(convId, queueID, text).catch(() => setQueuedHeldLocally(convId, queueID, true));
     }
     return;
   }
@@ -2661,11 +2678,13 @@ export const useAIStore = create<AIState>((set, get) => {
       if (!streaming) return;
       const item = streaming.pendingQueue[index];
       if (!item) return;
-      let removed: boolean;
-      try {
-        removed = await RemoveQueuedAIMessage(convId, item.id);
-      } catch {
-        return;
+      let removed = item.heldLocally === true;
+      if (!removed) {
+        try {
+          removed = await RemoveQueuedAIMessage(convId, item.id);
+        } catch {
+          return;
+        }
       }
       if (!removed) return;
       const current = get().conversationStreaming[convId];
@@ -2680,14 +2699,17 @@ export const useAIStore = create<AIState>((set, get) => {
       // 先登记再移除：移除期间这一轮若自行结束，done / error 会清掉登记，下面据此放弃停止。
       const interjection = { queueId, stopped: false };
       conversationInterjections.set(convId, interjection);
-      let removed: boolean;
-      try {
-        // 必须在停止之前：StopAIGeneration 会释放运行器，之后就无法从后端队列里取出这条了。
-        removed = await RemoveQueuedAIMessage(convId, queueId);
-      } catch (e) {
-        conversationInterjections.delete(convId);
-        toast.error(`${i18n.t("ai.interjectFailed")}: ${errorMessage(e)}`);
-        return;
+      // 只在前端的那条不必向后端取回。
+      let removed = streaming.pendingQueue.some((item) => item.id === queueId && item.heldLocally);
+      if (!removed) {
+        try {
+          // 必须在停止之前：StopAIGeneration 会释放运行器，之后就无法从后端队列里取出这条了。
+          removed = await RemoveQueuedAIMessage(convId, queueId);
+        } catch (e) {
+          conversationInterjections.delete(convId);
+          toast.error(`${i18n.t("ai.interjectFailed")}: ${errorMessage(e)}`);
+          return;
+        }
       }
       // 没移除成功 = 已在安全点注入（消息已生效）或这一轮已结束，都不必再中断。
       if (!removed || conversationInterjections.get(convId) !== interjection) {
@@ -2712,11 +2734,12 @@ export const useAIStore = create<AIState>((set, get) => {
       } catch {
         return;
       }
-      if (removedIDs.length === 0) return;
       const removed = new Set(removedIDs);
       const current = get().conversationStreaming[convId];
       if (!current) return;
-      updateConversation(convId, { pendingQueue: current.pendingQueue.filter((item) => !removed.has(item.id)) });
+      const rest = current.pendingQueue.filter((item) => !item.heldLocally && !removed.has(item.id));
+      if (rest.length === current.pendingQueue.length) return;
+      updateConversation(convId, { pendingQueue: rest });
     },
 
     // === 查询 ===

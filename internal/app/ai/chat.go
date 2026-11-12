@@ -279,10 +279,14 @@ func (a *AI) stopEntry(e *runnerEntry) {
 	releaseRunnerEntry(e)
 }
 
-// replaceRunner 在同会话开始新一轮前取消并释放仍登记着的旧一轮（例如前端重载后状态丢失）。
+// replaceRunner 在同会话开始新一轮前截断旧一轮：仍登记着的（例如前端重载后状态丢失）取消并释放；
+// 已在停止宽限里等待收尾的（例如停止后立即编辑重发）交给进行中的 StopAIGeneration 收尾。
 // 前端此时已为新一轮换上同一事件名的监听，旧一轮的任何事件（含宽限超时后代发的终态）都会被
-// 当成新一轮的，所以先截断它再停止。
+// 当成新一轮的，所以一律先截断。
 func (a *AI) replaceRunner(convID int64) {
+	if v, ok := a.stopping.Load(convID); ok {
+		v.(*runnerEntry).detach()
+	}
 	if v, ok := a.runners.LoadAndDelete(convID); ok {
 		old := v.(*runnerEntry)
 		old.detach()
@@ -727,11 +731,18 @@ func (a *AI) ClearQueuedAIMessages(convID int64) []string {
 
 // StopAIGeneration 调用 cago Runner.Cancel 触发取消。
 func (a *AI) StopAIGeneration(convID int64) error {
-	v, ok := a.runners.LoadAndDelete(convID)
+	v, ok := a.runners.Load(convID)
 	if !ok {
 		return nil
 	}
-	a.stopEntry(v.(*runnerEntry))
+	e := v.(*runnerEntry)
+	// 先登记到 stopping 再移出 runners，让并发开始的新一轮在任一时刻都能找到并截断它。
+	a.stopping.Store(convID, e)
+	defer a.stopping.CompareAndDelete(convID, e)
+	if !a.runners.CompareAndDelete(convID, e) {
+		return nil // 已被新一轮替换，由 replaceRunner 停止
+	}
+	a.stopEntry(e)
 	return nil
 }
 

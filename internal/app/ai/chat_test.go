@@ -144,6 +144,33 @@ func TestReplaceRunnerKeepsStuckOldTurnAwayFromTheNewTurn(t *testing.T) {
 	}
 }
 
+// 停止宽限中（StopAIGeneration 还在等卡住的这一轮）同会话就开始了新一轮（例如编辑重发、前端重载后
+// 直接发送）：这一轮已不在运行表里，但宽限超时后代发的收尾仍会落到新一轮同名的监听上，必须截断。
+func TestNewTurnDuringStopGraceKeepsTheAbandonedTerminalAway(t *testing.T) {
+	old := stopGrace
+	stopGrace = 300 * time.Millisecond
+	t.Cleanup(func() { stopGrace = old })
+	stuck, events := recordingEntry(t)
+	a := &AI{}
+	a.runners.Store(stuck.convID, stuck)
+
+	stopReturned := make(chan struct{})
+	go func() {
+		_ = a.StopAIGeneration(stuck.convID)
+		close(stopReturned)
+	}()
+	for a.ActiveTaskCount() != 0 {
+		time.Sleep(time.Millisecond)
+	}
+
+	a.replaceRunner(stuck.convID)
+	<-stopReturned
+
+	if got := strings.Join(events(), ","); got != "" {
+		t.Fatalf("the abandoned turn's terminal reached the new turn's listener: got %q", got)
+	}
+}
+
 func TestActiveTasksReturnsStableConversationIDs(t *testing.T) {
 	a := &AI{}
 	a.runners.Store(int64(9), &runnerEntry{})

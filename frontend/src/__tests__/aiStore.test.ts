@@ -2680,4 +2680,37 @@ describe("stop while a tool does not respond", () => {
       status: "running",
     });
   });
+
+  // 后端没收下的排队消息只在前端队列里，后端自然删不掉它；用户点 × 仍要能删除，且不再随终态发出。
+  it("removes a message the backend never took, and it is not sent when the turn ends", async () => {
+    vi.mocked(RemoveQueuedAIMessage).mockResolvedValue(false as any);
+    await useAIStore.getState().sendToTab(tabId, "换个思路");
+    await new Promise((r) => setTimeout(r, 0));
+
+    await useAIStore.getState().removeFromQueue(convId, 0);
+    expect(useAIStore.getState().conversationStreaming[convId].pendingQueue).toEqual([]);
+
+    await useAIStore.getState().stopGeneration(tabId);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(SendAIMessage).toHaveBeenCalledTimes(1);
+    expect(useAIStore.getState().conversationStreaming[convId].sending).toBe(false);
+  });
+
+  it("interjects a message the backend never took: only that one goes out, the rest stay queued", async () => {
+    vi.mocked(RemoveQueuedAIMessage).mockResolvedValue(false as any);
+    await useAIStore.getState().sendToTab(tabId, "第一条");
+    await useAIStore.getState().sendToTab(tabId, "第二条");
+    await new Promise((r) => setTimeout(r, 0));
+    const second = useAIStore.getState().conversationStreaming[convId].pendingQueue[1];
+
+    await useAIStore.getState().interjectQueuedMessage(convId, second.id);
+    await waitForStoreCondition(() => vi.mocked(SendAIMessage).mock.calls.length === 2);
+
+    const s = useAIStore.getState();
+    expect(s.conversationMessages[convId].filter((m) => m.role === "user").map((m) => m.content)).toEqual([
+      "跑个长任务",
+      "第二条",
+    ]);
+    expect(s.conversationStreaming[convId].pendingQueue.map((q) => q.text)).toEqual(["第一条"]);
+  });
 });
