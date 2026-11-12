@@ -218,6 +218,106 @@ func TestUninstallSkillHandlesUnknownAndMissingTargets(t *testing.T) {
 	}
 }
 
+func TestAntigravitySkillLifecycle(t *testing.T) {
+	initBootstrapForSystemTest(t)
+	home := setTestHome(t)
+	s := New(t.Context(), SkillContent{
+		SkillMD:    "---\nname: opsctl\n---\n\n## Global Flags\n",
+		CommandsMD: "commands doc\n",
+		InitMD:     "init doc\n",
+	})
+
+	expectedDir := filepath.Join(home, ".gemini", "config", "skills", "opsctl")
+	siblingDir := filepath.Join(home, ".gemini", "config", "skills", "other-skill")
+	if err := os.MkdirAll(siblingDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll siblingDir: %v", err)
+	}
+
+	findTarget := func(info SkillInstallInfo) (SkillTarget, bool) {
+		for _, target := range info.Standalone {
+			if target.Key == "antigravity" {
+				return target, true
+			}
+		}
+		return SkillTarget{}, false
+	}
+
+	before := s.DetectSkills()
+	target, ok := findTarget(before)
+	if !ok {
+		t.Fatalf("DetectSkills standalone missing antigravity target: %+v", before.Standalone)
+	}
+	if target.Installed {
+		t.Fatalf("antigravity should not be installed initially")
+	}
+	if target.Path != expectedDir {
+		t.Fatalf("antigravity path = %q, want %q", target.Path, expectedDir)
+	}
+
+	if err := s.InstallSkillTarget("antigravity"); err != nil {
+		t.Fatalf("InstallSkillTarget antigravity: %v", err)
+	}
+	if _, err := os.Stat(universalSkillDir(home)); !os.IsNotExist(err) {
+		t.Fatalf("installing standalone antigravity should not touch universal dir, stat err=%v", err)
+	}
+
+	skillBytes, err := os.ReadFile(filepath.Join(expectedDir, "SKILL.md")) //nolint:gosec // rooted in t.TempDir()
+	if err != nil {
+		t.Fatalf("ReadFile SKILL.md: %v", err)
+	}
+	if !strings.Contains(string(skillBytes), "## Data Directory") {
+		t.Fatalf("SKILL.md should inject Data Directory, got %q", skillBytes)
+	}
+	for rel, want := range map[string]string{
+		filepath.Join("references", "commands.md"): "commands doc\n",
+		filepath.Join("references", "init.md"):     "init doc\n",
+	} {
+		got, readErr := os.ReadFile(filepath.Join(expectedDir, rel)) //nolint:gosec // rooted in t.TempDir()
+		if readErr != nil {
+			t.Fatalf("ReadFile %s: %v", rel, readErr)
+		}
+		if string(got) != want {
+			t.Fatalf("%s = %q, want %q", rel, got, want)
+		}
+	}
+
+	afterInstall, ok := findTarget(s.DetectSkills())
+	if !ok || !afterInstall.Installed {
+		t.Fatalf("antigravity should be detected as installed: %+v", afterInstall)
+	}
+
+	// updateInstalledSkills 应保留已安装的 Antigravity 目录（不误当旧版 Gemini 扩展清理），且在内容变化时更新。
+	sUpdated := New(t.Context(), SkillContent{
+		SkillMD:    "---\nname: opsctl\n---\n\n## Global Flags\n",
+		CommandsMD: "updated commands doc\n",
+		InitMD:     "init doc\n",
+	})
+	if err := sUpdated.updateInstalledSkills(home); err != nil {
+		t.Fatalf("updateInstalledSkills: %v", err)
+	}
+	updatedCmds, err := os.ReadFile(filepath.Join(expectedDir, "references", "commands.md")) //nolint:gosec // rooted in t.TempDir()
+	if err != nil {
+		t.Fatalf("ReadFile updated commands.md: %v", err)
+	}
+	if string(updatedCmds) != "updated commands doc\n" {
+		t.Fatalf("updated commands.md = %q, want %q", updatedCmds, "updated commands doc\n")
+	}
+
+	if err := s.UninstallSkill("antigravity"); err != nil {
+		t.Fatalf("UninstallSkill antigravity: %v", err)
+	}
+	if _, err := os.Stat(expectedDir); !os.IsNotExist(err) {
+		t.Fatalf("antigravity dir should be removed, stat err=%v", err)
+	}
+	if _, err := os.Stat(siblingDir); err != nil {
+		t.Fatalf("sibling skill dir should remain untouched: %v", err)
+	}
+	afterUninstall, ok := findTarget(s.DetectSkills())
+	if !ok || afterUninstall.Installed {
+		t.Fatalf("antigravity should report uninstalled: %+v", afterUninstall)
+	}
+}
+
 func TestWebDAVExportDefaultsRoundTripEncryptedPassword(t *testing.T) {
 	initBootstrapForSystemTest(t)
 	cfg := &bootstrap.AppConfig{
