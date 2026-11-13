@@ -175,12 +175,15 @@ func ExecuteK8sCommandLocal(ctx context.Context, kubeconfig string, args []strin
 	cmd := exec.CommandContext(ctx, kubectlPath, args...) //nolint:gosec
 	executil.HideConsoleWindow(cmd)
 	cmd.Env = append(env, "KUBECONFIG="+kubeconfigPath)
+	// 取消时 kubectl 被结束，但它启动的 kubeconfig 凭据插件（如等待浏览器登录的 kubelogin）
+	// 继承了输出管道；不设 WaitDelay 时 Run 会一直等到插件自己退出，停止形同无效。
+	cmd.WaitDelay = commandPipeDrainTimeout
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Run(); err != nil && !exitedWithPipesHeld(ctx, err) {
 		if stderr.Len() > 0 {
 			return "", fmt.Errorf("kubectl command failed: %s", strings.TrimSpace(stderr.String()))
 		}

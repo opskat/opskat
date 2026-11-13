@@ -1547,7 +1547,7 @@ describe("sidebar and main tab multi-host behavior", () => {
     callbacks[0]?.({ type: "stopped" });
     await waitForStoreCondition(() => cancels[0]?.mock.calls.length === 1);
 
-    expect(useAIStore.getState().conversationStreaming[60]).toEqual({
+    expect(useAIStore.getState().conversationStreaming[60]).toMatchObject({
       sending: false,
       pendingQueue: [
         { id: "q1", text: "queued-1" },
@@ -2585,5 +2585,162 @@ describe("interjectQueuedMessage", () => {
     });
     msgs = useAIStore.getState().conversationMessages[convId];
     expect(msgs.at(-1)?.blocks.find((b) => b.toolCallId === "call-2")).toMatchObject({ status: "error" });
+  });
+});
+
+// 工具卡住不响应停止时，后端在停止宽限超时后补发 stopped + done（与 cago 正常取消同形），
+// 并且已从运行表删除这一轮——这段时间里排队会被后端拒绝。
+describe("stop while a tool does not respond", () => {
+  const convId = 366;
+  const tabId = "ai-366";
+  let callbacks: Array<(event: any) => void>;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    callbacks = [];
+    vi.mocked(EventsOn).mockImplementation(((_eventName: string, handler: (event: any) => void) => {
+      callbacks.push(handler);
+      return () => {};
+    }) as any);
+    vi.mocked(SendAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(SaveConversationMessages).mockResolvedValue(undefined as any);
+    vi.mocked(QueueAIMessage).mockRejectedValue(new Error(`会话 ${convId} 没有正在运行的生成`));
+    vi.mocked(StopAIGeneration).mockImplementation((async () => {
+      callbacks.at(-1)?.({ type: "stopped" });
+      callbacks.at(-1)?.({ type: "done" });
+    }) as any);
+    useTabStore.setState({
+      tabs: [{ id: tabId, type: "ai", label: "t", meta: { type: "ai", conversationId: convId, title: "t" } }],
+      activeTabId: tabId,
+    });
+    useAIStore.setState({
+      tabStates: { [tabId]: createTabState() },
+      conversationMessages: { [convId]: [] },
+      conversationStreaming: { [convId]: { sending: false, pendingQueue: [] } },
+    });
+    await useAIStore.getState().sendToTab(tabId, "跑个长任务");
+    callbacks.at(-1)?.({ type: "tool_start", tool_name: "exec", tool_input: "{}", tool_call_id: "call-1" });
+  });
+
+  it("keeps a message queued while the turn is gone, then sends it once the turn ends", async () => {
+    await useAIStore.getState().sendToTab(tabId, "换个思路");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(useAIStore.getState().conversationStreaming[convId].pendingQueue.map((q) => q.text)).toEqual(["换个思路"]);
+
+    await useAIStore.getState().stopGeneration(tabId);
+    await new Promise((r) => setTimeout(r, 0));
+
+    const s = useAIStore.getState();
+    expect(s.conversationStreaming[convId]).toMatchObject({ sending: true, pendingQueue: [] });
+    const users = s.conversationMessages[convId].filter((m) => m.role === "user").map((m) => m.content);
+    expect(users).toEqual(["跑个长任务", "换个思路"]);
+    expect(SendAIMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns to idle after the backend-issued stopped + done, with the stuck tool cancelled", async () => {
+    await useAIStore.getState().stopGeneration(tabId);
+
+    const s = useAIStore.getState();
+    expect(s.conversationStreaming[convId].sending).toBe(false);
+    expect(s.conversationMessages[convId].at(-1)?.blocks[0]).toMatchObject({
+      toolCallId: "call-1",
+      status: "cancelled",
+    });
+
+    await useAIStore.getState().sendToTab(tabId, "换个思路");
+    expect(SendAIMessage).toHaveBeenCalledTimes(2);
+    expect(QueueAIMessage).not.toHaveBeenCalled();
+  });
+
+  // 停止后的终态是 stopped 再 done，两者之间有间隔（实测 16–82ms）。队列若在 stopped 时就
+  // 发出，新一轮与旧一轮共用事件名，旧一轮随后的 done 会被当成新一轮的终态。
+  it("sends the queue only once the stopped turn's done arrives, and that done does not end the next turn", async () => {
+    vi.mocked(StopAIGeneration).mockImplementation((async () => {
+      callbacks.at(-1)?.({ type: "stopped" });
+    }) as any);
+    await useAIStore.getState().sendToTab(tabId, "换个思路");
+    await Promise.resolve();
+
+    await useAIStore.getState().stopGeneration(tabId);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(SendAIMessage).toHaveBeenCalledTimes(1);
+    expect(useAIStore.getState().conversationStreaming[convId].pendingQueue.map((q) => q.text)).toEqual(["换个思路"]);
+
+    callbacks.at(-1)?.({ type: "done" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(SendAIMessage).toHaveBeenCalledTimes(2);
+
+    callbacks.at(-1)?.({ type: "tool_start", tool_name: "exec", tool_input: "{}", tool_call_id: "call-2" });
+    const s = useAIStore.getState();
+    expect(s.conversationStreaming[convId]).toMatchObject({ sending: true, pendingQueue: [] });
+    expect(s.conversationMessages[convId].at(-1)?.blocks.at(-1)).toMatchObject({
+      toolCallId: "call-2",
+      status: "running",
+    });
+  });
+
+  // 后端没收下的排队消息只在前端队列里，后端自然删不掉它；用户点 × 仍要能删除，且不再随终态发出。
+  it("removes a message the backend never took, and it is not sent when the turn ends", async () => {
+    vi.mocked(RemoveQueuedAIMessage).mockResolvedValue(false as any);
+    await useAIStore.getState().sendToTab(tabId, "换个思路");
+    await new Promise((r) => setTimeout(r, 0));
+
+    await useAIStore.getState().removeFromQueue(convId, 0);
+    expect(useAIStore.getState().conversationStreaming[convId].pendingQueue).toEqual([]);
+
+    await useAIStore.getState().stopGeneration(tabId);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(SendAIMessage).toHaveBeenCalledTimes(1);
+    expect(useAIStore.getState().conversationStreaming[convId].sending).toBe(false);
+  });
+
+  // 停止前后端已收下的排队消息：停止后后端随这一轮把它丢弃、运行表里也没有这一轮了，后端删除恒为
+  // false。停止宽限里用户点 × 仍要能删除，且这一轮结束后不再随队列发出。
+  it("removes a message the backend took before the stop while the stop is still winding down", async () => {
+    vi.mocked(QueueAIMessage).mockResolvedValue(undefined as any);
+    vi.mocked(RemoveQueuedAIMessage).mockResolvedValue(false as any);
+    let finishStop!: () => void;
+    vi.mocked(StopAIGeneration).mockImplementation(
+      (() =>
+        new Promise<void>((resolve) => {
+          finishStop = () => {
+            callbacks.at(-1)?.({ type: "stopped" });
+            callbacks.at(-1)?.({ type: "done" });
+            resolve();
+          };
+        })) as any
+    );
+    await useAIStore.getState().sendToTab(tabId, "换个思路");
+    await new Promise((r) => setTimeout(r, 0));
+
+    const stopping = useAIStore.getState().stopGeneration(tabId);
+    await useAIStore.getState().removeFromQueue(convId, 0);
+    expect(useAIStore.getState().conversationStreaming[convId].pendingQueue).toEqual([]);
+
+    finishStop();
+    await stopping;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(SendAIMessage).toHaveBeenCalledTimes(1);
+    expect(useAIStore.getState().conversationStreaming[convId].sending).toBe(false);
+  });
+
+  it("interjects a message the backend never took: only that one goes out, the rest stay queued", async () => {
+    vi.mocked(RemoveQueuedAIMessage).mockResolvedValue(false as any);
+    await useAIStore.getState().sendToTab(tabId, "第一条");
+    await useAIStore.getState().sendToTab(tabId, "第二条");
+    await new Promise((r) => setTimeout(r, 0));
+    const second = useAIStore.getState().conversationStreaming[convId].pendingQueue[1];
+
+    await useAIStore.getState().interjectQueuedMessage(convId, second.id);
+    await waitForStoreCondition(() => vi.mocked(SendAIMessage).mock.calls.length === 2);
+
+    const s = useAIStore.getState();
+    expect(s.conversationMessages[convId].filter((m) => m.role === "user").map((m) => m.content)).toEqual([
+      "跑个长任务",
+      "第二条",
+    ]);
+    expect(s.conversationStreaming[convId].pendingQueue.map((q) => q.text)).toEqual(["第一条"]);
   });
 });

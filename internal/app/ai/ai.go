@@ -54,6 +54,10 @@ type AI struct {
 	runners               sync.Map // map[int64]*runnerEntry
 	currentConversationID int64
 
+	// stopping 是 StopAIGeneration 已移出 runners、仍在停止宽限里等待收尾的那一轮（map[int64]*runnerEntry），
+	// 供同会话开始新一轮时截断，见 replaceRunner。
+	stopping sync.Map
+
 	permissionChan     chan runner.PermissionResponse
 	pendingAIApprovals sync.Map // map[string]pendingAIApproval
 

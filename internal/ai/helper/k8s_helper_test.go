@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"go.uber.org/mock/gomock"
 
@@ -114,6 +115,55 @@ func TestExecuteK8sCommandLocalFindsHomebrewKubectlWhenPathIsMinimal(t *testing.
 	}
 	if !strings.Contains(out, "clientVersion:") {
 		t.Fatalf("expected kubectl client version output, got %q", out)
+	}
+}
+
+// kubeconfig 的凭据插件（如等待浏览器登录的 kubelogin）由 kubectl 启动并继承它的输出管道；
+// 停止时 kubectl 被结束，插件却还占着管道，执行不能因此一直等到插件退出。
+func TestExecuteK8sCommandLocalReturnsPromptlyOnCancelWhenChildHoldsOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake kubectl is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\nsleep 30 &\nwait\n"
+	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake kubectl: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+"/usr/bin:/bin")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := ExecuteK8sCommandLocal(ctx, "apiVersion: v1\nkind: Config\n", []string{"get", "pods"})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error after cancellation")
+	}
+	if elapsed > 5*time.Second {
+		t.Fatalf("returned %v after start; want within a few seconds of the 300ms cancel", elapsed)
+	}
+}
+
+// 不停止时结果不变：kubectl 正常退出、只剩后台子进程还占着输出管道，仍按成功返回它的输出，
+// 不能因为管道收尾的上限到了就报失败。
+func TestExecuteK8sCommandLocalSucceedsWhenChildOutlivesKubectl(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake kubectl is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	script := "#!/bin/sh\necho pod-a\nsleep 3 &\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "kubectl"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake kubectl: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+"/usr/bin:/bin")
+
+	out, err := ExecuteK8sCommandLocal(context.Background(), "apiVersion: v1\nkind: Config\n", []string{"get", "pods"})
+	if err != nil {
+		t.Fatalf("kubectl exited 0 but got error: %v", err)
+	}
+	if !strings.Contains(out, "pod-a") {
+		t.Fatalf("output lost: %q", out)
 	}
 }
 

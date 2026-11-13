@@ -259,11 +259,17 @@ func runInvocationCmd(ctx context.Context, cmd *exec.Cmd) (int, error) {
 	if errors.As(err, &exitErr) {
 		return exitErr.ExitCode(), nil
 	}
-	if errors.Is(err, exec.ErrWaitDelay) {
-		// 子进程已正常退出（退出码 0），只是后台孙进程还握着输出管道。
+	if exitedWithPipesHeld(ctx, err) {
 		return cmd.ProcessState.ExitCode(), nil
 	}
 	return 0, err
+}
+
+// exitedWithPipesHeld 报告设了 commandPipeDrainTimeout 的 cmd.Run 返回的 err 是否只表示：
+// 子进程已正常退出（退出码 0），只是后台孙进程还握着输出管道、到点后被 os/exec 关掉——这次
+// 调用本身是成功的。被取消 / 超时的调用不算。
+func exitedWithPipesHeld(ctx context.Context, err error) bool {
+	return ctx.Err() == nil && errors.Is(err, exec.ErrWaitDelay)
 }
 
 // shellCommandArgv 用系统默认 shell 执行一整条命令；实际的 goos/shell 由

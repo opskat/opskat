@@ -41,6 +41,7 @@ func outwardFailure(prefix string, err error) (string, error) {
 
 // runnerEntry 持有一个活跃会话的 cago 运行栈。
 type runnerEntry struct {
+	convID     int64
 	sys        *coding.System
 	runner     *agent.Runner
 	done       chan struct{}
@@ -48,6 +49,59 @@ type runnerEntry struct {
 	dbCache    *helper.DatabaseClientCache
 	redisCache *helper.RedisClientCache
 	mongoCache *helper.MongoDBClientCache
+
+	// emitFn 把这一轮的事件发往前端；一律经 deliver 调用，以便停止宽限超时后截断。
+	emitFn    func(runner.StreamEvent)
+	emitMu    sync.Mutex
+	abandoned bool // 已由 abandon（宽限超时，代发终态）或 detach（被新一轮替换）截断；之后的事件全部丢弃
+	stopped   bool // 已发出 stopped
+	finished  bool // 已发出 done / error
+}
+
+// stopGrace 是停止后等待这一轮自行收尾的时长。cago 在工具阶段要等所有工具返回才收尾，
+// 不响应取消的工具会让这一轮永远到不了 stopped/done；超过宽限就由 abandon 代发终态。
+var stopGrace = 3 * time.Second
+
+// deliver 把这一轮的一个事件发往前端；这一轮被放弃后丢弃，免得卡住的工具迟迟返回时
+// 把同会话已开始的新一轮误判为结束。
+func (e *runnerEntry) deliver(ev runner.StreamEvent) {
+	e.emitMu.Lock()
+	defer e.emitMu.Unlock()
+	if e.abandoned {
+		return
+	}
+	switch ev.Type {
+	case "stopped":
+		e.stopped = true
+	case "done", "error":
+		e.finished = true
+	}
+	e.emitFn(ev)
+}
+
+// detach 让这一轮此后的事件全部丢弃，且不代发终态。
+func (e *runnerEntry) detach() {
+	e.emitMu.Lock()
+	defer e.emitMu.Unlock()
+	e.abandoned = true
+}
+
+// abandon 在停止宽限超时后结束这一轮在前端的生命周期：按 cago 正常取消的形态补发
+// stopped 与 done（已发出的不重复），此后这一轮的事件不再送达。
+func (e *runnerEntry) abandon() {
+	e.emitMu.Lock()
+	defer e.emitMu.Unlock()
+	if e.abandoned {
+		return
+	}
+	e.abandoned = true
+	if e.finished {
+		return
+	}
+	if !e.stopped {
+		e.emitFn(runner.StreamEvent{Type: "stopped"})
+	}
+	e.emitFn(runner.StreamEvent{Type: "done"})
 }
 
 // allAssetTypeSkills 返回全部有用法文档的资产类型（skills.Types()——内嵌的 9 个 exec
@@ -204,6 +258,8 @@ func (a *AI) resetRunners() {
 }
 
 // stopEntry 取消正在跑的 turn 并等待事件消费 goroutine 退出，最后释放 Runner / System。
+// 宽限内没等到收尾（有工具不响应取消）时放弃这一轮：代发终态让前端回到可输入状态，
+// 卡住的工具留在后台直到自己返回，其后续事件被 deliver 丢弃。
 func (a *AI) stopEntry(e *runnerEntry) {
 	if e == nil {
 		return
@@ -214,10 +270,28 @@ func (a *AI) stopEntry(e *runnerEntry) {
 	if e.done != nil {
 		select {
 		case <-e.done:
-		case <-time.After(3 * time.Second):
+		case <-time.After(stopGrace):
+			logger.Default().Warn("AI turn did not end within the stop grace period; abandoning it",
+				zap.Int64("conv_id", e.convID), zap.Duration("grace", stopGrace))
+			e.abandon()
 		}
 	}
 	releaseRunnerEntry(e)
+}
+
+// replaceRunner 在同会话开始新一轮前截断旧一轮：仍登记着的（例如前端重载后状态丢失）取消并释放；
+// 已在停止宽限里等待收尾的（例如停止后立即编辑重发）交给进行中的 StopAIGeneration 收尾。
+// 前端此时已为新一轮换上同一事件名的监听，旧一轮的任何事件（含宽限超时后代发的终态）都会被
+// 当成新一轮的，所以一律先截断。
+func (a *AI) replaceRunner(convID int64) {
+	if v, ok := a.stopping.Load(convID); ok {
+		v.(*runnerEntry).detach()
+	}
+	if v, ok := a.runners.LoadAndDelete(convID); ok {
+		old := v.(*runnerEntry)
+		old.detach()
+		a.stopEntry(old)
+	}
 }
 
 // finishRunner removes a naturally completed runner without deleting a newer
@@ -540,10 +614,7 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	// 等于把"安全"寄托在读者不会误以为 nil 是合法状态上。
 	chatCtx = permission.WithPolicyChecker(chatCtx, a.policyChecker)
 
-	// 旧 entry 若存在，先取消并释放。
-	if v, ok := a.runners.LoadAndDelete(convID); ok {
-		a.stopEntry(v.(*runnerEntry))
-	}
+	a.replaceRunner(convID)
 
 	// 按会话选定的 Provider 组装本次发送配置（#246：可与全局激活 Provider 不同）。
 	cfg := a.buildSendConfig(ctx, conv)
@@ -568,6 +639,7 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	aiRunner := sys.Agent().Runner(agentConv)
 
 	entry := &runnerEntry{
+		convID:     convID,
 		sys:        sys,
 		runner:     aiRunner,
 		done:       make(chan struct{}),
@@ -575,6 +647,7 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 		dbCache:    dbCache,
 		redisCache: redisCache,
 		mongoCache: mongoCache,
+		emitFn:     onEvent,
 	}
 	a.runners.Store(convID, entry)
 
@@ -585,11 +658,11 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 		_ = aiRunner.Close()
 		_ = sys.Close(context.Background())
 		if chatCtx.Err() != nil {
-			onEvent(runner.StreamEvent{Type: "stopped"})
+			entry.deliver(runner.StreamEvent{Type: "stopped"})
 			return nil //nolint:nilerr // 取消是用户主动行为，不是错误
 		}
 		message, outwardErr := outwardFailure("send to LLM", err)
-		onEvent(runner.StreamEvent{Type: "error", Error: message})
+		entry.deliver(runner.StreamEvent{Type: "error", Error: message})
 		return outwardErr
 	}
 
@@ -602,7 +675,7 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 		// 通道关闭但没有 done / error / stopped 收尾时，冲刷合并窗口里剩下的 delta。
 		defer translator.Close()
 		for ev := range events {
-			translator.Translate(ev, onEvent)
+			translator.Translate(ev, entry.deliver)
 		}
 	}()
 	return nil
@@ -611,13 +684,13 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 // QueueAIMessage 在生成过程中通过 cago Runner.Steer 把用户消息注入当前 turn。
 func (a *AI) QueueAIMessage(convID int64, queueID string, content string) error {
 	v, ok := a.runners.Load(convID)
-	if !ok {
+	if !ok || v.(*runnerEntry).runner == nil {
+		// 前端仍显示生成中，但这一轮已不在（例如刚点停止、正在收尾）：前端会把消息留在队列，
+		// 等这一轮的终态后照常发出。
+		logger.Default().Warn("queue AI message: no running turn", zap.Int64("conv_id", convID))
 		return fmt.Errorf("会话 %d 没有正在运行的生成", convID)
 	}
 	entry := v.(*runnerEntry)
-	if entry.runner == nil {
-		return fmt.Errorf("会话 %d 没有正在运行的生成", convID)
-	}
 	err := entry.runner.Steer(context.Background(), content, agent.WithSteerID(queueID), agent.WithSteerDisplay(content))
 	if err != nil && !errors.Is(err, agent.ErrSteerNoActiveTurn) {
 		logger.Default().Warn("cago Steer failed", zap.Error(err))
@@ -658,11 +731,21 @@ func (a *AI) ClearQueuedAIMessages(convID int64) []string {
 
 // StopAIGeneration 调用 cago Runner.Cancel 触发取消。
 func (a *AI) StopAIGeneration(convID int64) error {
-	v, ok := a.runners.LoadAndDelete(convID)
+	v, ok := a.runners.Load(convID)
 	if !ok {
 		return nil
 	}
-	a.stopEntry(v.(*runnerEntry))
+	e := v.(*runnerEntry)
+	// 先登记到 stopping 再移出 runners，让并发开始的新一轮在任一时刻都能找到并截断它。
+	// 已登记的就是这一轮 = 另一次停止（连点）正在处理它，登记由那一次撤销，这里不能动。
+	if prev, loaded := a.stopping.Swap(convID, e); loaded && prev == e {
+		return nil
+	}
+	defer a.stopping.CompareAndDelete(convID, e)
+	if !a.runners.CompareAndDelete(convID, e) {
+		return nil // 已被新一轮替换，由 replaceRunner 停止
+	}
+	a.stopEntry(e)
 	return nil
 }
 
