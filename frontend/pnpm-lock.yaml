@@ -7,6 +7,11 @@ settings:
 overrides:
   dompurify: ^3.4.12
 
+patchedDependencies:
+  '@xterm/addon-webgl@0.19.0':
+    hash: c4bf4829e34f74b89a8752d1ed69ecf3c501017b88cc7da0161c93b1edd96fd4
+    path: patches/@xterm__addon-webgl@0.19.0.patch
+
 importers:
 
   .:
@@ -94,7 +99,7 @@ importers:
         version: 0.12.0
       '@xterm/addon-webgl':
         specifier: ^0.19.0
-        version: 0.19.0
+        version: 0.19.0(patch_hash=c4bf4829e34f74b89a8752d1ed69ecf3c501017b88cc7da0161c93b1edd96fd4)
       '@xterm/xterm':
         specifier: ^6.0.0
         version: 6.0.0
@@ -5148,7 +5153,7 @@ snapshots:
 
   '@xterm/addon-web-links@0.12.0': {}
 
-  '@xterm/addon-webgl@0.19.0': {}
+  '@xterm/addon-webgl@0.19.0(patch_hash=c4bf4829e34f74b89a8752d1ed69ecf3c501017b88cc7da0161c93b1edd96fd4)': {}
 
   '@xterm/xterm@6.0.0': {}
 
