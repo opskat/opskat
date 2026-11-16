@@ -123,8 +123,20 @@ func GetClusterInfo(ctx context.Context, kubeconfig string, opts ...ClientOption
 }
 
 func buildClient(kubeconfig string, opts ...ClientOption) (*kubernetes.Clientset, error) {
-	var config *rest.Config
-	var err error
+	config, err := restConfig(kubeconfig, opts...)
+	if err != nil {
+		return nil, err
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("create k8s clientset: %w", err)
+	}
+	return clientset, nil
+}
+
+// restConfig 由 kubeconfig 与选项构造 rest.Config；typed、discovery 与原始 REST 客户端都从这里取配置，
+// 保证 context、超时与自定义拨号（SSH 隧道 / 代理链 / .local）一致。
+func restConfig(kubeconfig string, opts ...ClientOption) (*rest.Config, error) {
 	clientOpts := &clientOptions{}
 	for _, opt := range opts {
 		opt(clientOpts)
@@ -141,7 +153,7 @@ func buildClient(kubeconfig string, opts ...ClientOption) (*kubernetes.Clientset
 	if clientOpts.contextName != "" {
 		overrides.CurrentContext = clientOpts.contextName
 	}
-	config, err = clientcmd.NewDefaultClientConfig(*clientCfg, overrides).ClientConfig()
+	config, err := clientcmd.NewDefaultClientConfig(*clientCfg, overrides).ClientConfig()
 	if err != nil {
 		return nil, fmt.Errorf("build rest config from kubeconfig: %w", err)
 	}
@@ -160,12 +172,7 @@ func buildClient(kubeconfig string, opts ...ClientOption) (*kubernetes.Clientset
 		// 设置 Dial 会让 client-go 不再缓存 transport,其余直连保持默认。
 		config.Dial = netdial.Default().DialContext
 	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("create k8s clientset: %w", err)
-	}
-	return clientset, nil
+	return config, nil
 }
 
 type PodListItem struct {

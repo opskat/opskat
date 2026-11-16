@@ -66,12 +66,25 @@ func (k *K8s) loadK8sCall(ctx context.Context, assetID int64) (*k8sCallContext, 
 	}, nil
 }
 
-// runK8sCall 是 9 个 GetK8sNamespace*/GetK8sClusterInfo/GetK8sPodDetail 共用的模板：
-// 加载上下文 → 调用 fn → JSON 序列化。
+// runK8sCall 是 K8S 读取类 IPC 共用的模板：加载上下文 → 调用 fn → JSON 序列化，
+// 并记录开始 / 结束 / 失败（带 assetID）。
 func (k *K8s) runK8sCall(assetID int64, label string, fn func(ctx context.Context, c *k8sCallContext) (any, error)) (string, error) {
 	ctx, cancel := context.WithTimeout(k.ctx, 30*time.Second)
 	defer cancel()
+	log := logger.Ctx(ctx).With(zap.String("op", label), zap.Int64("assetID", assetID))
+	start := time.Now()
+	log.Debug("k8s call start")
 
+	data, err := k.doK8sCall(ctx, assetID, label, fn)
+	if err != nil {
+		log.Error("k8s call failed", zap.Duration("elapsed", time.Since(start)), zap.Error(err))
+		return "", err
+	}
+	log.Debug("k8s call done", zap.Duration("elapsed", time.Since(start)))
+	return data, nil
+}
+
+func (k *K8s) doK8sCall(ctx context.Context, assetID int64, label string, fn func(ctx context.Context, c *k8sCallContext) (any, error)) (string, error) {
 	c, err := k.loadK8sCall(ctx, assetID)
 	if err != nil {
 		return "", err
