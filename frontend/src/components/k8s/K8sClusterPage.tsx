@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import type { asset_entity } from "../../../wailsjs/go/models";
 import { AsyncState } from "@/components/common/AsyncState";
 import { PanelSidebar, SidebarRefreshButton } from "@/components/common/PanelSidebar";
@@ -79,6 +80,7 @@ export function K8sClusterPage({ asset }: Props) {
 }
 
 function ActiveTab({ assetId, cluster }: { assetId: number; cluster: K8sClusterState }) {
+  const { t } = useTranslation();
   const id = cluster.activeTabId;
   if (id === OVERVIEW_TAB_ID && cluster.version.data) {
     return <K8sOverview assetId={assetId} version={cluster.version.data} />;
@@ -93,6 +95,14 @@ function ActiveTab({ assetId, cluster }: { assetId: number; cluster: K8sClusterS
   if (id.startsWith("log:")) {
     const [namespace, pod] = id.slice("log:".length).split(":");
     return <LegacyPodLogs key={id} assetId={assetId} namespace={namespace} pod={pod} tabId={id} />;
+  }
+  if (id.startsWith("res:")) {
+    // The generic resource detail view comes later; until then the tab only holds the opened resource.
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+        {t("asset.k8sDetailPending")}
+      </div>
+    );
   }
   return null;
 }

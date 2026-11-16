@@ -70,6 +70,28 @@ export interface K8sListEntry {
   error: string | null;
   /** A forced re-read is in flight while the previous rows stay on screen. */
   reloading: boolean;
+  /** The cluster's reason for rejecting the label selector; the previous rows stay on screen. */
+  filterError: string | null;
+}
+
+export interface K8sListSort {
+  /** Server column name. */
+  column: string;
+  dir: "asc" | "desc";
+}
+
+/** What a list tab remembers while its page is unmounted; keyed by typeKey. `sort` null = name ascending. */
+export interface K8sListView {
+  filter: string;
+  sort: K8sListSort | null;
+  autoRefresh: boolean;
+}
+
+const DEFAULT_LIST_VIEW: K8sListView = { filter: "", sort: null, autoRefresh: false };
+
+/** A filter containing `=` is a label selector handled by the cluster; anything else filters names locally. */
+export function labelSelectorOf(filter: string): string {
+  return filter.includes("=") ? filter.trim() : "";
 }
 
 /**
@@ -93,6 +115,8 @@ export interface K8sClusterState {
   collapsed: string[];
   refreshing: boolean;
 }
+
+export { DEFAULT_LIST_VIEW };
 
 export const OVERVIEW_TAB_ID = "overview";
 
@@ -137,6 +161,8 @@ interface K8sStoreState {
   /** Legacy pod detail (GetK8sPodDetail) keyed `<ns>/<pod>`, until the generic detail replaces it. */
   podDetails: Record<number, Record<string, Loadable<PodDetail>>>;
   logTabs: Record<number, Record<string, LogTabState>>;
+  /** Filter / sort / auto-refresh per list tab, `<typeKey>` → view. */
+  listViews: Record<number, Record<string, K8sListView>>;
 
   /** Creates the cluster's state and reads it; a cluster that already has state (page remount) is left as is. */
   initCluster: (assetId: number, defaultNamespace: string) => void;
@@ -147,6 +173,8 @@ interface K8sStoreState {
   toggleCategory: (assetId: number, key: string) => void;
   /** Reads a list unless it is cached (or `force`); pass namespace '' for cluster-scoped types and all namespaces. */
   loadList: (assetId: number, typeKey: string, namespace: string, opts?: { force?: boolean }) => Promise<void>;
+  /** Updates one list tab's filter / sort / auto-refresh (the rest is kept). */
+  setListView: (assetId: number, typeKey: string, patch: Partial<K8sListView>) => void;
   openTab: (assetId: number, tab: K8sInnerTab) => void;
   setActiveTab: (assetId: number, id: string) => void;
   /** Closes tabs (the overview tab never closes); `activate` picks the tab to show afterwards. */
@@ -247,6 +275,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
     lists: {},
     podDetails: {},
     logTabs: {},
+    listViews: {},
 
     initCluster: (assetId, defaultNamespace) => {
       if (get().clusters[assetId]) return;
@@ -302,8 +331,9 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
       setEntry(
         prev?.status === "ready"
           ? { ...prev, reloading: true }
-          : { status: "loading", columns: [], rows: [], error: null, reloading: false }
+          : { status: "loading", columns: [], rows: [], error: null, reloading: false, filterError: null }
       );
+      const labelSelector = labelSelectorOf((get().listViews[assetId]?.[typeKey] ?? DEFAULT_LIST_VIEW).filter);
       const version = apiVersionOf(cluster, typeKey);
       const [group, resource] = typeKey.split("/");
       try {
@@ -314,24 +344,45 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
           version,
           resource,
           namespace,
-          labelSelector: "",
+          labelSelector,
           fieldSelector: "",
           includeObject: false,
         });
         if (!isCurrent(assetId, slot, token)) return;
         const data = JSON.parse(result) as K8sResourceList;
-        setEntry({ status: "ready", columns: data.columns, rows: data.rows, error: null, reloading: false });
+        setEntry({
+          status: "ready",
+          columns: data.columns,
+          rows: data.rows,
+          error: null,
+          reloading: false,
+          filterError: null,
+        });
       } catch (e) {
         if (!isCurrent(assetId, slot, token)) return;
+        // A rejected selector isn't a failed list: the rows already shown stay, the reason goes under the filter.
+        if (labelSelector && prev?.status === "ready") {
+          setEntry({ ...prev, reloading: false, filterError: errorMessage(e) });
+          return;
+        }
         setEntry({
           status: "error",
           columns: prev?.columns ?? [],
           rows: prev?.rows ?? [],
           error: errorMessage(e),
           reloading: false,
+          filterError: null,
         });
       }
     },
+
+    setListView: (assetId, typeKey, patch) =>
+      set((s) => {
+        if (!s.clusters[assetId]) return s;
+        const views = s.listViews[assetId] ?? {};
+        const next = { ...(views[typeKey] ?? DEFAULT_LIST_VIEW), ...patch };
+        return { listViews: { ...s.listViews, [assetId]: { ...views, [typeKey]: next } } };
+      }),
 
     openTab: (assetId, tab) =>
       patchCluster(assetId, (c) => ({
@@ -472,6 +523,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
           lists: without(s.lists),
           podDetails: without(s.podDetails),
           logTabs: without(s.logTabs),
+          listViews: without(s.listViews),
         };
       });
     },

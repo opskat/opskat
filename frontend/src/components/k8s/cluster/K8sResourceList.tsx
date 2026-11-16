@@ -1,9 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { RefreshCw } from "lucide-react";
-import { Button, cn } from "@opskat/ui";
+import { RefreshCw, Search } from "lucide-react";
+import { Button, Input, Switch, cn } from "@opskat/ui";
 import { AsyncState } from "@/components/common/AsyncState";
 import {
+  DEFAULT_LIST_VIEW,
+  labelSelectorOf,
   listKey,
   resourceTabId,
   typeKeyOf,
@@ -12,10 +14,11 @@ import {
   type K8sResourceRow,
 } from "@/stores/k8sStore";
 import { KindIcon, kindLabel } from "./kindMeta";
-import { K8sResourceTable } from "./K8sResourceTable";
+import { K8sResourceGrid } from "./K8sResourceGrid";
+import { visibleRows } from "./listModel";
 
-// Pod rows open the legacy pod detail until the generic resource detail replaces it.
-const POD_TYPE_KEY = "/pods";
+const AUTO_REFRESH_MS = 5000;
+const SELECTOR_DEBOUNCE_MS = 300;
 
 interface Props {
   assetId: number;
@@ -75,23 +78,58 @@ function LoadedTypeList({
   const entry = useK8sStore((s) => s.lists[assetId]?.[listKey(typeKey, ns)]);
   const loadList = useK8sStore((s) => s.loadList);
   const openTab = useK8sStore((s) => s.openTab);
+  const setListView = useK8sStore((s) => s.setListView);
+  const view = useK8sStore((s) => s.listViews[assetId]?.[typeKey]) ?? DEFAULT_LIST_VIEW;
 
   useEffect(() => {
     void loadList(assetId, typeKey, ns);
   }, [assetId, typeKey, ns, loadList]);
 
+  // The label selector goes to the cluster, so a changed one re-reads the list — once typing pauses.
+  const selector = labelSelectorOf(view.filter);
+  const appliedSelector = useRef(selector);
+  useEffect(() => {
+    if (selector === appliedSelector.current) return;
+    const timer = setTimeout(() => {
+      appliedSelector.current = selector;
+      void loadList(assetId, typeKey, ns, { force: true });
+    }, SELECTOR_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [selector, assetId, typeKey, ns, loadList]);
+
+  // The list tab is only mounted while it is the active inner tab of a mounted page, so the interval's
+  // lifetime is exactly "visible".
+  useEffect(() => {
+    if (!view.autoRefresh) return;
+    const timer = setInterval(() => {
+      if (useK8sStore.getState().lists[assetId]?.[listKey(typeKey, ns)]?.reloading) return;
+      void loadList(assetId, typeKey, ns, { force: true });
+    }, AUTO_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [view.autoRefresh, assetId, typeKey, ns, loadList]);
+
   const reload = () => void loadList(assetId, typeKey, ns, { force: true });
   const busy = !entry || entry.status === "loading" || entry.reloading;
-  const openRow =
-    typeKey === POD_TYPE_KEY
-      ? (row: K8sResourceRow) =>
-          openTab(assetId, { id: resourceTabId(typeKey, row.namespace, row.name), label: row.name })
-      : undefined;
+  const openRow = (row: K8sResourceRow) =>
+    openTab(assetId, { id: resourceTabId(typeKey, row.namespace, row.name), label: row.name });
+
+  const rows = useMemo(
+    () => (entry ? visibleRows(entry.columns, entry.rows, view.filter, view.sort) : []),
+    [entry, view.filter, view.sort]
+  );
+  const sort = view.sort ?? { column: entry?.columns[0]?.name ?? "", dir: "asc" as const };
+  const sortBy = (column: string) =>
+    setListView(assetId, typeKey, {
+      sort: sort.column === column ? { column, dir: sort.dir === "asc" ? "desc" : "asc" } : { column, dir: "asc" },
+    });
+
   const empty =
-    entry?.status === "ready" && entry.rows.length === 0
-      ? ns
-        ? t("asset.k8sEmptyInNamespace", { namespace: ns, kind: label })
-        : t("asset.k8sEmpty", { kind: label })
+    entry?.status === "ready" && rows.length === 0
+      ? entry.rows.length > 0
+        ? t("asset.k8sNoMatch")
+        : ns
+          ? t("asset.k8sEmptyInNamespace", { namespace: ns, kind: label })
+          : t("asset.k8sEmpty", { kind: label })
       : undefined;
 
   return (
@@ -102,25 +140,54 @@ function LoadedTypeList({
         {apiVersion && (
           <span className="rounded-sm bg-muted px-1.5 font-mono text-[11px] text-muted-foreground">{apiVersion}</span>
         )}
-        {entry?.status === "ready" && <span className="text-[11px] text-muted-foreground">{entry.rows.length}</span>}
+        {entry?.status === "ready" && <span className="text-[11px] text-muted-foreground">{rows.length}</span>}
         {namespace !== null && (
           <span className="rounded-sm border px-1.5 font-mono text-[11px] text-muted-foreground">
             {namespace || t("asset.k8sAllNamespaces")}
           </span>
         )}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="ml-auto h-7 w-7"
-          onClick={reload}
-          disabled={busy}
-          title={t("action.refresh")}
-          aria-label={t("action.refresh")}
-        >
-          <RefreshCw className={cn("h-3.5 w-3.5", busy && "animate-spin")} />
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={view.filter}
+              onChange={(e) => setListView(assetId, typeKey, { filter: e.target.value })}
+              placeholder={t("asset.k8sFilterPlaceholder")}
+              aria-label={t("asset.k8sFilterPlaceholder")}
+              className="h-7 w-56 pl-7 text-xs"
+            />
+            {entry?.filterError && (
+              <p
+                role="alert"
+                className="absolute right-0 top-full z-20 mt-1 max-w-96 whitespace-pre-wrap break-words rounded-md border bg-popover px-2 py-1 font-mono text-xs text-destructive shadow-md select-text"
+              >
+                {entry.filterError}
+              </p>
+            )}
+          </div>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Switch
+              checked={view.autoRefresh}
+              onCheckedChange={(autoRefresh) => setListView(assetId, typeKey, { autoRefresh })}
+              aria-label={t("asset.k8sAutoRefresh")}
+              className="scale-75"
+            />
+            {t("asset.k8sAutoRefresh")}
+          </label>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={reload}
+            disabled={busy}
+            title={t("action.refresh")}
+            aria-label={t("action.refresh")}
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", busy && "animate-spin")} />
+          </Button>
+        </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="min-h-0 flex-1">
         <AsyncState
           status={entry?.status ?? "loading"}
           error={entry?.error}
@@ -128,7 +195,17 @@ function LoadedTypeList({
           empty={empty}
           className="h-full"
         >
-          {entry && <K8sResourceTable columns={entry.columns} rows={entry.rows} onOpen={openRow} />}
+          {entry && (
+            <K8sResourceGrid
+              assetId={assetId}
+              typeKey={typeKey}
+              columns={entry.columns}
+              rows={rows}
+              sort={sort}
+              onSort={sortBy}
+              onOpen={openRow}
+            />
+          )}
         </AsyncState>
       </div>
     </div>
