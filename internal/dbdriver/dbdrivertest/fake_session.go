@@ -404,8 +404,14 @@ func (s *FakeSession) ExecuteBatch(_ context.Context, req dbdriver.BatchRequest)
 	if err := s.tableCall(TableCall{Op: "batch", Database: req.Database, Table: req.Table, Batch: &req}); err != nil {
 		return nil, err
 	}
+	return s.runStatements(req.Statements, req.Atomic, req.ContinueOnError), nil
+}
+
+// runStatements 按次序执行每条非空白语句（记进 Statements，每条写语句改动表里的每一行）；
+// Fake.StatementErrors 里的语句失败。atomic 的批停在失败的那条并报告回滚，否则按 continueOnError。
+func (s *FakeSession) runStatements(statements []string, atomic, continueOnError bool) *dbdriver.BatchResult {
 	result := &dbdriver.BatchResult{Executed: []dbdriver.BatchStatement{}}
-	for index, statement := range req.Statements {
+	for index, statement := range statements {
 		if strings.TrimSpace(statement) == "" {
 			continue
 		}
@@ -415,19 +421,69 @@ func (s *FakeSession) ExecuteBatch(_ context.Context, req dbdriver.BatchRequest)
 		}
 		if err != nil {
 			result.Executed = append(result.Executed, dbdriver.BatchStatement{Index: index, Error: err.Error()})
-			if req.Atomic {
+			if atomic {
 				result.RolledBack = true
 				break
 			}
-			if !req.ContinueOnError {
+			if !continueOnError {
 				break
 			}
 			continue
 		}
 		result.Executed = append(result.Executed, dbdriver.BatchStatement{Index: index, AffectedRows: int64(len(s.fake.Rows))})
 	}
-	return result, nil
+	return result
 }
+
+// RunScript 记下收到的请求（Op "script"），经 dbdriver.RunScript 的编排运行 SQL 文件：假库的切分只认
+// 分号（不认引号与注释），语句像 ExecuteBatch 那样逐条执行（记进 Statements，Fake.StatementErrors 里的
+// 失败）。驱动没有声明 CapRunSQLFile 时以 ErrUnsupported 拒绝，什么也不记、不执行。
+func (s *FakeSession) RunScript(ctx context.Context, req dbdriver.ScriptRequest) (*dbdriver.ScriptResult, error) {
+	if !s.fake.Desc.Supports(dbdriver.CapRunSQLFile) {
+		return nil, fmt.Errorf("%w: %s does not declare running SQL files", dbdriver.ErrUnsupported, s.fake.Desc.ID)
+	}
+	if err := s.tableCall(TableCall{Op: "script", Database: req.Database}); err != nil {
+		return nil, err
+	}
+	return dbdriver.RunScript(ctx, req, fakeScriptRunner{s})
+}
+
+// fakeScriptRunner 是假库运行 SQL 文件的钩子。假库只有一条「连接」：执行器就是会话本身。
+type fakeScriptRunner struct{ s *FakeSession }
+
+// SplitScript 在每个分号处切分；语句从去掉前导空白处算起。
+func (fakeScriptRunner) SplitScript(_ context.Context, chunk dbdriver.ScriptChunk) (*dbdriver.ScriptSplit, error) {
+	split := &dbdriver.ScriptSplit{Statements: []dbdriver.ScriptStatement{}, State: chunk.State}
+	emit := func(start, end int) {
+		text := strings.TrimSpace(chunk.Text[start:end])
+		if text != "" {
+			split.Statements = append(split.Statements, dbdriver.ScriptStatement{
+				Text: text, Offset: start + strings.Index(chunk.Text[start:end], text),
+			})
+		}
+	}
+	for i := 0; i < len(chunk.Text); i++ {
+		if chunk.Text[i] == ';' {
+			emit(split.Consumed, i)
+			split.Consumed = i + 1
+		}
+	}
+	if chunk.Final {
+		emit(split.Consumed, len(chunk.Text))
+		split.Consumed = len(chunk.Text)
+	}
+	return split, nil
+}
+
+func (r fakeScriptRunner) OpenScriptExecutor(context.Context, string) (dbdriver.ScriptExecutor, error) {
+	return r, nil
+}
+
+func (r fakeScriptRunner) ExecuteScriptBatch(_ context.Context, batch dbdriver.ScriptBatch) (*dbdriver.BatchResult, error) {
+	return r.s.runStatements(batch.Statements, false, batch.ContinueOnError), nil
+}
+
+func (fakeScriptRunner) Close() error { return nil }
 
 func (s *FakeSession) page(page dbdriver.Page) *dbdriver.RowSet {
 	start := min(page.Index*page.Size, len(s.fake.Rows))

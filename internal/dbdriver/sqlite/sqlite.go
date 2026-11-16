@@ -35,6 +35,7 @@ var descriptor = dbdriver.Descriptor{
 		dbdriver.CapViews, dbdriver.CapTriggers,
 		dbdriver.CapGridEdit, dbdriver.CapCreateTable, dbdriver.CapAlterTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable,
 		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly,
+		dbdriver.CapRunSQLFile,
 	},
 	CanDisableForeignKeyChecks: true,
 	// 没有主键的表按 rowid 定位单行。

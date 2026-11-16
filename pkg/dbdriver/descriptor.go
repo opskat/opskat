@@ -790,6 +790,9 @@ const (
 	// CapClassifyStatements：驱动自己切分并分类 SQL（StatementClassifier，经 ClassifyStatements
 	// 取用），AI / opsctl 的权限判断与查询面板按它的结果，而不是宿主通用的 SQL 解析。
 	CapClassifyStatements Capability = "classify_statements"
+	// CapRunSQLFile：运行 SQL 文件（Session.RunScript）——按驱动自己的写法把文件切成语句，在一条连接上
+	// 逐条执行。
+	CapRunSQLFile Capability = "run_sql_file"
 )
 
 // Capabilities 是全部已知的功能。
@@ -798,7 +801,7 @@ func Capabilities() []Capability {
 		CapSchemas, CapCreateDatabase, CapViewDDL,
 		CapViews, CapProcedures, CapFunctions, CapTriggers,
 		CapGridEdit, CapCreateTable, CapAlterTable, CapDropTable, CapTruncateTable,
-		CapImport, CapExportSQL, CapCopySQL, CapReadOnly, CapClassifyStatements,
+		CapImport, CapExportSQL, CapCopySQL, CapReadOnly, CapClassifyStatements, CapRunSQLFile,
 	}
 }
 

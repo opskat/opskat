@@ -272,6 +272,12 @@ type Session interface {
 	// 返回 error；此前已经执行过语句的，同时返回记着它们的结果。
 	ExecuteBatch(ctx context.Context, req BatchRequest) (*BatchResult, error)
 
+	// RunScript 运行一个 SQL 文件（见 ScriptRequest）：文件里的语句按文件的次序、在 req.Database 上的同一
+	// 条连接里逐条执行、各自提交，前面设置的会话状态对后面的语句有效。驱动给出切分与执行两个钩子
+	// （ScriptRunner），编排（编码检查、边读边切、按批执行、进度与停下）用 RunScript，各驱动一样。驱动没有
+	// 声明 CapRunSQLFile 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	RunScript(ctx context.Context, req ScriptRequest) (*ScriptResult, error)
+
 	// Close 释放会话占用的一切（连接、文件锁、远端文件系统）。
 	io.Closer
 }

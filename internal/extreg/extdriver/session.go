@@ -959,6 +959,13 @@ func (s *driverSession) ExecuteBatch(ctx context.Context, req dbdriver.BatchRequ
 	return forwardRequest[*dbdriver.BatchResult](ctx, s, extwire.DriverOpExecuteBatch, extwire.DriverArgs{}, req)
 }
 
+// RunScript: host ABI 1.0 has no wire operations for running SQL files, and the host
+// refuses extension drivers that declare dbdriver.CapRunSQLFile, so it is refused
+// without calling into the guest.
+func (s *driverSession) RunScript(context.Context, dbdriver.ScriptRequest) (*dbdriver.ScriptResult, error) {
+	return nil, fmt.Errorf("%w: extension drivers cannot run SQL files", dbdriver.ErrUnsupported)
+}
+
 // Close closes the session: its idle instances now, side by side — the session in
 // the guest, then whatever connection it left open — and each instance still held by an
 // operation or a cursor once that lets go of it. Operations waiting for an

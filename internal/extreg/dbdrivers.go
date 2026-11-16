@@ -25,7 +25,9 @@ func (dbDriversPoint) Key() string { return extwire.KeyDatabaseDrivers }
 // the descriptor is what the code implements, and they may not disagree. It runs
 // for an extension that describes no driver too — the manifest may still declare
 // one. A driver that declares the Kerberos field group (dbdriver.FieldKerberos) asks
-// the host for tickets, which the user audits as permissions.kerberos.
+// the host for tickets, which the user audits as permissions.kerberos. Running SQL
+// files (dbdriver.CapRunSQLFile) has no wire operations in the host ABI, so a driver
+// declaring it is refused.
 func (dbDriversPoint) Check(v extension.ExtensionView) error {
 	var drivers []dbdriver.Descriptor
 	if err := decodeContribution(v, extwire.KeyDatabaseDrivers, &drivers); err != nil {
@@ -40,6 +42,10 @@ func (dbDriversPoint) Check(v extension.ExtensionView) error {
 		id := string(drv.ID)
 		if err := fitsNetworkRules(drv); err != nil {
 			return fmt.Errorf("databaseDrivers[%s]: %w", id, err)
+		}
+		if drv.Supports(dbdriver.CapRunSQLFile) {
+			return fmt.Errorf("databaseDrivers[%s]: database driver %q declares capability %q, which extension drivers cannot provide",
+				id, id, dbdriver.CapRunSQLFile)
 		}
 		if _, dup := described[id]; dup {
 			return fmt.Errorf("databaseDrivers[%s]: duplicate driver %q", id, id)

@@ -37,7 +37,8 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //     没有声明的功能必须以 dbdriver.ErrUnsupported 拒绝：连接级只读，没有声明的对象类型
 //     的浏览（ObjectSource），没有声明表格编辑时的表格编辑语句（GridEditStatements），没有声明
 //     改表时的改表（AlterTableModel / AlterTableStatements），没有声明导入时的导入语句（ImportStatements），没有声明导出 / 复制为 SQL 时的行语句（PrepareRowStatements），没有声明建表、删表、清空、建库时的对应语句（声明了的
-//     必须给出语句），以及
+//     必须给出语句），没有声明运行 SQL 文件时的 RunScript（声明了的必须能运行 ConformanceScript 并停在
+//     失败的语句上），以及
 //     没有声明 CanDisableForeignKeyChecks 时整批执行里的关闭外键检查，且拒绝时不能执行任何语句。
 //     表设计器的列能力（ExplicitDefaults、AutoIncrement）与索引编辑（IndexEditing）同样按声明检查：建表时
 //     声明了的必须给出语句、没声明的以 ErrUnsupported 拒绝，改表时没声明的在读表之前拒绝（见
@@ -116,10 +117,39 @@ func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 		}
 	}
 
+	problems = append(problems, scriptProblems(ctx, desc, s)...)
+
 	if err := s.Close(); err != nil {
 		problems = append(problems, fmt.Sprintf("Close: %v", err))
 	}
 	return problems
+}
+
+// ConformanceScript 是一致性测试运行的 SQL 文件：第二条语句是必然失败的 ConformanceFailingStatement，
+// 不继续的运行必须停在它（第 2 条、第 2 行），第三条不执行。会话工厂据此准备桩。
+const ConformanceScript = ConformanceStatement + ";\n" + ConformanceFailingStatement + ";\n" + ConformanceStatement + ";\n"
+
+// scriptProblems 检查声明了运行 SQL 文件的驱动：ConformanceScript 要能运行，并停在失败的那条语句上
+// 报出它的条号与行号。没有声明的由 undeclaredObjectProblems 在任何语句之前检查。
+func scriptProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
+	if !desc.Supports(dbdriver.CapRunSQLFile) {
+		return nil
+	}
+	result, err := s.RunScript(ctx, dbdriver.ScriptRequest{
+		Script: strings.NewReader(ConformanceScript), Size: int64(len(ConformanceScript)),
+	})
+	switch {
+	case err != nil:
+		return []string{fmt.Sprintf("RunScript: declared %q but the script failed to run: %v", dbdriver.CapRunSQLFile, err)}
+	case result.Failure == nil:
+		return []string{fmt.Sprintf("RunScript: the run did not stop at the failing statement %q", ConformanceFailingStatement)}
+	case result.Failure.Number != 2 || result.Failure.Line != 2 || result.Failure.Error == "":
+		return []string{fmt.Sprintf("RunScript: the failure must name statement 2 on line 2 with the database's error, got %+v", *result.Failure)}
+	case result.Succeeded != 1 || result.Failed != 1:
+		return []string{fmt.Sprintf("RunScript: a run stopping at the second statement executes one statement and fails one, got %d succeeded and %d failed",
+			result.Succeeded, result.Failed)}
+	}
+	return nil
 }
 
 // schemaWriteProblems 检查建表、删表、清空、建库的语句生成（只生成、不执行，所以不需要数据）：
@@ -301,7 +331,7 @@ func indexFeatureProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdri
 }
 
 // undeclaredObjectProblems 检查没有声明的功能都被以 ErrUnsupported 拒绝：对象类型的
-// ObjectSource、查看建表语句、表格编辑、改表、导入与行语句，以及整批执行里的关闭外键检查。
+// ObjectSource、查看建表语句、表格编辑、改表、导入、行语句与运行 SQL 文件，以及整批执行里的关闭外键检查。
 func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	var problems []string
 	for _, objType := range objectTypes {
@@ -324,6 +354,14 @@ func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s d
 		})
 		if !errors.Is(err, dbdriver.ErrUnsupported) {
 			problems = append(problems, fmt.Sprintf("ExecuteBatch: the driver does not declare canDisableForeignKeyChecks, so disabling them must be refused with ErrUnsupported, got: %v", err))
+		}
+	}
+	if !desc.Supports(dbdriver.CapRunSQLFile) {
+		_, err := s.RunScript(ctx, dbdriver.ScriptRequest{
+			Script: strings.NewReader(ConformanceStatement), Size: int64(len(ConformanceStatement)),
+		})
+		if !errors.Is(err, dbdriver.ErrUnsupported) {
+			problems = append(problems, fmt.Sprintf("RunScript: the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", dbdriver.CapRunSQLFile, err))
 		}
 	}
 	if !desc.Supports(dbdriver.CapGridEdit) {

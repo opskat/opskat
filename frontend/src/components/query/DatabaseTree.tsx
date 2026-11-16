@@ -18,6 +18,7 @@ import {
   Trash2,
   Eraser,
   Columns3,
+  FileInput,
 } from "lucide-react";
 import {
   Button,
@@ -47,8 +48,9 @@ import { useShallow } from "zustand/shallow";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
+import { RunSqlFileDialog } from "./RunSqlFileDialog";
 import { ObjectBrowserSection } from "./ObjectBrowserSection";
-import { useCanCreateTable, useDesignerAccess } from "./designer/access";
+import { useAssetReadOnly, useCanCreateTable, useDesignerAccess } from "./designer/access";
 import { defaultCreateTarget, targetLabel, targetOfTable, type CreateTableTarget } from "./designer/createTarget";
 import {
   OBJECT_BROWSER_CAPABILITIES,
@@ -170,6 +172,8 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   );
   const treeRef = useRef<HTMLDivElement>(null);
   const [showCreateDatabase, setShowCreateDatabase] = useState(false);
+  // 正在「运行 SQL 文件」的库;null 表示对话框没开。
+  const [runSqlFileDatabase, setRunSqlFileDatabase] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     type: "drop" | "truncate";
     targets: TableRef[];
@@ -191,6 +195,8 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const access = useDesignerAccess(driverDescriptor, tabMeta?.assetId);
   // 驱动没声明建表或资产是只读连接时,新建表的入口一个都不出现。
   const canCreateTable = useCanCreateTable(driverDescriptor, tabMeta?.assetId);
+  // 资产设为只读连接时「运行 SQL 文件…」仍显示但置灰:有的驱动的连接级只读并不生效。
+  const assetReadOnly = useAssetReadOnly(tabMeta?.assetId);
   const defaultDatabase = tabMeta?.defaultDatabase ?? "";
   const openNewTable = (target: CreateTableTarget) => openCreateTableTab(tabId, target.database, target.schema);
 
@@ -719,6 +725,18 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                           {t("query.newTable")}
                         </ContextMenuItem>
                       )}
+                      {can("run_sql_file") && (
+                        <div title={assetReadOnly ? t("query.runSqlFileReadOnlyHint") : undefined}>
+                          <ContextMenuItem
+                            data-testid="database-run-sql-file"
+                            disabled={assetReadOnly}
+                            onClick={() => setRunSqlFileDatabase(db)}
+                          >
+                            <FileInput className="h-3.5 w-3.5" />
+                            {t("query.runSqlFile")}
+                          </ContextMenuItem>
+                        </div>
+                      )}
                       <ContextMenuSeparator />
                       <ContextMenuItem
                         onClick={() => {
@@ -886,6 +904,22 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
         options={driverDescriptor?.createDatabaseOptions ?? []}
         onSuccess={() => loadDatabases(tabId)}
       />
+
+      {runSqlFileDatabase !== null && tabMeta && (
+        <RunSqlFileDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setRunSqlFileDatabase(null);
+          }}
+          assetId={tabMeta.assetId}
+          assetName={tabMeta.assetName}
+          database={runSqlFileDatabase}
+          onFinished={() => {
+            dropSelectionUnder(`${runSqlFileDatabase}.`);
+            refreshTables(tabId, runSqlFileDatabase);
+          }}
+        />
+      )}
 
       <ConfirmDialog
         open={!!confirmAction}
