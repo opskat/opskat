@@ -1,0 +1,44 @@
+import { useTranslation } from "react-i18next";
+import { Copy, Pencil } from "lucide-react";
+import { Button } from "@opskat/ui";
+import { notifyCopied } from "@/lib/notify";
+import type { K8sActionContext } from "../actions";
+
+/** Read-only YAML (the cluster read already omits managedFields); 「编辑」 only exists once an edit handler is registered. */
+export function K8sYamlTab({
+  yaml,
+  context,
+  onEdit,
+}: {
+  yaml: string;
+  context: K8sActionContext;
+  onEdit: ((ctx: K8sActionContext) => void) | null;
+}) {
+  const { t } = useTranslation();
+  const copy = async () => {
+    await navigator.clipboard.writeText(yaml);
+    notifyCopied(t("action.copied"));
+  };
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={() => void copy()}>
+          <Copy className="h-3 w-3" />
+          {t("action.copy")}
+        </Button>
+        {onEdit && (
+          <Button variant="outline" size="sm" onClick={() => onEdit(context)}>
+            <Pencil className="h-3 w-3" />
+            {t("asset.k8sEditYaml")}
+          </Button>
+        )}
+      </div>
+      <pre
+        data-testid="k8s-yaml"
+        className="select-text overflow-auto whitespace-pre rounded-lg bg-muted/50 p-3 font-mono text-xs"
+      >
+        {yaml}
+      </pre>
+    </div>
+  );
+}

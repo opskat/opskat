@@ -1,5 +1,12 @@
 import { create } from "zustand";
-import { GetK8sClusterVersion, GetK8sPodDetail, GetK8sResourceTypes, ListK8sResources } from "../../wailsjs/go/k8s/K8s";
+import {
+  GetK8sClusterVersion,
+  GetK8sPodDetail,
+  GetK8sResource,
+  GetK8sResourceTypes,
+  ListK8sEvents,
+  ListK8sResources,
+} from "../../wailsjs/go/k8s/K8s";
 import { errorMessage } from "@/lib/errorMessage";
 import type { PodDetail } from "@/components/k8s/cluster/types";
 import type { LogTabState, LogTabStateUpdate } from "@/components/k8s/k8sLogState";
@@ -44,6 +51,27 @@ export interface K8sResourceRow {
   ownerReferences: { apiVersion: string; kind: string; name: string; controller: boolean }[];
   cells: unknown[];
   object?: Record<string, unknown>;
+}
+
+/** GetK8sResource result; `notFound` = deleted since it was opened (object / yaml are then empty). */
+export interface K8sResourceDetail {
+  notFound: boolean;
+  object: Record<string, unknown> | null;
+  yaml: string;
+}
+
+export interface K8sEvent {
+  type: string;
+  reason: string;
+  message: string;
+  count: number;
+  lastTimestamp: string;
+}
+
+/** One open detail tab: the resource and its events are separate regions so either can fail alone. */
+export interface K8sDetailEntry {
+  resource: Loadable<K8sResourceDetail>;
+  events: Loadable<K8sEvent[]>;
 }
 
 interface K8sResourceList {
@@ -146,6 +174,13 @@ export function podDetailKey(namespace: string, pod: string) {
 }
 
 /** The pod detail a legacy pod detail (`res:/pods:<ns>:<pod>`) or log (`log:<ns>:<pod>`) tab shows. */
+/** Splits a `res:<typeKey>:<ns>:<name>` tab id. */
+export function parseResourceTabId(id: string): { typeKey: string; namespace: string; name: string } | null {
+  if (!id.startsWith("res:")) return null;
+  const [, typeKey, namespace, name] = id.split(":");
+  return name === undefined ? null : { typeKey, namespace, name };
+}
+
 function podKeyOfTab(id: string): string | null {
   const rest = id.startsWith("res:/pods:") ? id.slice("res:/pods:".length) : id.startsWith("log:") ? id.slice(4) : null;
   if (rest === null) return null;
@@ -161,6 +196,8 @@ interface K8sStoreState {
   /** Legacy pod detail (GetK8sPodDetail) keyed `<ns>/<pod>`, until the generic detail replaces it. */
   podDetails: Record<number, Record<string, Loadable<PodDetail>>>;
   logTabs: Record<number, Record<string, LogTabState>>;
+  /** Generic resource details keyed by their `res:` inner tab id. */
+  details: Record<number, Record<string, K8sDetailEntry>>;
   /** Filter / sort / auto-refresh per list tab, `<typeKey>` → view. */
   listViews: Record<number, Record<string, K8sListView>>;
 
@@ -175,6 +212,8 @@ interface K8sStoreState {
   loadList: (assetId: number, typeKey: string, namespace: string, opts?: { force?: boolean }) => Promise<void>;
   /** Updates one list tab's filter / sort / auto-refresh (the rest is kept). */
   setListView: (assetId: number, typeKey: string, patch: Partial<K8sListView>) => void;
+  /** Reads a resource detail and its events unless cached (or `force`); only the manual / action paths force. */
+  loadDetail: (assetId: number, tabId: string, opts?: { force?: boolean }) => Promise<void>;
   openTab: (assetId: number, tab: K8sInnerTab) => void;
   setActiveTab: (assetId: number, id: string) => void;
   /** Closes tabs (the overview tab never closes); `activate` picks the tab to show afterwards. */
@@ -275,6 +314,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
     lists: {},
     podDetails: {},
     logTabs: {},
+    details: {},
     listViews: {},
 
     initCluster: (assetId, defaultNamespace) => {
@@ -376,6 +416,72 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
       }
     },
 
+    loadDetail: async (assetId, tabId, opts) => {
+      const cluster = get().clusters[assetId];
+      const ref = parseResourceTabId(tabId);
+      if (!cluster || !ref) return;
+      const prev = get().details[assetId]?.[tabId];
+      if (prev && !opts?.force) return;
+      const patchEntry = (patch: (e: K8sDetailEntry) => Partial<K8sDetailEntry>) =>
+        set((s) => {
+          const entry = s.details[assetId]?.[tabId];
+          if (!s.clusters[assetId] || !entry) return s;
+          return {
+            details: { ...s.details, [assetId]: { ...s.details[assetId], [tabId]: { ...entry, ...patch(entry) } } },
+          };
+        });
+
+      const slot = `detail:${tabId}`;
+      const token = begin(assetId, slot);
+      set((s) => ({
+        details: {
+          ...s.details,
+          [assetId]: {
+            ...s.details[assetId],
+            [tabId]: {
+              resource: pending(prev?.resource),
+              events: prev?.events ?? { status: "loading", error: null },
+            },
+          },
+        },
+      }));
+      const version = apiVersionOf(cluster, ref.typeKey);
+      const [group, resource] = ref.typeKey.split("/");
+      let detail: K8sResourceDetail;
+      try {
+        if (!version) throw new Error(`unknown resource type ${ref.typeKey}`);
+        detail = JSON.parse(
+          await GetK8sResource({
+            assetId,
+            group,
+            version,
+            resource,
+            namespace: ref.namespace,
+            name: ref.name,
+          } as never)
+        ) as K8sResourceDetail;
+      } catch (e) {
+        if (!isCurrent(assetId, slot, token)) return;
+        patchEntry((en) => ({ resource: { ...en.resource, status: "error", error: errorMessage(e) } }));
+        return;
+      }
+      if (!isCurrent(assetId, slot, token)) return;
+      patchEntry(() => ({ resource: { status: "ready", data: detail, error: null } }));
+      if (detail.notFound || !detail.object) return;
+
+      const uid = (detail.object.metadata as { uid?: string } | undefined)?.uid ?? "";
+      try {
+        const result = JSON.parse(
+          await ListK8sEvents({ assetId, namespace: ref.namespace, involvedUid: uid, warningOnly: false } as never)
+        ) as { events: K8sEvent[] };
+        if (!isCurrent(assetId, slot, token)) return;
+        patchEntry(() => ({ events: { status: "ready", data: result.events, error: null } }));
+      } catch (e) {
+        if (!isCurrent(assetId, slot, token)) return;
+        patchEntry((en) => ({ events: { ...en.events, status: "error", error: errorMessage(e) } }));
+      }
+    },
+
     setListView: (assetId, typeKey, patch) =>
       set((s) => {
         if (!s.clusters[assetId]) return s;
@@ -410,7 +516,13 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         const cluster = s.clusters[assetId];
         if (!cluster) return s;
         const logs = { ...s.logTabs[assetId] };
-        for (const id of closing) delete logs[id];
+        const resDetails = { ...s.details[assetId] };
+        for (const id of closing) {
+          delete logs[id];
+          // Dropped with its tab, so reopening reads it afresh and the top refresh stops re-reading it.
+          delete resDetails[id];
+          tokens.delete(`${assetId}|detail:${id}`);
+        }
         // A pod detail is read for its detail / log tabs; once none is open it is dropped, so opening it again
         // reads it afresh and the top refresh doesn't keep re-reading it.
         const shown = new Set(cluster.tabs.map((t) => podKeyOfTab(t.id)));
@@ -421,6 +533,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         }
         return {
           logTabs: { ...s.logTabs, [assetId]: logs },
+          details: { ...s.details, [assetId]: resDetails },
           podDetails: { ...s.podDetails, [assetId]: details },
         };
       });
@@ -442,6 +555,9 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
       for (const key of Object.keys(state.podDetails[assetId] ?? {})) {
         const sep = key.indexOf("/");
         reads.push(state.loadPodDetail(assetId, key.slice(0, sep), key.slice(sep + 1), { force: true }));
+      }
+      for (const tabId of Object.keys(state.details[assetId] ?? {})) {
+        reads.push(state.loadDetail(assetId, tabId, { force: true }));
       }
       for (const fn of refreshers.get(assetId)?.values() ?? []) reads.push(fn());
       await Promise.allSettled(reads);
@@ -523,6 +639,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
           lists: without(s.lists),
           podDetails: without(s.podDetails),
           logTabs: without(s.logTabs),
+          details: without(s.details),
           listViews: without(s.listViews),
         };
       });
