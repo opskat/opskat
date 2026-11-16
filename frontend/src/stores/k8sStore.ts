@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import {
+  CountK8sResources,
+  GetK8sClusterHealth,
   GetK8sClusterVersion,
   GetK8sResource,
   GetK8sResourceTypes,
@@ -66,6 +68,36 @@ export interface K8sEvent {
   message: string;
   count: number;
   lastTimestamp: string;
+  involvedObject: { apiVersion: string; kind: string; namespace: string; name: string; uid: string };
+}
+
+/** One row of the overview's 需要关注 list (internal/pkg/k8s/health.go). */
+export interface K8sAttentionItem {
+  group: string;
+  version: string;
+  resource: string;
+  kind: string;
+  namespace: string;
+  name: string;
+  status: string;
+  reason: string;
+}
+
+/** GetK8sClusterHealth result: each section fails on its own (`errors`), a failed type has no abnormal count. */
+export interface K8sClusterHealth {
+  nodes: { total: number; schedulable: number; unschedulable: number; notReady: number; error?: string };
+  pods: { total: number; running: number; pending: number; abnormal: number; error?: string };
+  attention: K8sAttentionItem[];
+  abnormalCounts: Record<string, number>;
+  warningEvents: number;
+  errors: Record<string, string>;
+}
+
+/** A sidebar count: `error` is the reason it could not be read (shown as the hover text of "—"). */
+export interface K8sCount {
+  status: LoadStatus;
+  count?: number;
+  error: string | null;
 }
 
 /** One open detail tab: the resource and its events are separate regions so either can fail alone. */
@@ -113,9 +145,11 @@ export interface K8sListView {
   filter: string;
   sort: K8sListSort | null;
   autoRefresh: boolean;
+  /** Events list only: show every event instead of just the warnings. */
+  showAllEvents: boolean;
 }
 
-const DEFAULT_LIST_VIEW: K8sListView = { filter: "", sort: null, autoRefresh: false };
+const DEFAULT_LIST_VIEW: K8sListView = { filter: "", sort: null, autoRefresh: false, showAllEvents: false };
 
 /** A filter containing `=` is a label selector handled by the cluster; anything else filters names locally. */
 export function labelSelectorOf(filter: string): string {
@@ -202,6 +236,25 @@ export function parseResourceTabId(id: string): { typeKey: string; namespace: st
   return name === undefined ? null : { typeKey, namespace, name };
 }
 
+/** Events cache key: `<namespace>|w` (warnings only) or `<namespace>|a` (all). */
+export function eventsKey(namespace: string, warningOnly: boolean) {
+  return `${namespace}|${warningOnly ? "w" : "a"}`;
+}
+
+/** Cache key of a sidebar count: cluster-scoped types are counted once, so their namespace is ''. */
+export function countKey(typeKey: string, namespace: string) {
+  return `${typeKey}|${namespace}`;
+}
+
+/** The abnormal number next to a type in the sidebar; undefined when there is none to show (not read, or failed). */
+export function abnormalCountOf(health: K8sClusterHealth | undefined, typeKey: string): number | undefined {
+  if (!health) return undefined;
+  if (typeKey === "/events") return health.errors.events ? undefined : health.warningEvents;
+  return health.abnormalCounts[typeKey];
+}
+
+const COUNT_CONCURRENCY = 6;
+
 let terminalSeq = 0;
 
 type Refresher = () => Promise<unknown>;
@@ -219,6 +272,12 @@ interface K8sStoreState {
   listViews: Record<number, Record<string, K8sListView>>;
   /** Pod terminal tabs keyed by their `term:` tab id; removing one ends its session. */
   terminals: Record<number, Record<string, K8sTerminalState>>;
+  /** Overview / sidebar health summary per selected namespace ('' = all). */
+  health: Record<number, Record<string, Loadable<K8sClusterHealth>>>;
+  /** Sidebar counts keyed by `countKey`. */
+  counts: Record<number, Record<string, K8sCount>>;
+  /** Events lists keyed by `eventsKey`. */
+  eventLists: Record<number, Record<string, Loadable<K8sEvent[]>>>;
 
   /** Creates the cluster's state and reads it; a cluster that already has state (page remount) is left as is. */
   initCluster: (assetId: number, defaultNamespace: string) => void;
@@ -233,6 +292,12 @@ interface K8sStoreState {
   setListView: (assetId: number, typeKey: string, patch: Partial<K8sListView>) => void;
   /** Reads a resource detail and its events unless cached (or `force`); only the manual / action paths force. */
   loadDetail: (assetId: number, tabId: string, opts?: { force?: boolean }) => Promise<void>;
+  /** Reads the health summary of a namespace unless it is cached (or `force`). */
+  loadHealth: (assetId: number, namespace: string, opts?: { force?: boolean }) => Promise<void>;
+  /** Counts every discovered type for the selected namespace (bounded concurrency), skipping cached counts unless `force`. */
+  loadCounts: (assetId: number, opts?: { force?: boolean }) => Promise<void>;
+  /** Reads the events of a namespace (warnings only or all) unless cached (or `force`). */
+  loadEvents: (assetId: number, namespace: string, warningOnly: boolean, opts?: { force?: boolean }) => Promise<void>;
   openTab: (assetId: number, tab: K8sInnerTab) => void;
   setActiveTab: (assetId: number, id: string) => void;
   /** Closes tabs (the overview tab never closes); `activate` picks the tab to show afterwards. */
@@ -341,6 +406,9 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
     details: {},
     listViews: {},
     terminals: {},
+    health: {},
+    counts: {},
+    eventLists: {},
 
     initCluster: (assetId, defaultNamespace) => {
       if (get().clusters[assetId]) return;
@@ -518,6 +586,110 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         return { listViews: { ...s.listViews, [assetId]: { ...views, [typeKey]: next } } };
       }),
 
+    loadHealth: async (assetId, namespace, opts) => {
+      if (!get().clusters[assetId]) return;
+      const prev = get().health[assetId]?.[namespace];
+      if (prev && !opts?.force) return;
+      const slot = `health:${namespace}`;
+      const token = begin(assetId, slot);
+      const setEntry = (entry: Loadable<K8sClusterHealth>) =>
+        set((s) => {
+          if (!s.clusters[assetId]) return s;
+          return { health: { ...s.health, [assetId]: { ...s.health[assetId], [namespace]: entry } } };
+        });
+      setEntry(pending(prev));
+      try {
+        const data = JSON.parse(await GetK8sClusterHealth(assetId, namespace)) as K8sClusterHealth;
+        if (!isCurrent(assetId, slot, token)) return;
+        setEntry({ status: "ready", data, error: null });
+      } catch (e) {
+        if (!isCurrent(assetId, slot, token)) return;
+        setEntry({ ...prev, status: "error", error: errorMessage(e) });
+      }
+    },
+
+    loadCounts: async (assetId, opts) => {
+      const cluster = get().clusters[assetId];
+      const types = cluster?.types.data?.types;
+      if (!cluster || !types) return;
+      const namespace = cluster.namespace;
+      const todo = types
+        .map((t) => ({
+          typeKey: typeKeyOf(t),
+          group: t.group,
+          version: t.version,
+          resource: t.resource,
+          ns: t.namespaced ? namespace : "",
+        }))
+        .filter((t) => opts?.force || !get().counts[assetId]?.[countKey(t.typeKey, t.ns)]);
+
+      const setCount = (key: string, count: K8sCount) =>
+        set((s) => {
+          if (!s.clusters[assetId]) return s;
+          return { counts: { ...s.counts, [assetId]: { ...s.counts[assetId], [key]: count } } };
+        });
+
+      const run = async (t: (typeof todo)[number]) => {
+        const key = countKey(t.typeKey, t.ns);
+        const slot = `count:${key}`;
+        const token = begin(assetId, slot);
+        const prev = get().counts[assetId]?.[key];
+        // A count already shown stays while it is re-read.
+        if (prev?.status !== "ready") setCount(key, { status: "loading", error: null });
+        try {
+          const result = JSON.parse(
+            await CountK8sResources({
+              assetId,
+              group: t.group,
+              version: t.version,
+              resource: t.resource,
+              namespace: t.ns,
+              labelSelector: "",
+              fieldSelector: "",
+              includeObject: false,
+              withPhase: false,
+            })
+          ) as { count: number };
+          if (!isCurrent(assetId, slot, token)) return;
+          setCount(key, { status: "ready", count: result.count, error: null });
+        } catch (e) {
+          if (!isCurrent(assetId, slot, token)) return;
+          setCount(key, { status: "error", error: errorMessage(e) });
+        }
+      };
+
+      const queue = [...todo];
+      const worker = async () => {
+        for (let t = queue.shift(); t; t = queue.shift()) await run(t);
+      };
+      await Promise.all(Array.from({ length: Math.min(COUNT_CONCURRENCY, queue.length) }, worker));
+    },
+
+    loadEvents: async (assetId, namespace, warningOnly, opts) => {
+      if (!get().clusters[assetId]) return;
+      const key = eventsKey(namespace, warningOnly);
+      const prev = get().eventLists[assetId]?.[key];
+      if (prev && !opts?.force) return;
+      const slot = `events:${key}`;
+      const token = begin(assetId, slot);
+      const setEntry = (entry: Loadable<K8sEvent[]>) =>
+        set((s) => {
+          if (!s.clusters[assetId]) return s;
+          return { eventLists: { ...s.eventLists, [assetId]: { ...s.eventLists[assetId], [key]: entry } } };
+        });
+      setEntry(pending(prev));
+      try {
+        const result = JSON.parse(await ListK8sEvents({ assetId, namespace, involvedUid: "", warningOnly })) as {
+          events: K8sEvent[];
+        };
+        if (!isCurrent(assetId, slot, token)) return;
+        setEntry({ status: "ready", data: result.events, error: null });
+      } catch (e) {
+        if (!isCurrent(assetId, slot, token)) return;
+        setEntry({ ...prev, status: "error", error: errorMessage(e) });
+      }
+    },
+
     openTab: (assetId, tab) =>
       patchCluster(assetId, (c) => ({
         tabs: c.tabs.some((t) => t.id === tab.id) ? c.tabs : [...c.tabs, tab],
@@ -579,6 +751,27 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
       }
       for (const tabId of Object.keys(state.details[assetId] ?? {})) {
         reads.push(state.loadDetail(assetId, tabId, { force: true }));
+      }
+      // Counts, health and events of namespaces other than the selected one are dropped (they would be stale when
+      // switched back to); the selected namespace is read again.
+      const namespace = state.clusters[assetId].namespace;
+      const keep = <T>(entries: Record<string, T> | undefined, inScope: (key: string) => boolean) =>
+        Object.fromEntries(Object.entries(entries ?? {}).filter(([key]) => inScope(key)));
+      set((s) => ({
+        counts: {
+          ...s.counts,
+          [assetId]: keep(s.counts[assetId], (k) => ["", namespace].includes(k.slice(k.lastIndexOf("|") + 1))),
+        },
+        health: { ...s.health, [assetId]: keep(s.health[assetId], (k) => k === namespace) },
+        eventLists: {
+          ...s.eventLists,
+          [assetId]: keep(s.eventLists[assetId], (k) => k.slice(0, k.lastIndexOf("|")) === namespace),
+        },
+      }));
+      reads.push(state.loadCounts(assetId, { force: true }), state.loadHealth(assetId, namespace, { force: true }));
+      for (const key of Object.keys(get().eventLists[assetId] ?? {})) {
+        const sep = key.lastIndexOf("|");
+        reads.push(state.loadEvents(assetId, key.slice(0, sep), key.slice(sep + 1) === "w", { force: true }));
       }
       for (const fn of refreshers.get(assetId)?.values() ?? []) reads.push(fn());
       await Promise.allSettled(reads);
@@ -679,6 +872,9 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
           details: without(s.details),
           listViews: without(s.listViews),
           terminals: without(s.terminals),
+          health: without(s.health),
+          counts: without(s.counts),
+          eventLists: without(s.eventLists),
         };
       });
     },

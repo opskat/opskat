@@ -2,11 +2,12 @@ import { useEffect } from "react";
 import type { asset_entity } from "../../../wailsjs/go/models";
 import { AsyncState } from "@/components/common/AsyncState";
 import { PanelSidebar, SidebarRefreshButton } from "@/components/common/PanelSidebar";
-import { OVERVIEW_TAB_ID, useK8sStore, type K8sClusterState } from "@/stores/k8sStore";
+import { listTabId, OVERVIEW_TAB_ID, useK8sStore, type K8sClusterState } from "@/stores/k8sStore";
 import { K8sNamespaceSelect } from "./cluster/K8sNamespaceSelect";
 import { K8sTypeNav } from "./cluster/K8sTypeNav";
 import { K8sInnerTabBar } from "./cluster/K8sInnerTabBar";
 import { K8sResourceList } from "./cluster/K8sResourceList";
+import { K8sEventsView } from "./cluster/K8sEventsView";
 import { K8sOverview } from "./cluster/K8sOverview";
 import { K8sResourceDetail } from "./detail/K8sResourceDetail";
 import { PodTerminalTab } from "./terminal/PodTerminalTab";
@@ -84,7 +85,10 @@ export function K8sClusterPage({ asset }: Props) {
 function ActiveTab({ assetId, cluster }: { assetId: number; cluster: K8sClusterState }) {
   const id = cluster.activeTabId;
   if (id === OVERVIEW_TAB_ID && cluster.version.data) {
-    return <K8sOverview assetId={assetId} version={cluster.version.data} />;
+    return <K8sOverview assetId={assetId} cluster={cluster} version={cluster.version.data} />;
+  }
+  if (id === listTabId("/events")) {
+    return <K8sEventsView key={id} assetId={assetId} cluster={cluster} />;
   }
   if (id.startsWith("list:")) {
     return <K8sResourceList key={id} assetId={assetId} cluster={cluster} typeKey={id.slice("list:".length)} />;

@@ -72,6 +72,7 @@ const replicaSet = {
     ],
   },
 };
+const OBJ = { apiVersion: "apps/v1", kind: "Deployment", namespace: "default", name: "web", uid: "uid-web" };
 const YAML = "kind: Deployment\nmetadata:\n  name: web\n";
 
 let nextId = 92000;
@@ -86,9 +87,30 @@ function mockCluster(objects: Record<string, unknown>) {
   vi.mocked(ListK8sEvents).mockResolvedValue(
     JSON.stringify({
       events: [
-        { type: "Warning", reason: "NewestWarn", message: "m1", count: 1, lastTimestamp: "2026-11-16T10:00:00Z" },
-        { type: "Normal", reason: "MiddleNormal", message: "m2", count: 1, lastTimestamp: "2026-11-16T09:00:00Z" },
-        { type: "Warning", reason: "OldestWarn", message: "m3", count: 2, lastTimestamp: "2026-11-16T08:00:00Z" },
+        {
+          type: "Warning",
+          reason: "NewestWarn",
+          message: "m1",
+          count: 1,
+          lastTimestamp: "2026-11-16T10:00:00Z",
+          involvedObject: OBJ,
+        },
+        {
+          type: "Normal",
+          reason: "MiddleNormal",
+          message: "m2",
+          count: 1,
+          lastTimestamp: "2026-11-16T09:00:00Z",
+          involvedObject: OBJ,
+        },
+        {
+          type: "Warning",
+          reason: "OldestWarn",
+          message: "m3",
+          count: 2,
+          lastTimestamp: "2026-11-16T08:00:00Z",
+          involvedObject: OBJ,
+        },
       ],
     }) as never
   );

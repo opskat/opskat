@@ -149,3 +149,16 @@ func (k *K8s) ListK8sEvents(req K8sEventsRequest) (string, error) {
 		}, c.opts...)
 	})
 }
+
+// GetK8sClusterHealth 读取集群概览的健康汇总与异常清单；namespace 为空表示全部命名空间。
+// 各区块独立失败，失败原因在返回值的 errors 里，不使整个调用失败。
+func (k *K8s) GetK8sClusterHealth(assetID int64, namespace string) (string, error) {
+	if namespace != "" {
+		if err := validateSegment("namespace", namespace); err != nil {
+			return "", fmt.Errorf("get K8S cluster health: %w", err)
+		}
+	}
+	return k.runK8sCall(assetID, "get K8S cluster health", func(ctx context.Context, c *k8sCallContext) (any, error) {
+		return k8spkg.GetClusterHealth(ctx, c.kubeconfig, namespace, c.opts...)
+	})
+}

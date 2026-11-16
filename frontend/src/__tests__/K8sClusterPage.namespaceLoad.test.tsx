@@ -2,7 +2,14 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { K8sClusterPage } from "@/components/k8s/K8sClusterPage";
-import { GetK8sClusterVersion, GetK8sResourceTypes, ListK8sResources } from "../../wailsjs/go/k8s/K8s";
+import {
+  CountK8sResources,
+  GetK8sClusterHealth,
+  GetK8sClusterVersion,
+  GetK8sResourceTypes,
+  ListK8sEvents,
+  ListK8sResources,
+} from "../../wailsjs/go/k8s/K8s";
 import type { asset_entity, k8s } from "../../wailsjs/go/models";
 
 const types = {
@@ -88,6 +95,18 @@ function mockCluster(list: ListHandler = listOK) {
   );
   vi.mocked(GetK8sResourceTypes).mockResolvedValue(JSON.stringify(types) as never);
   vi.mocked(ListK8sResources).mockImplementation(list as never);
+  vi.mocked(CountK8sResources).mockResolvedValue(JSON.stringify({ count: 1 }) as never);
+  vi.mocked(GetK8sClusterHealth).mockResolvedValue(
+    JSON.stringify({
+      nodes: { total: 1, schedulable: 1, unschedulable: 0, notReady: 0 },
+      pods: { total: 0, running: 0, pending: 0, abnormal: 0 },
+      attention: [],
+      abnormalCounts: {},
+      warningEvents: 0,
+      errors: {},
+    }) as never
+  );
+  vi.mocked(ListK8sEvents).mockResolvedValue(JSON.stringify({ events: [] }) as never);
 }
 
 function asset(ID: number, namespace = "prod") {

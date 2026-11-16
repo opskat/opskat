@@ -51,4 +51,9 @@ func TestK8sReadIPCRejectsInvalidRequests(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "namespace")
 	})
+	t.Run("health namespace with slash", func(t *testing.T) {
+		_, err := k.GetK8sClusterHealth(1, "a/b")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "namespace")
+	})
 }
