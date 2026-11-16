@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { Loader2, Search, TerminalSquare } from "lucide-react";
+import { AlertTriangle, Loader2, RotateCcw, Search, TerminalSquare, Unplug } from "lucide-react";
 import {
   Button,
   cn,
@@ -20,7 +20,12 @@ import { useTerminalThemeStore, useXtermTheme } from "@/stores/terminalThemeStor
 import { withTerminalFontFallback, withTerminalFontIsolation } from "@/data/terminalFonts";
 import { TerminalSearchBar } from "@/components/terminal/TerminalSearchBar";
 import { getTerminalContextMenuAction } from "@/components/terminal/terminalContextMenuPolicy";
-import { fitPodTerminal, getPodTerminal } from "./podTerminalRegistry";
+import { disconnectPodTerminal, fitPodTerminal, getPodTerminal, restartPodTerminal } from "./podTerminalRegistry";
+import { endText } from "./terminalText";
+
+const PRESET_SHELLS = ["auto", "/bin/bash", "/bin/sh"];
+const CUSTOM_SHELL = "custom";
+const selectClass = "h-7 rounded-md border bg-background px-2 text-xs";
 
 interface Props {
   assetId: number;
@@ -36,6 +41,11 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
   const state = useK8sStore((s) => s.terminals[assetId]?.[tabId]);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [showSearch, setShowSearch] = useState(false);
+  // "Custom command…" picked, or a custom command already running: the command input is shown.
+  const [customMode, setCustomMode] = useState(() => !!state && !PRESET_SHELLS.includes(state.shell));
+  const [customDraft, setCustomDraft] = useState(() =>
+    state && !PRESET_SHELLS.includes(state.shell) ? state.shell : ""
+  );
   const [searchRequest, setSearchRequest] = useState<{ query: string | null; token: number }>({
     query: null,
     token: 0,
@@ -152,12 +162,54 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
           {state.namespace}/{state.pod}
         </span>
         <span className="text-muted-foreground">{t("asset.k8sTerminalContainer")}</span>
-        <span className="rounded-md border px-2 py-1 font-mono">{state.container}</span>
-        <span className="text-muted-foreground">Shell</span>
-        <span className={cn("rounded-md border px-2 py-1", state.shell !== "auto" && "font-mono")}>
-          {state.shell === "auto" ? t("asset.k8sTerminalShellAuto") : state.shell}
-        </span>
-        <StatusBadge status={state.status} />
+        <select
+          aria-label={t("asset.k8sTerminalContainer")}
+          className={cn(selectClass, "font-mono")}
+          value={state.container}
+          onChange={(e) => {
+            if (e.target.value !== state.container) restartPodTerminal(assetId, tabId, { container: e.target.value });
+          }}
+        >
+          {state.containers.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+        <span className="text-muted-foreground">{t("asset.k8sTerminalShell")}</span>
+        <select
+          aria-label={t("asset.k8sTerminalShell")}
+          className={selectClass}
+          value={customMode ? CUSTOM_SHELL : state.shell}
+          onChange={(e) => {
+            const value = e.target.value;
+            if (value === CUSTOM_SHELL) {
+              setCustomMode(true);
+              return;
+            }
+            setCustomMode(false);
+            if (value !== state.shell) restartPodTerminal(assetId, tabId, { shell: value });
+          }}
+        >
+          <option value="auto">{t("asset.k8sTerminalShellAuto")}</option>
+          <option value="/bin/bash">/bin/bash</option>
+          <option value="/bin/sh">/bin/sh</option>
+          <option value={CUSTOM_SHELL}>{t("asset.k8sTerminalShellCustom")}</option>
+        </select>
+        {customMode && (
+          <input
+            aria-label={t("asset.k8sTerminalCustomCommand")}
+            className="h-7 w-56 rounded-md border bg-background px-2 font-mono text-xs"
+            placeholder={t("asset.k8sTerminalCustomPlaceholder")}
+            value={customDraft}
+            onChange={(e) => setCustomDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && customDraft.trim())
+                restartPodTerminal(assetId, tabId, { shell: customDraft.trim() });
+            }}
+          />
+        )}
+        <StatusBadge status={state.status} shell={state.shellUsed} />
         <div className="ml-auto flex items-center gap-1">
           <Button
             variant="ghost"
@@ -168,6 +220,25 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
             onClick={() => openSearch()}
           >
             <Search className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1 text-xs"
+            onClick={() => restartPodTerminal(assetId, tabId)}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            {t("asset.k8sTerminalReconnect")}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 text-xs"
+            disabled={state.status === "ended"}
+            onClick={() => disconnectPodTerminal(assetId, tabId)}
+          >
+            <Unplug className="h-3.5 w-3.5" />
+            {t("asset.k8sTerminalDisconnect")}
           </Button>
         </div>
       </div>
@@ -215,12 +286,25 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
+        {state.status === "ended" && state.end && (
+          <div
+            data-testid="k8s-pod-terminal-ended"
+            className="absolute inset-x-0 bottom-0 flex items-center gap-3 border-t border-white/10 bg-black/70 px-4 py-2 text-xs text-white"
+          >
+            <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+            <span className="min-w-0 flex-1 break-words">{endText(state.end)}</span>
+            <Button size="sm" className="h-7 gap-1 text-xs" onClick={() => restartPodTerminal(assetId, tabId)}>
+              <RotateCcw className="h-3.5 w-3.5" />
+              {t("asset.k8sTerminalReconnect")}
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function StatusBadge({ status }: { status: K8sTerminalState["status"] }) {
+function StatusBadge({ status, shell }: { status: K8sTerminalState["status"]; shell: string | null }) {
   const { t } = useTranslation();
   if (status === "connecting") {
     return (
@@ -235,6 +319,7 @@ function StatusBadge({ status }: { status: K8sTerminalState["status"] }) {
     <span className={cn("ml-2 flex items-center gap-1", connected ? "text-success" : "text-muted-foreground")}>
       <span className={cn("h-1.5 w-1.5 rounded-full", connected ? "bg-success" : "bg-muted-foreground")} />
       {connected ? t("asset.k8sTerminalConnected") : t("asset.k8sTerminalDisconnected")}
+      {connected && shell && <span className="font-mono text-muted-foreground">· {shell}</span>}
     </span>
   );
 }

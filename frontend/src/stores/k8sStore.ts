@@ -48,6 +48,8 @@ export interface K8sResourceRow {
   labels: Record<string, string>;
   ownerReferences: { apiVersion: string; kind: string; name: string; controller: boolean }[];
   cells: unknown[];
+  /** The object's status.phase, on lists read with `withPhase` (Pods). */
+  phase?: string;
   object?: Record<string, unknown>;
 }
 
@@ -134,6 +136,12 @@ export interface K8sTerminalEnd {
   reason: "exited" | "closed" | "error";
   exitCode?: number;
   error?: string;
+  /** Why the container terminated (e.g. OOMKilled), read from the Pod status. */
+  containerReason?: string;
+  /** The Pod was deleted. */
+  podGone?: boolean;
+  /** The session never started: the cluster refused the exec. */
+  startFailed?: boolean;
 }
 
 /** A Pod terminal tab (`term:<n>`). Its xterm and exec session live in podTerminalRegistry, outside React. */
@@ -145,6 +153,8 @@ export interface K8sTerminalState {
   containers: string[];
   /** 'auto' | '/bin/bash' | '/bin/sh' | a custom command. */
   shell: string;
+  /** The shell the session actually runs ('auto' resolved to bash or sh); null until it reports. */
+  shellUsed: string | null;
   status: "connecting" | "connected" | "ended";
   end: K8sTerminalEnd | null;
 }
@@ -357,6 +367,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
           labelSelector: "",
           fieldSelector: "",
           includeObject: false,
+          withPhase: false,
         });
         return (JSON.parse(result) as K8sResourceList).rows.map((r) => r.name);
       }),
@@ -402,6 +413,8 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
           labelSelector,
           fieldSelector: "",
           includeObject: false,
+          // The Pod terminal action's state is the Pod phase, which the Status column doesn't show (CrashLoopBackOff).
+          withPhase: typeKey === "/pods",
         });
         if (!isCurrent(assetId, slot, token)) return;
         const data = JSON.parse(result) as K8sResourceList;
@@ -617,7 +630,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
       const id = `term:${++terminalSeq}`;
       set((s) => {
         if (!s.clusters[assetId]) return s;
-        const state: K8sTerminalState = { ...spec, status: "connecting", end: null };
+        const state: K8sTerminalState = { ...spec, shellUsed: null, status: "connecting", end: null };
         return { terminals: { ...s.terminals, [assetId]: { ...s.terminals[assetId], [id]: state } } };
       });
       get().openTab(assetId, { id, label: `${spec.pod} · ${spec.container}` });
@@ -629,8 +642,23 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         const existing = s.terminals[assetId]?.[tabId];
         // A session reports back after its tab (or the cluster tab) closed; that terminal is gone for good.
         if (!existing) return s;
+        const next = { ...existing, ...patch };
+        const cluster = s.clusters[assetId];
+        // The tab is named after the container it is attached to.
+        const relabel = cluster && next.container !== existing.container;
         return {
-          terminals: { ...s.terminals, [assetId]: { ...s.terminals[assetId], [tabId]: { ...existing, ...patch } } },
+          terminals: { ...s.terminals, [assetId]: { ...s.terminals[assetId], [tabId]: next } },
+          ...(relabel && {
+            clusters: {
+              ...s.clusters,
+              [assetId]: {
+                ...cluster,
+                tabs: cluster.tabs.map((t) =>
+                  t.id === tabId ? { ...t, label: `${next.pod} · ${next.container}` } : t
+                ),
+              },
+            },
+          }),
         };
       }),
 

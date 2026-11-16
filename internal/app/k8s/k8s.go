@@ -30,7 +30,6 @@ type K8s struct {
 	logStreamCounter atomic.Int64
 
 	execSessions sync.Map // map[string]*execSession
-	execCounter  atomic.Int64
 }
 
 // New 构造 k8s binder。

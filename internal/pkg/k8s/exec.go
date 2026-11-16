@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -60,7 +61,8 @@ func Exec(ctx context.Context, kubeconfig string, req ExecRequest, opts ...Clien
 			TTY:       true,
 		}, scheme.ParameterCodec).URL()
 
-	transport, upgrader, err := spdyTransport(config, req.OnConnected)
+	statusSeen := &atomic.Bool{}
+	transport, upgrader, err := spdyTransport(config, req.OnConnected, statusSeen)
 	if err != nil {
 		return fmt.Errorf("create exec transport: %w", err)
 	}
@@ -68,19 +70,28 @@ func Exec(ctx context.Context, kubeconfig string, req ExecRequest, opts ...Clien
 	if err != nil {
 		return fmt.Errorf("create exec executor: %w", err)
 	}
-	return executor.StreamWithContext(ctx, remotecommand.StreamOptions{
+	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdin:             req.Stdin,
 		Stdout:            req.Stdout,
 		Tty:               true,
 		TerminalSizeQueue: &sizeQueue{ctx: ctx, sizes: req.Sizes},
 	})
+	// 命令正常结束时服务端会在 error 流上写一条 Success 状态；连接被掐断时 error 流直接 EOF，
+	// client-go 把两者都当成 nil，所以靠有没有收到状态来区分。
+	if err == nil && !statusSeen.Load() {
+		return ErrConnectionClosed
+	}
+	return err
 }
+
+// ErrConnectionClosed 表示连接在命令结束前被对端或网络断开（没有收到命令的退出状态）。
+var ErrConnectionClosed = errors.New("connection closed before the command finished")
 
 // spdyTransport 构造 exec 用的 SPDY 传输（等同 client-go 的 spdy.RoundTripperFor，另加两点）：
 //   - 配置了拨号器（SSH 隧道 / 代理链 / .local）时，升级连接经它拨出。client-go 默认的 SPDY 升级连接自己拨号、
 //     不看 config.Dial，会绕过资产的隧道与代理；WebSocket 执行器同样忽略 config.Dial，所以 exec 只走 SPDY。
 //   - onConnected 非空时在 SPDY 升级成功后调用一次。
-func spdyTransport(config *rest.Config, onConnected func()) (http.RoundTripper, spdy.Upgrader, error) {
+func spdyTransport(config *rest.Config, onConnected func(), statusSeen *atomic.Bool) (http.RoundTripper, spdy.Upgrader, error) {
 	tlsConfig, err := rest.TLSConfigFor(config)
 	if err != nil {
 		return nil, nil, err
@@ -101,10 +112,7 @@ func spdyTransport(config *rest.Config, onConnected func()) (http.RoundTripper, 
 	if err != nil {
 		return nil, nil, err
 	}
-	var upgrader streamhttp.UpgradeRoundTripper = roundTripper
-	if onConnected != nil {
-		upgrader = &notifyingUpgrader{UpgradeRoundTripper: roundTripper, onConnected: onConnected}
-	}
+	upgrader := &notifyingUpgrader{UpgradeRoundTripper: roundTripper, onConnected: onConnected, statusSeen: statusSeen}
 	wrapper, err := rest.HTTPWrappersForConfig(config, roundTripper)
 	if err != nil {
 		return nil, nil, err
@@ -112,18 +120,50 @@ func spdyTransport(config *rest.Config, onConnected func()) (http.RoundTripper, 
 	return wrapper, spdy.NewUpgraderForStreaming(upgrader), nil
 }
 
-// notifyingUpgrader 在 SPDY 升级成功后通知调用方：此后的失败都属于已建立的会话。
+// notifyingUpgrader 在 SPDY 升级成功后通知调用方（此后的失败都属于已建立的会话），
+// 并盯着 error 流是否收到过命令的退出状态。
 type notifyingUpgrader struct {
 	streamhttp.UpgradeRoundTripper
 	onConnected func()
+	statusSeen  *atomic.Bool
 }
 
 func (u *notifyingUpgrader) NewConnection(resp *http.Response) (streamhttp.Connection, error) {
 	conn, err := u.UpgradeRoundTripper.NewConnection(resp)
-	if err == nil {
+	if err != nil {
+		return nil, err
+	}
+	if u.onConnected != nil {
 		u.onConnected()
 	}
-	return conn, err
+	return &statusTrackingConn{Connection: conn, statusSeen: u.statusSeen}, nil
+}
+
+// statusTrackingConn 包住 error 流，记下它是否读到过数据。
+type statusTrackingConn struct {
+	streamhttp.Connection
+	statusSeen *atomic.Bool
+}
+
+func (c *statusTrackingConn) CreateStream(headers http.Header) (streamhttp.Stream, error) {
+	stream, err := c.Connection.CreateStream(headers)
+	if err != nil || headers.Get(corev1.StreamType) != corev1.StreamTypeError {
+		return stream, err
+	}
+	return &statusTrackingStream{Stream: stream, statusSeen: c.statusSeen}, nil
+}
+
+type statusTrackingStream struct {
+	streamhttp.Stream
+	statusSeen *atomic.Bool
+}
+
+func (s *statusTrackingStream) Read(p []byte) (int, error) {
+	n, err := s.Stream.Read(p)
+	if n > 0 {
+		s.statusSeen.Store(true)
+	}
+	return n, err
 }
 
 // ExitCode 取出命令以非 0 退出时的退出码。

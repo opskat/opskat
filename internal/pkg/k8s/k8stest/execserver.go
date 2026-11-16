@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,7 +37,12 @@ type ExecSession struct {
 	Stdin   io.Reader
 	Stdout  io.Writer
 	Resizes <-chan TerminalSize
+	// Failure 非空时，会话返回后在 error 流上报告这条失败（而不是退出码），模拟运行时无法启动命令。
+	Failure string
 }
+
+// Command 是请求里要运行的命令（exec 的 command 查询参数）。
+func (s *ExecSession) Command() []string { return s.Request.URL.Query()["command"] }
 
 // ExecFunc 运行一次会话并返回退出码；0 = 正常退出。
 type ExecFunc func(s *ExecSession) int
@@ -57,6 +63,8 @@ func EchoUntilExit(s *ExecSession) int {
 // ExecServer 是假 exec 端点。
 type ExecServer struct {
 	Server *httptest.Server
+	// Other 处理非 exec 的请求（例如读取 Pod 状态）；nil 时回 404。
+	Other http.Handler
 
 	mu       sync.Mutex
 	requests []*http.Request
@@ -109,6 +117,14 @@ func (s *ExecServer) WaitEnded(timeout time.Duration) bool {
 }
 
 func (s *ExecServer) serve(w http.ResponseWriter, req *http.Request) {
+	if !strings.HasSuffix(req.URL.Path, "/exec") {
+		if s.Other == nil {
+			http.NotFound(w, req)
+			return
+		}
+		s.Other.ServeHTTP(w, req)
+		return
+	}
 	s.mu.Lock()
 	s.requests = append(s.requests, req.Clone(req.Context()))
 	s.mu.Unlock()
@@ -164,18 +180,21 @@ func (s *ExecServer) serve(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	session := &ExecSession{
+		Request: req,
+		Stdin:   streams[corev1.StreamTypeStdin],
+		Stdout:  streams[corev1.StreamTypeStdout],
+		Resizes: resizes,
+	}
 	done := make(chan int, 1)
-	go func() {
-		done <- s.run(&ExecSession{
-			Request: req,
-			Stdin:   streams[corev1.StreamTypeStdin],
-			Stdout:  streams[corev1.StreamTypeStdout],
-			Resizes: resizes,
-		})
-	}()
+	go func() { done <- s.run(session) }()
 	select {
 	case code := <-done:
-		writeExitStatus(streams[corev1.StreamTypeError], code)
+		if session.Failure != "" {
+			writeFailure(streams[corev1.StreamTypeError], session.Failure)
+		} else {
+			writeExitStatus(streams[corev1.StreamTypeError], code)
+		}
 		_ = streams[corev1.StreamTypeStdout].Close()
 	case <-conn.CloseChan():
 	}
@@ -206,6 +225,13 @@ func writeExitStatus(stream io.WriteCloser, code int) {
 		}
 	}
 	data, _ := json.Marshal(status)
+	_, _ = stream.Write(data)
+	_ = stream.Close()
+}
+
+// writeFailure 在 error 流上写一条非退出码的失败状态（运行时错误）。
+func writeFailure(stream io.WriteCloser, message string) {
+	data, _ := json.Marshal(metav1.Status{Status: metav1.StatusFailure, Reason: metav1.StatusReasonInternalError, Message: message})
 	_, _ = stream.Write(data)
 	_ = stream.Close()
 }

@@ -66,6 +66,8 @@ type ListQuery struct {
 	LabelSelector string
 	FieldSelector string
 	IncludeObject bool
+	// WithPhase 让行带上对象的 status.phase（有该字段的类型，如 Pod）：向服务端要完整对象，但只回传 phase。
+	WithPhase bool
 }
 
 type TableColumn struct {
@@ -89,6 +91,7 @@ type ResourceRow struct {
 	Labels            map[string]string `json:"labels"`
 	OwnerReferences   []OwnerReference  `json:"ownerReferences"`
 	Cells             []any             `json:"cells"`
+	Phase             string            `json:"phase,omitempty"`
 	Object            map[string]any    `json:"object,omitempty"`
 }
 
@@ -341,7 +344,7 @@ func ListResources(ctx context.Context, kubeconfig string, q ListQuery, opts ...
 		return nil, err
 	}
 	include := metav1.IncludeMetadata
-	if q.IncludeObject {
+	if q.IncludeObject || q.WithPhase {
 		include = metav1.IncludeObject
 	}
 
@@ -374,7 +377,7 @@ func ListResources(ctx context.Context, kubeconfig string, q ListQuery, opts ...
 			if len(tr.Cells) != columnCount {
 				return nil, fmt.Errorf("%s table row has %d cells for %d columns", q.Resource, len(tr.Cells), columnCount)
 			}
-			row, err := tableRow(tr, keep, q.IncludeObject)
+			row, err := tableRow(tr, keep, q.IncludeObject, q.WithPhase)
 			if err != nil {
 				return nil, fmt.Errorf("decode %s row: %w", q.Resource, err)
 			}
@@ -396,7 +399,7 @@ func ListResources(ctx context.Context, kubeconfig string, q ListQuery, opts ...
 	return result, nil
 }
 
-func tableRow(tr metav1.TableRow, keep []int, includeObject bool) (ResourceRow, error) {
+func tableRow(tr metav1.TableRow, keep []int, includeObject, withPhase bool) (ResourceRow, error) {
 	var meta metav1.PartialObjectMetadata
 	if err := json.Unmarshal(tr.Object.Raw, &meta); err != nil {
 		return ResourceRow{}, err
@@ -422,12 +425,18 @@ func tableRow(tr metav1.TableRow, keep []int, includeObject bool) (ResourceRow, 
 	for _, i := range keep {
 		row.Cells = append(row.Cells, tr.Cells[i])
 	}
-	if includeObject {
+	if includeObject || withPhase {
 		obj, err := decodeObject(tr.Object.Raw)
 		if err != nil {
 			return ResourceRow{}, err
 		}
-		row.Object = obj
+		if withPhase {
+			status, _ := obj["status"].(map[string]any)
+			row.Phase, _ = status["phase"].(string)
+		}
+		if includeObject {
+			row.Object = obj
+		}
 	}
 	return row, nil
 }

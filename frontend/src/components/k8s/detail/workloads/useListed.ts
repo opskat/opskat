@@ -53,6 +53,7 @@ export function useListed(assetId: number, refreshKey: string, request: Request 
         labelSelector: labelSelector ?? "",
         fieldSelector: "",
         includeObject: true,
+        withPhase: false,
       });
       if (mine !== seq.current) return;
       const rows = (JSON.parse(result) as { rows: { name: string; object?: Record<string, unknown> }[] }).rows;

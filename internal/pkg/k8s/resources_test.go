@@ -214,7 +214,7 @@ func podRow(name, ns, uid string, includeObject bool) string {
 	 "managedFields":[{"manager":"kubectl","operation":"Apply"}]}`, name, ns, uid)
 	object := fmt.Sprintf(`{"kind":"PartialObjectMetadata","apiVersion":"meta.k8s.io/v1","metadata":%s}`, meta)
 	if includeObject {
-		object = fmt.Sprintf(`{"kind":"Pod","apiVersion":"v1","metadata":%s,"spec":{"nodeName":"n1"}}`, meta)
+		object = fmt.Sprintf(`{"kind":"Pod","apiVersion":"v1","metadata":%s,"spec":{"nodeName":"n1"},"status":{"phase":"Running"}}`, meta)
 	}
 	return fmt.Sprintf(`{"cells":[%q,"1/1","Running",0,"15d","10.0.0.1","n1"],"object":%s}`, name, object)
 }
@@ -325,6 +325,32 @@ func TestListResourcesIncludeObjectStripsManagedFields(t *testing.T) {
 	meta := obj["metadata"].(map[string]any)
 	assert.Equal(t, "c1", meta["name"])
 	assert.NotContains(t, meta, "managedFields")
+}
+
+// 列表行的状态判断以 Pod 的 status.phase 为准（Status 列在 CrashLoopBackOff 时是容器原因、不是 phase）：
+// 读取时向服务端要对象，只把 phase 带回，不把整个对象发给前端。
+func TestListResourcesWithPhaseCarriesStatusPhaseWithoutTheObject(t *testing.T) {
+	f := newFakeAPIServer(t)
+	path := "/api/v1/namespaces/default/pods"
+	f.handle(path, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		withObject := r.URL.Query().Get("includeObject") == "Object"
+		_, _ = w.Write([]byte(tableBody("", podRow("api-1", "default", "u1", withObject))))
+	})
+
+	got, err := ListResources(context.Background(), f.kubeconfig(), ListQuery{
+		Version: "v1", Resource: "pods", Namespace: "default", WithPhase: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Object", f.requests(path)[0].URL.Query().Get("includeObject"))
+	require.Len(t, got.Rows, 1)
+	assert.Equal(t, "Running", got.Rows[0].Phase)
+	assert.Nil(t, got.Rows[0].Object, "the object stays on the server side of the IPC")
+
+	plain, err := ListResources(context.Background(), f.kubeconfig(), ListQuery{Version: "v1", Resource: "pods", Namespace: "default"})
+	require.NoError(t, err)
+	assert.Empty(t, plain.Rows[0].Phase)
+	assert.Equal(t, "Metadata", f.requests(path)[1].URL.Query().Get("includeObject"), "without WithPhase the cheap metadata table is used")
 }
 
 func TestListResourcesReturnsClusterErrorVerbatim(t *testing.T) {

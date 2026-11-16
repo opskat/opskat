@@ -3,24 +3,19 @@ import { toast } from "sonner";
 import { GetK8sResource } from "../../../../wailsjs/go/k8s/K8s";
 import i18n from "@/i18n";
 import { errorMessage } from "@/lib/errorMessage";
-import { useK8sStore, type K8sResourceDetail, type K8sTableColumn } from "@/stores/k8sStore";
+import { useK8sStore, type K8sResourceDetail, type K8sResourceRow } from "@/stores/k8sStore";
 import { registerK8sAction, type K8sActionContext, type K8sActionTarget } from "../actions";
-import { cellText } from "../cluster/listModel";
 import { podContainers, podDefaultContainer } from "../detail/pod/podInfo";
-import { isStatusColumn } from "../utils";
 import { startPodTerminal } from "./podTerminalRegistry";
 
 const POD_TYPE_KEY = "/pods";
 
 /**
- * Whether the Pod is running: the phase of a Pod object; for a list row (no object) its status column, which
- * shows the phase unless a container or deletion reason overrides it. undefined when unknown.
+ * The Pod's phase: that of a Pod object, or of a list row (the list reads it with the rows; the Status column
+ * shows container reasons like CrashLoopBackOff instead). undefined when unknown.
  */
-function podRunStatus(target: K8sActionTarget, columns?: K8sTableColumn[]): string | undefined {
-  if ("cells" in target && Array.isArray(target.cells)) {
-    const idx = columns?.findIndex(isStatusColumn) ?? -1;
-    return idx >= 0 ? cellText(target.cells[idx]) || undefined : undefined;
-  }
+function podPhase(target: K8sActionTarget): string | undefined {
+  if ("cells" in target && Array.isArray(target.cells)) return (target as K8sResourceRow).phase;
   return ((target as Record<string, unknown>).status as { phase?: string } | undefined)?.phase;
 }
 
@@ -57,7 +52,7 @@ export async function openPodTerminal(ctx: K8sActionContext) {
     toast.error(i18n.t("asset.k8sTerminalPodGone"));
     return;
   }
-  const reason = notRunningReason(podRunStatus(pod) ?? "Unknown");
+  const reason = notRunningReason(podPhase(pod) ?? "Unknown");
   if (reason) {
     toast.error(reason);
     return;
@@ -82,6 +77,6 @@ registerK8sAction({
   icon: TerminalSquare,
   primary: true,
   appliesTo: (typeKey) => typeKey === POD_TYPE_KEY,
-  disabledReason: (target, columns) => notRunningReason(podRunStatus(target, columns)),
+  disabledReason: (target) => notRunningReason(podPhase(target)),
   run: openPodTerminal,
 });

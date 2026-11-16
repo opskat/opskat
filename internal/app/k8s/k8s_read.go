@@ -20,6 +20,7 @@ type K8sListRequest struct {
 	LabelSelector string `json:"labelSelector"`
 	FieldSelector string `json:"fieldSelector"`
 	IncludeObject bool   `json:"includeObject"`
+	WithPhase     bool   `json:"withPhase"`
 }
 
 // K8sResourceRef 指向单个资源；集群级资源 Namespace 为空。
@@ -47,7 +48,7 @@ func (r K8sListRequest) validate() error {
 func (r K8sListRequest) query() k8spkg.ListQuery {
 	return k8spkg.ListQuery{
 		Group: r.Group, Version: r.Version, Resource: r.Resource, Namespace: r.Namespace,
-		LabelSelector: r.LabelSelector, FieldSelector: r.FieldSelector, IncludeObject: r.IncludeObject,
+		LabelSelector: r.LabelSelector, FieldSelector: r.FieldSelector, IncludeObject: r.IncludeObject, WithPhase: r.WithPhase,
 	}
 }
 

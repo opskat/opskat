@@ -165,6 +165,9 @@ describe("k8sStore", () => {
 
     expect(listCalls("pods").map((r) => r.namespace)).toEqual(["prod", "dev"]);
     expect(listCalls("deployments")[0]).toMatchObject({ group: "apps", version: "v1", namespace: "prod" });
+    // Pod rows carry their phase (the terminal action's state); other types don't pay for the full objects.
+    expect(listCalls("pods")[0].withPhase).toBe(true);
+    expect(listCalls("deployments")[0].withPhase).toBe(false);
     const lists = useK8sStore.getState().lists[assetId];
     expect(lists["/pods|prod"].rows.map((r) => r.name)).toEqual(["pods-prod"]);
     expect(lists["/pods|dev"].rows.map((r) => r.name)).toEqual(["pods-dev"]);

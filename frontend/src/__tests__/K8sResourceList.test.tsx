@@ -29,6 +29,7 @@ const types = {
 interface PodSpec {
   name: string;
   status?: string;
+  phase?: string;
   created?: string;
   age?: string;
 }
@@ -48,6 +49,7 @@ function podTable(pods: PodSpec[]) {
       labels: {},
       ownerReferences: [],
       cells: [p.name, p.status ?? "Running", p.age ?? "1m"],
+      phase: p.phase ?? "Running",
     })),
   });
 }
@@ -292,12 +294,13 @@ describe("K8s resource list", () => {
     }
   });
 
-  it("greys a row's terminal icon by its status column when the Pod is not running", async () => {
+  it("greys a row's terminal icon by the Pod phase, not the Status column", async () => {
     const user = userEvent.setup();
     mockPods(() =>
       podTable([
         { name: "api-1", status: "Running" },
-        { name: "job-1", status: "Completed" },
+        { name: "job-1", status: "Completed", phase: "Succeeded" },
+        { name: "crash-1", status: "CrashLoopBackOff" }, // a Running Pod whose container keeps failing
       ])
     );
     render(<K8sClusterPage asset={asset(nextId++)} />);
@@ -309,6 +312,7 @@ describe("K8s resource list", () => {
       });
     expect(terminalOf("api-1")).toBeEnabled();
     expect(terminalOf("job-1")).toBeDisabled();
+    expect(terminalOf("crash-1")).toBeEnabled();
   });
 
   it("offers Open detail and Copy name on right click", async () => {
