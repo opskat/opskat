@@ -12,6 +12,7 @@ import { K8sOverview } from "./cluster/K8sOverview";
 import { K8sResourceDetail } from "./detail/K8sResourceDetail";
 import { PodTerminalTab } from "./terminal/PodTerminalTab";
 import "./detail/workloads/register";
+import "./detail/resources/register";
 import "./terminal/register";
 
 interface Props {
