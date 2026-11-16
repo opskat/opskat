@@ -100,48 +100,6 @@ func (k *K8s) doK8sCall(ctx context.Context, assetID int64, label string, fn fun
 	return string(data), nil
 }
 
-func (k *K8s) GetK8sClusterInfo(assetID int64) (string, error) {
-	return k.runK8sCall(assetID, "get K8S cluster info", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetClusterInfo(ctx, c.kubeconfig, c.opts...)
-	})
-}
-
-func (k *K8s) GetK8sNamespaceResources(assetID int64, namespace string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S namespace resources", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetNamespaceResources(ctx, c.kubeconfig, namespace, c.opts...)
-	})
-}
-
-func (k *K8s) GetK8sNamespacePods(assetID int64, namespace string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S namespace pods", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetNamespacePods(ctx, c.kubeconfig, namespace, c.opts...)
-	})
-}
-
-func (k *K8s) GetK8sNamespaceDeployments(assetID int64, namespace string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S namespace deployments", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetNamespaceDeployments(ctx, c.kubeconfig, namespace, c.opts...)
-	})
-}
-
-func (k *K8s) GetK8sNamespaceServices(assetID int64, namespace string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S namespace services", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetNamespaceServices(ctx, c.kubeconfig, namespace, c.opts...)
-	})
-}
-
-func (k *K8s) GetK8sNamespaceConfigMaps(assetID int64, namespace string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S namespace configmaps", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetNamespaceConfigMaps(ctx, c.kubeconfig, namespace, c.opts...)
-	})
-}
-
-func (k *K8s) GetK8sNamespaceSecrets(assetID int64, namespace string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S namespace secrets", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetNamespaceSecrets(ctx, c.kubeconfig, namespace, c.opts...)
-	})
-}
-
 func (k *K8s) GetK8sPodDetail(assetID int64, namespace, podName string) (string, error) {
 	return k.runK8sCall(assetID, "get K8S pod detail", func(ctx context.Context, c *k8sCallContext) (any, error) {
 		return k8spkg.GetPodDetail(ctx, c.kubeconfig, namespace, podName, c.opts...)
