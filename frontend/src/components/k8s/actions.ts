@@ -23,7 +23,8 @@ export interface K8sAction {
   primary?: boolean;
   /** Listed after the other actions and drawn in the error colour. */
   destructive?: boolean;
-  appliesTo: (typeKey: string, target: K8sActionTarget) => boolean;
+  /** `assetId` is given when the caller knows the cluster (list / detail), for actions that depend on its discovery. */
+  appliesTo: (typeKey: string, target: K8sActionTarget, assetId?: number) => boolean;
   /**
    * A reason string greys the action out and explains why. A list row comes with the list's columns, which
    * its `cells` line up with (a row carries no full object).
@@ -44,7 +45,7 @@ export function registerK8sAction(action: K8sAction): () => void {
 }
 
 /** Actions that apply to the target, in registration order with destructive ones last. */
-export function getK8sActions(typeKey: string, target: K8sActionTarget): K8sAction[] {
-  const applicable = actions.filter((a) => a.appliesTo(typeKey, target));
+export function getK8sActions(typeKey: string, target: K8sActionTarget, assetId?: number): K8sAction[] {
+  const applicable = actions.filter((a) => a.appliesTo(typeKey, target, assetId));
   return [...applicable.filter((a) => !a.destructive), ...applicable.filter((a) => a.destructive)];
 }

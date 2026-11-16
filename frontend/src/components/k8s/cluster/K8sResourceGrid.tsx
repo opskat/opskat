@@ -100,7 +100,7 @@ export function K8sResourceGrid({ assetId, typeKey, columns, rows, sort, onSort,
           <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((item) => {
               const row = rows[item.index];
-              const actions = getK8sActions(typeKey, row);
+              const actions = getK8sActions(typeKey, row, assetId);
               const run = (action: K8sAction) => void action.run(contextOf(row));
               return (
                 <ContextMenu key={`${row.namespace}/${row.name}`}>

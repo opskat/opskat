@@ -88,6 +88,19 @@ describe("K8s resource list", () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it("opens the apply YAML dialog from the toolbar button", async () => {
+    const user = userEvent.setup();
+    mockPods(() => podTable([{ name: "a" }]));
+    const id = nextId++;
+    render(<K8sClusterPage asset={asset(id)} />);
+    await openPods(user);
+    await screen.findByText("a");
+
+    await user.click(screen.getByRole("button", { name: "asset.k8sApplyYaml" }));
+    expect(useK8sStore.getState().yamlDialogs[id]).toEqual({ mode: "apply" });
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
   it("sorts by name ascending by default and toggles direction on header click", async () => {
     const user = userEvent.setup();
     mockPods(() => podTable([{ name: "b" }, { name: "c" }, { name: "a" }]));

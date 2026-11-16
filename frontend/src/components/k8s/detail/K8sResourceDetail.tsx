@@ -96,7 +96,7 @@ export function K8sResourceDetail({
   const owner = primaryOwner(object);
   const ownerKey = owner && ownerType(owner, types);
   const ctx: K8sActionContext = { assetId, typeKey, namespace, name, object };
-  const actions = getK8sActions(typeKey, object);
+  const actions = getK8sActions(typeKey, object, assetId);
   const props: K8sDetailProps = { assetId, typeKey, namespace, name, object };
   const extraTabs = getDetailSubTabs(kind);
   const triggerClass =

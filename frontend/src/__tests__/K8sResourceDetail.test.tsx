@@ -4,11 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Trash2 } from "lucide-react";
 import { K8sClusterPage } from "@/components/k8s/K8sClusterPage";
 import { registerK8sAction } from "@/components/k8s/actions";
-import {
-  registerDetailOverview,
-  registerDetailSubTab,
-  registerYamlEditHandler,
-} from "@/components/k8s/detail/registry";
+import { registerDetailOverview, registerDetailSubTab } from "@/components/k8s/detail/registry";
 import { useK8sStore } from "@/stores/k8sStore";
 import {
   GetK8sClusterVersion,
@@ -174,7 +170,7 @@ describe("K8s generic resource detail", () => {
     );
   });
 
-  it("shows the YAML read-only, copyable, and offers edit only when a handler is registered", async () => {
+  it("shows the YAML read-only, copyable, and offers edit through the registered handler", async () => {
     const user = userEvent.setup();
     mockCluster({ web: deployment });
     const id = nextId++;
@@ -183,25 +179,17 @@ describe("K8s generic resource detail", () => {
     await user.click(await screen.findByRole("tab", { name: /YAML/ }));
     expect(await screen.findByTestId("k8s-yaml")).toHaveTextContent("kind: Deployment");
     expect(screen.getByTestId("k8s-yaml").textContent).not.toContain("managedFields");
-    expect(screen.queryByRole("button", { name: /asset\.k8sEditYaml/ })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /action\.copy/ }));
     expect(await navigator.clipboard.readText()).toBe(YAML);
     expect(copied).toHaveBeenCalled();
 
-    const onEdit = vi.fn();
-    const off = registerYamlEditHandler(onEdit);
-    try {
-      // handler registered after mount: switch tab away and back to re-render
-      await user.click(screen.getByRole("tab", { name: /asset\.k8sOverview/ }));
-      await user.click(screen.getByRole("tab", { name: /YAML/ }));
-      await user.click(await screen.findByRole("button", { name: /asset\.k8sEditYaml/ }));
-      expect(onEdit).toHaveBeenCalledWith(
-        expect.objectContaining({ assetId: id, typeKey: "apps/deployments", namespace: "default", name: "web" })
-      );
-    } finally {
-      off();
-    }
+    // the edit dialog registers itself as the handler, so the YAML tab offers 「编辑」
+    await user.click(await screen.findByRole("button", { name: /asset\.k8sEditYaml$/ }));
+    expect(useK8sStore.getState().yamlDialogs[id]).toEqual({
+      mode: "edit",
+      ctx: expect.objectContaining({ assetId: id, typeKey: "apps/deployments", namespace: "default", name: "web" }),
+    });
   });
 
   it("puts registered actions in the header with destructive ones last in the error colour", async () => {

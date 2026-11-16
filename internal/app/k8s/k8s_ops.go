@@ -28,7 +28,9 @@ import (
 // kubeconfig 是已解密的 YAML 文本，opts 已带上 SSH 隧道 dial 函数（若配置）。
 type k8sCallContext struct {
 	kubeconfig string
-	opts       []k8spkg.ClientOption
+	// namespace 是资产配置的默认命名空间，空表示未配置。
+	namespace string
+	opts      []k8spkg.ClientOption
 }
 
 // loadK8sCall 校验资产、解析 K8S 配置、解密 kubeconfig、构造 ClientOption。
@@ -61,6 +63,7 @@ func (k *K8s) loadK8sCall(ctx context.Context, assetID int64) (*k8sCallContext, 
 	}
 	return &k8sCallContext{
 		kubeconfig: kubeconfig,
+		namespace:  cfg.Namespace,
 		opts:       opts,
 	}, nil
 }
@@ -68,18 +71,32 @@ func (k *K8s) loadK8sCall(ctx context.Context, assetID int64) (*k8sCallContext, 
 // runK8sCall 是 K8S 读取类 IPC 共用的模板：加载上下文 → 调用 fn → JSON 序列化，
 // 并记录开始 / 结束 / 失败（带 assetID）。
 func (k *K8s) runK8sCall(assetID int64, label string, fn func(ctx context.Context, c *k8sCallContext) (any, error)) (string, error) {
-	ctx, cancel := context.WithTimeout(k.ctx, 30*time.Second)
+	return k.runLogged(assetID, label, 30*time.Second, false, nil, fn)
+}
+
+// runK8sWrite 是写入类 IPC（更新 / 应用）的模板：同 runK8sCall，但开始 / 结束以 Info 记录并带上操作对象
+// （target 只放资源标识，绝不放资源内容）。
+func (k *K8s) runK8sWrite(assetID int64, label string, target []zap.Field, fn func(ctx context.Context, c *k8sCallContext) (any, error)) (string, error) {
+	return k.runLogged(assetID, label, 2*time.Minute, true, target, fn)
+}
+
+func (k *K8s) runLogged(assetID int64, label string, timeout time.Duration, write bool, target []zap.Field, fn func(ctx context.Context, c *k8sCallContext) (any, error)) (string, error) {
+	ctx, cancel := context.WithTimeout(k.ctx, timeout)
 	defer cancel()
-	log := logger.Ctx(ctx).With(zap.String("op", label), zap.Int64("assetID", assetID))
+	log := logger.Ctx(ctx).With(append([]zap.Field{zap.String("op", label), zap.Int64("assetID", assetID)}, target...)...)
+	say := log.Debug
+	if write {
+		say = log.Info
+	}
 	start := time.Now()
-	log.Debug("k8s call start")
+	say("k8s call start")
 
 	data, err := k.doK8sCall(ctx, assetID, label, fn)
 	if err != nil {
 		log.Error("k8s call failed", zap.Duration("elapsed", time.Since(start)), zap.Error(err))
 		return "", err
 	}
-	log.Debug("k8s call done", zap.Duration("elapsed", time.Since(start)))
+	say("k8s call done", zap.Duration("elapsed", time.Since(start)))
 	return data, nil
 }
 

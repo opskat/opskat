@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { RefreshCw, Search } from "lucide-react";
+import { FilePlus2, RefreshCw, Search } from "lucide-react";
 import { Button, Input, Switch, cn } from "@opskat/ui";
 import { AsyncState } from "@/components/common/AsyncState";
 import {
@@ -78,6 +78,7 @@ function LoadedTypeList({
   const entry = useK8sStore((s) => s.lists[assetId]?.[listKey(typeKey, ns)]);
   const loadList = useK8sStore((s) => s.loadList);
   const openTab = useK8sStore((s) => s.openTab);
+  const openYamlApply = useK8sStore((s) => s.openYamlApply);
   const setListView = useK8sStore((s) => s.setListView);
   const view = useK8sStore((s) => s.listViews[assetId]?.[typeKey]) ?? DEFAULT_LIST_VIEW;
 
@@ -174,6 +175,10 @@ function LoadedTypeList({
             />
             {t("asset.k8sAutoRefresh")}
           </label>
+          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => openYamlApply(assetId)}>
+            <FilePlus2 className="h-3.5 w-3.5" />
+            {t("asset.k8sApplyYaml")}
+          </Button>
           <Button
             variant="ghost"
             size="icon"

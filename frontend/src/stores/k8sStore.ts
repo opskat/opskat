@@ -9,6 +9,7 @@ import {
   ListK8sResources,
 } from "../../wailsjs/go/k8s/K8s";
 import { errorMessage } from "@/lib/errorMessage";
+import type { K8sActionContext } from "@/components/k8s/actions";
 import type { LogTabState, LogTabStateUpdate } from "@/components/k8s/k8sLogState";
 import { registerTabCloseHook, type PageTabMeta } from "./tabStore";
 
@@ -259,6 +260,9 @@ let terminalSeq = 0;
 
 type Refresher = () => Promise<unknown>;
 
+/** The YAML dialog open on a cluster: editing one resource, or applying pasted documents. */
+export type K8sYamlDialogState = { mode: "edit"; ctx: K8sActionContext } | { mode: "apply" };
+
 interface K8sStoreState {
   clusters: Record<number, K8sClusterState>;
   lists: Record<number, Record<string, K8sListEntry>>;
@@ -278,6 +282,8 @@ interface K8sStoreState {
   counts: Record<number, Record<string, K8sCount>>;
   /** Events lists keyed by `eventsKey`. */
   eventLists: Record<number, Record<string, Loadable<K8sEvent[]>>>;
+  /** The edit / apply YAML dialog of each cluster; absent = none open. */
+  yamlDialogs: Record<number, K8sYamlDialogState | undefined>;
 
   /** Creates the cluster's state and reads it; a cluster that already has state (page remount) is left as is. */
   initCluster: (assetId: number, defaultNamespace: string) => void;
@@ -302,6 +308,11 @@ interface K8sStoreState {
   setActiveTab: (assetId: number, id: string) => void;
   /** Closes tabs (the overview tab never closes); `activate` picks the tab to show afterwards. */
   closeTabs: (assetId: number, ids: string[], activate?: string) => void;
+  /** Re-reads the loaded lists and details of one type (after a write to one of its resources). */
+  refreshType: (assetId: number, typeKey: string) => Promise<void>;
+  openYamlEdit: (ctx: K8sActionContext) => void;
+  openYamlApply: (assetId: number) => void;
+  closeYamlDialog: (assetId: number) => void;
   /** Re-reads version, types, namespaces, every loaded list / detail and every registered view. */
   refreshAll: (assetId: number) => Promise<void>;
   /** Lets a view take part in `refreshAll`; returns the unregister function. */
@@ -409,6 +420,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
     health: {},
     counts: {},
     eventLists: {},
+    yamlDialogs: {},
 
     initCluster: (assetId, defaultNamespace) => {
       if (get().clusters[assetId]) return;
@@ -778,6 +790,25 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
       patchCluster(assetId, () => ({ refreshing: false }));
     },
 
+    refreshType: async (assetId, typeKey) => {
+      const state = get();
+      const reads: Promise<unknown>[] = [];
+      for (const key of Object.keys(state.lists[assetId] ?? {})) {
+        const sep = key.lastIndexOf("|");
+        if (key.slice(0, sep) === typeKey)
+          reads.push(state.loadList(assetId, typeKey, key.slice(sep + 1), { force: true }));
+      }
+      for (const tabId of Object.keys(state.details[assetId] ?? {})) {
+        if (parseResourceTabId(tabId)?.typeKey === typeKey)
+          reads.push(state.loadDetail(assetId, tabId, { force: true }));
+      }
+      await Promise.all(reads);
+    },
+
+    openYamlEdit: (ctx) => set((s) => ({ yamlDialogs: { ...s.yamlDialogs, [ctx.assetId]: { mode: "edit", ctx } } })),
+    openYamlApply: (assetId) => set((s) => ({ yamlDialogs: { ...s.yamlDialogs, [assetId]: { mode: "apply" } } })),
+    closeYamlDialog: (assetId) => set((s) => ({ yamlDialogs: { ...s.yamlDialogs, [assetId]: undefined } })),
+
     registerRefresher: (assetId, key, fn) => {
       let byKey = refreshers.get(assetId);
       if (!byKey) {
@@ -875,6 +906,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
           health: without(s.health),
           counts: without(s.counts),
           eventLists: without(s.eventLists),
+          yamlDialogs: without(s.yamlDialogs),
         };
       });
     },

@@ -1,0 +1,22 @@
+package k8s
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestApplyNamespaceFallsBackToAssetNamespaceOnlyForAllNamespaces(t *testing.T) {
+	assert.Equal(t, "team", applyNamespace("team", "configured"), "the selected namespace wins")
+	assert.Equal(t, "configured", applyNamespace("", "configured"), "all namespaces -> the asset's namespace")
+	assert.Equal(t, "", applyNamespace("", ""), "nothing to default to")
+}
+
+func TestWriteRequestsRejectBadPathSegments(t *testing.T) {
+	k := &K8s{}
+	_, err := k.UpdateK8sResource(K8sUpdateRequest{Ref: K8sResourceRef{AssetID: 1, Version: "v1", Resource: "pods", Namespace: "../x", Name: "p"}, YAML: "a: b"})
+	require.ErrorContains(t, err, "invalid namespace")
+	_, err = k.ApplyK8sYAML(K8sApplyRequest{AssetID: 1, YAML: "a: b", DefaultNamespace: "a/b"})
+	require.ErrorContains(t, err, "invalid namespace")
+}

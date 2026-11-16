@@ -11,9 +11,11 @@ import { K8sEventsView } from "./cluster/K8sEventsView";
 import { K8sOverview } from "./cluster/K8sOverview";
 import { K8sResourceDetail } from "./detail/K8sResourceDetail";
 import { PodTerminalTab } from "./terminal/PodTerminalTab";
+import { K8sYamlDialogs } from "./yaml/K8sYamlDialogs";
 import "./detail/workloads/register";
 import "./detail/resources/register";
 import "./terminal/register";
+import "./yaml/register";
 
 interface Props {
   asset: asset_entity.Asset;
@@ -79,6 +81,7 @@ export function K8sClusterPage({ asset }: Props) {
           <ActiveTab assetId={assetId} cluster={cluster} />
         </div>
       </div>
+      <K8sYamlDialogs assetId={assetId} />
     </div>
   );
 }
