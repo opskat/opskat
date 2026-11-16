@@ -103,6 +103,33 @@ type ScriptSplit struct {
 	Consumed int `json:"consumed"`
 	// State 是切分要带到下一次的状态（如方言的当前分隔符），下一次原样放进 ScriptChunk.State。
 	State string `json:"state,omitempty"`
+	// Unsupported 不为空时，切分在 Text 里认出了运行 SQL 文件不支持的写法（如只有 psql 才能执行的
+	// COPY ... FROM stdin）：Statements 是它之前的语句，编排执行完它们后停下，以
+	// *ScriptUnsupportedError 报出（勾了「继续」也一样）；Consumed 与 State 不再使用。
+	Unsupported *ScriptUnsupported `json:"unsupported,omitempty"`
+}
+
+// ScriptUnsupported 是切分认出的、运行 SQL 文件不支持的写法。
+type ScriptUnsupported struct {
+	// Construct 是写法本身，如「COPY ... FROM stdin」「\connect」。
+	Construct string `json:"construct"`
+	// Tool 是这类文件该改用的命令行工具，如「psql」。
+	Tool string `json:"tool"`
+	// Offset 是写法在 ScriptChunk.Text 里开始的字节位置，编排据此算出它在文件里的行号；它不在
+	// Statements 里任何一条语句之前。
+	Offset int `json:"offset"`
+}
+
+// ScriptUnsupportedError 表示运行停在了文件里不支持的写法上：它之前的语句已经执行。
+type ScriptUnsupportedError struct {
+	Construct string
+	Tool      string
+	// Line 是写法开始的行，从 1 起。
+	Line int
+}
+
+func (e *ScriptUnsupportedError) Error() string {
+	return fmt.Sprintf("第 %d 行的 %s 不能在这里运行，之前的语句已执行；这类文件请改用命令行工具 %s 导入", e.Line, e.Construct, e.Tool)
 }
 
 // ScriptStatement 是切分出的一条语句。
@@ -155,9 +182,11 @@ var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 // RunScript 是运行 SQL 文件的编排，各驱动的 Session.RunScript 用它：先检查整个文件是 UTF-8（不是
 // 就以 *ScriptEncodingError 拒绝，什么也不执行），再回到开头边读边经 runner 切分，按批在同一个
 // 执行器（一条连接）上按文件的次序执行。不继续时停在第一条失败的语句（ScriptResult.Failure）。
+// 切分认出不支持的写法（ScriptSplit.Unsupported）时，执行完它之前的语句后停下，返回
+// *ScriptUnsupportedError，勾了继续也一样。
 //
-// 运行本身出错（读文件、切分、连接出错，ctx 被取消）时返回 error；已经执行过语句的，同时返回
-// 记着它们的结果。
+// 运行本身出错（读文件、切分、连接出错，ctx 被取消）时返回 error，切分出错之前切出的语句先执行完；
+// 已经执行过语句的，同时返回记着它们的结果。
 func RunScript(ctx context.Context, req ScriptRequest, runner ScriptRunner) (*ScriptResult, error) {
 	readSize := req.ReadSize
 	if readSize <= 0 {
@@ -280,15 +309,24 @@ func (r *scriptRun) run() error {
 		text := string(buf[:end])
 		split, err := r.runner.SplitScript(r.ctx, ScriptChunk{Text: text, State: state, Final: eof})
 		if err != nil {
-			return err
+			// 切分出错的地方在已经切出的语句之后：先执行完它们。
+			return r.stopAfterPending(err)
 		}
-		if split.Consumed < 0 || split.Consumed > len(text) || (eof && split.Consumed != len(text)) {
+		// 认出了不支持的写法时，它之前的语句都在 Statements 里，写法所在之处就是语句的边界。
+		limit := split.Consumed
+		if split.Unsupported != nil {
+			limit = split.Unsupported.Offset
+		}
+		if limit < 0 || limit > len(text) {
+			return fmt.Errorf("script splitter stopped at byte %d of the %d bytes it was given", limit, len(text))
+		}
+		if split.Unsupported == nil && eof && split.Consumed != len(text) {
 			return fmt.Errorf("script splitter consumed %d of the %d bytes it was given (final: %t)", split.Consumed, len(text), eof)
 		}
 		pos := 0
 		for _, statement := range split.Statements {
-			if statement.Offset < pos || statement.Offset > split.Consumed {
-				return fmt.Errorf("script splitter returned a statement at offset %d outside %d..%d", statement.Offset, pos, split.Consumed)
+			if statement.Offset < pos || statement.Offset > limit {
+				return fmt.Errorf("script splitter returned a statement at offset %d outside %d..%d", statement.Offset, pos, limit)
 			}
 			line += strings.Count(text[pos:statement.Offset], "\n")
 			pos = statement.Offset
@@ -304,7 +342,10 @@ func (r *scriptRun) run() error {
 				}
 			}
 		}
-		line += strings.Count(text[pos:split.Consumed], "\n")
+		line += strings.Count(text[pos:limit], "\n")
+		if unsupported := split.Unsupported; unsupported != nil {
+			return r.stopAfterPending(&ScriptUnsupportedError{Construct: unsupported.Construct, Tool: unsupported.Tool, Line: line})
+		}
 		state = split.State
 		buf = append(buf[:0], buf[split.Consumed:]...)
 		if eof {
@@ -318,6 +359,19 @@ func (r *scriptRun) run() error {
 		}
 	}
 	return r.flush()
+}
+
+// stopAfterPending 在文件里排在攒着的语句之后的地方结束运行（切分出错、不支持的写法）：先照常执行
+// 攒着的语句，再返回 cause；执行时运行已经因失败（不继续时）或被要求停下而结束的，运行停在那里，
+// 不再报 cause。
+func (r *scriptRun) stopAfterPending(cause error) error {
+	if err := r.flush(); err != nil {
+		return errors.Join(err, cause)
+	}
+	if r.done {
+		return nil
+	}
+	return cause
 }
 
 // flush 把攒着的语句交给执行器，计数，并在失败（不继续时）或被要求停下时结束运行。

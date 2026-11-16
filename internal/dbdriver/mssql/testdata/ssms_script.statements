@@ -1,0 +1,35 @@
+SET ANSI_NULLS ON
+@@@@
+SET QUOTED_IDENTIFIER ON
+@@@@
+CREATE TABLE [dbo].[orders](
+	[id] [int] IDENTITY(1,1) NOT NULL,
+	[note] [nvarchar](200) NULL CONSTRAINT [DF_orders_note] DEFAULT (N'GO; not a separator'),
+	[go] [int] NULL,
+ CONSTRAINT [PK_orders] PRIMARY KEY CLUSTERED ([id] ASC)
+) ON [PRIMARY]
+@@@@
+SET IDENTITY_INSERT [dbo].[orders] ON
+@@@@
+INSERT [dbo].[orders] ([id], [note], [go]) VALUES (1, N'it''s; fine', 1);
+INSERT [dbo].[orders] ([id], [note], [go]) VALUES (2, N'multi
+GO
+line', 2);
+@@@@
+SET IDENTITY_INSERT [dbo].[orders] OFF
+@@@@
+CREATE PROCEDURE [dbo].[order_note] @id int
+AS
+BEGIN
+	SET NOCOUNT ON;
+	-- GOTO is a word, not GO
+	SELECT [note], [go] FROM [dbo].[orders] WHERE [id] = @id;
+END
+@@@@
+CREATE VIEW [dbo].[GO] AS SELECT "go" = 1
+@@@@
+PRINT 'twice'
+@@@@
+PRINT 'twice'
+@@@@
+SELECT 'no separator at the end'

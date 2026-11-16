@@ -29,7 +29,7 @@ var descriptor = dbdriver.Descriptor{
 		dbdriver.CapSchemas, dbdriver.CapCreateDatabase, dbdriver.CapViewDDL,
 		dbdriver.CapViews, dbdriver.CapProcedures, dbdriver.CapFunctions, dbdriver.CapTriggers,
 		dbdriver.CapGridEdit, dbdriver.CapCreateTable, dbdriver.CapAlterTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable,
-		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly,
+		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly, dbdriver.CapRunSQLFile,
 	},
 	// 没有主键的表按 (tableoid, ctid) 定位单行。
 	LocatesRowWithoutPrimaryKey: true,

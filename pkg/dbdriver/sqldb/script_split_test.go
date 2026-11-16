@@ -125,6 +125,191 @@ func TestSplitScriptStartsAStatementAtItsFirstToken(t *testing.T) {
 	assert.Equal(t, len(text), split.Consumed)
 }
 
+// mysqlSyntax 像 MySQL：反斜杠转义的字符串、# 与「-- 」注释、/*! */ 版本注释、DELIMITER。
+var mysqlSyntax = ScriptSyntax{
+	Quotes:             []ScriptQuote{{Open: '\'', Close: '\'', Backslash: true}, {Open: '"', Close: '"', Backslash: true}, {Open: '`', Close: '`'}},
+	HashComments:       true,
+	SpacedDashComments: true,
+	ExecutableComments: true,
+	Delimiter:          true,
+}
+
+// pgSyntax 像 PostgreSQL：$tag$ 字符串、E'...' 转义、嵌套注释、BEGIN ATOMIC 函数体、psql 才有的写法。
+var pgSyntax = ScriptSyntax{
+	Quotes:         []ScriptQuote{{Open: '\'', Close: '\''}, {Open: '"', Close: '"'}},
+	AtomicBodies:   true,
+	NestedComments: true,
+	DollarQuotes:   true,
+	EscapeStrings:  true,
+	PsqlCommands:   true,
+}
+
+// batchSyntax 像 SQL Server：GO 分批，分号不切分。
+var batchSyntax = ScriptSyntax{
+	Quotes:         []ScriptQuote{{Open: '\'', Close: '\''}, {Open: '[', Close: ']'}},
+	NestedComments: true,
+	BatchSeparator: "GO",
+}
+
+// splitEverySize 在每一种读取块大小下切分 script，切出的语句都必须是 want。
+func splitEverySize(t *testing.T, syntax ScriptSyntax, script string, want []string) {
+	t.Helper()
+	for readSize := 1; readSize <= len(script); readSize++ {
+		require.Equal(t, want, splitAll(t, syntax, script, readSize), "read size %d", readSize)
+	}
+}
+
+// DELIMITER 一行换掉之后语句的结束符，这一行本身不是语句；结束符可以紧跟在词后面（END$$）、可以换回
+// 分号；不在语句开头的 DELIMITER 只是一个词。换过的结束符跨读取块保持。
+func TestSplitScriptFollowsDelimiterCommands(t *testing.T) {
+	script := "SELECT 1;\n" +
+		"DELIMITER $$\n" +
+		"CREATE PROCEDURE p() BEGIN SELECT 1; SELECT 'x$$'; END$$\n" +
+		"delimiter //  trailing words are ignored\n" +
+		"CREATE TRIGGER t BEFORE INSERT ON a FOR EACH ROW BEGIN SET @x = 1; END //\n" +
+		"SELECT 2; SELECT 3 //\n" +
+		"DELIMITER ;\n" +
+		"SELECT 4; SELECT delimiter FROM t;\n" +
+		"SELECT 5"
+	splitEverySize(t, mysqlSyntax, script, []string{
+		"SELECT 1",
+		"CREATE PROCEDURE p() BEGIN SELECT 1; SELECT 'x$$'; END",
+		"CREATE TRIGGER t BEFORE INSERT ON a FOR EACH ROW BEGIN SET @x = 1; END",
+		"SELECT 2; SELECT 3",
+		"SELECT 4",
+		"SELECT delimiter FROM t",
+		"SELECT 5",
+	})
+}
+
+// 当前的结束符经 State 带到下一次切分：上一次换成 ;; 的，下一次照样以 ;; 结束语句；换回分号时 State
+// 为空。
+func TestSplitScriptCarriesTheDelimiterInItsState(t *testing.T) {
+	split, err := SplitScript(mysqlSyntax, dbdriver.ScriptChunk{Text: "DELIMITER ;;\nBEGIN; END;;\nSELECT 1;"})
+	require.NoError(t, err)
+	assert.Equal(t, []dbdriver.ScriptStatement{{Text: "BEGIN; END", Offset: len("DELIMITER ;;\n")}}, split.Statements)
+	assert.Equal(t, ";;", split.State)
+	assert.Equal(t, len("DELIMITER ;;\nBEGIN; END;;"), split.Consumed)
+
+	split, err = SplitScript(mysqlSyntax, dbdriver.ScriptChunk{Text: "\nSELECT 1; SELECT 2;;\nDELIMITER ;\nSELECT 3;", State: ";;", Final: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"SELECT 1; SELECT 2", "SELECT 3"}, statementTexts(split))
+	assert.Empty(t, split.State)
+
+	_, err = SplitScript(mysqlSyntax, dbdriver.ScriptChunk{Text: "DELIMITER \nSELECT 1;", Final: true})
+	require.Error(t, err)
+}
+
+func statementTexts(split *dbdriver.ScriptSplit) []string {
+	texts := make([]string, 0, len(split.Statements))
+	for _, statement := range split.Statements {
+		texts = append(texts, statement.Text)
+	}
+	return texts
+}
+
+// MySQL 的词法：反斜杠转义引号与反斜杠本身；# 与「-- 」是注释，--1 不是；/*! */ 与 /*+ */ 属于语句，
+// 普通的 /* */ 不属于；语句只由版本注释构成时照样给出。
+func TestSplitScriptHonoursMySQLLexing(t *testing.T) {
+	script := "INSERT INTO t VALUES ('it\\'s; \\\\', \"a\\\";b\");\n" +
+		"# hash; comment\n" +
+		"SELECT 1--1;\n" +
+		"-- dash; comment\n" +
+		"/*!40101 SET NAMES utf8; */;\n" +
+		"SELECT /*+ MAX_EXECUTION_TIME(1); */ 2 /* plain; */;\n" +
+		"SELECT `a;b`;"
+	splitEverySize(t, mysqlSyntax, script, []string{
+		"INSERT INTO t VALUES ('it\\'s; \\\\', \"a\\\";b\")",
+		"SELECT 1--1",
+		"/*!40101 SET NAMES utf8; */",
+		"SELECT /*+ MAX_EXECUTION_TIME(1); */ 2 /* plain; */",
+		"SELECT `a;b`",
+	})
+}
+
+// PostgreSQL 的词法：$$ 与 $tag$ 字符串里的分号（包括别的 tag）不结束语句，$1 参数与含 $ 的标识符
+// 不是字符串；E'...' 里反斜杠转义，普通字符串里的反斜杠就是字符；注释可以嵌套。
+func TestSplitScriptHonoursPostgreSQLLexing(t *testing.T) {
+	script := "CREATE FUNCTION f() RETURNS text AS $body$ SELECT $$a;b$$; $body$ LANGUAGE sql;\n" +
+		"PREPARE q AS SELECT $1, a$b$c FROM t;\n" +
+		"SELECT E'it\\'s; ok', e'\\\\';\n" +
+		"SELECT 'plain\\';\n" +
+		"/* outer /* inner; */ still; */ SELECT 2;\n" +
+		"SELECT $tag_1$ ; $tag_1$"
+	splitEverySize(t, pgSyntax, script, []string{
+		"CREATE FUNCTION f() RETURNS text AS $body$ SELECT $$a;b$$; $body$ LANGUAGE sql",
+		"PREPARE q AS SELECT $1, a$b$c FROM t",
+		"SELECT E'it\\'s; ok', e'\\\\'",
+		"SELECT 'plain\\'",
+		"SELECT 2",
+		"SELECT $tag_1$ ; $tag_1$",
+	})
+}
+
+// CREATE [OR REPLACE] FUNCTION | PROCEDURE 的 BEGIN ... END 体（体里有 CASE ... END）到配对的 END
+// 才结束；括号里的 begin 不算；不是建函数的 BEGIN; 照常结束语句。
+func TestSplitScriptKeepsAtomicBodiesWhole(t *testing.T) {
+	script := "CREATE OR REPLACE PROCEDURE p(begin int) LANGUAGE sql BEGIN ATOMIC\n" +
+		"  INSERT INTO t VALUES (CASE WHEN begin > 0 THEN 1 ELSE 0 END);\n" +
+		"  INSERT INTO t VALUES (2);\n" +
+		"END;\n" +
+		"BEGIN;\n" +
+		"SELECT CASE WHEN true THEN 1 END;\n" +
+		"END;"
+	splitEverySize(t, pgSyntax, script, []string{
+		"CREATE OR REPLACE PROCEDURE p(begin int) LANGUAGE sql BEGIN ATOMIC\n" +
+			"  INSERT INTO t VALUES (CASE WHEN begin > 0 THEN 1 ELSE 0 END);\n" +
+			"  INSERT INTO t VALUES (2);\n" +
+			"END",
+		"BEGIN",
+		"SELECT CASE WHEN true THEN 1 END",
+		"END",
+	})
+}
+
+// 认出 psql 才有的写法时停下：给出它之前的语句与它的位置，不再往后切分。
+func TestSplitScriptReportsPsqlOnlyConstructs(t *testing.T) {
+	for name, tt := range map[string]struct {
+		text, construct string
+		before          []string
+	}{
+		"copy from stdin": {text: "SELECT 1;\nCOPY t (a) FROM STDIN;\n1\n\\.\n", construct: "COPY ... FROM stdin", before: []string{"SELECT 1"}},
+		"meta-command":    {text: "SELECT 1; SELECT 2;\n\\i other.sql\n", construct: `\i`, before: []string{"SELECT 1", "SELECT 2"}},
+	} {
+		split, err := SplitScript(pgSyntax, dbdriver.ScriptChunk{Text: tt.text, Final: true})
+		require.NoError(t, err, name)
+		assert.Equal(t, tt.before, statementTexts(split), name)
+		require.NotNil(t, split.Unsupported, name)
+		offset := strings.Index(tt.text, "COPY")
+		if offset < 0 {
+			offset = strings.Index(tt.text, `\`)
+		}
+		assert.Equal(t, dbdriver.ScriptUnsupported{Construct: tt.construct, Tool: "psql", Offset: offset}, *split.Unsupported, name)
+	}
+	// 别的方言里这些只是普通的记号。
+	split, err := SplitScript(triggerSyntax, dbdriver.ScriptChunk{Text: "COPY t FROM stdin;", Final: true})
+	require.NoError(t, err)
+	assert.Nil(t, split.Unsupported)
+}
+
+// 单独一行的 GO（不分大小写，前面可以有空白，后面可以跟次数与 -- 注释）分开一个个批；批里的分号不切分；
+// 行里还有别的内容、在注释与字符串里、跟在注释后面同一行的 GO 都不是分隔符。
+func TestSplitScriptSplitsBatchesAtSeparatorLines(t *testing.T) {
+	script := "SELECT 1; SELECT 2\nGO\n" +
+		"  go  -- empty batch\n" +
+		"SELECT 'GO\nGO'\n/* GO\n/* GO */ GO\n*/ GO\nGO 2\n" +
+		"-- comment\nGO\n" +
+		"PRINT [GO]\nGO x\nGOTO done\nGo\n" +
+		"SELECT 3"
+	splitEverySize(t, batchSyntax, script, []string{
+		"SELECT 1; SELECT 2",
+		"SELECT 'GO\nGO'\n/* GO\n/* GO */ GO\n*/ GO",
+		"SELECT 'GO\nGO'\n/* GO\n/* GO */ GO\n*/ GO",
+		"PRINT [GO]\nGO x\nGOTO done",
+		"SELECT 3",
+	})
+}
+
 // 没有触发器体的语法（别的方言）里，BEGIN ... END 之间的分号照常结束语句。
 func TestSplitScriptWithoutTriggerBodiesEndsAtEverySemicolon(t *testing.T) {
 	syntax := ScriptSyntax{Quotes: []ScriptQuote{{Open: '\'', Close: '\''}}}

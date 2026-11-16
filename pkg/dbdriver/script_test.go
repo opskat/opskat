@@ -15,21 +15,25 @@ import (
 // semicolonRunner 是测试用的脚本钩子：切分只认分号（不认引号与注释），执行器把语句记下来，
 // failing 里的语句失败。它记下每次切分收到的文本，证明编排只把完整的 UTF-8 交给切分。
 type semicolonRunner struct {
-	failing   map[string]string
-	opened    int
-	closed    int
-	batches   []ScriptBatch
-	executed  []string
-	chunks    []ScriptChunk
-	splitErr  error
-	leaveTail bool
+	failing  map[string]string
+	opened   int
+	closed   int
+	batches  []ScriptBatch
+	executed []string
+	chunks   []ScriptChunk
+	splitErr error
+	// splitErrAfter 是切分返回 splitErr 之前正常切分的次数。
+	splitErrAfter int
+	leaveTail     bool
+	// unsupported 是不支持的语句开头：切分到以它开头的语句时停下，给出它之前的语句与它的位置。
+	unsupported string
 	// onStatement 在一条语句开始执行时被调用，测试用它在一批的中途要求停下（这条语句仍会执行完）。
 	onStatement func(statement string)
 }
 
 func (r *semicolonRunner) SplitScript(_ context.Context, chunk ScriptChunk) (*ScriptSplit, error) {
 	r.chunks = append(r.chunks, chunk)
-	if r.splitErr != nil {
+	if r.splitErr != nil && len(r.chunks) > r.splitErrAfter {
 		return nil, r.splitErr
 	}
 	split := &ScriptSplit{Statements: []ScriptStatement{}, State: chunk.State + "+"}
@@ -37,17 +41,24 @@ func (r *semicolonRunner) SplitScript(_ context.Context, chunk ScriptChunk) (*Sc
 	emit := func(end int) {
 		text := chunk.Text[start:end]
 		trimmed := strings.TrimLeft(text, " \t\r\n")
-		if strings.TrimSpace(trimmed) != "" {
-			split.Statements = append(split.Statements, ScriptStatement{
-				Text: strings.TrimSpace(trimmed), Offset: start + len(text) - len(trimmed),
-			})
+		if strings.TrimSpace(trimmed) == "" {
+			return
 		}
+		offset := start + len(text) - len(trimmed)
+		if r.unsupported != "" && strings.HasPrefix(trimmed, r.unsupported) {
+			split.Unsupported = &ScriptUnsupported{Construct: r.unsupported, Tool: "psql", Offset: offset}
+			return
+		}
+		split.Statements = append(split.Statements, ScriptStatement{Text: strings.TrimSpace(trimmed), Offset: offset})
 	}
-	for i := 0; i < len(chunk.Text); i++ {
+	for i := 0; i < len(chunk.Text) && split.Unsupported == nil; i++ {
 		if chunk.Text[i] == ';' {
 			emit(i)
 			start = i + 1
 		}
+	}
+	if split.Unsupported != nil {
+		return split, nil
 	}
 	split.Consumed = start
 	if chunk.Final && !r.leaveTail {
@@ -299,4 +310,49 @@ func TestRunScriptReportsEveryFailureWhenContinuing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, failures)
 	require.NotNil(t, result.Failure)
+}
+
+// 切分在文件后面出错时，前面已经切出、还没执行的语句先按次序执行完，再返回切分的错误。
+func TestRunScriptExecutesThePendingStatementsBeforeASplitterError(t *testing.T) {
+	splitErr := errors.New("splitter broke")
+	runner := &semicolonRunner{splitErr: splitErr, splitErrAfter: 1}
+	req := scriptRequest("SELECT 1;\nSELECT 2;\nSELECT 3")
+	req.ReadSize = len("SELECT 1;\nSELECT 2;\n")
+
+	result, err := RunScript(context.Background(), req, runner)
+	require.ErrorIs(t, err, splitErr)
+	assert.Equal(t, []string{"SELECT 1", "SELECT 2"}, runner.executed)
+	require.NotNil(t, result)
+	assert.EqualValues(t, 2, result.Succeeded)
+}
+
+// 切分认出不支持的写法：它之前的语句按次序执行完（勾了「继续」时失败的也照样继续），然后运行停下，
+// 报出是什么写法、在文件第几行、该用什么工具；之后的语句不执行。与文件按多大的块读取无关。
+func TestRunScriptStopsAtAnUnsupportedConstructAfterTheStatementsBeforeIt(t *testing.T) {
+	script := "SELECT 1;\nBAD;\n\n  COPY t FROM stdin;\n1\t2\n\\.\nSELECT 3;\n"
+	for readSize := 1; readSize <= len(script); readSize++ {
+		runner := &semicolonRunner{failing: map[string]string{"BAD": "boom"}, unsupported: "COPY"}
+		req := scriptRequest(script)
+		req.ReadSize = readSize
+		req.ContinueOnError = true
+
+		result, err := RunScript(context.Background(), req, runner)
+		var unsupported *ScriptUnsupportedError
+		require.ErrorAs(t, err, &unsupported, "read size %d", readSize)
+		assert.Equal(t, ScriptUnsupportedError{Construct: "COPY", Tool: "psql", Line: 4}, *unsupported, "read size %d", readSize)
+		assert.Equal(t, []string{"SELECT 1", "BAD"}, runner.executed, "read size %d", readSize)
+		require.NotNil(t, result)
+		assert.EqualValues(t, 1, result.Succeeded, "read size %d", readSize)
+		assert.EqualValues(t, 1, result.Failed, "read size %d", readSize)
+	}
+}
+
+// 不继续时，不支持的写法之前已有语句失败：运行停在那条失败的语句上（照常报出），不再报不支持的写法。
+func TestRunScriptStopsAtAFailureBeforeAnUnsupportedConstruct(t *testing.T) {
+	runner := &semicolonRunner{failing: map[string]string{"BAD": "boom"}, unsupported: "COPY"}
+	result, err := RunScript(context.Background(), scriptRequest("BAD;\nSELECT 1;\nCOPY t FROM stdin;\n"), runner)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"BAD"}, runner.executed)
+	require.NotNil(t, result.Failure)
+	assert.EqualValues(t, 1, result.Failure.Number)
 }

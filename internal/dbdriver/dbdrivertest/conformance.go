@@ -37,14 +37,14 @@ type SessionFactory func(t *testing.T) dbdriver.Session
 //     没有声明的功能必须以 dbdriver.ErrUnsupported 拒绝：连接级只读，没有声明的对象类型
 //     的浏览（ObjectSource），没有声明表格编辑时的表格编辑语句（GridEditStatements），没有声明
 //     改表时的改表（AlterTableModel / AlterTableStatements），没有声明导入时的导入语句（ImportStatements），没有声明导出 / 复制为 SQL 时的行语句（PrepareRowStatements），没有声明建表、删表、清空、建库时的对应语句（声明了的
-//     必须给出语句），没有声明运行 SQL 文件时的 RunScript（声明了的必须能运行 ConformanceScript 并停在
-//     失败的语句上），以及
+//     必须给出语句），没有声明运行 SQL 文件时的 RunScript（声明了的必须能运行 ConformanceScript——或
+//     WithScriptCheck 给出的、按驱动写法分语句的文件——并停在失败的语句上），以及
 //     没有声明 CanDisableForeignKeyChecks 时整批执行里的关闭外键检查，且拒绝时不能执行任何语句。
 //     表设计器的列能力（ExplicitDefaults、AutoIncrement）与索引编辑（IndexEditing）同样按声明检查：建表时
 //     声明了的必须给出语句、没声明的以 ErrUnsupported 拒绝，改表时没声明的在读表之前拒绝（见
 //     columnFeatureProblems / indexFeatureProblems）。声明了的浏览操作、表浏览与行语句能不能调用，要有数据才能
 //     验证，由 RunBrowseConformance / RunTableConformance 在能提供数据的会话上检查。
-func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) {
+func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory, opts ...ConformanceOption) {
 	t.Helper()
 	if err := d.Descriptor().Validate(); err != nil {
 		t.Errorf("descriptor: %v", err)
@@ -58,7 +58,7 @@ func RunConformance(t *testing.T, d dbdriver.Driver, newSession SessionFactory) 
 	for _, problem := range readOnlyProblems(d) {
 		t.Errorf("read-only: %s", problem)
 	}
-	for _, problem := range sessionProblems(d.Descriptor(), newSession(t)) {
+	for _, problem := range sessionProblems(d.Descriptor(), newSession(t), opts...) {
 		t.Errorf("session: %s", problem)
 	}
 }
@@ -87,8 +87,9 @@ func readOnlyProblems(d dbdriver.Driver) []string {
 }
 
 // sessionProblems 在一条会话上跑每个驱动都必须支持的操作，最后关闭它。
-func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
+func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session, opts ...ConformanceOption) []string {
 	ctx := context.Background()
+	options := resolveOptions(opts)
 	var problems []string
 
 	// 拒绝要在任何语句之前：基于桩连接的会话在见到未预期的语句时会失败。
@@ -117,7 +118,7 @@ func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 		}
 	}
 
-	problems = append(problems, scriptProblems(ctx, desc, s)...)
+	problems = append(problems, scriptProblems(ctx, desc, s, options.script)...)
 
 	if err := s.Close(); err != nil {
 		problems = append(problems, fmt.Sprintf("Close: %v", err))
@@ -125,29 +126,64 @@ func sessionProblems(desc dbdriver.Descriptor, s dbdriver.Session) []string {
 	return problems
 }
 
-// ConformanceScript 是一致性测试运行的 SQL 文件：第二条语句是必然失败的 ConformanceFailingStatement，
-// 不继续的运行必须停在它（第 2 条、第 2 行），第三条不执行。会话工厂据此准备桩。
+// ConformanceScript 是一致性测试默认运行的 SQL 文件：三条以分号结束的语句，第二条是必然失败的
+// ConformanceFailingStatement，不继续的运行必须停在它（第 2 条、第 2 行），第三条不执行。会话工厂
+// 据此准备桩。
 const ConformanceScript = ConformanceStatement + ";\n" + ConformanceFailingStatement + ";\n" + ConformanceStatement + ";\n"
 
-// scriptProblems 检查声明了运行 SQL 文件的驱动：ConformanceScript 要能运行，并停在失败的那条语句上
-// 报出它的条号与行号。没有声明的由 undeclaredObjectProblems 在任何语句之前检查。
-func scriptProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
+// ConformanceScriptCheck 是一致性测试运行的 SQL 文件与不继续的运行该停在的失败语句：文件按驱动自己的
+// 写法分成语句，第 FailingNumber 条（从文件第 FailingLine 行开始）必然失败，它之前的都成功，它之后的
+// 不执行。
+type ConformanceScriptCheck struct {
+	Script        string
+	FailingNumber int64
+	FailingLine   int
+}
+
+// DefaultConformanceScriptCheck 是以分号结束语句的驱动运行的文件：ConformanceScript。
+var DefaultConformanceScriptCheck = ConformanceScriptCheck{Script: ConformanceScript, FailingNumber: 2, FailingLine: 2}
+
+// ConformanceOption 调整一致性测试里依驱动写法而定的输入。
+type ConformanceOption func(*conformanceOptions)
+
+type conformanceOptions struct {
+	script ConformanceScriptCheck
+}
+
+// WithScriptCheck 让声明了运行 SQL 文件的驱动运行 check 里的文件（不以分号结束语句的方言，如按 GO
+// 分批的），代替 DefaultConformanceScriptCheck。
+func WithScriptCheck(check ConformanceScriptCheck) ConformanceOption {
+	return func(o *conformanceOptions) { o.script = check }
+}
+
+func resolveOptions(opts []ConformanceOption) conformanceOptions {
+	o := conformanceOptions{script: DefaultConformanceScriptCheck}
+	for _, opt := range opts {
+		opt(&o)
+	}
+	return o
+}
+
+// scriptProblems 检查声明了运行 SQL 文件的驱动：check 的文件要能运行，并停在失败的那条语句上报出它的
+// 条号与行号。没有声明的由 undeclaredObjectProblems 在任何语句之前检查。
+func scriptProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session, check ConformanceScriptCheck) []string {
 	if !desc.Supports(dbdriver.CapRunSQLFile) {
 		return nil
 	}
 	result, err := s.RunScript(ctx, dbdriver.ScriptRequest{
-		Script: strings.NewReader(ConformanceScript), Size: int64(len(ConformanceScript)),
+		Script: strings.NewReader(check.Script), Size: int64(len(check.Script)),
 	})
 	switch {
 	case err != nil:
 		return []string{fmt.Sprintf("RunScript: declared %q but the script failed to run: %v", dbdriver.CapRunSQLFile, err)}
 	case result.Failure == nil:
 		return []string{fmt.Sprintf("RunScript: the run did not stop at the failing statement %q", ConformanceFailingStatement)}
-	case result.Failure.Number != 2 || result.Failure.Line != 2 || result.Failure.Error == "":
-		return []string{fmt.Sprintf("RunScript: the failure must name statement 2 on line 2 with the database's error, got %+v", *result.Failure)}
-	case result.Succeeded != 1 || result.Failed != 1:
-		return []string{fmt.Sprintf("RunScript: a run stopping at the second statement executes one statement and fails one, got %d succeeded and %d failed",
-			result.Succeeded, result.Failed)}
+	case result.Failure.Number != check.FailingNumber || result.Failure.Line != check.FailingLine || result.Failure.Error == "":
+		return []string{fmt.Sprintf("RunScript: the failure must name statement %d on line %d with the database's error, got %+v",
+			check.FailingNumber, check.FailingLine, *result.Failure)}
+	case result.Succeeded != check.FailingNumber-1 || result.Failed != 1:
+		return []string{fmt.Sprintf("RunScript: a run stopping at statement %d executes %d statements and fails one, got %d succeeded and %d failed",
+			check.FailingNumber, check.FailingNumber-1, result.Succeeded, result.Failed)}
 	}
 	return nil
 }

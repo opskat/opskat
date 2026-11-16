@@ -29,7 +29,7 @@ var descriptor = dbdriver.Descriptor{
 		dbdriver.CapCreateDatabase, dbdriver.CapViewDDL,
 		dbdriver.CapViews, dbdriver.CapProcedures, dbdriver.CapFunctions, dbdriver.CapTriggers,
 		dbdriver.CapGridEdit, dbdriver.CapCreateTable, dbdriver.CapAlterTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable,
-		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly,
+		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly, dbdriver.CapRunSQLFile,
 	},
 	CanDisableForeignKeyChecks: true,
 	CreateDatabaseOptions: []dbdriver.DatabaseOption{

@@ -34,6 +34,9 @@ func TestMySQLPassesConformance(t *testing.T) {
 		mock.ExpectQuery(dbdrivertest.ConformanceStatement).WillReturnRows(one())
 		mock.ExpectQuery(dbdrivertest.ConformanceStatement).WillReturnRows(one())
 		mock.ExpectQuery(dbdrivertest.ConformanceStatement).WillReturnRows(one())
+		// 运行 ConformanceScript：第一条成功，第二条失败后停下。
+		mock.ExpectExec(dbdrivertest.ConformanceStatement).WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(dbdrivertest.ConformanceFailingStatement).WillReturnError(errors.New("You have an error in your SQL syntax"))
 		mock.ExpectClose()
 		return newSession(db)
 	})
