@@ -254,6 +254,8 @@ export function abnormalCountOf(health: K8sClusterHealth | undefined, typeKey: s
   return health.abnormalCounts[typeKey];
 }
 
+const POD_TYPE_KEY = "/pods";
+
 const COUNT_CONCURRENCY = 6;
 
 let terminalSeq = 0;
@@ -262,6 +264,12 @@ type Refresher = () => Promise<unknown>;
 
 /** The YAML dialog open on a cluster: editing one resource, or applying pasted documents. */
 export type K8sYamlDialogState = { mode: "edit"; ctx: K8sActionContext } | { mode: "apply" };
+
+/** The scale / restart / delete dialog open on a cluster, for the resource the action was started from. */
+export interface K8sOpDialogState {
+  kind: "scale" | "restart" | "delete";
+  ctx: K8sActionContext;
+}
 
 interface K8sStoreState {
   clusters: Record<number, K8sClusterState>;
@@ -284,6 +292,8 @@ interface K8sStoreState {
   eventLists: Record<number, Record<string, Loadable<K8sEvent[]>>>;
   /** The edit / apply YAML dialog of each cluster; absent = none open. */
   yamlDialogs: Record<number, K8sYamlDialogState | undefined>;
+  /** The scale / restart / delete dialog of each cluster; absent = none open. */
+  opDialogs: Record<number, K8sOpDialogState | undefined>;
 
   /** Creates the cluster's state and reads it; a cluster that already has state (page remount) is left as is. */
   initCluster: (assetId: number, defaultNamespace: string) => void;
@@ -313,6 +323,10 @@ interface K8sStoreState {
   openYamlEdit: (ctx: K8sActionContext) => void;
   openYamlApply: (assetId: number) => void;
   closeYamlDialog: (assetId: number) => void;
+  openOp: (kind: K8sOpDialogState["kind"], ctx: K8sActionContext) => void;
+  closeOp: (assetId: number) => void;
+  /** Closes everything open for one resource: its detail tab (with its log sub-tab) and, for a Pod, its terminal tabs. */
+  closeResourceTabs: (assetId: number, typeKey: string, namespace: string, name: string) => void;
   /** Re-reads version, types, namespaces, every loaded list / detail and every registered view. */
   refreshAll: (assetId: number) => Promise<void>;
   /** Lets a view take part in `refreshAll`; returns the unregister function. */
@@ -421,6 +435,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
     counts: {},
     eventLists: {},
     yamlDialogs: {},
+    opDialogs: {},
 
     initCluster: (assetId, defaultNamespace) => {
       if (get().clusters[assetId]) return;
@@ -809,6 +824,19 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
     openYamlApply: (assetId) => set((s) => ({ yamlDialogs: { ...s.yamlDialogs, [assetId]: { mode: "apply" } } })),
     closeYamlDialog: (assetId) => set((s) => ({ yamlDialogs: { ...s.yamlDialogs, [assetId]: undefined } })),
 
+    openOp: (kind, ctx) => set((s) => ({ opDialogs: { ...s.opDialogs, [ctx.assetId]: { kind, ctx } } })),
+    closeOp: (assetId) => set((s) => ({ opDialogs: { ...s.opDialogs, [assetId]: undefined } })),
+
+    closeResourceTabs: (assetId, typeKey, namespace, name) => {
+      const ids = [resourceTabId(typeKey, namespace, name)];
+      if (typeKey === POD_TYPE_KEY) {
+        for (const [id, term] of Object.entries(get().terminals[assetId] ?? {})) {
+          if (term.namespace === namespace && term.pod === name) ids.push(id);
+        }
+      }
+      get().closeTabs(assetId, ids);
+    },
+
     registerRefresher: (assetId, key, fn) => {
       let byKey = refreshers.get(assetId);
       if (!byKey) {
@@ -907,6 +935,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
           counts: without(s.counts),
           eventLists: without(s.eventLists),
           yamlDialogs: without(s.yamlDialogs),
+          opDialogs: without(s.opDialogs),
         };
       });
     },

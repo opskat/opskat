@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { K8sTableSection } from "../../K8sTableSection";
 import { resourceTabId, useK8sStore } from "@/stores/k8sStore";
 import type { K8sDetailProps } from "../registry";
+import { useHpaOf } from "./useHpaOf";
 import { useListed } from "./useListed";
 import { WorkloadSummary, type PodTemplate } from "./WorkloadSummary";
 import type { LabelSelector } from "./selector";
@@ -14,22 +15,11 @@ const statusOf = (o: Record<string, unknown>) => (o.status ?? {}) as Obj;
 /** The HPA of this workload (same namespace, `scaleTargetRef` pointing at it), as `name · min–max`; null when none. */
 function useRelatedHpa({ assetId, namespace, name, object }: K8sDetailProps): SummaryItem | null {
   const { t } = useTranslation();
-  const listed = useListed(assetId, `hpa:${namespace}:${object.kind}:${name}`, {
-    group: "autoscaling",
-    version: "v2",
-    resource: "horizontalpodautoscalers",
-    namespace,
-    labelSelector: "",
-  });
+  const { failed, hpa } = useHpaOf(assetId, namespace, String(object.kind), name);
   const label = t("asset.k8sHpa");
-  if (listed.status === "error") return { label, value: "-", mono: true };
-  const hpa = listed.items.find((h) => {
-    const ref = specOf(h.object).scaleTargetRef as { kind?: string; name?: string } | undefined;
-    return ref?.kind === object.kind && ref?.name === name;
-  });
+  if (failed) return { label, value: "-", mono: true };
   if (!hpa) return null;
-  const spec = specOf(hpa.object);
-  return { label, value: `${hpa.name} · ${spec.minReplicas ?? 1}–${spec.maxReplicas}`, mono: true };
+  return { label, value: `${hpa.name} · ${hpa.min}–${hpa.max}`, mono: true };
 }
 
 const strategyText = (strategy: Obj | undefined) => {

@@ -3,10 +3,12 @@ package k8s
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -220,4 +222,65 @@ func applyDocument(ctx context.Context, dyn dynamic.Interface, mapper meta.RESTM
 		res.Action = ApplyCreated
 	}
 	return res
+}
+
+// restartedAtAnnotation 是 kubectl rollout restart 写入 Pod 模板的注解，改动模板即触发滚动更新。
+const restartedAtAnnotation = "kubectl.kubernetes.io/restartedAt"
+
+// dynamicFor 用与其他读写一致的 rest 配置建 dynamic client。
+func dynamicFor(kubeconfig string, opts ...ClientOption) (dynamic.Interface, error) {
+	config, err := restConfig(kubeconfig, opts...)
+	if err != nil {
+		return nil, err
+	}
+	dyn, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("create k8s dynamic client: %w", err)
+	}
+	return dyn, nil
+}
+
+func gvrOf(ref ResourceRef) schema.GroupVersionResource {
+	return schema.GroupVersionResource{Group: ref.Group, Version: ref.Version, Resource: ref.Resource}
+}
+
+// DeleteResource 删除 ref 指向的资源，级联策略为 Background（与 kubectl delete 默认一致：立即返回，依赖对象由 GC 后台清理）。
+func DeleteResource(ctx context.Context, kubeconfig string, ref ResourceRef, opts ...ClientOption) error {
+	dyn, err := dynamicFor(kubeconfig, opts...)
+	if err != nil {
+		return err
+	}
+	policy := metav1.DeletePropagationBackground
+	return resourceClient(dyn, gvrOf(ref), ref.Namespace).Delete(ctx, ref.Name, metav1.DeleteOptions{PropagationPolicy: &policy})
+}
+
+// ScaleResource 通过 scale 子资源把副本数设为 replicas（≥ 0）。
+func ScaleResource(ctx context.Context, kubeconfig string, ref ResourceRef, replicas int32, opts ...ClientOption) error {
+	if replicas < 0 {
+		return fmt.Errorf("replicas must be >= 0, got %d", replicas)
+	}
+	dyn, err := dynamicFor(kubeconfig, opts...)
+	if err != nil {
+		return err
+	}
+	patch := []byte(fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas))
+	_, err = resourceClient(dyn, gvrOf(ref), ref.Namespace).Patch(ctx, ref.Name, types.MergePatchType, patch, metav1.PatchOptions{FieldManager: fieldManager}, "scale")
+	return err
+}
+
+// RestartWorkload 与 kubectl rollout restart 相同：把 Pod 模板注解 restartedAt 改为当前时间。
+func RestartWorkload(ctx context.Context, kubeconfig string, ref ResourceRef, opts ...ClientOption) error {
+	dyn, err := dynamicFor(kubeconfig, opts...)
+	if err != nil {
+		return err
+	}
+	patch := map[string]any{"spec": map[string]any{"template": map[string]any{"metadata": map[string]any{
+		"annotations": map[string]any{restartedAtAnnotation: time.Now().Format(time.RFC3339)},
+	}}}}
+	raw, err := json.Marshal(patch)
+	if err != nil {
+		return fmt.Errorf("marshal restart patch: %w", err)
+	}
+	_, err = resourceClient(dyn, gvrOf(ref), ref.Namespace).Patch(ctx, ref.Name, types.StrategicMergePatchType, raw, metav1.PatchOptions{FieldManager: fieldManager})
+	return err
 }

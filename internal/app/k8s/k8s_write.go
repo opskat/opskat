@@ -58,3 +58,51 @@ func applyNamespace(selected, configured string) string {
 	}
 	return configured
 }
+
+// K8sScaleRequest 是 ScaleK8sResource 的请求。
+type K8sScaleRequest struct {
+	Ref      K8sResourceRef `json:"ref"`
+	Replicas int32          `json:"replicas"`
+}
+
+func refTarget(ref K8sResourceRef) []zap.Field {
+	return []zap.Field{zap.String("resource", ref.Resource), zap.String("namespace", ref.Namespace), zap.String("name", ref.Name)}
+}
+
+func (r K8sResourceRef) pkgRef() k8spkg.ResourceRef {
+	return k8spkg.ResourceRef{Group: r.Group, Version: r.Version, Resource: r.Resource, Namespace: r.Namespace, Name: r.Name}
+}
+
+// DeleteK8sResource 删除资源（Background 级联）。
+func (k *K8s) DeleteK8sResource(ref K8sResourceRef) (string, error) {
+	if err := ref.validate(); err != nil {
+		return "", fmt.Errorf("delete K8S resource: %w", err)
+	}
+	return k.runK8sWrite(ref.AssetID, "delete K8S resource", refTarget(ref), func(ctx context.Context, c *k8sCallContext) (any, error) {
+		return struct{}{}, k8spkg.DeleteResource(ctx, c.kubeconfig, ref.pkgRef(), c.opts...)
+	})
+}
+
+// ScaleK8sResource 通过 scale 子资源设置副本数。
+func (k *K8s) ScaleK8sResource(req K8sScaleRequest) (string, error) {
+	if err := req.Ref.validate(); err != nil {
+		return "", fmt.Errorf("scale K8S resource: %w", err)
+	}
+	if req.Replicas < 0 {
+		return "", fmt.Errorf("scale K8S resource: replicas must be >= 0")
+	}
+	target := append(refTarget(req.Ref), zap.Int32("replicas", req.Replicas))
+	return k.runK8sWrite(req.Ref.AssetID, "scale K8S resource", target, func(ctx context.Context, c *k8sCallContext) (any, error) {
+		return struct{}{}, k8spkg.ScaleResource(ctx, c.kubeconfig, req.Ref.pkgRef(), req.Replicas, c.opts...)
+	})
+}
+
+// RestartK8sWorkload 滚动重启工作负载（等同 kubectl rollout restart）。
+func (k *K8s) RestartK8sWorkload(ref K8sResourceRef) (string, error) {
+	if err := ref.validate(); err != nil {
+		return "", fmt.Errorf("restart K8S workload: %w", err)
+	}
+	return k.runK8sWrite(ref.AssetID, "restart K8S workload", refTarget(ref), func(ctx context.Context, c *k8sCallContext) (any, error) {
+		return struct{}{}, k8spkg.RestartWorkload(ctx, c.kubeconfig, ref.pkgRef(), c.opts...)
+	})
+}

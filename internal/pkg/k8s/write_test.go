@@ -6,9 +6,11 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 const writeVerbs = `["create","delete","get","list","patch","update","watch"]`
@@ -235,4 +237,120 @@ func TestApplyYAMLReportsSyntaxErrorsAndMissingNamesPerDocument(t *testing.T) {
 		assert.Equal(t, ApplyFailed, r.Action)
 		assert.NotEmpty(t, r.Error)
 	}
+}
+
+var deployRef = ResourceRef{Group: "apps", Version: "v1", Resource: "deployments", Namespace: "default", Name: "web"}
+
+const deployPath = "/apis/apps/v1/namespaces/default/deployments/web"
+
+func TestDeleteResourceUsesBackgroundPropagation(t *testing.T) {
+	f := newFakeAPIServer(t)
+	var body map[string]any
+	f.handle(deployPath, func(w http.ResponseWriter, r *http.Request) {
+		body = readBody(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Success"}`))
+	})
+	require.NoError(t, DeleteResource(context.Background(), f.kubeconfig(), deployRef))
+
+	reqs := f.requests(deployPath)
+	require.Len(t, reqs, 1)
+	assert.Equal(t, http.MethodDelete, reqs[0].Method)
+	assert.Equal(t, "Background", body["propagationPolicy"])
+}
+
+func TestDeleteResourceClusterScopedHasNoNamespaceInPath(t *testing.T) {
+	f := newFakeAPIServer(t)
+	f.handle("/api/v1/namespaces/team", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Success"}`))
+	})
+	require.NoError(t, DeleteResource(context.Background(), f.kubeconfig(), ResourceRef{Version: "v1", Resource: "namespaces", Name: "team"}))
+	require.Len(t, f.requests("/api/v1/namespaces/team"), 1)
+}
+
+func TestDeleteResourcePassesThroughClusterError(t *testing.T) {
+	f := newFakeAPIServer(t)
+	f.handle(deployPath, func(w http.ResponseWriter, _ *http.Request) {
+		writeStatus(w, http.StatusForbidden, "Forbidden", `deployments.apps "web" is forbidden: User "u" cannot delete resource`)
+	})
+	require.ErrorContains(t, DeleteResource(context.Background(), f.kubeconfig(), deployRef), "cannot delete resource")
+
+	g := newFakeAPIServer(t)
+	err := DeleteResource(context.Background(), g.kubeconfig(), deployRef)
+	require.Error(t, err)
+	assert.True(t, apierrors.IsNotFound(err), "a missing object stays a NotFound error")
+}
+
+func TestScaleResourcePatchesScaleSubresource(t *testing.T) {
+	f := newFakeAPIServer(t)
+	var body map[string]any
+	var contentType string
+	f.handle(deployPath+"/scale", func(w http.ResponseWriter, r *http.Request) {
+		body, contentType = readBody(t, r), r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"Scale","apiVersion":"autoscaling/v1","spec":{"replicas":5}}`))
+	})
+	require.NoError(t, ScaleResource(context.Background(), f.kubeconfig(), deployRef, 5))
+
+	reqs := f.requests(deployPath + "/scale")
+	require.Len(t, reqs, 1)
+	assert.Equal(t, http.MethodPatch, reqs[0].Method)
+	assert.Equal(t, "application/merge-patch+json", contentType)
+	assert.Equal(t, float64(5), body["spec"].(map[string]any)["replicas"])
+	assert.Empty(t, f.requests(deployPath), "the workload object itself is not written")
+}
+
+func TestScaleResourceAllowsZeroAndRejectsNegative(t *testing.T) {
+	f := newFakeAPIServer(t)
+	var body map[string]any
+	f.handle(deployPath+"/scale", func(w http.ResponseWriter, r *http.Request) {
+		body = readBody(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"Scale","apiVersion":"autoscaling/v1"}`))
+	})
+	require.NoError(t, ScaleResource(context.Background(), f.kubeconfig(), deployRef, 0))
+	assert.Equal(t, float64(0), body["spec"].(map[string]any)["replicas"])
+
+	require.Error(t, ScaleResource(context.Background(), f.kubeconfig(), deployRef, -1))
+	assert.Len(t, f.requests(deployPath+"/scale"), 1, "a negative target never reaches the cluster")
+}
+
+func TestScaleResourcePassesThroughClusterError(t *testing.T) {
+	f := newFakeAPIServer(t)
+	f.handle(deployPath+"/scale", func(w http.ResponseWriter, _ *http.Request) {
+		writeStatus(w, http.StatusForbidden, "Forbidden", `deployments.apps "web" is forbidden: cannot patch resource "deployments/scale"`)
+	})
+	require.ErrorContains(t, ScaleResource(context.Background(), f.kubeconfig(), deployRef, 2), `deployments/scale`)
+}
+
+func TestRestartWorkloadPatchesRestartedAtAnnotation(t *testing.T) {
+	f := newFakeAPIServer(t)
+	var body map[string]any
+	var contentType string
+	f.handle(deployPath, func(w http.ResponseWriter, r *http.Request) {
+		body, contentType = readBody(t, r), r.Header.Get("Content-Type")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"Deployment","apiVersion":"apps/v1","metadata":{"name":"web"}}`))
+	})
+	before := time.Now().Add(-time.Second)
+	require.NoError(t, RestartWorkload(context.Background(), f.kubeconfig(), deployRef))
+
+	reqs := f.requests(deployPath)
+	require.Len(t, reqs, 1)
+	assert.Equal(t, http.MethodPatch, reqs[0].Method)
+	assert.Equal(t, "application/strategic-merge-patch+json", contentType)
+	annotations := body["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
+	require.Len(t, annotations, 1)
+	at, err := time.Parse(time.RFC3339, annotations["kubectl.kubernetes.io/restartedAt"].(string))
+	require.NoError(t, err)
+	assert.False(t, at.Before(before.Truncate(time.Second)))
+}
+
+func TestRestartWorkloadPassesThroughClusterError(t *testing.T) {
+	f := newFakeAPIServer(t)
+	f.handle(deployPath, func(w http.ResponseWriter, _ *http.Request) {
+		writeStatus(w, http.StatusForbidden, "Forbidden", `deployments.apps "web" is forbidden: cannot patch resource`)
+	})
+	require.ErrorContains(t, RestartWorkload(context.Background(), f.kubeconfig(), deployRef), "cannot patch resource")
 }

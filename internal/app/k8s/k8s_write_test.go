@@ -20,3 +20,14 @@ func TestWriteRequestsRejectBadPathSegments(t *testing.T) {
 	_, err = k.ApplyK8sYAML(K8sApplyRequest{AssetID: 1, YAML: "a: b", DefaultNamespace: "a/b"})
 	require.ErrorContains(t, err, "invalid namespace")
 }
+
+func TestDeleteScaleRestartRejectBadRefs(t *testing.T) {
+	k := &K8s{}
+	bad := K8sResourceRef{AssetID: 1, Version: "v1", Resource: "pods", Namespace: "../x", Name: "p"}
+	_, err := k.DeleteK8sResource(bad)
+	require.ErrorContains(t, err, "invalid namespace")
+	_, err = k.RestartK8sWorkload(bad)
+	require.ErrorContains(t, err, "invalid namespace")
+	_, err = k.ScaleK8sResource(K8sScaleRequest{Ref: K8sResourceRef{AssetID: 1, Group: "apps", Version: "v1", Resource: "deployments", Namespace: "d", Name: "w"}, Replicas: -1})
+	require.ErrorContains(t, err, "replicas")
+}

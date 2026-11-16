@@ -11,10 +11,12 @@ import { K8sEventsView } from "./cluster/K8sEventsView";
 import { K8sOverview } from "./cluster/K8sOverview";
 import { K8sResourceDetail } from "./detail/K8sResourceDetail";
 import { PodTerminalTab } from "./terminal/PodTerminalTab";
+import { K8sOpDialogs } from "./ops/K8sOpDialogs";
 import { K8sYamlDialogs } from "./yaml/K8sYamlDialogs";
 import "./detail/workloads/register";
 import "./detail/resources/register";
 import "./terminal/register";
+import "./ops/register";
 import "./yaml/register";
 
 interface Props {
@@ -82,6 +84,7 @@ export function K8sClusterPage({ asset }: Props) {
         </div>
       </div>
       <K8sYamlDialogs assetId={assetId} />
+      <K8sOpDialogs assetId={assetId} />
     </div>
   );
 }
