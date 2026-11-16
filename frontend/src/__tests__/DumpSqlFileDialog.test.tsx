@@ -39,7 +39,7 @@ function renderDialog(props: Partial<React.ComponentProps<typeof DumpSqlFileDial
       assetId={7}
       assetName="demo-sqlite"
       database="main"
-      tables={["users", "orders"]}
+      target={{ kind: "tables", tables: ["users", "orders"] }}
       withData
       canDumpData
       {...props}
@@ -84,7 +84,7 @@ afterEach(() => {
 
 describe("DumpSqlFileDialog", () => {
   it("names the source, offers <table>.sql for one table and only starts once a location is chosen", async () => {
-    renderDialog({ tables: ["users"], withData: false });
+    renderDialog({ target: { kind: "tables", tables: ["users"] }, withData: false });
     expect(screen.getByText("query.dumpSqlFileDesc demo-sqlite / main users")).toBeInTheDocument();
     expect(screen.getByText("query.dumpSqlFileNote")).toBeInTheDocument();
     expect(startButton()).toBeDisabled();
@@ -98,6 +98,7 @@ describe("DumpSqlFileDialog", () => {
         database: "main",
         schema: "",
         tables: ["users"],
+        whole: false,
         withData: false,
         path: "/tmp/users.sql",
       })
@@ -108,6 +109,50 @@ describe("DumpSqlFileDialog", () => {
     renderDialog();
     await chooseLocation();
     expect(SelectDumpFile).toHaveBeenCalledWith(expect.stringMatching(/^main_\d{8}\.sql$/));
+  });
+
+  it("dumps the whole database: names it, offers <database>_<YYYYMMDD>.sql and asks for every object", async () => {
+    renderDialog({ target: { kind: "database" } });
+    expect(
+      screen.getByText("query.dumpSqlFileDesc demo-sqlite / main query.dumpSqlFileWholeDatabase")
+    ).toBeInTheDocument();
+
+    await chooseLocation();
+    expect(SelectDumpFile).toHaveBeenCalledWith(expect.stringMatching(/^main_\d{8}\.sql$/));
+    await userEvent.click(startButton());
+    await waitFor(() =>
+      expect(StartDumpSQLFile).toHaveBeenCalledWith(7, {
+        database: "main",
+        schema: "",
+        tables: [],
+        whole: true,
+        withData: true,
+        path: "/tmp/main.sql",
+      })
+    );
+    // 转储整个库时事先不知道有几个对象:第一个事件到之前进度是 0,不是 NaN。
+    expect(screen.getByText("0%")).toBeInTheDocument();
+  });
+
+  it("dumps a whole schema: names it, offers <schema>_<YYYYMMDD>.sql and passes the schema", async () => {
+    renderDialog({ target: { kind: "schema", schema: "sales" }, withData: false });
+    expect(
+      screen.getByText("query.dumpSqlFileDesc demo-sqlite / main query.dumpSqlFileWholeSchema sales")
+    ).toBeInTheDocument();
+
+    await chooseLocation("/tmp/sales.sql");
+    expect(SelectDumpFile).toHaveBeenCalledWith(expect.stringMatching(/^sales_\d{8}\.sql$/));
+    await userEvent.click(startButton());
+    await waitFor(() =>
+      expect(StartDumpSQLFile).toHaveBeenCalledWith(7, {
+        database: "main",
+        schema: "sales",
+        tables: [],
+        whole: true,
+        withData: false,
+        path: "/tmp/sales.sql",
+      })
+    );
   });
 
   it("starts with the content picked from the menu and leaves out structure and data when the driver can't write rows", async () => {

@@ -2715,6 +2715,8 @@
     "dumpSqlFileOneDatabaseHint": "Only tables from one database can be dumped together",
     "dumpSqlFileTitle": "Dump SQL File",
     "dumpSqlFileDesc": "Dumps {{objects}} from {{target}}",
+    "dumpSqlFileWholeDatabase": "the entire database",
+    "dumpSqlFileWholeSchema": "the entire {{schema}} schema",
     "dumpSqlFileContent": "Content",
     "dumpSqlFileStructureAndData": "Structure and data",
     "dumpSqlFileStructureOnly": "Structure only",

@@ -129,10 +129,79 @@ describe("DatabaseTree 的「转储 SQL 文件」", () => {
         database: "main",
         schema: "",
         tables: ["users", "orders"],
+        whole: false,
         withData: false,
         path: "/tmp/main.sql",
       })
     );
+  });
+
+  it("库节点:同一个子菜单转储整个库,下面是「运行 SQL 文件…」", async () => {
+    provideDrivers([fakeDriverWith(["view_ddl", "export_sql", "dump_sql", "run_sql_file"])]);
+    vi.mocked(SelectDumpFile).mockResolvedValue("/tmp/main.sql");
+    vi.mocked(StartDumpSQLFile).mockResolvedValue("dump-1");
+    await renderTree("fakedb");
+
+    const trigger = dumpTrigger("main")!;
+    const items = within(trigger.closest<HTMLElement>("[role=menu]")!)
+      .getAllByRole("menuitem")
+      .map((item) => item.getAttribute("data-testid"));
+    expect(items.indexOf("database-dump-sql-file")).toBeLessThan(items.indexOf("database-run-sql-file"));
+    expect(openSubmenu(trigger)).toEqual([
+      "query.dumpSqlFileStructureAndDataItem",
+      "query.dumpSqlFileStructureOnlyItem",
+    ]);
+    fireEvent.click(screen.getByText("query.dumpSqlFileStructureAndDataItem"));
+
+    expect(await screen.findByText("query.dumpSqlFileTitle")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /query\.exportChooseFile/ }));
+    await screen.findByText("/tmp/main.sql");
+    fireEvent.click(screen.getByRole("button", { name: /query\.dumpSqlFileStart/ }));
+    await waitFor(() =>
+      expect(StartDumpSQLFile).toHaveBeenCalledWith(1, {
+        database: "main",
+        schema: "",
+        tables: [],
+        whole: true,
+        withData: true,
+        path: "/tmp/main.sql",
+      })
+    );
+  });
+
+  it("schema 节点(驱动按 schema 分组时):同一个子菜单转储整个 schema", async () => {
+    provideDrivers([fakeDriverWith(["schemas", "view_ddl", "dump_sql"])]);
+    vi.mocked(SelectDumpFile).mockResolvedValue("/tmp/sales.sql");
+    vi.mocked(StartDumpSQLFile).mockResolvedValue("dump-1");
+    await renderTree("fakedb", { main: ["public.users", "sales.orders"] });
+
+    expect(openSubmenu(dumpTrigger("sales")!)).toEqual(["query.dumpSqlFileStructureOnlyItem"]);
+    fireEvent.click(screen.getByText("query.dumpSqlFileStructureOnlyItem"));
+
+    expect(await screen.findByText("query.dumpSqlFileTitle")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /query\.exportChooseFile/ }));
+    await screen.findByText("/tmp/sales.sql");
+    fireEvent.click(screen.getByRole("button", { name: /query\.dumpSqlFileStart/ }));
+    await waitFor(() =>
+      expect(StartDumpSQLFile).toHaveBeenCalledWith(1, {
+        database: "main",
+        schema: "sales",
+        tables: [],
+        whole: true,
+        withData: false,
+        path: "/tmp/sales.sql",
+      })
+    );
+  });
+
+  it("库节点与 schema 节点在驱动不能转储时没有这一项", async () => {
+    provideDrivers([fakeDriverWith(["schemas", "view_ddl", "export_sql"])]);
+    await renderTree("fakedb", { main: ["public.users"] });
+    expect(dumpTrigger("main")).toBeNull();
+    cleanup();
+    provideDrivers([fakeDriverWith(["schemas", "view_ddl", "export_sql"])]);
+    await renderTree("fakedb", { main: ["public.users"] });
+    expect(dumpTrigger("public")).toBeNull();
   });
 
   it("选中的表跨了库时不能转储,悬停说明原因", async () => {

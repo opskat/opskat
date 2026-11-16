@@ -49,14 +49,17 @@ export interface DumpSqlFileEvent {
   error?: string;
 }
 
+/** 要转储的对象:选中的表与视图(树上的名字,按选中的次序)、整个库,或整个 schema。 */
+export type DumpTarget =
+  { kind: "tables"; tables: string[] } | { kind: "database" } | { kind: "schema"; schema: string };
+
 interface DumpSqlFileDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   assetId: number;
   assetName: string;
   database: string;
-  /** 要转储的表与视图(树上的名字,按选中的次序)。 */
-  tables: string[];
+  target: DumpTarget;
   /** 「转储内容」的初始值:取自所选的子菜单项。 */
   withData: boolean;
   /** 驱动能生成行语句时才有「结构和数据」。 */
@@ -66,12 +69,24 @@ interface DumpSqlFileDialogProps {
 type Phase = "idle" | "starting" | "running" | "finished";
 type Content = "data" | "structure";
 
-/** 默认文件名:单张表是 <表名>.sql,其余是 <库名>_<YYYYMMDD>.sql。 */
-function defaultFileName(database: string, tables: string[]): string {
-  if (tables.length === 1) return `${tables[0]}.sql`;
+/** 默认文件名:单张表是 <表名>.sql,其余是 <库名或 schema 名>_<YYYYMMDD>.sql。 */
+function defaultFileName(database: string, target: DumpTarget): string {
+  if (target.kind === "tables" && target.tables.length === 1) return `${target.tables[0]}.sql`;
   const now = new Date();
   const date = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
-  return `${database}_${date}.sql`;
+  return `${target.kind === "schema" ? target.schema : database}_${date}.sql`;
+}
+
+/** 副标题里要转储的对象:选中的表名,或「整个库」「整个 schema」。 */
+function targetObjects(t: (key: string, opts?: Record<string, unknown>) => string, target: DumpTarget): string {
+  switch (target.kind) {
+    case "tables":
+      return target.tables.join(", ");
+    case "database":
+      return t("query.dumpSqlFileWholeDatabase");
+    case "schema":
+      return t("query.dumpSqlFileWholeSchema", { schema: target.schema });
+  }
 }
 
 function containingDirectory(filePath: string): string {
@@ -103,7 +118,7 @@ export function DumpSqlFileDialog({
   assetId,
   assetName,
   database,
-  tables,
+  target: dumpTarget,
   withData,
   canDumpData,
 }: DumpSqlFileDialogProps) {
@@ -174,12 +189,12 @@ export function DumpSqlFileDialog({
 
   const handleChooseLocation = useCallback(async () => {
     try {
-      const chosen = await SelectDumpFile(defaultFileName(database, tables));
+      const chosen = await SelectDumpFile(defaultFileName(database, dumpTarget));
       if (chosen) setPath(chosen);
     } catch (e) {
       toast.error(errorMessage(e));
     }
-  }, [database, tables]);
+  }, [database, dumpTarget]);
 
   const handleStart = useCallback(async () => {
     if (!path) return;
@@ -203,7 +218,14 @@ export function DumpSqlFileDialog({
       else if (event.dumpId === dumpId) apply(event);
     });
     try {
-      dumpId = await StartDumpSQLFile(assetId, { database, schema: "", tables, withData: dumpData, path });
+      dumpId = await StartDumpSQLFile(assetId, {
+        database,
+        schema: dumpTarget.kind === "schema" ? dumpTarget.schema : "",
+        tables: dumpTarget.kind === "tables" ? dumpTarget.tables : [],
+        whole: dumpTarget.kind !== "tables",
+        withData: dumpData,
+        path,
+      });
     } catch (e) {
       stopListening();
       setStartError(errorMessage(e));
@@ -220,7 +242,7 @@ export function DumpSqlFileDialog({
     for (const event of early) {
       if (event.dumpId === dumpId) apply(event);
     }
-  }, [apply, assetId, content, database, path, stopListening, t, tables, target]);
+  }, [apply, assetId, content, database, dumpTarget, path, stopListening, t, target]);
 
   const handleCancel = useCallback(() => {
     if (!activeDumpRef.current) return;
@@ -228,10 +250,11 @@ export function DumpSqlFileDialog({
     void requestCancel(activeDumpRef.current);
   }, []);
 
-  const objects = latest?.progress.objects || tables.length;
+  // 整库或整个 schema 有几个对象要等第一个事件才知道。
+  const objects = latest?.progress.objects || (dumpTarget.kind === "tables" ? dumpTarget.tables.length : 0);
   const done = latest?.status === "done";
   const stopped = latest?.status === "failed" || latest?.status === "canceled";
-  const percent = done ? 100 : Math.min(100, Math.round((finishedObjects / objects) * 100));
+  const percent = done ? 100 : objects === 0 ? 0 : Math.min(100, Math.round((finishedObjects / objects) * 100));
 
   return (
     <Dialog
@@ -248,7 +271,9 @@ export function DumpSqlFileDialog({
       >
         <DialogHeader>
           <DialogTitle>{t("query.dumpSqlFileTitle")}</DialogTitle>
-          <DialogDescription>{t("query.dumpSqlFileDesc", { target, objects: tables.join(", ") })}</DialogDescription>
+          <DialogDescription>
+            {t("query.dumpSqlFileDesc", { target, objects: targetObjects(t, dumpTarget) })}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4">

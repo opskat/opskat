@@ -126,6 +126,48 @@ func TestDumpSQLFileWritesTheSelectedTables(t *testing.T) {
 	assert.Equal(t, []dbdriver.DumpedObject{{Name: "t", Kind: dbdriver.DumpTable, Data: true, Rows: 2}}, finished)
 }
 
+// 转储整个库：不用选表，库里的表、视图与触发器都写进文件，触发器在数据之后；每个对象写完都有事件。
+func TestDumpSQLFileWritesAWholeDatabase(t *testing.T) {
+	events := captureDumpEvents(t)
+	q := newNamedPanelQuery(t, "local-sqlite", &asset_entity.DatabaseConfig{
+		Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "panel.db"),
+	})
+	for _, statement := range []string{
+		"CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)",
+		"CREATE TABLE log (t_id INT)",
+		"CREATE TRIGGER t_log AFTER INSERT ON t BEGIN INSERT INTO log VALUES (new.id); END",
+		"CREATE VIEW v AS SELECT name FROM t",
+		"INSERT INTO t (name) VALUES ('a')",
+	} {
+		_, err := q.ExecuteSQL(1, statement, "main")
+		require.NoError(t, err)
+	}
+	path := filepath.Join(t.TempDir(), "main.sql")
+
+	_, err := q.StartDumpSQLFile(1, DumpSQLFileRequest{Database: "main", Whole: true, WithData: true, Path: path})
+	require.NoError(t, err)
+	final := events.wait(t)
+
+	require.Equal(t, DumpSQLFileDone, final.Status, final.Error)
+	require.NotNil(t, final.Result)
+	assert.Equal(t, 4, final.Result.Objects)
+	content, err := os.ReadFile(filepath.Clean(path))
+	require.NoError(t, err)
+	text := string(content)
+	assert.Contains(t, text, "CREATE VIEW v AS SELECT name FROM t;")
+	require.Contains(t, text, "-- Records of t\n")
+	assert.Greater(t, strings.Index(text, "CREATE TRIGGER t_log"), strings.Index(text, "-- Records of t\n"))
+	events.mu.Lock()
+	defer events.mu.Unlock()
+	var kinds []string
+	for _, event := range events.events {
+		if event.Progress.Finished != nil {
+			kinds = append(kinds, event.Progress.Finished.Kind+" "+event.Progress.Finished.Name)
+		}
+	}
+	assert.Equal(t, []string{"table log", "table t", "view v", "trigger t_log"}, kinds)
+}
+
 // 注释头不写主机、端口与账号。
 func TestDumpSQLFileKeepsConnectionDetailsOutOfTheFile(t *testing.T) {
 	events := captureDumpEvents(t)
@@ -192,6 +234,10 @@ func TestDumpSQLFileIsRefusedBeforeStarting(t *testing.T) {
 		"no tables": {
 			capabilities: []dbdriver.Capability{dbdriver.CapViewDDL, dbdriver.CapExportSQL, dbdriver.CapDumpSQL},
 			request:      DumpSQLFileRequest{Path: path},
+		},
+		"tables together with a whole database": {
+			capabilities: []dbdriver.Capability{dbdriver.CapViewDDL, dbdriver.CapExportSQL, dbdriver.CapDumpSQL},
+			request:      DumpSQLFileRequest{Whole: true, Tables: []string{"users"}, Path: path},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -56,10 +56,12 @@ type DumpSQLFileEvent struct {
 // DumpSQLFileRequest 是开始转储的参数。
 type DumpSQLFileRequest struct {
 	Database string `json:"database"`
-	// Schema 是转储的 schema（有 schema 分组的驱动），只写进注释头；转储选中的表时为空。
+	// Schema 是转储的 schema（有 schema 分组的驱动）：Whole 时非空表示转储整个 schema；转储选中的表时为空。
 	Schema string `json:"schema"`
-	// Tables 是选中的表与视图，用 ListTables 给出的形式。
+	// Tables 是选中的表与视图，用 ListTables 给出的形式；Whole 时为空。
 	Tables []string `json:"tables"`
+	// Whole 为真时转储整个库（Schema 为空）或整个 schema：全部表、视图、函数、过程与触发器。
+	Whole bool `json:"whole"`
 	// WithData 为真时是「结构和数据」，否则是「仅结构」。
 	WithData bool `json:"withData"`
 	// Path 是本机上要写的文件（SelectDumpFile 选出的）。
@@ -134,8 +136,8 @@ func (q *Query) SelectDumpFile(defaultFilename string) (string, error) {
 	return path, nil
 }
 
-// StartDumpSQLFile 在资产的库上开始转储选中的表，返回这次转储的 id；进度与终态经 DumpSQLFileEventName
-// 事件发出。驱动没有声明转储（或要结构和数据而驱动生成不了行语句）时在开始之前拒绝；转储不受资产只读
+// StartDumpSQLFile 在资产的库上开始转储选中的表（或整个库、整个 schema），返回这次转储的 id；进度与终态
+// 经 DumpSQLFileEventName 事件发出。驱动没有声明转储（或要结构和数据而驱动生成不了行语句）时在开始之前拒绝；转储不受资产只读
 // 连接的影响。不写审计日志；日志只记开始、结束、对象数、行数与耗时，不记语句与数据。
 func (q *Query) StartDumpSQLFile(assetID int64, request DumpSQLFileRequest) (string, error) {
 	ctx := i18n.Ctx(q.ctx, q.lang.Lang())
@@ -143,7 +145,10 @@ func (q *Query) StartDumpSQLFile(assetID int64, request DumpSQLFileRequest) (str
 	if request.Path == "" {
 		return "", errors.New("没有选择保存位置")
 	}
-	if len(request.Tables) == 0 {
+	if request.Whole && len(request.Tables) > 0 {
+		return "", errors.New("转储整个库或 schema 时不能另选表")
+	}
+	if !request.Whole && len(request.Tables) == 0 {
 		return "", errors.New("没有要转储的表")
 	}
 	assetName, err := checkDumpAllowed(ctx, assetID, request.WithData)
@@ -165,9 +170,10 @@ func (q *Query) StartDumpSQLFile(assetID int64, request DumpSQLFileRequest) (str
 	dumpRunsWG.Add(1)
 
 	log = log.With(zap.String("dumpID", dumpID))
-	log.Info("dump sql file start", zap.Int("tables", len(request.Tables)), zap.Bool("withData", request.WithData))
+	log.Info("dump sql file start", zap.Int("tables", len(request.Tables)), zap.Bool("whole", request.Whole),
+		zap.String("schema", request.Schema), zap.Bool("withData", request.WithData))
 	go q.dumpSQLFile(runCtx, dumpID, log, panel, request.Path, dbdriver.DumpRequest{
-		Database: panel.database, Schema: request.Schema, Tables: request.Tables, WithData: request.WithData,
+		Database: panel.database, Schema: request.Schema, Tables: request.Tables, WithData: request.WithData, Whole: request.Whole,
 		Header: dbdriver.DumpHeader{Version: configs.Version, Asset: assetName, Time: time.Now()},
 	})
 	return dumpID, nil

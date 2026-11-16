@@ -152,6 +152,127 @@ func TestDumpRoundTripsSelectedTablesThroughRunScript(t *testing.T) {
 	assert.Empty(t, queryRows(t, target, "SELECT name FROM sqlite_master WHERE name = 'unrelated'"))
 }
 
+// wholeDatabase 建出一个带视图（a_top 依赖 b_base；a_label 只在字符串里提到 b_base）与触发器（每插入一行
+// items 就往 audit 记一行）的库，并插入两行。
+func wholeDatabase(t *testing.T, session dbdriver.Session) {
+	t.Helper()
+	execAll(t, session,
+		"CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+		"CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INT)",
+		"CREATE TRIGGER items_audit AFTER INSERT ON items BEGIN INSERT INTO audit (item_id) VALUES (new.id); END",
+		"CREATE VIEW b_base AS SELECT id, name FROM items WHERE id > 0",
+		`CREATE VIEW a_top AS SELECT name FROM "b_base"`,
+		"CREATE VIEW a_label AS SELECT 'b_base' AS label /* b_base */ FROM items",
+		"INSERT INTO items (name) VALUES ('x'), ('y;')",
+	)
+}
+
+// 整库转储：全部表、视图按依赖顺序（被依赖的 b_base 在 a_top 之前；字符串与注释里的名字不算依赖），
+// 触发器在所有表与视图之后；定义都是 sqlite_master 里的原文。
+func TestDumpWholeDatabaseOrdersViewsAndPutsTriggersLast(t *testing.T) {
+	session := openFileSession(t, "whole.db")
+	wholeDatabase(t, session)
+	var out strings.Builder
+
+	result, err := session.Dump(context.Background(), dbdriver.DumpRequest{
+		Database: "main", Whole: true, Header: dumpHeader(), Writer: &out,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, `-- OpsKat SQL Dump
+--
+-- OpsKat version: 1.16.0
+-- Asset: local-sqlite
+-- Database: main
+-- Content: structure only
+-- Date: 2026-11-16 09:30:05 +00:00
+--
+-- File encoding: UTF-8
+
+PRAGMA foreign_keys = false;
+
+-- ----------------------------
+-- Table structure for audit
+-- ----------------------------
+DROP TABLE IF EXISTS "main"."audit";
+CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INT);
+
+-- ----------------------------
+-- Table structure for items
+-- ----------------------------
+DROP TABLE IF EXISTS "main"."items";
+CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+
+-- ----------------------------
+-- View structure for a_label
+-- ----------------------------
+DROP VIEW IF EXISTS "main"."a_label";
+CREATE VIEW a_label AS SELECT 'b_base' AS label /* b_base */ FROM items;
+
+-- ----------------------------
+-- View structure for b_base
+-- ----------------------------
+DROP VIEW IF EXISTS "main"."b_base";
+CREATE VIEW b_base AS SELECT id, name FROM items WHERE id > 0;
+
+-- ----------------------------
+-- View structure for a_top
+-- ----------------------------
+DROP VIEW IF EXISTS "main"."a_top";
+CREATE VIEW a_top AS SELECT name FROM "b_base";
+
+-- ----------------------------
+-- Trigger structure for items_audit
+-- ----------------------------
+DROP TRIGGER IF EXISTS "main"."items_audit";
+CREATE TRIGGER items_audit AFTER INSERT ON items BEGIN INSERT INTO audit (item_id) VALUES (new.id); END;
+
+PRAGMA foreign_keys = true;
+`, out.String())
+	assert.Equal(t, 6, result.Objects)
+}
+
+// 整库往返：结构和数据转储到文件，再经运行 SQL 文件导入一个空库：表、视图、触发器的定义与每张表的行数
+// 都一样；触发器在所有数据之后才建出，导入时没有被触发（audit 的行数与原库一样，不是翻倍）。导入之后
+// 触发器照常工作。
+func TestDumpRoundTripsAWholeDatabaseThroughRunScript(t *testing.T) {
+	ctx := context.Background()
+	source := openFileSession(t, "source.db")
+	wholeDatabase(t, source)
+	path := filepath.Join(t.TempDir(), "whole.sql")
+
+	result, err := dbdriver.DumpToFile(ctx, source, dbdriver.DumpRequest{
+		Database: "main", Whole: true, WithData: true, Header: dumpHeader(),
+	}, path)
+	require.NoError(t, err)
+	assert.Equal(t, 6, result.Objects)
+	assert.EqualValues(t, 4, result.Rows)
+	content, err := os.ReadFile(filepath.Clean(path))
+	require.NoError(t, err)
+
+	target := openFileSession(t, "target.db")
+	file, err := os.Open(filepath.Clean(path))
+	require.NoError(t, err)
+	run, err := target.RunScript(ctx, dbdriver.ScriptRequest{Database: "main", Script: file, Size: int64(len(content))})
+	require.NoError(t, file.Close())
+	require.NoError(t, err)
+	require.Nil(t, run.Failure, "the dump must run on an empty database")
+
+	schema := "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+	assert.Equal(t, queryRows(t, source, schema), queryRows(t, target, schema))
+	for _, query := range []string{
+		"SELECT count(*) FROM items",
+		"SELECT count(*) FROM audit",
+		"SELECT * FROM a_top ORDER BY name",
+	} {
+		assert.Equal(t, queryRows(t, source, query), queryRows(t, target, query), query)
+	}
+	assert.Equal(t, [][]any{{int64(2)}}, queryRows(t, target, "SELECT count(*) FROM audit"))
+
+	execAll(t, target, "INSERT INTO items (name) VALUES ('z')")
+	assert.Equal(t, [][]any{{int64(3)}}, queryRows(t, target, "SELECT count(*) FROM audit"))
+}
+
 func queryRows(t *testing.T, session dbdriver.Session, query string) [][]any {
 	t.Helper()
 	result, err := session.Execute(context.Background(), query)

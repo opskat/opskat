@@ -80,6 +80,15 @@ func TestDumpDefaultsWhenTheDialectHasNoHooks(t *testing.T) {
 	assert.Equal(t, []string{"DROP VIEW IF EXISTS <db>.<v>;"}, view.Drop)
 	assert.Equal(t, []string{"CREATE VIEW v AS SELECT 1;"}, view.Definition)
 
+	for kind, keyword := range map[string]string{dbdriver.ObjectFunction: "FUNCTION", dbdriver.ObjectProcedure: "PROCEDURE", dbdriver.ObjectTrigger: "TRIGGER"} {
+		object, err := dialect.DumpObject(ctx, dbdriver.DumpObject{Database: "db", Kind: kind, Name: "o", Definition: "CREATE " + keyword + " o"})
+		require.NoError(t, err, kind)
+		assert.Equal(t, dbdriver.DumpObjectScript{
+			Drop:       []string{"DROP " + keyword + " IF EXISTS <db>.<o>;"},
+			Definition: []string{"CREATE " + keyword + " o;"},
+		}, *object, kind)
+	}
+
 	_, err = dialect.DumpObject(ctx, dbdriver.DumpObject{Database: "db", Kind: "sequence", Name: "s", Definition: "CREATE SEQUENCE s"})
 	require.Error(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())

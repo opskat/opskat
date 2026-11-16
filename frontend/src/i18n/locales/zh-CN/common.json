@@ -2715,6 +2715,8 @@
     "dumpSqlFileOneDatabaseHint": "只能一起转储同一个库里的表",
     "dumpSqlFileTitle": "转储 SQL 文件",
     "dumpSqlFileDesc": "从 {{target}} 转储：{{objects}}",
+    "dumpSqlFileWholeDatabase": "整个库",
+    "dumpSqlFileWholeSchema": "整个 schema {{schema}}",
     "dumpSqlFileContent": "转储内容",
     "dumpSqlFileStructureAndData": "结构和数据",
     "dumpSqlFileStructureOnly": "仅结构",

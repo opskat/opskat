@@ -12,9 +12,10 @@ import (
 // DumpDialect 是方言里「转储写成什么样」里整份文件不变的部分。实现 Dialect 的类型同时实现它（以及
 // Tables）才提供转储（Session.Dump）；没实现的方言以 dbdriver.ErrUnsupported 拒绝。
 //
-// 什么钩子都不实现时得到的是默认写法：没有文件开头结尾与批分隔符，每个对象之前写
-// DROP TABLE / DROP VIEW IF EXISTS（表引用用 Tables.TableRef），定义是 TableDDL 的原文补上分号，INSERT
-// 写读出的全部列，外键留在定义里。要改的方言再实现 DumpFileWriter / DumpObjectWriter。
+// 什么钩子都不实现时得到的是默认写法：没有文件开头结尾与批分隔符，每个对象之前按种类写
+// DROP TABLE / VIEW / FUNCTION / PROCEDURE / TRIGGER IF EXISTS（引用用 Tables.TableRef），定义是会话给出的
+// 原文补上分号，INSERT 写读出的全部列，外键留在定义里，视图不给依赖（按列出的次序写）。要改的方言再实现
+// DumpFileWriter / DumpObjectWriter。
 type DumpDialect interface {
 	DumpSyntax() DumpSyntax
 }
@@ -37,7 +38,7 @@ type DumpFileWriter interface {
 // DumpObjectWriter 是可选的钩子：在一条连接上改一个对象的默认写法（script 已填好默认的 Drop 与
 // Definition）。能改的见 dbdriver.DumpObjectScript：存在则删除的写法（没有 IF EXISTS 的库），定义的
 // 包装（DELIMITER、/）与附属定义（索引），INSERT 的列（去掉生成列），数据前后的开关（IDENTITY_INSERT），
-// 挪到全部数据之后的外键（定义里就要去掉它们），以及数据之后的收尾（setval）。
+// 挪到全部数据之后的外键（定义里就要去掉它们），数据之后的收尾（setval），以及视图依赖的对象（DependsOn）。
 type DumpObjectWriter interface {
 	DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error
 }
@@ -81,7 +82,10 @@ func (d dumpDialect) DumpFile(ctx context.Context, scope dbdriver.DumpScope) (*d
 }
 
 // dropKeywords 是默认的存在则删除按对象种类写的关键字。
-var dropKeywords = map[string]string{dbdriver.DumpTable: "TABLE", dbdriver.ObjectView: "VIEW"}
+var dropKeywords = map[string]string{
+	dbdriver.DumpTable: "TABLE", dbdriver.ObjectView: "VIEW",
+	dbdriver.ObjectFunction: "FUNCTION", dbdriver.ObjectProcedure: "PROCEDURE", dbdriver.ObjectTrigger: "TRIGGER",
+}
 
 func (d dumpDialect) DumpObject(ctx context.Context, object dbdriver.DumpObject) (*dbdriver.DumpObjectScript, error) {
 	keyword, ok := dropKeywords[object.Kind]

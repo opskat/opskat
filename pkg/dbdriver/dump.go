@@ -14,19 +14,24 @@ import (
 	"time"
 )
 
-// DumpTable 是转储里表的种类；视图用 ObjectView（以后整库转储的过程、函数、触发器用对应的 Object*）。
+// DumpTable 是转储里表的种类；视图、函数、过程与触发器用对应的 Object*。
 const DumpTable = "table"
 
 // DumpRequest 是 Session.Dump 要写出的一份 SQL 转储。
 type DumpRequest struct {
 	// Database 是对象所在的库，含义同 Session 的其他操作。
 	Database string
-	// Schema 是转储的 schema（有 schema 分组的驱动），只写进注释头、交给方言；转储选中的表时为空。
+	// Schema 是转储的 schema（有 schema 分组的驱动），写进注释头、交给方言；Whole 时非空表示只转储这个
+	// schema。转储选中的表时为空。
 	Schema string
-	// Tables 是要转储的表与视图，用 ListTables 给出的形式，按用户选中的次序。
+	// Tables 是要转储的表与视图，用 ListTables 给出的形式，按用户选中的次序；Whole 时不用。
 	Tables []string
-	// WithData 为真时每张表的结构之后写出全部行（视图只写定义）。
+	// WithData 为真时每张表的结构之后写出全部行（视图、函数、过程与触发器只写定义）。
 	WithData bool
+	// Whole 为真时转储整个库（Schema 为空）或整个 schema 的全部对象：ListTables 给出的表与视图，以及
+	// ListObjects 给出的函数、过程与触发器。有 schema 分组的驱动给的名字是「schema.名字」（同 ListTables），
+	// 整个 schema 就是以「Schema.」开头的那些。
+	Whole bool
 	// Header 是注释头里写的来源。
 	Header DumpHeader
 	// Writer 是写出的目标。
@@ -45,7 +50,7 @@ type DumpHeader struct {
 
 // DumpProgress 是转储到目前为止的进度。
 type DumpProgress struct {
-	// Objects 是这次要写的对象数（表与视图），Object 是正在写的第几个（从 1 起），Name 是它的名字。
+	// Objects 是这次要写的对象数（表、视图、函数、过程与触发器），Object 是正在写的第几个（从 1 起），Name 是它的名字。
 	Objects int    `json:"objects"`
 	Object  int    `json:"object"`
 	Name    string `json:"name"`
@@ -84,10 +89,13 @@ func (e *DumpObjectError) Unwrap() error { return e.Err }
 
 // DumpScope 是交给方言的整份转储的范围。
 type DumpScope struct {
-	Database string   `json:"database"`
-	Schema   string   `json:"schema,omitempty"`
+	Database string `json:"database"`
+	Schema   string `json:"schema,omitempty"`
+	// Tables 是转储的表与视图：选中的，或 Whole 时库里（schema 里）的全部。
 	Tables   []string `json:"tables"`
 	WithData bool     `json:"withData"`
+	// Whole 表示转储整个库或整个 schema（同 DumpRequest.Whole）。
+	Whole bool `json:"whole,omitempty"`
 }
 
 // DumpFileScript 是方言给出的、整份文件一次的部分。每条语句都是写进文件的原文（含结束符），一条
@@ -106,11 +114,13 @@ type DumpFileScript struct {
 // DumpObject 是交给方言的一个对象。
 type DumpObject struct {
 	Database string `json:"database"`
-	// Kind 是 DumpTable 或 ObjectView。
+	// Kind 是 DumpTable、ObjectView、ObjectFunction、ObjectProcedure 或 ObjectTrigger。
 	Kind string `json:"kind"`
-	// Name 用 ListTables 给出的形式。
+	// Name 用 ListTables（表与视图）或 ListObjects（其余）给出的形式。
 	Name string `json:"name"`
-	// Definition 是会话给出的定义原文（TableDDL）。
+	// Table 是触发器所在的表（ObjectMeta.Table，只有给出它的驱动才有）。
+	Table string `json:"table,omitempty"`
+	// Definition 是会话给出的定义原文：表与视图的来自 TableDDL，其余的来自 ObjectSource。
 	Definition string `json:"definition"`
 	// WithData 表示它的行会接着写出（只有结构和数据时的表）。
 	WithData bool `json:"withData"`
@@ -132,6 +142,9 @@ type DumpObjectScript struct {
 	ForeignKeys []string `json:"foreignKeys,omitempty"`
 	// PostData 写在全部对象之后：序列与自增的收尾（如 PostgreSQL 的 setval）。
 	PostData []string `json:"postData,omitempty"`
+	// DependsOn 是它的定义用到的对象（名字的形式同 DumpObject.Name）：视图按它排序，被依赖的视图先写。
+	// 不是这次转储里的视图的名字（如表）不影响次序；不给时视图按列出的次序写。
+	DependsOn []string `json:"dependsOn,omitempty"`
 }
 
 // DumpDialect 是驱动在转储里的部分：输入输出都能序列化，按整份文件一次、按对象一次调用（不按行），
@@ -143,8 +156,10 @@ type DumpDialect interface {
 
 // DumpSource 是转储读库用到的会话操作（Session 都有）。
 type DumpSource interface {
+	ListTables(ctx context.Context, database string) ([]string, error)
 	ListObjects(ctx context.Context, database string) (*DatabaseObjects, error)
 	TableDDL(ctx context.Context, database, table string) (string, error)
+	ObjectSource(ctx context.Context, database, objType, name, table string) (string, error)
 	PrepareRowStatements(ctx context.Context, database, table string) (RowStatementWriter, error)
 	StreamTableRows(ctx context.Context, database, table string, query TableQuery) (RowStream, error)
 }
@@ -154,35 +169,87 @@ const dumpChunkRows = 500
 
 // Dump 是转储的编排，各驱动的 Session.Dump 用它：依次写出注释头、方言的文件开头与类型、每张表（注释
 // 分隔行、存在则删除、定义；结构和数据时接着是它的全部行，每行一条与「复制为 INSERT」一样的 INSERT，
-// 只写方言给出的列）、全部表之后的外键、视图（只有定义）、数据之后的收尾与方言的文件结尾。行边读边写，
-// 不整表留在内存里。
+// 只写方言给出的列）、全部表之后的外键、视图（只有定义，按依赖顺序）、整库或整个 schema 时的函数、过程
+// 与触发器（在所有数据之后，导入数据时不会触发它们）、数据之后的收尾与方言的文件结尾。行边读边写，不整表
+// 留在内存里。
 //
 // 任何一个对象出错（读定义、方言、读行）或 ctx 被取消都立即停下，返回的错误是点名那个对象的
 // *DumpObjectError（被取消时它包着 ctx 的错误）；已经写出的内容由调用方丢弃（见 DumpToFile）。
 func Dump(ctx context.Context, req DumpRequest, source DumpSource, dialect DumpDialect) (*DumpResult, error) {
-	if len(req.Tables) == 0 {
+	if !req.Whole && len(req.Tables) == 0 {
 		return nil, errors.New("no tables to dump")
 	}
-	objects, err := source.ListObjects(ctx, req.Database)
+	plan, err := planDump(ctx, req, source)
 	if err != nil {
-		return nil, fmt.Errorf("list views: %w", err)
+		return nil, err
 	}
-	var tables, views []string
-	for _, name := range req.Tables {
-		if slices.ContainsFunc(objects.Views, func(view ObjectMeta) bool { return view.Name == name }) {
-			views = append(views, name)
-		} else {
-			tables = append(tables, name)
-		}
-	}
-	file, err := dialect.DumpFile(ctx, DumpScope{Database: req.Database, Schema: req.Schema, Tables: req.Tables, WithData: req.WithData})
+	file, err := dialect.DumpFile(ctx, DumpScope{
+		Database: req.Database, Schema: req.Schema, Tables: plan.listed, WithData: req.WithData, Whole: req.Whole,
+	})
 	if err != nil {
 		return nil, err
 	}
 	d := &dump{ctx: ctx, req: req, source: source, dialect: dialect, out: &countingWriter{w: req.Writer}, terminator: file.BatchTerminator}
-	d.progress.Objects = len(tables) + len(views)
-	err = d.run(file, tables, views)
+	d.progress.Objects = len(plan.tables) + len(plan.views) + len(plan.routines)
+	err = d.run(file, plan)
 	return &DumpResult{Objects: d.progress.Objects, Rows: d.progress.Rows, Bytes: d.out.n}, err
+}
+
+// dumpItem 是要写的一个对象。
+type dumpItem struct {
+	kind string
+	name string
+	// table 是触发器所在的表（ObjectMeta.Table）。
+	table string
+}
+
+// dumpPlan 是一次转储要写的对象，按段分开。
+type dumpPlan struct {
+	// listed 是转储的表与视图（交给方言的范围）。
+	listed []string
+	tables []dumpItem
+	views  []dumpItem
+	// routines 是整库或整个 schema 时的函数、过程与触发器，按写出的次序。
+	routines []dumpItem
+}
+
+// planDump 列出要写的对象：选中的表与视图，或 Whole 时库里（schema 里）的全部对象。
+func planDump(ctx context.Context, req DumpRequest, source DumpSource) (*dumpPlan, error) {
+	objects, err := source.ListObjects(ctx, req.Database)
+	if err != nil {
+		return nil, fmt.Errorf("list objects: %w", err)
+	}
+	plan := &dumpPlan{listed: req.Tables}
+	if req.Whole {
+		all, err := source.ListTables(ctx, req.Database)
+		if err != nil {
+			return nil, fmt.Errorf("list tables: %w", err)
+		}
+		plan.listed = slices.DeleteFunc(all, func(name string) bool { return !inDumpSchema(req.Schema, name) })
+	}
+	for _, name := range plan.listed {
+		if slices.ContainsFunc(objects.Views, func(view ObjectMeta) bool { return view.Name == name }) {
+			plan.views = append(plan.views, dumpItem{kind: ObjectView, name: name})
+		} else {
+			plan.tables = append(plan.tables, dumpItem{kind: DumpTable, name: name})
+		}
+	}
+	if !req.Whole {
+		return plan, nil
+	}
+	for _, group := range [][]ObjectMeta{objects.Functions, objects.Procedures, objects.Triggers} {
+		for _, object := range group {
+			if inDumpSchema(req.Schema, object.Name) {
+				plan.routines = append(plan.routines, dumpItem{kind: object.Type, name: object.Name, table: object.Table})
+			}
+		}
+	}
+	return plan, nil
+}
+
+// inDumpSchema 报告一个对象是否在要转储的 schema 里；schema 为空（整个库）时都在。
+func inDumpSchema(schema, name string) bool {
+	return schema == "" || strings.HasPrefix(name, schema+".")
 }
 
 // dump 是一次转储的状态。
@@ -199,18 +266,21 @@ type dump struct {
 	postData    []string
 }
 
-func (d *dump) run(file *DumpFileScript, tables, views []string) error {
+func (d *dump) run(file *DumpFileScript, plan *dumpPlan) error {
 	d.header()
 	d.section("", file.Opening)
 	d.section("", file.Types)
-	for _, table := range tables {
-		if err := d.object(DumpTable, table, d.req.WithData); err != nil {
+	for _, table := range plan.tables {
+		if err := d.object(table, d.req.WithData); err != nil {
 			return err
 		}
 	}
 	d.section("Foreign keys", d.foreignKeys)
-	for _, view := range views {
-		if err := d.object(ObjectView, view, false); err != nil {
+	if err := d.views(plan.views); err != nil {
+		return err
+	}
+	for _, routine := range plan.routines {
+		if err := d.object(routine, false); err != nil {
 			return err
 		}
 	}
@@ -291,55 +361,125 @@ func (d *dump) batchEnd() {
 }
 
 // object 写一个对象：注释分隔行、存在则删除、定义，withData 时接着是它的行。
-func (d *dump) object(kind, name string, withData bool) error {
-	d.progress.Object++
-	d.progress.Name = name
-	d.report(nil)
-	written, err := d.writeObject(kind, name, withData)
+func (d *dump) object(item dumpItem, withData bool) error {
+	d.begin(item)
+	script, err := d.prepare(item, withData)
 	if err != nil {
-		return &DumpObjectError{Object: name, Err: err}
+		return &DumpObjectError{Object: item.name, Err: err}
 	}
-	d.report(&DumpedObject{Name: name, Kind: kind, Data: withData, Rows: written})
+	return d.write(item, script, withData)
+}
+
+// views 写视图：先读出全部视图的定义、得到方言的语句，再按依赖顺序写出。
+func (d *dump) views(views []dumpItem) error {
+	scripts := make(map[string]*DumpObjectScript, len(views))
+	for _, view := range views {
+		script, err := d.prepare(view, false)
+		if err != nil {
+			return &DumpObjectError{Object: view.name, Err: err}
+		}
+		scripts[view.name] = script
+	}
+	for _, view := range dependencyOrder(views, scripts) {
+		d.begin(view)
+		if err := d.write(view, scripts[view.name], false); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func (d *dump) writeObject(kind, name string, withData bool) (int64, error) {
-	if err := d.ctx.Err(); err != nil {
-		return 0, err
+// dependencyOrder 把视图排成被依赖的在前：每个视图之前先放它 DependsOn 里属于这批视图的那些，其余保持
+// 列出的次序。每个视图只放一次，所以依赖成环时也会停下。
+func dependencyOrder(views []dumpItem, scripts map[string]*DumpObjectScript) []dumpItem {
+	byName := make(map[string]dumpItem, len(views))
+	for _, view := range views {
+		byName[view.name] = view
 	}
-	definition, err := d.source.TableDDL(d.ctx, d.req.Database, name)
+	placed := make(map[string]bool, len(views))
+	ordered := make([]dumpItem, 0, len(views))
+	var place func(view dumpItem)
+	place = func(view dumpItem) {
+		if placed[view.name] {
+			return
+		}
+		placed[view.name] = true
+		for _, name := range scripts[view.name].DependsOn {
+			if dependency, ok := byName[name]; ok {
+				place(dependency)
+			}
+		}
+		ordered = append(ordered, view)
+	}
+	for _, view := range views {
+		place(view)
+	}
+	return ordered
+}
+
+// prepare 读出一个对象的定义，交给方言得到它的语句。
+func (d *dump) prepare(item dumpItem, withData bool) (*DumpObjectScript, error) {
+	if err := d.ctx.Err(); err != nil {
+		return nil, err
+	}
+	definition, err := d.definition(item)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if strings.TrimSpace(definition) == "" {
-		return 0, errors.New("the database gave no definition for it")
+		return nil, errors.New("the database gave no definition for it")
 	}
-	script, err := d.dialect.DumpObject(d.ctx, DumpObject{
-		Database: d.req.Database, Kind: kind, Name: name, Definition: definition, WithData: withData,
+	return d.dialect.DumpObject(d.ctx, DumpObject{
+		Database: d.req.Database, Kind: item.kind, Name: item.name, Table: item.table, Definition: definition, WithData: withData,
 	})
-	if err != nil {
-		return 0, err
+}
+
+// definition 是一个对象的定义原文：表与视图的来自 TableDDL，函数、过程与触发器的来自 ObjectSource。
+func (d *dump) definition(item dumpItem) (string, error) {
+	if item.kind == DumpTable || item.kind == ObjectView {
+		return d.source.TableDDL(d.ctx, d.req.Database, item.name)
 	}
-	structure := "Table structure for "
-	if kind == ObjectView {
-		structure = "View structure for "
-	}
-	d.banner(structure + name)
+	return d.source.ObjectSource(d.ctx, d.req.Database, item.kind, item.name, item.table)
+}
+
+// structureTitles 是各种对象的注释分隔行。
+var structureTitles = map[string]string{
+	DumpTable:       "Table structure for ",
+	ObjectView:      "View structure for ",
+	ObjectFunction:  "Function structure for ",
+	ObjectProcedure: "Procedure structure for ",
+	ObjectTrigger:   "Trigger structure for ",
+}
+
+// begin 报告开始写一个对象。
+func (d *dump) begin(item dumpItem) {
+	d.progress.Object++
+	d.progress.Name = item.name
+	d.report(nil)
+}
+
+// write 写出一个对象的语句，withData 时接着是它的行，写完时报告它写了什么。
+func (d *dump) write(item dumpItem, script *DumpObjectScript, withData bool) error {
+	d.banner(structureTitles[item.kind] + item.name)
 	d.statements(script.Drop)
 	d.statements(script.Definition)
 	d.foreignKeys = append(d.foreignKeys, script.ForeignKeys...)
 	d.postData = append(d.postData, script.PostData...)
-	if !withData {
-		return 0, d.out.err
+	var written int64
+	if withData {
+		d.banner("Records of " + item.name)
+		d.statements(script.DataPrologue)
+		var err error
+		if written, err = d.rows(item.name, script.DataColumns); err != nil {
+			return &DumpObjectError{Object: item.name, Err: err}
+		}
+		d.statements(script.DataEpilogue)
 	}
-	d.banner("Records of " + name)
-	d.statements(script.DataPrologue)
-	written, err := d.rows(name, script.DataColumns)
-	if err != nil {
-		return written, err
+	if d.out.err != nil {
+		return &DumpObjectError{Object: item.name, Err: d.out.err}
 	}
-	d.statements(script.DataEpilogue)
-	return written, d.out.err
+	d.report(&DumpedObject{Name: item.name, Kind: item.kind, Data: withData, Rows: written})
+	return nil
 }
 
 // rows 读出一张表的全部行，按块生成 INSERT 写出。writer 在游标打开之前备好：游标占着连接时（远端

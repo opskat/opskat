@@ -53,7 +53,7 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
 import { RunSqlFileDialog } from "./RunSqlFileDialog";
-import { DumpSqlFileDialog } from "./DumpSqlFileDialog";
+import { DumpSqlFileDialog, type DumpTarget } from "./DumpSqlFileDialog";
 import { ObjectBrowserSection } from "./ObjectBrowserSection";
 import { useAssetReadOnly, useCanCreateTable, useDesignerAccess } from "./designer/access";
 import { defaultCreateTarget, targetLabel, targetOfTable, type CreateTableTarget } from "./designer/createTarget";
@@ -137,6 +137,35 @@ function buildUngroupedTables(tables: string[], filterLower: string, dbMatch: bo
   });
 }
 
+/** 「转储 SQL 文件 ›」子菜单:结构和数据(驱动能生成行语句时)/ 仅结构;没有 onPick 时置灰、不展开。 */
+function DumpSubmenu({
+  testId,
+  canDumpData,
+  onPick,
+}: {
+  testId: string;
+  canDumpData: boolean;
+  onPick?: (withData: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <ContextMenuSub>
+      <ContextMenuSubTrigger data-testid={testId} disabled={!onPick}>
+        <FileOutput className="h-3.5 w-3.5" />
+        {t("query.dumpSqlFile")}
+      </ContextMenuSubTrigger>
+      {onPick && (
+        <ContextMenuSubContent>
+          {canDumpData && (
+            <ContextMenuItem onClick={() => onPick(true)}>{t("query.dumpSqlFileStructureAndDataItem")}</ContextMenuItem>
+          )}
+          <ContextMenuItem onClick={() => onPick(false)}>{t("query.dumpSqlFileStructureOnlyItem")}</ContextMenuItem>
+        </ContextMenuSubContent>
+      )}
+    </ContextMenuSub>
+  );
+}
+
 /** 资产的驱动没有注册时的提示(侧栏与右侧内容区共用)。 */
 export function DriverUnavailableNotice({ driver }: { driver: string | undefined }) {
   const { t } = useTranslation();
@@ -179,8 +208,10 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const [showCreateDatabase, setShowCreateDatabase] = useState(false);
   // 正在「运行 SQL 文件」的库;null 表示对话框没开。
   const [runSqlFileDatabase, setRunSqlFileDatabase] = useState<string | null>(null);
-  // 要「转储 SQL 文件」的库与表(内容取自所选的子菜单项);null 表示对话框没开。
-  const [dumpTarget, setDumpTarget] = useState<{ database: string; tables: string[]; withData: boolean } | null>(null);
+  // 要「转储 SQL 文件」的库与对象(选中的表、整个库或整个 schema;内容取自所选的子菜单项);null 表示对话框没开。
+  const [dumpTarget, setDumpTarget] = useState<{ database: string; target: DumpTarget; withData: boolean } | null>(
+    null
+  );
   const [confirmAction, setConfirmAction] = useState<{
     type: "drop" | "truncate";
     targets: TableRef[];
@@ -550,28 +581,20 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
               <ContextMenuSeparator />
               {/* 一次转储针对一个库:选中的表跨了库时置灰。 */}
               <div title={dumpDatabase === null ? t("query.dumpSqlFileOneDatabaseHint") : undefined}>
-                <ContextMenuSub>
-                  <ContextMenuSubTrigger data-testid="table-dump-sql-file" disabled={dumpDatabase === null}>
-                    <FileOutput className="h-3.5 w-3.5" />
-                    {t("query.dumpSqlFile")}
-                  </ContextMenuSubTrigger>
-                  {dumpDatabase !== null && (
-                    <ContextMenuSubContent>
-                      {canDumpData && (
-                        <ContextMenuItem
-                          onClick={() => setDumpTarget({ database: dumpDatabase, tables: dumpTables, withData: true })}
-                        >
-                          {t("query.dumpSqlFileStructureAndDataItem")}
-                        </ContextMenuItem>
-                      )}
-                      <ContextMenuItem
-                        onClick={() => setDumpTarget({ database: dumpDatabase, tables: dumpTables, withData: false })}
-                      >
-                        {t("query.dumpSqlFileStructureOnlyItem")}
-                      </ContextMenuItem>
-                    </ContextMenuSubContent>
-                  )}
-                </ContextMenuSub>
+                <DumpSubmenu
+                  testId="table-dump-sql-file"
+                  canDumpData={canDumpData}
+                  onPick={
+                    dumpDatabase === null
+                      ? undefined
+                      : (withData) =>
+                          setDumpTarget({
+                            database: dumpDatabase,
+                            target: { kind: "tables", tables: dumpTables },
+                            withData,
+                          })
+                  }
+                />
               </div>
             </>
           )}
@@ -770,6 +793,13 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                           {t("query.newTable")}
                         </ContextMenuItem>
                       )}
+                      {canDump && (
+                        <DumpSubmenu
+                          testId="database-dump-sql-file"
+                          canDumpData={canDumpData}
+                          onPick={(withData) => setDumpTarget({ database: db, target: { kind: "database" }, withData })}
+                        />
+                      )}
                       {can("run_sql_file") && (
                         <div title={assetReadOnly ? t("query.runSqlFileReadOnlyHint") : undefined}>
                           <ContextMenuItem
@@ -893,24 +923,49 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                                     const isSchemaExpanded = filterLower
                                       ? true
                                       : expandedSchemas.includes(group.schema);
+                                    const schemaRow = (
+                                      <div
+                                        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
+                                        onClick={() => {
+                                          if (filterLower) return;
+                                          if (isSchemaExpanded) dropSelectionUnder(`${db}.${group.schema}.`);
+                                          toggleSchemaExpand(tabId, db, group.schema);
+                                        }}
+                                      >
+                                        {isSchemaExpanded ? (
+                                          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                        ) : (
+                                          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                        )}
+                                        <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                        <span className="truncate">{group.schema}</span>
+                                      </div>
+                                    );
                                     return (
                                       <div key={group.schema}>
-                                        <div
-                                          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
-                                          onClick={() => {
-                                            if (filterLower) return;
-                                            if (isSchemaExpanded) dropSelectionUnder(`${db}.${group.schema}.`);
-                                            toggleSchemaExpand(tabId, db, group.schema);
-                                          }}
-                                        >
-                                          {isSchemaExpanded ? (
-                                            <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                          ) : (
-                                            <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                          )}
-                                          <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                          <span className="truncate">{group.schema}</span>
-                                        </div>
+                                        {/* schema 节点的右键菜单:转储这个 schema 下的全部对象。 */}
+                                        {canDump ? (
+                                          <ContextMenu>
+                                            <ContextMenuTrigger className="block w-full">
+                                              {schemaRow}
+                                            </ContextMenuTrigger>
+                                            <ContextMenuContent>
+                                              <DumpSubmenu
+                                                testId="schema-dump-sql-file"
+                                                canDumpData={canDumpData}
+                                                onPick={(withData) =>
+                                                  setDumpTarget({
+                                                    database: db,
+                                                    target: { kind: "schema", schema: group.schema },
+                                                    withData,
+                                                  })
+                                                }
+                                              />
+                                            </ContextMenuContent>
+                                          </ContextMenu>
+                                        ) : (
+                                          schemaRow
+                                        )}
                                         {isSchemaExpanded && (
                                           <div className="ml-3">
                                             {group.tables.map((tbl) =>
@@ -959,7 +1014,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
           assetId={tabMeta.assetId}
           assetName={tabMeta.assetName}
           database={dumpTarget.database}
-          tables={dumpTarget.tables}
+          target={dumpTarget.target}
           withData={dumpTarget.withData}
           canDumpData={canDumpData}
         />

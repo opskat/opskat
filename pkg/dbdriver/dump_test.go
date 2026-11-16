@@ -22,7 +22,15 @@ type dumpSource struct {
 	columns map[string][]string
 	rows    map[string][][]any
 	views   []string
-	ddlErr  map[string]error
+	// tables 是 ListTables 给出的表与视图；functions / procedures / triggers 是 ListObjects 给出的其余对象，
+	// sources 是它们的定义（键是「种类 名字」）。
+	tables     []string
+	functions  []string
+	procedures []string
+	triggers   []ObjectMeta
+	sources    map[string]string
+	sourceErr  map[string]error
+	ddlErr     map[string]error
 	// streamErr 在读完 streamErrAfter 行之后让游标以它失败。
 	streamErr      map[string]error
 	streamErrAfter int
@@ -39,7 +47,27 @@ func (s *dumpSource) ListObjects(_ context.Context, database string) (*DatabaseO
 	for _, name := range s.views {
 		objects.Views = append(objects.Views, ObjectMeta{Name: name, Type: ObjectView})
 	}
+	for _, name := range s.functions {
+		objects.Functions = append(objects.Functions, ObjectMeta{Name: name, Type: ObjectFunction})
+	}
+	for _, name := range s.procedures {
+		objects.Procedures = append(objects.Procedures, ObjectMeta{Name: name, Type: ObjectProcedure})
+	}
+	objects.Triggers = s.triggers
 	return objects, nil
+}
+
+func (s *dumpSource) ListTables(_ context.Context, database string) ([]string, error) {
+	s.calls = append(s.calls, "tables "+database)
+	return s.tables, nil
+}
+
+func (s *dumpSource) ObjectSource(_ context.Context, database, objType, name, table string) (string, error) {
+	s.calls = append(s.calls, "source "+database+" "+objType+" "+name+" "+table)
+	if err := s.sourceErr[name]; err != nil {
+		return "", err
+	}
+	return s.sources[objType+" "+name], nil
 }
 
 func (s *dumpSource) TableDDL(_ context.Context, database, table string) (string, error) {
@@ -121,6 +149,8 @@ type dumpDialect struct {
 	scopes     []DumpScope
 	objects    []DumpObject
 	dataColumn map[string][]string
+	// dependsOn 是各对象依赖的对象（方言给出的 DependsOn）。
+	dependsOn map[string][]string
 	// plain 为真时对象只给出存在则删除与定义（像什么钩子都没实现的方言）。
 	plain bool
 }
@@ -136,6 +166,7 @@ func (d *dumpDialect) DumpObject(_ context.Context, object DumpObject) (*DumpObj
 	script := &DumpObjectScript{
 		Drop:       []string{fmt.Sprintf("DROP %s %s;", strings.ToUpper(object.Kind), object.Name)},
 		Definition: []string{object.Definition + ";"},
+		DependsOn:  d.dependsOn[object.Name],
 	}
 	if d.plain || object.Kind != DumpTable {
 		return script, nil
@@ -459,6 +490,231 @@ func TestDumpNeedsTables(t *testing.T) {
 	require.Error(t, err)
 	assert.Empty(t, out.String())
 	assert.Empty(t, source.calls)
+}
+
+// newWholeDumpSource 是一个整库：两张表、一个视图、一个函数、一个过程与一个表上的触发器。
+func newWholeDumpSource() *dumpSource {
+	source := newDumpSource()
+	source.tables = []string{"orders", "users", "v_big"}
+	source.functions = []string{"f_total"}
+	source.procedures = []string{"p_clean"}
+	source.triggers = []ObjectMeta{{Name: "trg_audit", Type: ObjectTrigger, Table: "users"}}
+	source.sources = map[string]string{
+		"function f_total":  "CREATE FUNCTION f_total() RETURNS int",
+		"procedure p_clean": "CREATE PROCEDURE p_clean()",
+		"trigger trg_audit": "CREATE TRIGGER trg_audit AFTER INSERT ON users",
+	}
+	return source
+}
+
+// 整库转储：表来自 ListTables（视图除外），视图、函数、过程与触发器来自 ListObjects；文件依次是表与数据、
+// 外键、视图、函数、过程、触发器（在所有数据之后，导入数据时不会触发）、数据之后的收尾与文件结尾。函数、
+// 过程与触发器的定义来自 ObjectSource（触发器带上它的表），表与视图的来自 TableDDL。
+func TestDumpWholeDatabaseWritesEveryObjectInItsSection(t *testing.T) {
+	source := newWholeDumpSource()
+	dialect := &dumpDialect{file: DumpFileScript{Opening: []string{"SET FK OFF;"}, Closing: []string{"SET FK ON;"}}}
+	var out bytes.Buffer
+
+	result, err := Dump(context.Background(), DumpRequest{
+		Database: "shop", Whole: true, WithData: true, Header: dumpHeader(), Writer: &out,
+	}, source, dialect)
+	require.NoError(t, err)
+
+	assert.Equal(t, `-- OpsKat SQL Dump
+--
+-- OpsKat version: 1.16.0
+-- Asset: demo-db
+-- Database: shop
+-- Content: structure and data
+-- Date: 2026-11-16 09:30:05 +08:00
+--
+-- File encoding: UTF-8
+
+SET FK OFF;
+
+-- ----------------------------
+-- Table structure for orders
+-- ----------------------------
+DROP TABLE orders;
+CREATE TABLE orders (id int, user_id int);
+
+-- ----------------------------
+-- Records of orders
+-- ----------------------------
+BEGIN DATA orders;
+INSERT INTO orders (id, user_id) VALUES (10, 1);
+END DATA orders;
+
+-- ----------------------------
+-- Table structure for users
+-- ----------------------------
+DROP TABLE users;
+CREATE TABLE users (id int, name text);
+
+-- ----------------------------
+-- Records of users
+-- ----------------------------
+BEGIN DATA users;
+INSERT INTO users (id, name) VALUES (1, alice);
+INSERT INTO users (id, name) VALUES (2, <nil>);
+END DATA users;
+
+-- ----------------------------
+-- Foreign keys
+-- ----------------------------
+ADD FK orders;
+ADD FK users;
+
+-- ----------------------------
+-- View structure for v_big
+-- ----------------------------
+DROP VIEW v_big;
+CREATE VIEW v_big AS SELECT * FROM orders;
+
+-- ----------------------------
+-- Function structure for f_total
+-- ----------------------------
+DROP FUNCTION f_total;
+CREATE FUNCTION f_total() RETURNS int;
+
+-- ----------------------------
+-- Procedure structure for p_clean
+-- ----------------------------
+DROP PROCEDURE p_clean;
+CREATE PROCEDURE p_clean();
+
+-- ----------------------------
+-- Trigger structure for trg_audit
+-- ----------------------------
+DROP TRIGGER trg_audit;
+CREATE TRIGGER trg_audit AFTER INSERT ON users;
+
+-- ----------------------------
+-- Sequence and auto-increment values
+-- ----------------------------
+SYNC orders;
+SYNC users;
+
+SET FK ON;
+`, out.String())
+	assert.Equal(t, DumpResult{Objects: 6, Rows: 3, Bytes: int64(out.Len())}, *result)
+	assert.Equal(t, []DumpScope{{Database: "shop", Tables: []string{"orders", "users", "v_big"}, WithData: true, Whole: true}}, dialect.scopes)
+	assert.Equal(t, []DumpObject{
+		{Database: "shop", Kind: DumpTable, Name: "orders", Definition: source.ddl["orders"], WithData: true},
+		{Database: "shop", Kind: DumpTable, Name: "users", Definition: source.ddl["users"], WithData: true},
+		{Database: "shop", Kind: ObjectView, Name: "v_big", Definition: source.ddl["v_big"]},
+		{Database: "shop", Kind: ObjectFunction, Name: "f_total", Definition: source.sources["function f_total"]},
+		{Database: "shop", Kind: ObjectProcedure, Name: "p_clean", Definition: source.sources["procedure p_clean"]},
+		{Database: "shop", Kind: ObjectTrigger, Name: "trg_audit", Table: "users", Definition: source.sources["trigger trg_audit"]},
+	}, dialect.objects)
+	assert.Contains(t, source.calls, "source shop trigger trg_audit users")
+	assert.NotContains(t, source.calls, "stream shop.v_big")
+}
+
+// 整个 schema：只有这个 schema 里的对象（名字是 ListTables / ListObjects 给出的「schema.名字」），别的
+// schema 与不属于任何 schema 的对象（库级触发器）都不在其中；方言拿到的范围也只有这个 schema 的表。
+func TestDumpWholeSchemaKeepsToItsSchema(t *testing.T) {
+	source := &dumpSource{
+		ddl: map[string]string{
+			"public.a": "CREATE TABLE public.a ()", "sales.b": "CREATE TABLE sales.b ()",
+			"sales_archive.c": "CREATE TABLE sales_archive.c ()", "sales.v": "CREATE VIEW sales.v AS SELECT 1",
+			"public.v": "CREATE VIEW public.v AS SELECT 1",
+		},
+		tables:     []string{"public.a", "public.v", "sales.b", "sales.v", "sales_archive.c"},
+		views:      []string{"public.v", "sales.v"},
+		functions:  []string{"public.f", "sales.f"},
+		procedures: []string{"sales_archive.p"},
+		triggers: []ObjectMeta{
+			{Name: "public.t", Type: ObjectTrigger, Table: "a"}, {Name: "sales.t", Type: ObjectTrigger, Table: "b"},
+			{Name: "ddl_guard", Type: ObjectTrigger},
+		},
+		sources: map[string]string{"function sales.f": "CREATE FUNCTION sales.f()", "trigger sales.t": "CREATE TRIGGER sales.t"},
+	}
+	dialect := &dumpDialect{plain: true}
+
+	result, err := Dump(context.Background(), DumpRequest{
+		Database: "shop", Schema: "sales", Whole: true, Header: dumpHeader(), Writer: &bytes.Buffer{},
+	}, source, dialect)
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(dialect.objects))
+	for _, object := range dialect.objects {
+		names = append(names, object.Kind+" "+object.Name)
+	}
+	assert.Equal(t, []string{"table sales.b", "view sales.v", "function sales.f", "trigger sales.t"}, names)
+	assert.Equal(t, 4, result.Objects)
+	assert.Equal(t, []DumpScope{{Database: "shop", Schema: "sales", Tables: []string{"sales.b", "sales.v"}, Whole: true}}, dialect.scopes)
+}
+
+// 转储选中的表时只有表与选中的视图：不列库里的表，不写函数、过程与触发器。
+func TestDumpSelectedTablesLeavesOutRoutinesAndTriggers(t *testing.T) {
+	source := newWholeDumpSource()
+	var out bytes.Buffer
+
+	_, err := Dump(context.Background(), DumpRequest{
+		Database: "shop", Tables: []string{"users"}, Header: dumpHeader(), Writer: &out,
+	}, source, &dumpDialect{plain: true})
+	require.NoError(t, err)
+
+	assert.NotContains(t, out.String(), "f_total")
+	assert.NotContains(t, out.String(), "trg_audit")
+	assert.Equal(t, []string{"objects shop", "ddl shop.users"}, source.calls)
+}
+
+// 视图按依赖顺序写出：被依赖的在前（方言经 DependsOn 给出依赖，不在这次转储里的名字如表不算）；方言不给
+// 依赖时按列出的次序。
+func TestDumpWritesViewsInDependencyOrder(t *testing.T) {
+	newSource := func() *dumpSource {
+		return &dumpSource{
+			ddl: map[string]string{
+				"a_report": "CREATE VIEW a_report", "b_mid": "CREATE VIEW b_mid", "c_base": "CREATE VIEW c_base",
+				"d_alone": "CREATE VIEW d_alone", "users": "CREATE TABLE users",
+			},
+			tables: []string{"a_report", "b_mid", "c_base", "d_alone", "users"},
+			views:  []string{"a_report", "b_mid", "c_base", "d_alone"},
+		}
+	}
+	viewOrder := func(t *testing.T, dialect *dumpDialect, req DumpRequest) []string {
+		t.Helper()
+		var out bytes.Buffer
+		req.Header, req.Writer = dumpHeader(), &out
+		_, err := Dump(context.Background(), req, newSource(), dialect)
+		require.NoError(t, err)
+		var order []string
+		for _, line := range strings.Split(out.String(), "\n") {
+			if name, ok := strings.CutPrefix(line, "-- View structure for "); ok {
+				order = append(order, name)
+			}
+		}
+		return order
+	}
+	dependsOn := map[string][]string{"a_report": {"users", "b_mid"}, "b_mid": {"c_base"}}
+
+	t.Run("whole database", func(t *testing.T) {
+		assert.Equal(t, []string{"c_base", "b_mid", "a_report", "d_alone"},
+			viewOrder(t, &dumpDialect{plain: true, dependsOn: dependsOn}, DumpRequest{Database: "shop", Whole: true}))
+	})
+	t.Run("selected views", func(t *testing.T) {
+		assert.Equal(t, []string{"d_alone", "c_base", "b_mid", "a_report"}, viewOrder(t, &dumpDialect{plain: true, dependsOn: dependsOn},
+			DumpRequest{Database: "shop", Tables: []string{"d_alone", "a_report", "c_base", "b_mid"}}))
+	})
+	t.Run("a dialect without dependencies", func(t *testing.T) {
+		assert.Equal(t, []string{"a_report", "b_mid", "c_base", "d_alone"},
+			viewOrder(t, &dumpDialect{plain: true}, DumpRequest{Database: "shop", Whole: true}))
+	})
+}
+
+// 整库转储里函数、过程或触发器的定义读不到时同样立即停下，错误说出那个对象。
+func TestDumpStopsAtARoutineThatFailed(t *testing.T) {
+	source := newWholeDumpSource()
+	source.sourceErr = map[string]error{"p_clean": errors.New("permission denied")}
+
+	_, err := Dump(context.Background(), DumpRequest{Database: "shop", Whole: true, Header: dumpHeader(), Writer: &bytes.Buffer{}}, source, &dumpDialect{})
+	var objectErr *DumpObjectError
+	require.ErrorAs(t, err, &objectErr)
+	assert.Equal(t, "p_clean", objectErr.Object)
+	assert.ErrorContains(t, err, "permission denied")
+	assert.NotContains(t, source.calls, "source shop trigger trg_audit users")
 }
 
 // dumpSession 把 Dump 交给编排：DumpToFile 只经 Session.Dump 写文件。
