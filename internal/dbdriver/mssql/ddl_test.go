@@ -9,55 +9,79 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const ddlColumnsSQL = "SELECT COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, IS_NULLABLE, COLUMN_DEFAULT " +
-	"FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2 ORDER BY ORDINAL_POSITION"
-
 func ddlColumnRows() *sqlmock.Rows {
-	return sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "CHARACTER_MAXIMUM_LENGTH", "IS_NULLABLE", "COLUMN_DEFAULT"})
+	return sqlmock.NewRows([]string{"name", "type_name", "max_length", "precision", "scale", "is_nullable",
+		"identity_seed", "identity_increment", "default_definition"})
 }
 
-func ddlColumns() *sqlmock.Rows {
-	return ddlColumnRows().
-		AddRow("id", "int", nil, "NO", "((0))").
-		AddRow("name", "nvarchar", int64(50), "YES", nil).
-		AddRow("bio", "nvarchar", int64(-1), "YES", nil).
-		AddRow("code", "char", int64(0), "NO", nil)
+func ddlIndexRows() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"name", "is_primary_key", "is_unique_constraint", "is_unique", "type",
+		"filter_definition", "column_name", "is_descending_key", "is_included_column"})
 }
 
-// 从 INFORMATION_SCHEMA 重建：长度为正写成 type(n)，-1 写成 type(max)，NOT NULL、DEFAULT、主键
-// 依次排列；表名按 [schema].[table] 加引号。
-func TestTableDDL(t *testing.T) {
+func ddlCheckRows() *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"name", "definition"})
+}
+
+// 一张覆盖各类元素的表：类型长度（nvarchar 按字符数、max）、精度与小数位、IDENTITY(种子, 增量)、
+// 默认值、主键 / 唯一约束 / CHECK 写在 CREATE TABLE 里，普通索引（含降序、INCLUDE、过滤条件）单独成句。
+func TestTableDDLRebuildsRestorableStatements(t *testing.T) {
 	session, mock := newMock(t)
-	mock.ExpectQuery(ddlColumnsSQL).WithArgs("sales", "orders").WillReturnRows(ddlColumns())
-	mock.ExpectQuery(primaryKeysSQL).WithArgs("sales", "orders").
-		WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME"}).AddRow("id"))
+	mock.ExpectQuery(ddlColumnsQuery).WithArgs("[sales].[orders]").WillReturnRows(ddlColumnRows().
+		AddRow("id", "int", int64(4), int64(10), int64(0), false, int64(100), int64(5), nil).
+		AddRow("name", "nvarchar", int64(100), int64(0), int64(0), true, nil, nil, nil).
+		AddRow("bio", "nvarchar", int64(-1), int64(0), int64(0), true, nil, nil, nil).
+		AddRow("code", "char", int64(8), int64(0), int64(0), false, nil, nil, "('N/A')").
+		AddRow("raw", "varbinary", int64(-1), int64(0), int64(0), true, nil, nil, nil).
+		AddRow("price", "decimal", int64(9), int64(18), int64(4), false, nil, nil, "((0))").
+		AddRow("at", "datetime2", int64(8), int64(27), int64(3), true, nil, nil, nil).
+		AddRow("ratio", "float", int64(8), int64(53), int64(0), true, nil, nil, nil).
+		AddRow("small", "float", int64(4), int64(24), int64(0), true, nil, nil, nil))
+	mock.ExpectQuery(ddlIndexesQuery).WithArgs("[sales].[orders]").WillReturnRows(ddlIndexRows().
+		AddRow("PK_orders", true, false, true, int64(1), nil, "id", false, false).
+		AddRow("UQ_orders_code", false, true, true, int64(2), nil, "code", false, false).
+		AddRow("UQ_orders_code", false, true, true, int64(2), nil, "name", true, false).
+		AddRow("IX_orders_at", false, false, true, int64(2), "([at] IS NOT NULL)", "at", true, false).
+		AddRow("IX_orders_at", false, false, true, int64(2), "([at] IS NOT NULL)", "price", false, true))
+	mock.ExpectQuery(ddlChecksQuery).WithArgs("[sales].[orders]").WillReturnRows(ddlCheckRows().
+		AddRow("CK_orders_price", "([price]>=(0))"))
 
 	ddl, err := session.TableDDL(context.Background(), "appdb", "sales.orders")
 	require.NoError(t, err)
 	assert.Equal(t, "CREATE TABLE [sales].[orders] (\n"+
-		"  [id] int NOT NULL DEFAULT ((0)),\n"+
-		"  [name] nvarchar(50),\n"+
-		"  [bio] nvarchar(max),\n"+
-		"  [code] char NOT NULL,\n"+
-		"  PRIMARY KEY ([id])\n);", ddl)
+		"  [id] int IDENTITY(100, 5) NOT NULL,\n"+
+		"  [name] nvarchar(50) NULL,\n"+
+		"  [bio] nvarchar(max) NULL,\n"+
+		"  [code] char(8) NOT NULL DEFAULT ('N/A'),\n"+
+		"  [raw] varbinary(max) NULL,\n"+
+		"  [price] decimal(18, 4) NOT NULL DEFAULT ((0)),\n"+
+		"  [at] datetime2(3) NULL,\n"+
+		"  [ratio] float NULL,\n"+
+		"  [small] float(24) NULL,\n"+
+		"  CONSTRAINT [PK_orders] PRIMARY KEY CLUSTERED ([id]),\n"+
+		"  CONSTRAINT [UQ_orders_code] UNIQUE NONCLUSTERED ([code], [name] DESC),\n"+
+		"  CONSTRAINT [CK_orders_price] CHECK ([price]>=(0))\n"+
+		");\n"+
+		"CREATE UNIQUE NONCLUSTERED INDEX [IX_orders_at] ON [sales].[orders] ([at] DESC) INCLUDE ([price]) WHERE ([at] IS NOT NULL);", ddl)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// 裸表名按 dbo 查询，语句里的表名保持原样（不补 schema），与改动前一致。
+// 裸表名按 dbo 查询，语句里的表名保持原样（不补 schema）；没有约束与索引时只有建表语句。
 func TestTableDDLOfABareNameQueriesDbo(t *testing.T) {
 	session, mock := newMock(t)
-	mock.ExpectQuery(ddlColumnsSQL).WithArgs("dbo", "users").WillReturnRows(ddlColumns())
-	mock.ExpectQuery(primaryKeysSQL).WithArgs("dbo", "users").WillReturnRows(sqlmock.NewRows([]string{"COLUMN_NAME"}))
+	mock.ExpectQuery(ddlColumnsQuery).WithArgs("[dbo].[users]").WillReturnRows(ddlColumnRows().
+		AddRow("id", "int", int64(4), int64(10), int64(0), false, nil, nil, nil))
+	mock.ExpectQuery(ddlIndexesQuery).WithArgs("[dbo].[users]").WillReturnRows(ddlIndexRows())
+	mock.ExpectQuery(ddlChecksQuery).WithArgs("[dbo].[users]").WillReturnRows(ddlCheckRows())
 
 	ddl, err := session.TableDDL(context.Background(), "appdb", "users")
 	require.NoError(t, err)
-	assert.Contains(t, ddl, "CREATE TABLE [users] (\n")
-	assert.NotContains(t, ddl, "PRIMARY KEY")
+	assert.Equal(t, "CREATE TABLE [users] (\n  [id] int NOT NULL\n);", ddl)
 }
 
 func TestTableDDLOfAMissingTableIsEmpty(t *testing.T) {
 	session, mock := newMock(t)
-	mock.ExpectQuery(ddlColumnsSQL).WithArgs("dbo", "gone").WillReturnRows(ddlColumnRows())
+	mock.ExpectQuery(ddlColumnsQuery).WithArgs("[dbo].[gone]").WillReturnRows(ddlColumnRows())
 
 	ddl, err := session.TableDDL(context.Background(), "appdb", "gone")
 	require.NoError(t, err)
