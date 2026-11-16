@@ -2,8 +2,11 @@ package query
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -146,5 +149,77 @@ func TestRunSQLFileIsRefusedBeforeStarting(t *testing.T) {
 			require.Error(t, err)
 			assert.Empty(t, fake.Sessions())
 		})
+	}
+}
+
+// 勾了「遇到错误时继续」：失败的语句逐条经事件列出（条号、行号、错误），超过 100 条后不再逐条列出，
+// 只在一个事件上提示一次并继续计数；终态带着成功与失败的总数。
+func TestRunSQLFileListsFailuresUpToTheCapAndKeepsCounting(t *testing.T) {
+	events := captureRunEvents(t)
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapRunSQLFile)
+	fake.StatementErrors = map[string]error{"BAD": errors.New("boom")}
+	dbdrivertest.Register(t, fake)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+	var script strings.Builder
+	script.WriteString("SELECT 1;\n")
+	for range RunSQLFileMaxListedFailures + 5 {
+		script.WriteString("BAD;\n")
+	}
+	script.WriteString("SELECT 2;\n")
+	path := writeScript(t, script.String())
+
+	_, err := q.StartRunSQLFile(1, "", RunSQLFileRequest{Path: path, ContinueOnError: true})
+	require.NoError(t, err)
+	final := events.wait(t)
+
+	assert.Equal(t, RunSQLFileDone, final.Status)
+	assert.EqualValues(t, 2, final.Progress.Succeeded)
+	assert.EqualValues(t, RunSQLFileMaxListedFailures+5, final.Progress.Failed)
+	events.mu.Lock()
+	defer events.mu.Unlock()
+	var listed []dbdriver.ScriptFailure
+	omitted := 0
+	for _, event := range events.events {
+		listed = append(listed, event.Failures...)
+		if event.FailuresOmitted {
+			omitted++
+		}
+	}
+	require.Len(t, listed, RunSQLFileMaxListedFailures)
+	assert.Equal(t, dbdriver.ScriptFailure{Number: 2, Line: 2, Error: "boom", Excerpt: "BAD"}, listed[0])
+	assert.EqualValues(t, RunSQLFileMaxListedFailures+1, listed[RunSQLFileMaxListedFailures-1].Number)
+	assert.Equal(t, 1, omitted)
+}
+
+// 退出应用（Cleanup）等同于点「停止」：进行中的运行在当前语句后停下，终态是 stopped，Cleanup 返回
+// 时它已经收尾（会话在连接缓存关闭之前释放）。
+func TestCleanupStopsARunningSQLFile(t *testing.T) {
+	events := captureRunEvents(t)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{
+		Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "panel.db"),
+	})
+	const rows = 20000
+	var script strings.Builder
+	script.WriteString("CREATE TABLE t (id INTEGER);\n")
+	for i := range rows {
+		fmt.Fprintf(&script, "INSERT INTO t VALUES (%d);\n", i)
+	}
+	_, err := q.StartRunSQLFile(1, "main", RunSQLFileRequest{Path: writeScript(t, script.String())})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		events.mu.Lock()
+		defer events.mu.Unlock()
+		return len(events.events) > 0
+	}, 10*time.Second, 5*time.Millisecond)
+
+	q.Cleanup()
+
+	select {
+	case final := <-events.done:
+		assert.Equal(t, RunSQLFileStopped, final.Status)
+		assert.Less(t, final.Progress.Succeeded, int64(rows+1))
+	default:
+		t.Fatal("Cleanup returned before the run ended")
 	}
 }

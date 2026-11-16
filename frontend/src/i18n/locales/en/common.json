@@ -2693,7 +2693,8 @@
     "runSqlFileContinueOnErrorHint": "If unchecked, the run stops at the first statement that fails. Statements already run are not rolled back.",
     "runSqlFileWarning": "The file's statements run directly on {{database}} and may include irreversible operations such as DROP TABLE or DELETE.",
     "runSqlFileStart": "Start",
-    "runSqlFileRunning": "Running…",
+    "runSqlFileStop": "Stop",
+    "runSqlFileStopping": "Stopping…",
     "runSqlFileProgress": "{{count}} statements run · {{read}} / {{total}}",
     "runSqlFileDoneSummary": "Finished · {{succeeded}} succeeded · {{failed}} failed · {{seconds}}s",
     "runSqlFileStoppedSummary": "Stopped · {{succeeded}} succeeded · {{failed}} failed · {{seconds}}s",
@@ -2706,6 +2707,7 @@
     "runSqlFileLogProgress": "{{count}} statements run",
     "runSqlFileLogDone": "Finished",
     "runSqlFileLogStopped": "Stopped",
+    "runSqlFileFailuresOmitted": "Further failures are not listed individually",
     "runSqlFileLogError": "Failed",
     "viewStructure": "View Structure",
     "designer": {

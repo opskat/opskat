@@ -20,8 +20,11 @@ type ScriptRequest struct {
 	Size int64
 	// ContinueOnError 为真时一条语句失败后继续执行后面的；为假时停在第一条失败的语句。
 	ContinueOnError bool
-	// Stop 被关闭后，正在执行的一批语句执行完就停下（结果标为 Stopped）。nil 表示不会被要求停下。
+	// Stop 被关闭后，当前语句执行完就停下，不论它在哪一批里（结果标为 Stopped）。nil 表示不会被要求停下。
 	Stop <-chan struct{}
+	// OnFailure 在 ContinueOnError 时对每条失败的语句调用一次（同一个 goroutine 上，按先后）；不继续
+	// 时停下的那条失败语句只记在 ScriptResult.Failure。nil 表示不需要。
+	OnFailure func(ScriptFailure)
 	// Progress 在每批语句执行完后被调用（同一个 goroutine 上，按先后）；nil 表示不需要进度。
 	Progress func(ScriptProgress)
 	// ReadSize 是每次从文件读多少字节；0 表示 DefaultScriptReadSize。
@@ -123,6 +126,9 @@ type ScriptBatch struct {
 	Statements []string `json:"statements"`
 	// ContinueOnError 为假时停在这批里第一条失败的语句。
 	ContinueOnError bool `json:"continueOnError"`
+	// Stop 被关闭后，执行器在当前语句之后停下，没轮到的语句不执行、也不记在结果里。批仍是粗粒度的
+	// 一次调用；这个信号不进序列化，扩展里的驱动在宿主侧按批收到它。nil 表示不会被要求停下。
+	Stop <-chan struct{} `json:"-"`
 }
 
 // ScriptExecutor 在一条固定的连接上执行一个 SQL 文件的语句：文件前面设置的会话状态（如关闭外键
@@ -326,7 +332,7 @@ func (r *scriptRun) flush() error {
 		return nil
 	default:
 	}
-	batch := ScriptBatch{Statements: make([]string, len(r.pending)), ContinueOnError: r.req.ContinueOnError}
+	batch := ScriptBatch{Statements: make([]string, len(r.pending)), ContinueOnError: r.req.ContinueOnError, Stop: r.req.Stop}
 	for i, statement := range r.pending {
 		batch.Statements[i] = statement.text
 	}
@@ -341,11 +347,17 @@ func (r *scriptRun) flush() error {
 				continue
 			}
 			r.result.Failed++
-			if !r.req.ContinueOnError && r.result.Failure == nil {
-				statement := r.pending[executed.Index]
-				r.result.Failure = &ScriptFailure{
-					Number: statement.number, Line: statement.line, Error: executed.Error, Excerpt: scriptExcerpt(statement.text),
+			statement := r.pending[executed.Index]
+			failure := ScriptFailure{
+				Number: statement.number, Line: statement.line, Error: executed.Error, Excerpt: scriptExcerpt(statement.text),
+			}
+			switch {
+			case r.req.ContinueOnError:
+				if r.req.OnFailure != nil {
+					r.req.OnFailure(failure)
 				}
+			case r.result.Failure == nil:
+				r.result.Failure = &failure
 				r.done = true
 			}
 		}

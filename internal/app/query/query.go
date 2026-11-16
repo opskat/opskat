@@ -66,8 +66,9 @@ func (q *Query) dropAssetConns(_ context.Context, assetID int64) error {
 	return nil
 }
 
-// Cleanup 关闭 evictor 并释放所有缓存连接。
+// Cleanup 停下进行中的运行 SQL 文件（等同于点「停止」），关闭 evictor 并释放所有缓存连接。
 func (q *Query) Cleanup() {
+	stopAllSQLFileRuns()
 	if q.evictCxl != nil {
 		q.evictCxl()
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
@@ -49,5 +50,24 @@ func TestRunScriptExecutesStatementsInOrderAndStopsAtTheFirstFailure(t *testing.
 	assert.EqualValues(t, 1, result.Failed)
 	require.NotNil(t, result.Failure)
 	assert.Equal(t, dbdriver.ScriptFailure{Number: 3, Line: 4, Error: "no such column: oops", Excerpt: "INSERT INTO t VALUES (oops)"}, *result.Failure)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 一批语句执行到一半时被要求停下：正在执行的语句执行完，后面的不再执行，也不记在结果里。
+func TestRunScriptStopsAfterTheCurrentStatementInsideABatch(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectExec("INSERT INTO t VALUES (1)").WillDelayFor(150 * time.Millisecond).WillReturnResult(sqlmock.NewResult(0, 1))
+
+	stop := make(chan struct{})
+	time.AfterFunc(30*time.Millisecond, func() { close(stop) })
+	req := scriptOf("INSERT INTO t VALUES (1);\nINSERT INTO t VALUES (2);\nINSERT INTO t VALUES (3);\n")
+	req.Stop = stop
+
+	result, err := NewSession(db, scriptDialect{}).RunScript(context.Background(), req)
+	require.NoError(t, err)
+	assert.True(t, result.Stopped)
+	assert.EqualValues(t, 1, result.Succeeded)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

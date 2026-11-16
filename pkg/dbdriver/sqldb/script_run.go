@@ -41,8 +41,28 @@ func (r scriptRunner) OpenScriptExecutor(ctx context.Context, _ string) (dbdrive
 // scriptExecutor 在一条固定的连接上执行 SQL 文件的语句，每条单独提交（不开事务）。
 type scriptExecutor struct{ conn *sql.Conn }
 
+// ExecuteScriptBatch 逐条执行一批语句；batch.Stop 被关闭后在当前语句之后停下，没轮到的语句不执行。
 func (e scriptExecutor) ExecuteScriptBatch(ctx context.Context, batch dbdriver.ScriptBatch) (*dbdriver.BatchResult, error) {
-	return runStatements(ctx, e.conn, dbdriver.BatchRequest{Statements: batch.Statements, ContinueOnError: batch.ContinueOnError})
+	result := &dbdriver.BatchResult{Executed: []dbdriver.BatchStatement{}}
+	for index, statement := range batch.Statements {
+		select {
+		case <-batch.Stop:
+			return result, nil
+		default:
+		}
+		one, err := runStatements(ctx, e.conn, dbdriver.BatchRequest{Statements: []string{statement}, ContinueOnError: batch.ContinueOnError})
+		for _, executed := range one.Executed {
+			executed.Index = index
+			result.Executed = append(result.Executed, executed)
+		}
+		if err != nil {
+			return result, err
+		}
+		if one.Failed() && !batch.ContinueOnError {
+			break
+		}
+	}
+	return result, nil
 }
 
 func (e scriptExecutor) Close() error { return e.conn.Close() }

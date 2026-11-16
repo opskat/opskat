@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RunSqlFileDialog, RUN_SQL_FILE_EVENT, type RunSqlFileEvent } from "@/components/query/RunSqlFileDialog";
-import { SelectSQLFile, StartRunSQLFile } from "../../wailsjs/go/query/Query";
+import { SelectSQLFile, StartRunSQLFile, StopRunSQLFile } from "../../wailsjs/go/query/Query";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
 
 // 带插值参数的文案要能看出参数(全局 mock 只回键名)。
@@ -65,6 +65,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.mocked(SelectSQLFile).mockReset();
   vi.mocked(StartRunSQLFile).mockReset();
+  vi.mocked(StopRunSQLFile).mockReset();
   vi.mocked(EventsOn).mockReset();
   onOpenChange.mockReset();
   onFinished.mockReset();
@@ -90,7 +91,7 @@ describe("RunSqlFileDialog", () => {
     renderDialog();
     await chooseFile();
     await userEvent.click(startButton());
-    await waitFor(() => expect(screen.getByRole("button", { name: /query\.runSqlFileRunning/ })).toBeDisabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: /query\.runSqlFileStop/ })).toBeEnabled());
 
     emit({ progress: { succeeded: 12345, failed: 0, bytesRead: 1024, totalBytes: 2048 } });
     expect(screen.getByText("query.runSqlFileProgress 12,345 1.0 KB 2.0 KB")).toBeInTheDocument();
@@ -164,5 +165,71 @@ describe("RunSqlFileDialog", () => {
     expect(onFinished).not.toHaveBeenCalled();
     expect(unsubscribe).toHaveBeenCalled();
     expect(startButton()).toBeEnabled();
+  });
+
+  it("stops the run after the current statement when Stop is clicked and reports it as stopped", async () => {
+    renderDialog();
+    await chooseFile();
+    await userEvent.click(startButton());
+    const stop = await screen.findByRole("button", { name: /query\.runSqlFileStop/ });
+    await waitFor(() => expect(stop).toBeEnabled());
+
+    await userEvent.click(stop);
+    expect(StopRunSQLFile).toHaveBeenCalledWith("run-1");
+    expect(screen.getByRole("button", { name: /query\.runSqlFileStopping/ })).toBeDisabled();
+
+    emit({
+      status: "stopped",
+      progress: { succeeded: 5, failed: 0, bytesRead: 100, totalBytes: 2048 },
+      elapsedMs: 1500,
+    });
+    expect(screen.getByText("query.runSqlFileStoppedSummary 5 0 1.5")).toBeInTheDocument();
+    expect(screen.getByText("[RUN] query.runSqlFileLogStopped")).toBeInTheDocument();
+    expect(onFinished).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a running run when the dialog goes away (asset tab closed) but not a finished one", async () => {
+    const running = renderDialog();
+    await chooseFile();
+    await userEvent.click(startButton());
+    await waitFor(() => expect(screen.getByRole("button", { name: /query\.runSqlFileStop/ })).toBeEnabled());
+    running.unmount();
+    expect(StopRunSQLFile).toHaveBeenCalledWith("run-1");
+
+    vi.mocked(StopRunSQLFile).mockClear();
+    const finished = renderDialog();
+    await chooseFile();
+    await userEvent.click(startButton());
+    await waitFor(() => expect(StartRunSQLFile).toHaveBeenCalledTimes(2));
+    emit({ status: "done", progress: { succeeded: 1, failed: 0, bytesRead: 2048, totalBytes: 2048 } });
+    finished.unmount();
+    expect(StopRunSQLFile).not.toHaveBeenCalled();
+  });
+
+  it("lists each failed statement in the log and notes once that further failures are not listed", async () => {
+    renderDialog();
+    await chooseFile();
+    await userEvent.click(screen.getByRole("checkbox"));
+    await userEvent.click(startButton());
+    await waitFor(() => expect(StartRunSQLFile).toHaveBeenCalled());
+
+    emit({
+      progress: { succeeded: 1, failed: 2, bytesRead: 10, totalBytes: 2048 },
+      failures: [
+        { number: 2, line: 2, error: "boom a", excerpt: "BAD a" },
+        { number: 3, line: 3, error: "boom b", excerpt: "BAD b" },
+      ],
+    });
+    emit({ progress: { succeeded: 1, failed: 150, bytesRead: 20, totalBytes: 2048 }, failuresOmitted: true });
+    emit({
+      status: "done",
+      progress: { succeeded: 3, failed: 150, bytesRead: 2048, totalBytes: 2048 },
+      elapsedMs: 2000,
+    });
+
+    expect(screen.getByText("[ERR] query.runSqlFileFailedAt 2 2 boom a")).toBeInTheDocument();
+    expect(screen.getByText("[ERR] query.runSqlFileFailedAt 3 3 boom b")).toBeInTheDocument();
+    expect(screen.getAllByText("[ERR] query.runSqlFileFailuresOmitted")).toHaveLength(1);
+    expect(screen.getByText("query.runSqlFileDoneSummary 3 150 2.0")).toBeInTheDocument();
   });
 });

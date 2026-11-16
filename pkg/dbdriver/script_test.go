@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
@@ -22,6 +23,8 @@ type semicolonRunner struct {
 	chunks    []ScriptChunk
 	splitErr  error
 	leaveTail bool
+	// onStatement 在一条语句开始执行时被调用，测试用它在一批的中途要求停下（这条语句仍会执行完）。
+	onStatement func(statement string)
 }
 
 func (r *semicolonRunner) SplitScript(_ context.Context, chunk ScriptChunk) (*ScriptSplit, error) {
@@ -63,7 +66,15 @@ func (r *semicolonRunner) run(_ context.Context, batch ScriptBatch) (*BatchResul
 	r.batches = append(r.batches, batch)
 	result := &BatchResult{Executed: []BatchStatement{}}
 	for i, statement := range batch.Statements {
+		select {
+		case <-batch.Stop:
+			return result, nil
+		default:
+		}
 		r.executed = append(r.executed, statement)
+		if r.onStatement != nil {
+			r.onStatement(statement)
+		}
 		if msg, ok := r.failing[statement]; ok {
 			result.Executed = append(result.Executed, BatchStatement{Index: i, Error: msg})
 			if !batch.ContinueOnError {
@@ -239,4 +250,53 @@ func TestRunScriptStopsBeforeTheNextBatchWhenAsked(t *testing.T) {
 	assert.True(t, result.Stopped)
 	assert.Len(t, runner.batches, 1)
 	assert.EqualValues(t, scriptBatchStatements, result.Succeeded)
+}
+
+// 一批语句执行到一半时被要求停下：执行器收到批里的 Stop，在当前语句之后停下，没轮到的语句不执行，
+// 结果标为已停止，已执行的照实计数。
+func TestRunScriptStopsBetweenStatementsOfABatch(t *testing.T) {
+	stop := make(chan struct{})
+	runner := &semicolonRunner{}
+	req := scriptRequest("SELECT 1;\nSELECT 2;\nSELECT 3;\nSELECT 4;\n")
+	req.Stop = stop
+	var once sync.Once
+	runner.onStatement = func(statement string) {
+		if statement == "SELECT 2" {
+			once.Do(func() { close(stop) })
+		}
+	}
+
+	result, err := RunScript(context.Background(), req, runner)
+	require.NoError(t, err)
+	assert.True(t, result.Stopped)
+	assert.Equal(t, []string{"SELECT 1", "SELECT 2"}, runner.executed)
+	assert.EqualValues(t, 2, result.Succeeded)
+}
+
+// 勾了「继续」时每条失败的语句都交给 OnFailure（条号、行号、错误与语句开头）；没勾时失败只记在结果里。
+func TestRunScriptReportsEveryFailureWhenContinuing(t *testing.T) {
+	runner := &semicolonRunner{failing: map[string]string{"BAD 1": "boom 1", "BAD 2": "boom 2"}}
+	script := "SELECT 1;\nBAD 1;\nSELECT 2;\n\nBAD 2;\n"
+
+	var failures []ScriptFailure
+	req := scriptRequest(script)
+	req.ContinueOnError = true
+	req.OnFailure = func(f ScriptFailure) { failures = append(failures, f) }
+	result, err := RunScript(context.Background(), req, runner)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, result.Succeeded)
+	assert.EqualValues(t, 2, result.Failed)
+	assert.Nil(t, result.Failure)
+	assert.Equal(t, []ScriptFailure{
+		{Number: 2, Line: 2, Error: "boom 1", Excerpt: "BAD 1"},
+		{Number: 4, Line: 5, Error: "boom 2", Excerpt: "BAD 2"},
+	}, failures)
+
+	failures = nil
+	req = scriptRequest(script)
+	req.OnFailure = func(f ScriptFailure) { failures = append(failures, f) }
+	result, err = RunScript(context.Background(), req, &semicolonRunner{failing: runner.failing})
+	require.NoError(t, err)
+	assert.Empty(t, failures)
+	require.NotNil(t, result.Failure)
 }

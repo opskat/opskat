@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, FolderOpen, Loader2 } from "lucide-react";
+import { AlertTriangle, FolderOpen, Loader2, Square } from "lucide-react";
 import { toast } from "sonner";
 import {
   Button,
@@ -13,7 +13,7 @@ import {
   DialogTitle,
   Label,
 } from "@opskat/ui";
-import { SelectSQLFile, StartRunSQLFile } from "../../../wailsjs/go/query/Query";
+import { SelectSQLFile, StartRunSQLFile, StopRunSQLFile } from "../../../wailsjs/go/query/Query";
 import { EventsOn } from "../../../wailsjs/runtime/runtime";
 import { errorMessage } from "@/lib/errorMessage";
 import { formatBytes } from "@/lib/formatBytes";
@@ -28,6 +28,10 @@ export interface RunSqlFileEvent {
   progress: { succeeded: number; failed: number; bytesRead: number; totalBytes: number };
   elapsedMs: number;
   failure?: { number: number; line: number; error: string; excerpt: string };
+  /** 自上一个事件以来新失败的语句(勾了「遇到错误时继续」时,后端最多逐条列出 100 条)。 */
+  failures?: { number: number; line: number; error: string; excerpt: string }[];
+  /** 后面的失败不再逐条列出(只在超过上限的那个事件上为真一次)。 */
+  failuresOmitted?: boolean;
   invalidUtf8Line?: number;
   error?: string;
 }
@@ -55,6 +59,15 @@ interface RunSqlFileDialogProps {
 
 type Phase = "idle" | "starting" | "running" | "finished";
 
+/** 要求一次运行在当前语句之后停下。失败要让用户看到:停不下来是用户该知道的事。 */
+async function requestStop(runId: string) {
+  try {
+    await StopRunSQLFile(runId);
+  } catch (e) {
+    toast.error(errorMessage(e));
+  }
+}
+
 export function RunSqlFileDialog({
   open,
   onOpenChange,
@@ -72,12 +85,23 @@ export function RunSqlFileDialog({
   const [logLines, setLogLines] = useState<string[]>([]);
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const loggedRef = useRef(0);
+  const [stopping, setStopping] = useState(false);
+  /** 进行中的运行 id(未开始或已结束时为 null);对话框消失(关闭资产标签页)时据此停下它。 */
+  const activeRunRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
 
   const stopListening = useCallback(() => {
     unsubscribeRef.current?.();
     unsubscribeRef.current = null;
   }, []);
-  useEffect(() => stopListening, [stopListening]);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+      stopListening();
+      if (activeRunRef.current) void requestStop(activeRunRef.current);
+    },
+    [stopListening]
+  );
 
   const busy = phase === "starting" || phase === "running";
 
@@ -92,10 +116,17 @@ export function RunSqlFileDialog({
           `[RUN] ${t("query.runSqlFileLogProgress", { count: (loggedRef.current * LOG_EVERY).toLocaleString() })}`
         );
       }
+      for (const failure of event.failures ?? []) {
+        lines.push(
+          `[ERR] ${t("query.runSqlFileFailedAt", { number: failure.number.toLocaleString(), line: failure.line.toLocaleString() })} ${failure.error}`
+        );
+      }
+      if (event.failuresOmitted) lines.push(`[ERR] ${t("query.runSqlFileFailuresOmitted")}`);
       if (event.status === "running") {
         if (lines.length) setLogLines((prev) => [...prev, ...lines]);
         return;
       }
+      activeRunRef.current = null;
       if (event.failure) {
         lines.push(
           `[ERR] ${t("query.runSqlFileFailedAt", { number: event.failure.number.toLocaleString(), line: event.failure.line.toLocaleString() })} ${event.failure.error}`
@@ -125,6 +156,7 @@ export function RunSqlFileDialog({
     if (!file) return;
     setPhase("starting");
     setStartError("");
+    setStopping(false);
     setLatest(null);
     loggedRef.current = 0;
     setLogLines([`[RUN] ${t("query.runSqlFileLogStart", { file: file.path, target: `${assetName} / ${database}` })}`]);
@@ -143,11 +175,23 @@ export function RunSqlFileDialog({
       setPhase("idle");
       return;
     }
+    if (!mountedRef.current) {
+      // 等运行 id 的时候对话框已经消失(资产标签页关了):刚开始的运行不留着。
+      void requestStop(runId);
+      return;
+    }
+    activeRunRef.current = runId;
     setPhase("running");
     for (const event of early) {
       if (event.runId === runId) apply(event);
     }
   }, [apply, assetId, assetName, continueOnError, database, file, stopListening, t]);
+
+  const handleStop = useCallback(() => {
+    if (!activeRunRef.current) return;
+    setStopping(true);
+    void requestStop(activeRunRef.current);
+  }, []);
 
   const progress = latest?.progress;
   const totalBytes = progress?.totalBytes || file?.size || 0;
@@ -294,9 +338,9 @@ export function RunSqlFileDialog({
               {t("action.close")}
             </Button>
           ) : busy ? (
-            <Button size="sm" disabled>
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              {t("query.runSqlFileRunning")}
+            <Button variant="outline" size="sm" disabled={phase !== "running" || stopping} onClick={handleStop}>
+              {stopping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
+              {stopping ? t("query.runSqlFileStopping") : t("query.runSqlFileStop")}
             </Button>
           ) : (
             <>

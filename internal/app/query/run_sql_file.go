@@ -48,6 +48,11 @@ type RunSQLFileEvent struct {
 	ElapsedMs int64                   `json:"elapsedMs"`
 	// Failure 是 failed 时停在的那条语句。
 	Failure *dbdriver.ScriptFailure `json:"failure,omitempty"`
+	// Failures 是自上一个事件以来新失败的语句（勾了「遇到错误时继续」时）：整次运行里最多逐条列出
+	// RunSQLFileMaxListedFailures 条，之后的只计数（Progress.Failed），并在 FailuresOmitted 上提示一次。
+	Failures []dbdriver.ScriptFailure `json:"failures,omitempty"`
+	// FailuresOmitted 在失败超过上限、后面的不再逐条列出的那个事件上为真，之后不再重复。
+	FailuresOmitted bool `json:"failuresOmitted,omitempty"`
 	// InvalidUTF8Line 是文件不是 UTF-8 时第一处非 UTF-8 内容所在的行（此时一条语句也没有执行）。
 	InvalidUTF8Line int `json:"invalidUtf8Line,omitempty"`
 	// Error 是 error 时的原因。
@@ -68,6 +73,9 @@ type SQLFile struct {
 	Size int64  `json:"size"`
 }
 
+// RunSQLFileMaxListedFailures 是一次运行最多逐条列出的失败语句数。
+const RunSQLFileMaxListedFailures = 100
+
 // runSQLFileTimeout 是一次运行的时限。运行由用户停下，不受资产的查询超时限制；这个时限只收回被
 // 遗忘、一直没有结束的运行。
 const runSQLFileTimeout = 24 * time.Hour
@@ -87,7 +95,32 @@ var (
 	sqlFileRunsMu sync.Mutex
 	// sqlFileRuns 是进行中的运行：runId → 要求它停下的函数。
 	sqlFileRuns = map[string]func(){}
+	// sqlFileRunsWG 在每次运行收尾（会话与文件都释放）后完成：退出应用时等它们停下。
+	sqlFileRunsWG sync.WaitGroup
 )
+
+// sqlFileStopWait 是退出应用时等进行中的运行在当前语句之后停下的上限。
+const sqlFileStopWait = 10 * time.Second
+
+// stopAllSQLFileRuns 要求所有进行中的运行停下，并等它们收尾（至多 sqlFileStopWait）：退出应用等同于
+// 点「停止」，会话要在连接缓存关闭之前释放。
+func stopAllSQLFileRuns() {
+	sqlFileRunsMu.Lock()
+	for _, stop := range sqlFileRuns {
+		stop()
+	}
+	sqlFileRunsMu.Unlock()
+	finished := make(chan struct{})
+	go func() {
+		sqlFileRunsWG.Wait()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(sqlFileStopWait):
+		logger.Default().Warn("run sql file did not stop before quitting", zap.Duration("wait", sqlFileStopWait))
+	}
+}
 
 // SelectSQLFile 打开原生的打开文件对话框（筛选 *.sql，也允许所有文件），返回选中的文件与它的大小；
 // 用户取消时返回 nil。
@@ -148,6 +181,7 @@ func (q *Query) StartRunSQLFile(assetID int64, database string, request RunSQLFi
 	sqlFileRunsMu.Lock()
 	sqlFileRuns[runID] = sync.OnceFunc(func() { close(stop) })
 	sqlFileRunsMu.Unlock()
+	sqlFileRunsWG.Add(1)
 
 	log = log.With(zap.String("runID", runID))
 	log.Info("run sql file start", zap.Int64("bytes", info.Size()), zap.Bool("continueOnError", request.ContinueOnError))
@@ -157,7 +191,7 @@ func (q *Query) StartRunSQLFile(assetID int64, database string, request RunSQLFi
 	return runID, nil
 }
 
-// StopRunSQLFile 要求一次运行停下：正在执行的那批语句执行完就停，终态为 stopped。运行已经结束时什么
+// StopRunSQLFile 要求一次运行停下：当前语句执行完就停，终态为 stopped。运行已经结束时什么
 // 也不做。
 func (q *Query) StopRunSQLFile(runID string) error {
 	sqlFileRunsMu.Lock()
@@ -203,6 +237,7 @@ func (q *Query) runSQLFile(runID string, log *zap.Logger, panel *panelSession, f
 	event := RunSQLFileEvent{RunID: runID, Status: RunSQLFileRunning}
 	finished := false
 	defer func() {
+		defer sqlFileRunsWG.Done()
 		sqlFileRunsMu.Lock()
 		delete(sqlFileRuns, runID)
 		sqlFileRunsMu.Unlock()
@@ -218,12 +253,29 @@ func (q *Query) runSQLFile(runID string, log *zap.Logger, panel *panelSession, f
 			}
 		}
 		event.Status, event.Error = RunSQLFileError, fmt.Sprintf("运行 SQL 文件时发生意外错误: %v", r)
+		event.Failures, event.FailuresOmitted = nil, false
 		event.ElapsedMs = time.Since(start).Milliseconds()
 		emitRunSQLFileEvent(q.ctx, event)
 	}()
 
 	var lastEmit time.Time
 	var logged int64
+	// failures 是还没发出去的失败语句；listed 是已经列出的条数，omitted 表示「不再逐条列出」已经提示过。
+	var failures []dbdriver.ScriptFailure
+	listed, omitReported, omitPending := 0, false, false
+	req.OnFailure = func(failure dbdriver.ScriptFailure) {
+		if listed < RunSQLFileMaxListedFailures {
+			listed++
+			failures = append(failures, failure)
+		} else if !omitReported {
+			omitReported, omitPending = true, true
+		}
+	}
+	// flushFailures 把攒着的失败放进事件，之后清空。
+	flushFailures := func() {
+		event.Failures, event.FailuresOmitted = failures, omitPending
+		failures, omitPending = nil, false
+	}
 	req.Progress = func(progress dbdriver.ScriptProgress) {
 		if executed := progress.Succeeded + progress.Failed; executed/runSQLFileLogEvery > logged {
 			logged = executed / runSQLFileLogEvery
@@ -233,6 +285,7 @@ func (q *Query) runSQLFile(runID string, log *zap.Logger, panel *panelSession, f
 			return
 		}
 		lastEmit = time.Now()
+		flushFailures()
 		event.Progress = progress
 		event.ElapsedMs = time.Since(start).Milliseconds()
 		emitRunSQLFileEvent(q.ctx, event)
@@ -245,6 +298,7 @@ func (q *Query) runSQLFile(runID string, log *zap.Logger, panel *panelSession, f
 		event.Progress = result.ScriptProgress
 	}
 	event.ElapsedMs = time.Since(start).Milliseconds()
+	flushFailures()
 	fields := []zap.Field{zap.Int64("succeeded", event.Progress.Succeeded), zap.Int64("failed", event.Progress.Failed),
 		zap.Duration("elapsed", time.Since(start))}
 	var encodingErr *dbdriver.ScriptEncodingError
