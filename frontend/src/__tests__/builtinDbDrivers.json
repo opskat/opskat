@@ -54,7 +54,8 @@
       "export_sql",
       "copy_sql",
       "read_only",
-      "run_sql_file"
+      "run_sql_file",
+      "dump_sql"
     ],
     "canDisableForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": false,
@@ -184,7 +185,8 @@
       "export_sql",
       "copy_sql",
       "read_only",
-      "run_sql_file"
+      "run_sql_file",
+      "dump_sql"
     ],
     "canDisableForeignKeyChecks": false,
     "locatesRowWithoutPrimaryKey": true,
@@ -315,7 +317,8 @@
       "export_sql",
       "copy_sql",
       "read_only",
-      "run_sql_file"
+      "run_sql_file",
+      "dump_sql"
     ],
     "canDisableForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": false,
@@ -424,7 +427,8 @@
       "export_sql",
       "copy_sql",
       "read_only",
-      "run_sql_file"
+      "run_sql_file",
+      "dump_sql"
     ],
     "canDisableForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": true,

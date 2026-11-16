@@ -966,6 +966,13 @@ func (s *driverSession) RunScript(context.Context, dbdriver.ScriptRequest) (*dbd
 	return nil, fmt.Errorf("%w: extension drivers cannot run SQL files", dbdriver.ErrUnsupported)
 }
 
+// Dump: host ABI 1.0 has no wire operations for a driver's dump dialect, and the
+// host refuses extension drivers that declare dbdriver.CapDumpSQL, so it is refused
+// without calling into the guest.
+func (s *driverSession) Dump(context.Context, dbdriver.DumpRequest) (*dbdriver.DumpResult, error) {
+	return nil, fmt.Errorf("%w: extension drivers cannot dump SQL files", dbdriver.ErrUnsupported)
+}
+
 // Close closes the session: its idle instances now, side by side — the session in
 // the guest, then whatever connection it left open — and each instance still held by an
 // operation or a cursor once that lets go of it. Operations waiting for an

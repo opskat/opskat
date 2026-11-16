@@ -485,6 +485,30 @@ func (r fakeScriptRunner) ExecuteScriptBatch(_ context.Context, batch dbdriver.S
 
 func (fakeScriptRunner) Close() error { return nil }
 
+// Dump 经 dbdriver.Dump 的编排写出转储，读定义、读行都经会话自己的表浏览（照样记进 TableCalls，
+// TableErr 使它们失败）；假库的方言给出一眼能与任何真实方言区分的写法。驱动没有声明 CapDumpSQL 时以
+// ErrUnsupported 拒绝，什么也不读、不写。
+func (s *FakeSession) Dump(ctx context.Context, req dbdriver.DumpRequest) (*dbdriver.DumpResult, error) {
+	if !s.fake.Desc.Supports(dbdriver.CapDumpSQL) {
+		return nil, fmt.Errorf("%w: %s does not declare dumping SQL files", dbdriver.ErrUnsupported, s.fake.Desc.ID)
+	}
+	return dbdriver.Dump(ctx, req, s, fakeDumpDialect{})
+}
+
+// fakeDumpDialect 是假库在转储里的写法。
+type fakeDumpDialect struct{}
+
+func (fakeDumpDialect) DumpFile(context.Context, dbdriver.DumpScope) (*dbdriver.DumpFileScript, error) {
+	return &dbdriver.DumpFileScript{Opening: []string{"FAKE DUMP BEGIN;"}, Closing: []string{"FAKE DUMP END;"}}, nil
+}
+
+func (fakeDumpDialect) DumpObject(_ context.Context, object dbdriver.DumpObject) (*dbdriver.DumpObjectScript, error) {
+	return &dbdriver.DumpObjectScript{
+		Drop:       []string{fmt.Sprintf("FAKE DROP %s %s;", object.Kind, object.Name)},
+		Definition: []string{object.Definition + ";"},
+	}, nil
+}
+
 func (s *FakeSession) page(page dbdriver.Page) *dbdriver.RowSet {
 	start := min(page.Index*page.Size, len(s.fake.Rows))
 	end := min(start+page.Size, len(s.fake.Rows))

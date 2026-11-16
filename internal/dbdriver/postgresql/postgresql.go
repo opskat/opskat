@@ -29,7 +29,7 @@ var descriptor = dbdriver.Descriptor{
 		dbdriver.CapSchemas, dbdriver.CapCreateDatabase, dbdriver.CapViewDDL,
 		dbdriver.CapViews, dbdriver.CapProcedures, dbdriver.CapFunctions, dbdriver.CapTriggers,
 		dbdriver.CapGridEdit, dbdriver.CapCreateTable, dbdriver.CapAlterTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable,
-		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly, dbdriver.CapRunSQLFile,
+		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly, dbdriver.CapRunSQLFile, dbdriver.CapDumpSQL,
 	},
 	// 没有主键的表按 (tableoid, ctid) 定位单行。
 	LocatesRowWithoutPrimaryKey: true,
@@ -61,3 +61,8 @@ func init() {
 }
 
 func (driver) Descriptor() dbdriver.Descriptor { return descriptor }
+
+// 转储先用共用的默认写法（每个对象之前 DROP ... IF EXISTS，定义取 TableDDL 的原文）。
+var _ sqldb.DumpDialect = dialect{}
+
+func (dialect) DumpSyntax() sqldb.DumpSyntax { return sqldb.DumpSyntax{} }

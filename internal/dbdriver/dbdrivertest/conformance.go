@@ -1,6 +1,7 @@
 package dbdrivertest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -186,6 +187,58 @@ func scriptProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Se
 			check.FailingNumber, check.FailingNumber-1, result.Succeeded, result.Failed)}
 	}
 	return nil
+}
+
+// dumpDeclarationProblems 检查转储与声明相符（不需要数据，也不能执行语句）：没有声明 CapDumpSQL 的
+// 必须以 ErrUnsupported 拒绝、什么也不写；声明了的不能以 ErrUnsupported 拒绝——没有表的转储在读任何
+// 东西之前就被编排拒绝。写出的转储与表相符由 RunTableConformance 在有数据的会话上检查（dumpProblems）。
+func dumpDeclarationProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session) []string {
+	var out bytes.Buffer
+	if !desc.Supports(dbdriver.CapDumpSQL) {
+		_, err := s.Dump(ctx, dbdriver.DumpRequest{Tables: []string{"x"}, Writer: &out})
+		if !errors.Is(err, dbdriver.ErrUnsupported) || out.Len() > 0 {
+			return []string{fmt.Sprintf("Dump: the driver does not declare %q, so it must be refused with ErrUnsupported and write nothing, got: %v (%d bytes written)",
+				dbdriver.CapDumpSQL, err, out.Len())}
+		}
+		return nil
+	}
+	if _, err := s.Dump(ctx, dbdriver.DumpRequest{Writer: &out}); errors.Is(err, dbdriver.ErrUnsupported) {
+		return []string{fmt.Sprintf("Dump: declared %q but refused with ErrUnsupported: %v", dbdriver.CapDumpSQL, err)}
+	}
+	return nil
+}
+
+// dumpProblems 在有数据的会话上转储一张表（结构和数据，驱动能生成行语句时）：一个对象，行数与游标读出的
+// 一样，写完时报出这张表与它的行数，写出的字节数与结果相符。
+func dumpProblems(ctx context.Context, desc dbdriver.Descriptor, s dbdriver.Session, database, table string, rows int64) []string {
+	var problems []string
+	report := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	withData := desc.GeneratesRowStatements()
+	var out bytes.Buffer
+	var finished []dbdriver.DumpedObject
+	result, err := s.Dump(ctx, dbdriver.DumpRequest{
+		Database: database, Tables: []string{table}, WithData: withData, Writer: &out,
+		Progress: func(p dbdriver.DumpProgress) {
+			if p.Finished != nil {
+				finished = append(finished, *p.Finished)
+			}
+		},
+	})
+	if err != nil {
+		report("Dump(%q): %v", table, err)
+		return problems
+	}
+	wantRows := int64(0)
+	if withData {
+		wantRows = rows
+	}
+	if result.Objects != 1 || result.Rows != wantRows || result.Bytes != int64(out.Len()) {
+		report("Dump(%q): got %+v for %d bytes written; want one object and %d rows", table, *result, out.Len(), wantRows)
+	}
+	if len(finished) != 1 || finished[0].Name != table || finished[0].Rows != wantRows {
+		report("Dump(%q): the progress reported %+v as finished; want the table with %d rows", table, finished, wantRows)
+	}
+	return problems
 }
 
 // schemaWriteProblems 检查建表、删表、清空、建库的语句生成（只生成、不执行，所以不需要数据）：
@@ -400,6 +453,7 @@ func undeclaredObjectProblems(ctx context.Context, desc dbdriver.Descriptor, s d
 			problems = append(problems, fmt.Sprintf("RunScript: the driver does not declare %q, so it must be refused with ErrUnsupported, got: %v", dbdriver.CapRunSQLFile, err))
 		}
 	}
+	problems = append(problems, dumpDeclarationProblems(ctx, desc, s)...)
 	if !desc.Supports(dbdriver.CapGridEdit) {
 		_, err := s.GridEditStatements(ctx, "", "x", dbdriver.GridEditRequest{
 			Columns: []string{"id"}, Inserts: []dbdriver.GridInsert{{Values: []dbdriver.ColumnValue{{Column: "id", Value: float64(1)}}}},
@@ -678,6 +732,10 @@ func tableProblems(desc dbdriver.Descriptor, s dbdriver.Session, database, table
 		if opened != nil && streamed != opened.TotalCount {
 			report("StreamTableRows: streamed %d rows, but OpenTable reported a total of %d", streamed, opened.TotalCount)
 		}
+	}
+
+	if desc.Supports(dbdriver.CapDumpSQL) && opened != nil {
+		problems = append(problems, dumpProblems(ctx, desc, s, database, table, opened.TotalCount)...)
 	}
 
 	var writer dbdriver.RowStatementWriter
@@ -1210,6 +1268,9 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 	}
 	if len(desc.AlterTableAttributes) > 0 && !desc.Supports(dbdriver.CapAlterTable) {
 		report("alterTableAttributes are declared without capability %q, the only feature that uses them", dbdriver.CapAlterTable)
+	}
+	if desc.Supports(dbdriver.CapDumpSQL) && !desc.Supports(dbdriver.CapViewDDL) {
+		report("capability %q is declared without capability %q; a dump writes the definitions TableDDL gives", dbdriver.CapDumpSQL, dbdriver.CapViewDDL)
 	}
 	if desc.CreateTableComments && !desc.Supports(dbdriver.CapCreateTable) {
 		report("createTableComments is declared without capability %q, the only feature that uses it", dbdriver.CapCreateTable)

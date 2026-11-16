@@ -17,6 +17,9 @@ type dbDriversPoint struct{ guest guestFunc }
 
 func (dbDriversPoint) Key() string { return extwire.KeyDatabaseDrivers }
 
+// hostOnlyCapabilities 是扩展驱动还不能声明的功能：ABI 里没有它们的操作。
+var hostOnlyCapabilities = []dbdriver.Capability{dbdriver.CapRunSQLFile, dbdriver.CapDumpSQL}
+
 // Check validates every driver descriptor on its own (dbdriver validation: known
 // fields, capabilities and tabs, driver fields clear of the built-in ones) and
 // against the extension driver's network rules (fitsNetworkRules), that no id
@@ -26,8 +29,8 @@ func (dbDriversPoint) Key() string { return extwire.KeyDatabaseDrivers }
 // for an extension that describes no driver too — the manifest may still declare
 // one. A driver that declares the Kerberos field group (dbdriver.FieldKerberos) asks
 // the host for tickets, which the user audits as permissions.kerberos. Running SQL
-// files (dbdriver.CapRunSQLFile) has no wire operations in the host ABI, so a driver
-// declaring it is refused.
+// files (dbdriver.CapRunSQLFile) and dumping them (dbdriver.CapDumpSQL) have no wire
+// operations in the host ABI, so a driver declaring either is refused.
 func (dbDriversPoint) Check(v extension.ExtensionView) error {
 	var drivers []dbdriver.Descriptor
 	if err := decodeContribution(v, extwire.KeyDatabaseDrivers, &drivers); err != nil {
@@ -43,9 +46,11 @@ func (dbDriversPoint) Check(v extension.ExtensionView) error {
 		if err := fitsNetworkRules(drv); err != nil {
 			return fmt.Errorf("databaseDrivers[%s]: %w", id, err)
 		}
-		if drv.Supports(dbdriver.CapRunSQLFile) {
-			return fmt.Errorf("databaseDrivers[%s]: database driver %q declares capability %q, which extension drivers cannot provide",
-				id, id, dbdriver.CapRunSQLFile)
+		for _, capability := range hostOnlyCapabilities {
+			if drv.Supports(capability) {
+				return fmt.Errorf("databaseDrivers[%s]: database driver %q declares capability %q, which extension drivers cannot provide",
+					id, id, capability)
+			}
 		}
 		if _, dup := described[id]; dup {
 			return fmt.Errorf("databaseDrivers[%s]: duplicate driver %q", id, id)

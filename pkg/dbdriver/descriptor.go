@@ -793,6 +793,9 @@ const (
 	// CapRunSQLFile：运行 SQL 文件（Session.RunScript）——按驱动自己的写法把文件切成语句，在一条连接上
 	// 逐条执行。
 	CapRunSQLFile Capability = "run_sql_file"
+	// CapDumpSQL：转储为 SQL 文件（Session.Dump）——选中的表与视图写成一份能在空库上运行还原的文件。
+	// 只与 CapViewDDL 一起声明（定义来自 TableDDL）；结构和数据还要会话能生成行语句（GeneratesRowStatements）。
+	CapDumpSQL Capability = "dump_sql"
 )
 
 // Capabilities 是全部已知的功能。
@@ -801,7 +804,7 @@ func Capabilities() []Capability {
 		CapSchemas, CapCreateDatabase, CapViewDDL,
 		CapViews, CapProcedures, CapFunctions, CapTriggers,
 		CapGridEdit, CapCreateTable, CapAlterTable, CapDropTable, CapTruncateTable,
-		CapImport, CapExportSQL, CapCopySQL, CapReadOnly, CapClassifyStatements, CapRunSQLFile,
+		CapImport, CapExportSQL, CapCopySQL, CapReadOnly, CapClassifyStatements, CapRunSQLFile, CapDumpSQL,
 	}
 }
 

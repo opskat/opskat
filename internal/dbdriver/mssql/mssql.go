@@ -33,7 +33,7 @@ var descriptor = dbdriver.Descriptor{
 		// 连接级只读对 SQL Server 目前不生效（连接时只记一条日志），但表单上的只读开关
 		// 一直对所有驱动显示；这一轮保持表单不变，所以仍然声明。
 		dbdriver.CapReadOnly,
-		dbdriver.CapRunSQLFile,
+		dbdriver.CapRunSQLFile, dbdriver.CapDumpSQL,
 	},
 	CanDisableForeignKeyChecks: true,
 	// SQL Server 没有 CHARACTER SET，只有排序规则；默认空（用服务器默认）。
@@ -56,3 +56,8 @@ func init() {
 }
 
 func (driver) Descriptor() dbdriver.Descriptor { return descriptor }
+
+// 转储先用共用的默认写法（每个对象之前 DROP ... IF EXISTS，定义取 TableDDL 的原文）。
+var _ sqldb.DumpDialect = dialect{}
+
+func (dialect) DumpSyntax() sqldb.DumpSyntax { return sqldb.DumpSyntax{} }

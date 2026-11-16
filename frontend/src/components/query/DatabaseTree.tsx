@@ -19,6 +19,7 @@ import {
   Eraser,
   Columns3,
   FileInput,
+  FileOutput,
 } from "lucide-react";
 import {
   Button,
@@ -30,6 +31,9 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ConfirmDialog,
   DropdownMenu,
   DropdownMenuContent,
@@ -49,6 +53,7 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
 import { RunSqlFileDialog } from "./RunSqlFileDialog";
+import { DumpSqlFileDialog } from "./DumpSqlFileDialog";
 import { ObjectBrowserSection } from "./ObjectBrowserSection";
 import { useAssetReadOnly, useCanCreateTable, useDesignerAccess } from "./designer/access";
 import { defaultCreateTarget, targetLabel, targetOfTable, type CreateTableTarget } from "./designer/createTarget";
@@ -174,6 +179,8 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const [showCreateDatabase, setShowCreateDatabase] = useState(false);
   // 正在「运行 SQL 文件」的库;null 表示对话框没开。
   const [runSqlFileDatabase, setRunSqlFileDatabase] = useState<string | null>(null);
+  // 要「转储 SQL 文件」的库与表(内容取自所选的子菜单项);null 表示对话框没开。
+  const [dumpTarget, setDumpTarget] = useState<{ database: string; tables: string[]; withData: boolean } | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     type: "drop" | "truncate";
     targets: TableRef[];
@@ -197,6 +204,9 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const canCreateTable = useCanCreateTable(driverDescriptor, tabMeta?.assetId);
   // 资产设为只读连接时「运行 SQL 文件…」仍显示但置灰:有的驱动的连接级只读并不生效。
   const assetReadOnly = useAssetReadOnly(tabMeta?.assetId);
+  // 「转储 SQL 文件」:仅结构要驱动能给出定义,结构和数据还要能生成行语句。转储不受只读连接影响。
+  const canDump = can("dump_sql") && can("view_ddl");
+  const canDumpData = canDump && (can("export_sql") || can("copy_sql"));
   const defaultDatabase = tabMeta?.defaultDatabase ?? "";
   const openNewTable = (target: CreateTableTarget) => openCreateTableTab(tabId, target.database, target.schema);
 
@@ -462,6 +472,11 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
     // 所以这里按当前选中集算出的作用范围就是菜单实际生效的范围。
     const targets = contextTargets(db, tbl);
     const isBatch = targets.length > 1;
+    // 转储针对一个库:选中的表都在同一个库时才有(null 表示跨了库)。
+    const dumpDatabase = targets.every((target) => target.database === targets[0].database)
+      ? targets[0].database
+      : null;
+    const dumpTables = targets.map((target) => target.table);
     return (
       <ContextMenu key={tbl}>
         <ContextMenuTrigger className="block w-full">
@@ -529,6 +544,36 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                 {t("query.newMenu.in", { name: targetLabel(targetOfTable(db, tbl, schemaAware)) })}
               </ContextMenuShortcut>
             </ContextMenuItem>
+          )}
+          {canDump && (
+            <>
+              <ContextMenuSeparator />
+              {/* 一次转储针对一个库:选中的表跨了库时置灰。 */}
+              <div title={dumpDatabase === null ? t("query.dumpSqlFileOneDatabaseHint") : undefined}>
+                <ContextMenuSub>
+                  <ContextMenuSubTrigger data-testid="table-dump-sql-file" disabled={dumpDatabase === null}>
+                    <FileOutput className="h-3.5 w-3.5" />
+                    {t("query.dumpSqlFile")}
+                  </ContextMenuSubTrigger>
+                  {dumpDatabase !== null && (
+                    <ContextMenuSubContent>
+                      {canDumpData && (
+                        <ContextMenuItem
+                          onClick={() => setDumpTarget({ database: dumpDatabase, tables: dumpTables, withData: true })}
+                        >
+                          {t("query.dumpSqlFileStructureAndDataItem")}
+                        </ContextMenuItem>
+                      )}
+                      <ContextMenuItem
+                        onClick={() => setDumpTarget({ database: dumpDatabase, tables: dumpTables, withData: false })}
+                      >
+                        {t("query.dumpSqlFileStructureOnlyItem")}
+                      </ContextMenuItem>
+                    </ContextMenuSubContent>
+                  )}
+                </ContextMenuSub>
+              </div>
+            </>
           )}
           {(can("truncate_table") || can("drop_table")) && <ContextMenuSeparator />}
           {can("truncate_table") && (
@@ -904,6 +949,21 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
         options={driverDescriptor?.createDatabaseOptions ?? []}
         onSuccess={() => loadDatabases(tabId)}
       />
+
+      {dumpTarget !== null && tabMeta && (
+        <DumpSqlFileDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setDumpTarget(null);
+          }}
+          assetId={tabMeta.assetId}
+          assetName={tabMeta.assetName}
+          database={dumpTarget.database}
+          tables={dumpTarget.tables}
+          withData={dumpTarget.withData}
+          canDumpData={canDumpData}
+        />
+      )}
 
       {runSqlFileDatabase !== null && tabMeta && (
         <RunSqlFileDialog

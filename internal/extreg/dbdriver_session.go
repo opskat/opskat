@@ -204,6 +204,10 @@ func (s *extensionSession) RunScript(ctx context.Context, req dbdriver.ScriptReq
 	return do(s, ctx, func(ctx context.Context) (*dbdriver.ScriptResult, error) { return s.inner.RunScript(ctx, req) })
 }
 
+func (s *extensionSession) Dump(ctx context.Context, req dbdriver.DumpRequest) (*dbdriver.DumpResult, error) {
+	return do(s, ctx, func(ctx context.Context) (*dbdriver.DumpResult, error) { return s.inner.Dump(ctx, req) })
+}
+
 // extensionRowStream 是扩展驱动的游标：驱动被移除后读取停止，Err 报驱动不可用。
 type extensionRowStream struct {
 	dbdriver.RowStream

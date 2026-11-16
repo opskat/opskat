@@ -278,6 +278,11 @@ type Session interface {
 	// 声明 CapRunSQLFile 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
 	RunScript(ctx context.Context, req ScriptRequest) (*ScriptResult, error)
 
+	// Dump 把 req.Tables 写成一份 SQL 转储（见 DumpRequest）：能在空库上运行还原的文件，写进 req.Writer。
+	// 驱动给出方言部分（DumpDialect），编排（顺序、读定义、边读行边写、进度、取消）用 Dump，各驱动一样。
+	// 驱动没有声明 CapDumpSQL 时返回包着 ErrUnsupported 的错误，且不执行任何语句、不写任何内容。
+	Dump(ctx context.Context, req DumpRequest) (*DumpResult, error)
+
 	// Close 释放会话占用的一切（连接、文件锁、远端文件系统）。
 	io.Closer
 }
