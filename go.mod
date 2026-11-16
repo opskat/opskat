@@ -258,3 +258,8 @@ require (
 // replace github.com/wailsapp/wails/v2 v2.10.2 => /Users/codfrm/go/pkg/mod
 
 replace github.com/bouncyball-git/gopher-rdp => github.com/opskat/gopher-rdp v0.0.0-20261112054432-7717ec6da048
+
+// v2.17.1 + fix for a frameless window coming back from minimize scaled to another monitor's DPI
+// (opskat#196). Branch opskat/v2.17.1-frameless-restore on github.com/opskat/wails; drop once the
+// upstream PR (wailsapp/wails#6603) is in a wails v2 release.
+replace github.com/wailsapp/wails/v2 => github.com/opskat/wails/v2 v2.0.0-20261116090547-fb6236b76d57
