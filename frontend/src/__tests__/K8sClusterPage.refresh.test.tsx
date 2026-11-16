@@ -2,7 +2,13 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { K8sClusterPage } from "@/components/k8s/K8sClusterPage";
-import { GetK8sClusterVersion, GetK8sPodDetail, GetK8sResourceTypes, ListK8sResources } from "../../wailsjs/go/k8s/K8s";
+import {
+  GetK8sClusterVersion,
+  GetK8sResource,
+  GetK8sResourceTypes,
+  ListK8sEvents,
+  ListK8sResources,
+} from "../../wailsjs/go/k8s/K8s";
 import type { asset_entity, k8s } from "../../wailsjs/go/models";
 
 const types = {
@@ -38,25 +44,12 @@ function podTable(names: string[]) {
   });
 }
 
-function podDetail(name: string, image: string) {
+function podObject(name: string, image: string) {
   return {
-    name,
-    namespace: "default",
-    status: "Running",
-    node_name: "node-1",
-    pod_ip: "10.0.0.1",
-    host_ip: "192.168.0.1",
-    creation_time: "2026-06-30T00:00:00Z",
-    age: "1m",
-    ready: "1/1",
-    restart_count: 0,
-    qos_class: "BestEffort",
-    containers: [{ name: "app", image, state: "Running", ready: true, restart_count: 0 }],
-    conditions: [],
-    events: [],
-    labels: {},
-    annotations: {},
-    yaml: `image: ${image}`,
+    kind: "Pod",
+    metadata: { name, namespace: "default", uid: name, creationTimestamp: "2026-06-30T00:00:00Z" },
+    spec: { nodeName: "node-1", containers: [{ name: "app", image }] },
+    status: { phase: "Running", podIP: "10.0.0.1", hostIP: "192.168.0.1", qosClass: "BestEffort" },
   };
 }
 
@@ -89,7 +82,8 @@ describe("K8sClusterPage refresh (#212)", () => {
     vi.mocked(GetK8sClusterVersion).mockReset();
     vi.mocked(GetK8sResourceTypes).mockReset();
     vi.mocked(ListK8sResources).mockReset();
-    vi.mocked(GetK8sPodDetail).mockReset();
+    vi.mocked(GetK8sResource).mockReset();
+    vi.mocked(ListK8sEvents).mockReset();
   });
 
   it("re-reads an already loaded list and shows the new rows", async () => {
@@ -112,9 +106,14 @@ describe("K8sClusterPage refresh (#212)", () => {
   it("re-reads an open pod detail", async () => {
     const user = userEvent.setup();
     mockCluster(() => podTable(["api"]));
-    vi.mocked(GetK8sPodDetail)
-      .mockResolvedValueOnce(JSON.stringify(podDetail("api", "example/api:old")) as never)
-      .mockResolvedValueOnce(JSON.stringify(podDetail("api", "example/api:new")) as never);
+    vi.mocked(ListK8sEvents).mockResolvedValue(JSON.stringify({ events: [] }) as never);
+    vi.mocked(GetK8sResource)
+      .mockResolvedValueOnce(
+        JSON.stringify({ notFound: false, object: podObject("api", "example/api:old"), yaml: "" }) as never
+      )
+      .mockResolvedValueOnce(
+        JSON.stringify({ notFound: false, object: podObject("api", "example/api:new"), yaml: "" }) as never
+      );
 
     render(<K8sClusterPage asset={asset(99002)} />);
     await openPods(user);
@@ -123,7 +122,7 @@ describe("K8sClusterPage refresh (#212)", () => {
 
     await user.click(within(screen.getByTestId("k8s-sidebar")).getByRole("button", { name: "query.refreshTree" }));
 
-    await waitFor(() => expect(GetK8sPodDetail).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(GetK8sResource).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("example/api:new")).toBeInTheDocument();
     expect(screen.queryByText("example/api:old")).not.toBeInTheDocument();
   });

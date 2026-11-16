@@ -1,14 +1,12 @@
 import { create } from "zustand";
 import {
   GetK8sClusterVersion,
-  GetK8sPodDetail,
   GetK8sResource,
   GetK8sResourceTypes,
   ListK8sEvents,
   ListK8sResources,
 } from "../../wailsjs/go/k8s/K8s";
 import { errorMessage } from "@/lib/errorMessage";
-import type { PodDetail } from "@/components/k8s/cluster/types";
 import type { LogTabState, LogTabStateUpdate } from "@/components/k8s/k8sLogState";
 import { registerTabCloseHook, type PageTabMeta } from "./tabStore";
 
@@ -124,7 +122,7 @@ export function labelSelectorOf(filter: string): string {
 
 /**
  * Inner tab of the cluster page. Ids: `overview` | `list:<typeKey>` | `res:<typeKey>:<ns>:<name>` |
- * `term:<sessionKey>`; the legacy pod log tab is `log:<ns>:<pod>` until the generic detail replaces it.
+ * `term:<sessionKey>`.
  */
 export interface K8sInnerTab {
   id: string;
@@ -165,15 +163,6 @@ export function resourceTabId(typeKey: string, namespace: string, name: string) 
   return `res:${typeKey}:${namespace}:${name}`;
 }
 
-export function podLogTabId(namespace: string, pod: string) {
-  return `log:${namespace}:${pod}`;
-}
-
-export function podDetailKey(namespace: string, pod: string) {
-  return `${namespace}/${pod}`;
-}
-
-/** The pod detail a legacy pod detail (`res:/pods:<ns>:<pod>`) or log (`log:<ns>:<pod>`) tab shows. */
 /** Splits a `res:<typeKey>:<ns>:<name>` tab id. */
 export function parseResourceTabId(id: string): { typeKey: string; namespace: string; name: string } | null {
   if (!id.startsWith("res:")) return null;
@@ -181,21 +170,15 @@ export function parseResourceTabId(id: string): { typeKey: string; namespace: st
   return name === undefined ? null : { typeKey, namespace, name };
 }
 
-function podKeyOfTab(id: string): string | null {
-  const rest = id.startsWith("res:/pods:") ? id.slice("res:/pods:".length) : id.startsWith("log:") ? id.slice(4) : null;
-  if (rest === null) return null;
-  const [namespace, pod] = rest.split(":");
-  return podDetailKey(namespace, pod);
-}
-
 type Refresher = () => Promise<unknown>;
 
 interface K8sStoreState {
   clusters: Record<number, K8sClusterState>;
   lists: Record<number, Record<string, K8sListEntry>>;
-  /** Legacy pod detail (GetK8sPodDetail) keyed `<ns>/<pod>`, until the generic detail replaces it. */
-  podDetails: Record<number, Record<string, Loadable<PodDetail>>>;
+  /** Log panel state of a detail's Logs sub-tab, keyed by the detail's `res:` tab id. */
   logTabs: Record<number, Record<string, LogTabState>>;
+  /** The sub-tab a detail shows (absent = overview), keyed by its `res:` tab id. */
+  detailSubTabs: Record<number, Record<string, string>>;
   /** Generic resource details keyed by their `res:` inner tab id. */
   details: Record<number, Record<string, K8sDetailEntry>>;
   /** Filter / sort / auto-refresh per list tab, `<typeKey>` → view. */
@@ -222,8 +205,10 @@ interface K8sStoreState {
   refreshAll: (assetId: number) => Promise<void>;
   /** Lets a view take part in `refreshAll`; returns the unregister function. */
   registerRefresher: (assetId: number, key: string, fn: Refresher) => () => void;
-  loadPodDetail: (assetId: number, namespace: string, pod: string, opts?: { force?: boolean }) => Promise<void>;
-  openPodLogs: (assetId: number, namespace: string, pod: string, container: string, label: string) => void;
+  /** Selects a detail's sub-tab (e.g. 'logs'); the detail keeps it while its tab is open. */
+  setDetailSubTab: (assetId: number, tabId: string, subTab: string) => void;
+  /** Creates the log panel state of a detail's Logs sub-tab unless it exists. */
+  initLogTab: (assetId: number, tabId: string) => void;
   updateLogTab: (assetId: number, tabId: string, update: LogTabStateUpdate) => void;
   clearCluster: (assetId: number) => void;
 }
@@ -312,8 +297,8 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
   return {
     clusters: {},
     lists: {},
-    podDetails: {},
     logTabs: {},
+    detailSubTabs: {},
     details: {},
     listViews: {},
 
@@ -516,25 +501,19 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         const cluster = s.clusters[assetId];
         if (!cluster) return s;
         const logs = { ...s.logTabs[assetId] };
+        const subTabs = { ...s.detailSubTabs[assetId] };
         const resDetails = { ...s.details[assetId] };
         for (const id of closing) {
           delete logs[id];
+          delete subTabs[id];
           // Dropped with its tab, so reopening reads it afresh and the top refresh stops re-reading it.
           delete resDetails[id];
           tokens.delete(`${assetId}|detail:${id}`);
         }
-        // A pod detail is read for its detail / log tabs; once none is open it is dropped, so opening it again
-        // reads it afresh and the top refresh doesn't keep re-reading it.
-        const shown = new Set(cluster.tabs.map((t) => podKeyOfTab(t.id)));
-        const details: Record<string, Loadable<PodDetail>> = {};
-        for (const [key, entry] of Object.entries(s.podDetails[assetId] ?? {})) {
-          if (shown.has(key)) details[key] = entry;
-          else tokens.delete(`${assetId}|pod:${key}`); // a read still in flight must not bring it back
-        }
         return {
           logTabs: { ...s.logTabs, [assetId]: logs },
+          detailSubTabs: { ...s.detailSubTabs, [assetId]: subTabs },
           details: { ...s.details, [assetId]: resDetails },
-          podDetails: { ...s.podDetails, [assetId]: details },
         };
       });
     },
@@ -551,10 +530,6 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
       for (const key of Object.keys(state.lists[assetId] ?? {})) {
         const sep = key.lastIndexOf("|");
         reads.push(state.loadList(assetId, key.slice(0, sep), key.slice(sep + 1), { force: true }));
-      }
-      for (const key of Object.keys(state.podDetails[assetId] ?? {})) {
-        const sep = key.indexOf("/");
-        reads.push(state.loadPodDetail(assetId, key.slice(0, sep), key.slice(sep + 1), { force: true }));
       }
       for (const tabId of Object.keys(state.details[assetId] ?? {})) {
         reads.push(state.loadDetail(assetId, tabId, { force: true }));
@@ -576,44 +551,24 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
       };
     },
 
-    loadPodDetail: async (assetId, namespace, pod, opts) => {
-      if (!get().clusters[assetId]) return;
-      const key = podDetailKey(namespace, pod);
-      const prev = get().podDetails[assetId]?.[key];
-      if (prev && !opts?.force) return;
-      const setEntry = (entry: Loadable<PodDetail>) =>
-        set((s) => {
-          if (!s.clusters[assetId]) return s;
-          return { podDetails: { ...s.podDetails, [assetId]: { ...s.podDetails[assetId], [key]: entry } } };
-        });
-      const slot = `pod:${key}`;
-      const token = begin(assetId, slot);
-      setEntry(pending(prev));
-      try {
-        const data = JSON.parse(await GetK8sPodDetail(assetId, namespace, pod)) as PodDetail;
-        if (!isCurrent(assetId, slot, token)) return;
-        setEntry({ status: "ready", data, error: null });
-      } catch (e) {
-        if (!isCurrent(assetId, slot, token)) return;
-        setEntry({ ...pending(prev), status: "error", error: errorMessage(e) });
-      }
-    },
-
-    openPodLogs: (assetId, namespace, pod, container, label) => {
-      const id = podLogTabId(namespace, pod);
+    setDetailSubTab: (assetId, tabId, subTab) =>
       set((s) => {
-        if (!s.clusters[assetId] || s.logTabs[assetId]?.[id]) return s;
+        if (!s.clusters[assetId]) return s;
+        return { detailSubTabs: { ...s.detailSubTabs, [assetId]: { ...s.detailSubTabs[assetId], [tabId]: subTab } } };
+      }),
+
+    initLogTab: (assetId, tabId) =>
+      set((s) => {
+        if (!s.clusters[assetId] || s.logTabs[assetId]?.[tabId]) return s;
         const initial: LogTabState = {
           logStreamID: null,
-          logContainer: container,
+          logContainer: "",
           logTailLines: 200,
           logError: null,
           logBuffers: {},
         };
-        return { logTabs: { ...s.logTabs, [assetId]: { ...s.logTabs[assetId], [id]: initial } } };
-      });
-      get().openTab(assetId, { id, label });
-    },
+        return { logTabs: { ...s.logTabs, [assetId]: { ...s.logTabs[assetId], [tabId]: initial } } };
+      }),
 
     updateLogTab: (assetId, tabId, update) =>
       set((s) => {
@@ -637,8 +592,8 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         return {
           clusters: without(s.clusters),
           lists: without(s.lists),
-          podDetails: without(s.podDetails),
           logTabs: without(s.logTabs),
+          detailSubTabs: without(s.detailSubTabs),
           details: without(s.details),
           listViews: without(s.listViews),
         };

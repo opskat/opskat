@@ -1,10 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  GetK8sClusterVersion,
-  GetK8sResourceTypes,
-  ListK8sResources,
-  GetK8sPodDetail,
-} from "../../../wailsjs/go/k8s/K8s";
+import { GetK8sClusterVersion, GetK8sResourceTypes, ListK8sResources } from "../../../wailsjs/go/k8s/K8s";
 import type { k8s } from "../../../wailsjs/go/models";
 import { useK8sStore } from "../k8sStore";
 import { useTabStore } from "../tabStore";
@@ -105,7 +100,6 @@ describe("k8sStore", () => {
     vi.mocked(GetK8sClusterVersion).mockReset();
     vi.mocked(GetK8sResourceTypes).mockReset();
     vi.mocked(ListK8sResources).mockReset();
-    vi.mocked(GetK8sPodDetail).mockReset();
   });
 
   it("selects the asset's namespace by default, and all namespaces when none is configured", async () => {
@@ -237,24 +231,21 @@ describe("k8sStore", () => {
     expect(cluster.activeTabId).toBe("list:apps/deployments");
   });
 
-  it("forgets a pod detail once no open tab shows it, so reopening reads it again", async () => {
+  it("drops a detail's sub-tab choice and log state with its tab, so reopening starts on the overview", () => {
     mockCluster(namespacesOK);
-    vi.mocked(GetK8sPodDetail).mockResolvedValue(JSON.stringify({ name: "api", containers: [] }) as never);
     const store = useK8sStore.getState();
     store.initCluster(assetId, "prod");
-    const detailTab = { id: "res:/pods:prod:api", label: "api" };
-    store.openTab(assetId, detailTab);
-    await store.loadPodDetail(assetId, "prod", "api");
-    store.openPodLogs(assetId, "prod", "api", "app", "logs");
+    const tab = { id: "res:/pods:prod:api", label: "api" };
+    store.openTab(assetId, tab);
+    store.setDetailSubTab(assetId, tab.id, "logs");
+    store.initLogTab(assetId, tab.id);
+    expect(useK8sStore.getState().detailSubTabs[assetId][tab.id]).toBe("logs");
+    expect(useK8sStore.getState().logTabs[assetId][tab.id]).toBeDefined();
 
-    store.closeTabs(assetId, [detailTab.id]);
-    await store.loadPodDetail(assetId, "prod", "api");
-    expect(GetK8sPodDetail).toHaveBeenCalledTimes(1);
+    store.closeTabs(assetId, [tab.id]);
 
-    store.closeTabs(assetId, ["log:prod:api"]);
-    store.openTab(assetId, detailTab);
-    await store.loadPodDetail(assetId, "prod", "api");
-    expect(GetK8sPodDetail).toHaveBeenCalledTimes(2);
+    expect(useK8sStore.getState().detailSubTabs[assetId][tab.id]).toBeUndefined();
+    expect(useK8sStore.getState().logTabs[assetId][tab.id]).toBeUndefined();
   });
 
   it("clears a cluster's state when its cluster tab closes", async () => {

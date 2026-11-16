@@ -100,12 +100,6 @@ func (k *K8s) doK8sCall(ctx context.Context, assetID int64, label string, fn fun
 	return string(data), nil
 }
 
-func (k *K8s) GetK8sPodDetail(assetID int64, namespace, podName string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S pod detail", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetPodDetail(ctx, c.kubeconfig, namespace, podName, c.opts...)
-	})
-}
-
 func (k *K8s) StartK8sPodLogs(assetID int64, namespace, podName, container string, tailLines int64) (string, error) {
 	loadCtx, loadCancel := context.WithTimeout(k.ctx, 30*time.Second)
 	defer loadCancel()

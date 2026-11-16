@@ -250,7 +250,7 @@ describe("K8s resource list", () => {
     expect(useK8sStore.getState().clusters[a.ID].activeTabId).toBe("res:/pods:default:api-1");
   });
 
-  it("shows no row actions when nothing is registered, and registered ones in hover icons and the ⋯ menu", async () => {
+  it("shows registered actions in hover icons and the ⋯ menu", async () => {
     const user = userEvent.setup();
     const run = vi.fn();
     mockPods(() => podTable([{ name: "api-1" }]));
@@ -258,7 +258,6 @@ describe("K8s resource list", () => {
     render(<K8sClusterPage asset={a} />);
     await openPods(user);
     await screen.findByText("api-1");
-    expect(screen.queryByRole("button", { name: "asset.k8sMoreActions" })).not.toBeInTheDocument();
 
     const off = registerK8sAction({
       id: "t.primary",

@@ -207,7 +207,10 @@ describe("K8s generic resource detail", () => {
       const id = nextId++;
       await openDetail(id, "apps/deployments", "web");
       const header = await screen.findByTestId("k8s-detail-header");
-      const buttons = within(header).getAllByRole("button");
+      // the built-in actions (logs…) come first; only the ones registered here are compared
+      const buttons = within(header)
+        .getAllByRole("button")
+        .filter((b) => b.textContent?.startsWith("t."));
       expect(buttons.map((b) => b.textContent)).toEqual(["t.restart", "t.delete"]);
       expect(buttons[1].className).toContain("text-destructive");
       await user.click(buttons[1]);

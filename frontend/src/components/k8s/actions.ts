@@ -8,6 +8,8 @@ export interface K8sActionContext {
   namespace: string;
   name: string;
   object?: Record<string, unknown>;
+  /** Set when the action was started from one container of a Pod (e.g. its terminal button). */
+  container?: string;
 }
 
 /** A list row, or the full resource object shown by a detail view. */

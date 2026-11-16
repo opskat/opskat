@@ -1,4 +1,4 @@
-import { createElement, useEffect, useMemo, useState } from "react";
+import { createElement, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Tabs, TabsContent, TabsList, TabsTrigger, Button, cn } from "@opskat/ui";
 import { AsyncState } from "@/components/common/AsyncState";
@@ -53,7 +53,8 @@ export function K8sResourceDetail({
   const entry = useK8sStore((s) => s.details[assetId]?.[tabId]);
   const loadDetail = useK8sStore((s) => s.loadDetail);
   const openTab = useK8sStore((s) => s.openTab);
-  const [subTab, setSubTab] = useState("overview");
+  const subTab = useK8sStore((s) => s.detailSubTabs[assetId]?.[tabId]) ?? "overview";
+  const setDetailSubTab = useK8sStore((s) => s.setDetailSubTab);
 
   const ref = parseResourceTabId(tabId);
   // Reads only when the detail isn't cached yet (first open); inner-tab switches never come through here.
@@ -168,7 +169,7 @@ export function K8sResourceDetail({
         </div>
       </div>
 
-      <Tabs value={subTab} onValueChange={setSubTab} className="min-h-0 flex-1 gap-0">
+      <Tabs value={subTab} onValueChange={(v) => setDetailSubTab(assetId, tabId, v)} className="min-h-0 flex-1 gap-0">
         <div className="flex h-9 w-full shrink-0 items-center border-b border-border bg-muted/20 px-2">
           <TabsList variant="line" className="h-full justify-start bg-transparent p-0">
             <TabsTrigger value="overview" className={triggerClass}>

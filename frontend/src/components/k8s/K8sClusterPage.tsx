@@ -9,7 +9,7 @@ import { K8sInnerTabBar } from "./cluster/K8sInnerTabBar";
 import { K8sResourceList } from "./cluster/K8sResourceList";
 import { K8sOverview } from "./cluster/K8sOverview";
 import { K8sResourceDetail } from "./detail/K8sResourceDetail";
-import { LegacyPodDetail, LegacyPodLogs } from "./cluster/LegacyPodDetail";
+import "./detail/workloads/register";
 
 interface Props {
   asset: asset_entity.Asset;
@@ -86,14 +86,6 @@ function ActiveTab({ assetId, cluster }: { assetId: number; cluster: K8sClusterS
   }
   if (id.startsWith("list:")) {
     return <K8sResourceList key={id} assetId={assetId} cluster={cluster} typeKey={id.slice("list:".length)} />;
-  }
-  if (id.startsWith("res:/pods:")) {
-    const [namespace, pod] = id.slice("res:/pods:".length).split(":");
-    return <LegacyPodDetail key={id} assetId={assetId} namespace={namespace} pod={pod} />;
-  }
-  if (id.startsWith("log:")) {
-    const [namespace, pod] = id.slice("log:".length).split(":");
-    return <LegacyPodLogs key={id} assetId={assetId} namespace={namespace} pod={pod} tabId={id} />;
   }
   if (id.startsWith("res:")) {
     return <K8sResourceDetail key={id} assetId={assetId} cluster={cluster} tabId={id} />;

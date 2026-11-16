@@ -1,23 +1,19 @@
 import { useTranslation } from "react-i18next";
 import { K8sSectionCard } from "../K8sSectionCard";
 import { K8sMetadataGrid } from "../K8sMetadataGrid";
-import { K8sConditionList } from "../K8sConditionList";
-import { K8sTagList } from "../K8sTagList";
+import { K8sMetaSections } from "./K8sMetaSections";
 import type { K8sDetailProps } from "./registry";
 
 interface Metadata {
   uid?: string;
   resourceVersion?: string;
   creationTimestamp?: string;
-  labels?: Record<string, string>;
-  annotations?: Record<string, string>;
 }
 
 /** Overview for kinds without a dedicated one: metadata, `status.conditions` if present, labels and annotations. */
 export function K8sGenericOverview({ namespace, name, object }: K8sDetailProps) {
   const { t } = useTranslation();
   const meta = (object.metadata ?? {}) as Metadata;
-  const conditions = (object.status as { conditions?: unknown } | undefined)?.conditions;
 
   return (
     <div className="space-y-4">
@@ -32,14 +28,7 @@ export function K8sGenericOverview({ namespace, name, object }: K8sDetailProps) 
           ]}
         />
       </K8sSectionCard>
-      {Array.isArray(conditions) && conditions.length > 0 && (
-        <K8sConditionList
-          conditions={conditions as { type: string; status: string; reason?: string; message?: string }[]}
-          title={t("asset.k8sPodConditions")}
-        />
-      )}
-      <K8sTagList tags={meta.labels ?? {}} title={t("asset.k8sPodLabels")} defaultCollapsed />
-      <K8sTagList tags={meta.annotations ?? {}} title={t("asset.k8sAnnotations")} defaultCollapsed />
+      <K8sMetaSections object={object} />
     </div>
   );
 }
