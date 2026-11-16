@@ -21,7 +21,6 @@ import (
 	"github.com/opskat/opskat/internal/sshpool"
 
 	"github.com/cago-frame/cago/pkg/logger"
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"go.uber.org/zap"
 )
 
@@ -128,9 +127,7 @@ func (k *K8s) StartK8sPodLogs(assetID int64, namespace, podName, container strin
 		defer cancel()
 		defer k.logStreams.Delete(streamID)
 
-		pumpPodLogs(reader, streamID, func(event string, payload any) {
-			wailsRuntime.EventsEmit(k.ctx, event, payload)
-		})
+		pumpPodLogs(reader, streamID, k.emit)
 	}()
 
 	return streamID, nil

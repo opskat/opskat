@@ -9,7 +9,9 @@ import { K8sInnerTabBar } from "./cluster/K8sInnerTabBar";
 import { K8sResourceList } from "./cluster/K8sResourceList";
 import { K8sOverview } from "./cluster/K8sOverview";
 import { K8sResourceDetail } from "./detail/K8sResourceDetail";
+import { PodTerminalTab } from "./terminal/PodTerminalTab";
 import "./detail/workloads/register";
+import "./terminal/register";
 
 interface Props {
   asset: asset_entity.Asset;
@@ -89,6 +91,9 @@ function ActiveTab({ assetId, cluster }: { assetId: number; cluster: K8sClusterS
   }
   if (id.startsWith("res:")) {
     return <K8sResourceDetail key={id} assetId={assetId} cluster={cluster} tabId={id} />;
+  }
+  if (id.startsWith("term:")) {
+    return <PodTerminalTab key={id} assetId={assetId} tabId={id} />;
   }
   return null;
 }

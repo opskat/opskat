@@ -2,9 +2,8 @@ import { useImperativeHandle, type Ref } from "react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Terminal } from "lucide-react";
 import { K8sClusterPage } from "@/components/k8s/K8sClusterPage";
-import { getK8sActions, registerK8sAction } from "@/components/k8s/actions";
+import { getK8sActions } from "@/components/k8s/actions";
 import { selectorString } from "@/components/k8s/detail/workloads/selector";
 import { useK8sStore, type K8sResourceRow } from "@/stores/k8sStore";
 import {
@@ -16,6 +15,14 @@ import {
   StartK8sPodLogs,
 } from "../../wailsjs/go/k8s/K8s";
 import type { asset_entity, k8s } from "../../wailsjs/go/models";
+
+// The xterm side of the terminal is covered by K8sPodTerminal.test; here only the entry points matter.
+const startPodTerminal = vi.hoisted(() => vi.fn());
+vi.mock("@/components/k8s/terminal/podTerminalRegistry", () => ({
+  startPodTerminal,
+  getPodTerminal: vi.fn(),
+  fitPodTerminal: vi.fn(),
+}));
 
 vi.mock("@/components/k8s/K8sLogTerminal", () => ({
   K8sLogTerminal: function MockK8sLogTerminal({ ref }: { ref?: Ref<unknown> }) {
@@ -308,9 +315,9 @@ describe("workload overviews", () => {
     expect(ov.queryByText("other-1")).not.toBeInTheDocument();
   });
 
-  it("Pod: keeps IPs, node, ready, QoS, container states / restarts, conditions and offers no terminal without one registered", async () => {
+  it("Pod: keeps IPs, node, ready, QoS, container states / restarts, conditions and a terminal per container", async () => {
     const user = userEvent.setup();
-    await openDetail("/pods", "web-1");
+    const id = await openDetail("/pods", "web-1");
     const ov = within(await screen.findByTestId("k8s-overview"));
     expect(await ov.findByText("10.42.0.7")).toBeInTheDocument();
     expect(ov.getByText("192.0.2.5")).toBeInTheDocument();
@@ -321,7 +328,13 @@ describe("workload overviews", () => {
     expect(ov.getByText("3")).toBeInTheDocument();
     await user.click(ov.getByRole("button", { name: /asset\.k8sPodConditions/ }));
     expect(ov.getByText("AllReady")).toBeInTheDocument();
-    expect(ov.queryByRole("button", { name: /asset\.k8sTerminal/ })).not.toBeInTheDocument();
+
+    const terminals = ov.getAllByRole("button", { name: /asset\.k8sTerminal/ });
+    expect(terminals).toHaveLength(2);
+    await user.click(terminals[1]);
+    const cluster = useK8sStore.getState().clusters[id];
+    expect(cluster.tabs.find((t) => t.id === cluster.activeTabId)?.label).toBe("web-1 · sidecar");
+    expect(startPodTerminal).toHaveBeenCalledWith(id, cluster.activeTabId);
   });
 });
 
@@ -342,31 +355,48 @@ describe("Pods sub-tab", () => {
       })
     );
     expect(screen.getByRole("link", { name: "web-2" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /asset\.k8sTerminal/ })).not.toBeInTheDocument();
-
-    const run = vi.fn();
-    const off = registerK8sAction({
-      id: "terminal",
-      labelKey: "asset.k8sTerminal",
-      icon: Terminal,
-      appliesTo: (typeKey) => typeKey === "/pods",
-      run,
-    });
-    try {
-      // the registered action shows up once the tab renders again
-      await user.click(screen.getByRole("tab", { name: /asset\.k8sOverview/ }));
-      await user.click(screen.getByRole("tab", { name: /asset\.k8sPodsTab/ }));
-      const terminals = await screen.findAllByRole("button", { name: /asset\.k8sTerminal/ });
-      await user.click(terminals[1]);
-      expect(run).toHaveBeenCalledWith(expect.objectContaining({ assetId: id, typeKey: "/pods", name: "web-2" }));
-    } finally {
-      off();
-    }
 
     const web1 = screen.getByRole("link", { name: "web-1" }).closest("tr")!;
     await user.click(within(web1).getByRole("button", { name: /asset\.k8sLogs/ }));
     expect(useK8sStore.getState().clusters[id].activeTabId).toBe("res:/pods:default:web-1");
     expect(useK8sStore.getState().detailSubTabs[id]["res:/pods:default:web-1"]).toBe("logs");
+  });
+
+  it("opens a terminal on a row's Pod in its first container", async () => {
+    const user = userEvent.setup();
+    const id = await openDetail("apps/deployments", "web");
+    await user.click(await screen.findByRole("tab", { name: /asset\.k8sPodsTab/ }));
+    const web2 = (await screen.findByRole("link", { name: "web-2" })).closest("tr")!;
+    await user.click(within(web2).getByRole("button", { name: /asset\.k8sTerminal/ }));
+
+    const cluster = useK8sStore.getState().clusters[id];
+    expect(cluster.tabs.find((t) => t.id === cluster.activeTabId)?.label).toBe("web-2 · app");
+    expect(useK8sStore.getState().terminals[id][cluster.activeTabId]).toMatchObject({
+      namespace: "default",
+      pod: "web-2",
+      container: "app",
+      containers: ["app", "sidecar"],
+      shell: "auto",
+    });
+  });
+
+  it("greys a row's terminal entry with the reason when its Pod is not running", async () => {
+    const user = userEvent.setup();
+    const running = objects["web-2"];
+    objects["web-2"] = pod("web-2", { status: { phase: "Pending" } });
+    try {
+      const id = await openDetail("apps/deployments", "web");
+      await user.click(await screen.findByRole("tab", { name: /asset\.k8sPodsTab/ }));
+      const web2 = (await screen.findByRole("link", { name: "web-2" })).closest("tr")!;
+      const button = within(web2).getByRole("button", { name: /asset\.k8sTerminal/ });
+      expect(button).toBeDisabled();
+      expect(button.parentElement?.getAttribute("title")).toMatch(/Pending/);
+      const web1 = screen.getByRole("link", { name: "web-1" }).closest("tr")!;
+      expect(within(web1).getByRole("button", { name: /asset\.k8sTerminal/ })).toBeEnabled();
+      expect(useK8sStore.getState().terminals[id]).toBeUndefined();
+    } finally {
+      objects["web-2"] = running;
+    }
   });
 
   it("opens the Pod detail from the pod name", async () => {

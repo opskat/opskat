@@ -13,7 +13,7 @@ interface ContainerStatus {
   state?: ContainerState;
 }
 interface PodShape {
-  metadata?: { deletionTimestamp?: string };
+  metadata?: { deletionTimestamp?: string; annotations?: Record<string, string> };
   spec?: { containers?: { name: string; image?: string }[]; initContainers?: { name: string; image?: string }[] };
   status?: {
     phase?: string;
@@ -93,4 +93,15 @@ export function podStatus(pod: Record<string, unknown>): { text: string; variant
 /** Container names (regular, then init) of a Pod object, for pickers. */
 export function podContainerNames(pod: Record<string, unknown>): string[] {
   return podContainers(pod).map((c) => c.name);
+}
+
+const DEFAULT_CONTAINER_ANNOTATION = "kubectl.kubernetes.io/default-container";
+
+/** The container kubectl picks when none is named: the default-container annotation if it names one, else the first. */
+export function podDefaultContainer(pod: Record<string, unknown>): string {
+  const names = podContainers(pod)
+    .filter((c) => !c.init)
+    .map((c) => c.name);
+  const annotated = (pod as PodShape).metadata?.annotations?.[DEFAULT_CONTAINER_ANNOTATION];
+  return annotated && names.includes(annotated) ? annotated : names[0];
 }

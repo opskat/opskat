@@ -50,6 +50,7 @@ export function PodsTab(props: K8sDetailProps) {
               const status = podStatus(p.object);
               const ctx = { assetId, typeKey: POD_TYPE_KEY, namespace, name: p.name, object: p.object };
               const terminal = getK8sActions(POD_TYPE_KEY, p.object).find((a) => a.id === "terminal");
+              const terminalDisabled = terminal?.disabledReason?.(p.object);
               return (
                 <tr key={p.name} className="border-b last:border-0 hover:bg-muted/30">
                   <td className="py-1.5 pr-4 font-mono">
@@ -76,16 +77,19 @@ export function PodsTab(props: K8sDetailProps) {
                   </td>
                   <td className="py-1 text-right">
                     {terminal && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6"
-                        title={t(terminal.labelKey)}
-                        aria-label={t(terminal.labelKey)}
-                        onClick={() => void terminal.run(ctx)}
-                      >
-                        <terminal.icon className="h-3.5 w-3.5" />
-                      </Button>
+                      // The wrapper carries the hover text: a disabled button gets no hover.
+                      <span title={terminalDisabled ?? t(terminal.labelKey)}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6"
+                          aria-label={t(terminal.labelKey)}
+                          disabled={!!terminalDisabled}
+                          onClick={() => void terminal.run(ctx)}
+                        >
+                          <terminal.icon className="h-3.5 w-3.5" />
+                        </Button>
+                      </span>
                     )}
                     <Button
                       variant="ghost"

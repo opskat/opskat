@@ -129,6 +129,28 @@ export interface K8sInnerTab {
   label: string;
 }
 
+/** How a Pod terminal session ended (`k8s:exec:end` payload), or why it couldn't start. */
+export interface K8sTerminalEnd {
+  reason: "exited" | "closed" | "error";
+  exitCode?: number;
+  error?: string;
+}
+
+/** A Pod terminal tab (`term:<n>`). Its xterm and exec session live in podTerminalRegistry, outside React. */
+export interface K8sTerminalState {
+  namespace: string;
+  pod: string;
+  container: string;
+  /** The Pod's regular containers. */
+  containers: string[];
+  /** 'auto' | '/bin/bash' | '/bin/sh' | a custom command. */
+  shell: string;
+  status: "connecting" | "connected" | "ended";
+  end: K8sTerminalEnd | null;
+}
+
+export type K8sTerminalSpec = Pick<K8sTerminalState, "namespace" | "pod" | "container" | "containers" | "shell">;
+
 export interface K8sClusterState {
   /** Selected namespace; '' = all namespaces. */
   namespace: string;
@@ -170,6 +192,8 @@ export function parseResourceTabId(id: string): { typeKey: string; namespace: st
   return name === undefined ? null : { typeKey, namespace, name };
 }
 
+let terminalSeq = 0;
+
 type Refresher = () => Promise<unknown>;
 
 interface K8sStoreState {
@@ -183,6 +207,8 @@ interface K8sStoreState {
   details: Record<number, Record<string, K8sDetailEntry>>;
   /** Filter / sort / auto-refresh per list tab, `<typeKey>` → view. */
   listViews: Record<number, Record<string, K8sListView>>;
+  /** Pod terminal tabs keyed by their `term:` tab id; removing one ends its session. */
+  terminals: Record<number, Record<string, K8sTerminalState>>;
 
   /** Creates the cluster's state and reads it; a cluster that already has state (page remount) is left as is. */
   initCluster: (assetId: number, defaultNamespace: string) => void;
@@ -210,6 +236,9 @@ interface K8sStoreState {
   /** Creates the log panel state of a detail's Logs sub-tab unless it exists. */
   initLogTab: (assetId: number, tabId: string) => void;
   updateLogTab: (assetId: number, tabId: string, update: LogTabStateUpdate) => void;
+  /** Opens a new Pod terminal tab (every call a new one) and returns its tab id. */
+  openTerminal: (assetId: number, spec: K8sTerminalSpec) => string;
+  updateTerminal: (assetId: number, tabId: string, patch: Partial<K8sTerminalState>) => void;
   clearCluster: (assetId: number) => void;
 }
 
@@ -301,6 +330,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
     detailSubTabs: {},
     details: {},
     listViews: {},
+    terminals: {},
 
     initCluster: (assetId, defaultNamespace) => {
       if (get().clusters[assetId]) return;
@@ -503,9 +533,11 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         const logs = { ...s.logTabs[assetId] };
         const subTabs = { ...s.detailSubTabs[assetId] };
         const resDetails = { ...s.details[assetId] };
+        const terminals = { ...s.terminals[assetId] };
         for (const id of closing) {
           delete logs[id];
           delete subTabs[id];
+          delete terminals[id];
           // Dropped with its tab, so reopening reads it afresh and the top refresh stops re-reading it.
           delete resDetails[id];
           tokens.delete(`${assetId}|detail:${id}`);
@@ -514,6 +546,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
           logTabs: { ...s.logTabs, [assetId]: logs },
           detailSubTabs: { ...s.detailSubTabs, [assetId]: subTabs },
           details: { ...s.details, [assetId]: resDetails },
+          terminals: { ...s.terminals, [assetId]: terminals },
         };
       });
     },
@@ -580,6 +613,27 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         return { logTabs: { ...s.logTabs, [assetId]: { ...s.logTabs[assetId], [tabId]: next } } };
       }),
 
+    openTerminal: (assetId, spec) => {
+      const id = `term:${++terminalSeq}`;
+      set((s) => {
+        if (!s.clusters[assetId]) return s;
+        const state: K8sTerminalState = { ...spec, status: "connecting", end: null };
+        return { terminals: { ...s.terminals, [assetId]: { ...s.terminals[assetId], [id]: state } } };
+      });
+      get().openTab(assetId, { id, label: `${spec.pod} · ${spec.container}` });
+      return id;
+    },
+
+    updateTerminal: (assetId, tabId, patch) =>
+      set((s) => {
+        const existing = s.terminals[assetId]?.[tabId];
+        // A session reports back after its tab (or the cluster tab) closed; that terminal is gone for good.
+        if (!existing) return s;
+        return {
+          terminals: { ...s.terminals, [assetId]: { ...s.terminals[assetId], [tabId]: { ...existing, ...patch } } },
+        };
+      }),
+
     clearCluster: (assetId) => {
       forgetTokens(assetId);
       refreshers.delete(assetId);
@@ -596,6 +650,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
           detailSubTabs: without(s.detailSubTabs),
           details: without(s.details),
           listViews: without(s.listViews),
+          terminals: without(s.terminals),
         };
       });
     },

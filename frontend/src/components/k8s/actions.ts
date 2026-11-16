@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import type { K8sResourceRow } from "@/stores/k8sStore";
+import type { K8sResourceRow, K8sTableColumn } from "@/stores/k8sStore";
 
 /** What an action runs against; `object` is the full resource when the caller has it (detail view). */
 export interface K8sActionContext {
@@ -24,8 +24,11 @@ export interface K8sAction {
   /** Listed after the other actions and drawn in the error colour. */
   destructive?: boolean;
   appliesTo: (typeKey: string, target: K8sActionTarget) => boolean;
-  /** A reason string greys the action out and explains why. */
-  disabledReason?: (target: K8sActionTarget) => string | undefined;
+  /**
+   * A reason string greys the action out and explains why. A list row comes with the list's columns, which
+   * its `cells` line up with (a row carries no full object).
+   */
+  disabledReason?: (target: K8sActionTarget, columns?: K8sTableColumn[]) => string | undefined;
   run: (ctx: K8sActionContext) => void | Promise<void>;
 }
 

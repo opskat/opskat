@@ -129,7 +129,7 @@ export function K8sResourceGrid({ assetId, typeKey, columns, rows, sort, onSort,
                           .filter((a) => a.primary)
                           .map((a) => {
                             const label = t(a.labelKey);
-                            const reason = a.disabledReason?.(row);
+                            const reason = a.disabledReason?.(row, columns);
                             return (
                               <Tooltip key={a.id}>
                                 <TooltipTrigger asChild>
@@ -166,6 +166,7 @@ export function K8sResourceGrid({ assetId, typeKey, columns, rows, sort, onSort,
                               <ActionItems
                                 actions={actions}
                                 target={row}
+                                columns={columns}
                                 run={run}
                                 Item={DropdownMenuItem}
                                 Separator={DropdownMenuSeparator}
@@ -189,6 +190,7 @@ export function K8sResourceGrid({ assetId, typeKey, columns, rows, sort, onSort,
                     <ActionItems
                       actions={actions}
                       target={row}
+                      columns={columns}
                       run={run}
                       Item={ContextMenuItem}
                       Separator={ContextMenuSeparator}
@@ -224,12 +226,14 @@ type MenuItem = ComponentType<{
 function ActionItems({
   actions,
   target,
+  columns,
   run,
   Item,
   Separator,
 }: {
   actions: K8sAction[];
   target: K8sResourceRow;
+  columns: K8sTableColumn[];
   run: (action: K8sAction) => void;
   Item: MenuItem;
   Separator: ComponentType;
@@ -238,7 +242,7 @@ function ActionItems({
   return (
     <>
       {actions.map((a) => {
-        const reason = a.disabledReason?.(target);
+        const reason = a.disabledReason?.(target, columns);
         return (
           <Fragment key={a.id}>
             {a.destructive && <Separator />}

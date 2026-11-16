@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { ScrollText, Server, X, type LucideIcon } from "lucide-react";
+import { ScrollText, Server, TerminalSquare, X, type LucideIcon } from "lucide-react";
 import {
   cn,
   ContextMenu,
@@ -14,6 +14,7 @@ import { kindIcon } from "./kindMeta";
 function tabIcon(id: string): LucideIcon {
   if (id === OVERVIEW_TAB_ID) return Server;
   if (id.startsWith("log:")) return ScrollText;
+  if (id.startsWith("term:")) return TerminalSquare;
   // list:<typeKey> | res:<typeKey>:<ns>:<name>
   const typeKey = id.slice(id.indexOf(":") + 1).split(":")[0];
   return kindIcon(typeKey);

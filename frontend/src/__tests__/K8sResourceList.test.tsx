@@ -292,6 +292,25 @@ describe("K8s resource list", () => {
     }
   });
 
+  it("greys a row's terminal icon by its status column when the Pod is not running", async () => {
+    const user = userEvent.setup();
+    mockPods(() =>
+      podTable([
+        { name: "api-1", status: "Running" },
+        { name: "job-1", status: "Completed" },
+      ])
+    );
+    render(<K8sClusterPage asset={asset(nextId++)} />);
+    await openPods(user);
+    await screen.findByText("job-1");
+    const terminalOf = (name: string) =>
+      within(screen.getByText(name).closest<HTMLElement>('[data-testid="k8s-row"]')!).getByRole("button", {
+        name: "asset.k8sTerminal",
+      });
+    expect(terminalOf("api-1")).toBeEnabled();
+    expect(terminalOf("job-1")).toBeDisabled();
+  });
+
   it("offers Open detail and Copy name on right click", async () => {
     const user = userEvent.setup();
     const a = asset(nextId++);

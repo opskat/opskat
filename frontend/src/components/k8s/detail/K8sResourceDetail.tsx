@@ -152,18 +152,19 @@ export function K8sResourceDetail({
           {actions.map((a) => {
             const reason = a.disabledReason?.(object);
             return (
-              <Button
-                key={a.id}
-                variant="outline"
-                size="sm"
-                disabled={!!reason}
-                title={reason}
-                className={cn(a.destructive && "text-destructive hover:text-destructive")}
-                onClick={() => void a.run(ctx)}
-              >
-                <a.icon className="h-3 w-3" />
-                {t(a.labelKey)}
-              </Button>
+              // The wrapper carries the reason: a disabled button gets no hover.
+              <span key={a.id} title={reason}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!!reason}
+                  className={cn(a.destructive && "text-destructive hover:text-destructive")}
+                  onClick={() => void a.run(ctx)}
+                >
+                  <a.icon className="h-3 w-3" />
+                  {t(a.labelKey)}
+                </Button>
+              </span>
             );
           })}
         </div>

@@ -22,6 +22,7 @@ export function PodOverview({ assetId, typeKey, namespace, name, object }: K8sDe
   const { metadata, spec, status } = object as PodShape;
   const ctx = { assetId, typeKey, namespace, name, object };
   const terminal = getK8sActions(typeKey, object).find((a) => a.id === "terminal");
+  const terminalDisabled = terminal?.disabledReason?.(object);
   const containers = podContainers(object);
 
   return (
@@ -68,15 +69,19 @@ export function PodOverview({ assetId, typeKey, namespace, name, object }: K8sDe
               {!c.init && (
                 <>
                   {terminal && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 gap-1 px-1.5 text-xs"
-                      onClick={() => void terminal.run({ ...ctx, container: c.name })}
-                    >
-                      <terminal.icon className="h-3.5 w-3.5" />
-                      {t(terminal.labelKey)}
-                    </Button>
+                    // The wrapper carries the reason: a disabled button gets no hover.
+                    <span title={terminalDisabled}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 gap-1 px-1.5 text-xs"
+                        disabled={!!terminalDisabled}
+                        onClick={() => void terminal.run({ ...ctx, container: c.name })}
+                      >
+                        <terminal.icon className="h-3.5 w-3.5" />
+                        {t(terminal.labelKey)}
+                      </Button>
+                    </span>
                   )}
                   <Button
                     variant="ghost"
