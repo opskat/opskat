@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	k8spkg "github.com/opskat/opskat/internal/pkg/k8s"
 	"github.com/opskat/opskat/internal/pkg/k8s/k8stest"
@@ -424,6 +426,10 @@ func TestK8sExecEmitsUnderCallerSessionIDFromTheFirstByte(t *testing.T) {
 
 const runningPod = `[{"name":"app","state":{"running":{}}}]`
 
+// finishedNow 在 podStatusServer 响应时才换成当前时间：终止发生在会话开始之后，夹具里不能提前取时间，
+// 否则跨过整秒边界时「终止」会早于会话开始。
+const finishedNow = "{{now}}"
+
 func podStatusServer(t *testing.T, statuses string, run k8stest.ExecFunc) *k8stest.ExecServer {
 	srv := k8stest.NewExecServer(t, false, run)
 	srv.Other = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -433,13 +439,14 @@ func podStatusServer(t *testing.T, statuses string, run k8stest.ExecFunc) *k8ste
 			_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Failure","reason":"NotFound","code":404,"message":"pods \"web-0\" not found"}`))
 			return
 		}
+		statuses := strings.ReplaceAll(statuses, finishedNow, time.Now().UTC().Format(time.RFC3339))
 		_, _ = w.Write([]byte(`{"kind":"Pod","apiVersion":"v1","metadata":{"name":"web-0","namespace":"ns1"},"status":{"phase":"Running","containerStatuses":` + statuses + `}}`))
 	})
 	return srv
 }
 
 func TestK8sExecEndEnrichedWithContainerTerminationReason(t *testing.T) {
-	now := time.Now().UTC().Format(time.RFC3339)
+	now := finishedNow
 	long := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
 	cases := map[string]struct {
 		statuses string
@@ -515,4 +522,19 @@ func TestK8sExecEndOnConnectionDrop(t *testing.T) {
 			assert.Equal(t, statuses == "", end.PodGone)
 		})
 	}
+}
+
+// 状态里的时间只到秒：与会话开始同一秒内的终止属于本次会话，更早一秒的不算。
+func TestContainerTerminationAtSecondPrecision(t *testing.T) {
+	since := time.Date(2026, 11, 16, 10, 0, 1, 900_000_000, time.UTC)
+	podAt := func(finished time.Time) corev1.Pod {
+		return corev1.Pod{Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name: "app",
+			State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+				Reason: "OOMKilled", FinishedAt: metav1.NewTime(finished.Truncate(time.Second)),
+			}},
+		}}}}
+	}
+	assert.NotNil(t, containerTermination(podAt(since.Add(-800*time.Millisecond)), "app", since), "same second as session start")
+	assert.Nil(t, containerTermination(podAt(since.Add(-time.Second)), "app", since), "previous second")
 }
