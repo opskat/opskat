@@ -149,3 +149,16 @@ func TestObjectSourceUsesObjectDefinition(t *testing.T) {
 	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// 触发器经 sys.triggers 找：ListObjects 给库级 DDL 触发器的裸名（OBJECT_ID 找不到不属于 schema 的对象）按名字
+// 找，DML 触发器的 schema.name 按 OBJECT_ID 找。
+func TestObjectSourceFindsDatabaseTriggers(t *testing.T) {
+	session, mock := newMock(t)
+	mock.ExpectQuery(triggerSourceSQL).WithArgs("ddl_guard", "[dbo].[ddl_guard]").
+		WillReturnRows(names("def", "CREATE TRIGGER ddl_guard ON DATABASE FOR DROP_TABLE AS ROLLBACK"))
+
+	source, err := session.ObjectSource(context.Background(), "appdb", dbdriver.ObjectTrigger, "ddl_guard", "")
+	require.NoError(t, err)
+	assert.Equal(t, "CREATE TRIGGER ddl_guard ON DATABASE FOR DROP_TABLE AS ROLLBACK", source)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

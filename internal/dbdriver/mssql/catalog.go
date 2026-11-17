@@ -112,9 +112,15 @@ func (dialect) ListObjects(ctx context.Context, conn *sql.Conn, _ string) (*dbdr
 	return out, nil
 }
 
-func (dialect) ObjectSource(ctx context.Context, conn *sql.Conn, _, _, name, _ string) (string, error) {
+// ObjectSource 是服务器保存的原文。触发器经 sys.triggers 找（见 triggerLookup）：库级 DDL 触发器不属于 schema，
+// OBJECT_ID 找不到它们。
+func (dialect) ObjectSource(ctx context.Context, conn *sql.Conn, _, objType, name, _ string) (string, error) {
+	query, args := "SELECT OBJECT_DEFINITION(OBJECT_ID(@p1))", []any{sql.Named("p1", name)}
+	if objType == dbdriver.ObjectTrigger {
+		query, args = "SELECT OBJECT_DEFINITION((SELECT TOP 1 tr.object_id "+triggerLookup+"))", triggerArgs(name)
+	}
 	var src sql.NullString
-	if err := conn.QueryRowContext(ctx, "SELECT OBJECT_DEFINITION(OBJECT_ID(@p1))", sql.Named("p1", name)).Scan(&src); err != nil {
+	if err := conn.QueryRowContext(ctx, query, args...).Scan(&src); err != nil {
 		return "", err
 	}
 	return src.String, nil

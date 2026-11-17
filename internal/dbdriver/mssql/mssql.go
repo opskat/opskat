@@ -56,8 +56,3 @@ func init() {
 }
 
 func (driver) Descriptor() dbdriver.Descriptor { return descriptor }
-
-// 转储先用共用的默认写法（每个对象之前 DROP ... IF EXISTS，定义取 TableDDL 的原文）。
-var _ sqldb.DumpDialect = dialect{}
-
-func (dialect) DumpSyntax() sqldb.DumpSyntax { return sqldb.DumpSyntax{} }

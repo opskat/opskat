@@ -10,15 +10,19 @@ import (
 )
 
 // 建表语句：SQL Server 不存原文，从系统目录视图重建，在空库里运行能还原列（类型长度、精度与
-// 小数位、IDENTITY、默认值）、主键、唯一约束、CHECK，以及索引（单独成句）。外键、计算列、
-// 列注释（扩展属性）不在其中。表名是 "schema.table"（裸名按 dbo 查询），语句里的表名保持收到的写法。
+// 小数位、IDENTITY、默认值及用户起的约束名、计算列）、主键、唯一约束、CHECK，以及索引（单独成句）。
+// 外键与列注释（扩展属性）不在其中：转储把外键写在全部数据之后（见 dump.go）。表名是 "schema.table"
+// （裸名按 dbo 查询），语句里的表名保持收到的写法。
 var _ sqldb.DDL = dialect{}
 
+// 默认值约束只有不是系统起名的才给出名字；计算列给出表达式与是否持久化。
 const ddlColumnsQuery = "SELECT c.name, t.name, c.max_length, c.precision, c.scale, c.is_nullable, " +
-	"CAST(ic.seed_value AS BIGINT), CAST(ic.increment_value AS BIGINT), dc.definition " +
+	"CAST(ic.seed_value AS BIGINT), CAST(ic.increment_value AS BIGINT), dc.definition, " +
+	"CASE WHEN dc.is_system_named = 0 THEN dc.name END, cc.definition, ISNULL(cc.is_persisted, 0) " +
 	"FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id " +
 	"LEFT JOIN sys.identity_columns ic ON ic.object_id = c.object_id AND ic.column_id = c.column_id " +
 	"LEFT JOIN sys.default_constraints dc ON dc.object_id = c.default_object_id " +
+	"LEFT JOIN sys.computed_columns cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id " +
 	"WHERE c.object_id = OBJECT_ID(@p1) ORDER BY c.column_id"
 
 const ddlIndexesQuery = "SELECT i.name, i.is_primary_key, i.is_unique_constraint, i.is_unique, i.type, i.filter_definition, " +
@@ -36,6 +40,11 @@ type ddlColumn struct {
 	nullable                    bool
 	identitySeed, identityStep  sql.NullInt64
 	defaultDefinition           sql.NullString
+	// defaultName 是用户起名的默认值约束的名字（系统起名的为 NULL）。
+	defaultName sql.NullString
+	// computed 是计算列的表达式（不是计算列为 NULL），persisted 表示它持久化。
+	computed  sql.NullString
+	persisted bool
 }
 
 // ddlIndex 是一个索引或主键 / 唯一约束，行按索引名聚合。
@@ -48,8 +57,7 @@ type ddlIndex struct {
 }
 
 func (dialect) TableDDL(ctx context.Context, conn *sql.Conn, _, table string) (string, error) {
-	schema, tbl := splitSchemaTable(table)
-	object := quoteIdent(schema) + "." + quoteIdent(tbl)
+	object := objectRef(table)
 	columns, err := queryDDLColumns(ctx, conn, object)
 	if err != nil {
 		return "", err
@@ -99,7 +107,7 @@ func queryDDLColumns(ctx context.Context, conn *sql.Conn, object string) ([]ddlC
 	for rows.Next() {
 		var c ddlColumn
 		if err := rows.Scan(&c.name, &c.typeName, &c.maxLength, &c.precision, &c.scale, &c.nullable,
-			&c.identitySeed, &c.identityStep, &c.defaultDefinition); err != nil {
+			&c.identitySeed, &c.identityStep, &c.defaultDefinition, &c.defaultName, &c.computed, &c.persisted); err != nil {
 			return nil, err
 		}
 		columns = append(columns, c)
@@ -162,6 +170,9 @@ func queryDDLChecks(ctx context.Context, conn *sql.Conn, object string) ([][2]st
 }
 
 func columnDefinition(c ddlColumn) string {
+	if c.computed.Valid {
+		return computedColumnDefinition(c)
+	}
 	def := quoteIdent(c.name) + " " + columnType(c)
 	if c.identitySeed.Valid {
 		def += fmt.Sprintf(" IDENTITY(%d, %d)", c.identitySeed.Int64, c.identityStep.Int64)
@@ -171,8 +182,24 @@ func columnDefinition(c ddlColumn) string {
 	} else {
 		def += " NOT NULL"
 	}
+	if c.defaultName.Valid {
+		def += " CONSTRAINT " + quoteIdent(c.defaultName.String)
+	}
 	if c.defaultDefinition.Valid {
 		def += " DEFAULT " + c.defaultDefinition.String
+	}
+	return def
+}
+
+// computedColumnDefinition 写计算列：AS (表达式)，持久化的带 PERSISTED；只有持久化的计算列能声明 NOT NULL，
+// 可空性不写时由表达式推出，所以只在持久化且不可为空时写。
+func computedColumnDefinition(c ddlColumn) string {
+	def := quoteIdent(c.name) + " AS " + c.computed.String
+	if c.persisted {
+		def += " PERSISTED"
+		if !c.nullable {
+			def += " NOT NULL"
+		}
 	}
 	return def
 }
