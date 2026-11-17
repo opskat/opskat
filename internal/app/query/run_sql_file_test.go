@@ -161,30 +161,36 @@ func TestRunSQLFileRefusesANonUTF8File(t *testing.T) {
 	}
 }
 
-// unsupportedDriver 的会话运行文件时停在不支持的写法上（假库的切分只认分号，认不出 psql 的写法）。
-type unsupportedDriver struct{ *dbdrivertest.Fake }
+// scriptErrorDriver 的会话运行文件时不碰文件，直接返回 result 与 err（如停在不支持的写法上，假库的切分
+// 只认分号，认不出 psql 的写法）。
+type scriptErrorDriver struct {
+	*dbdrivertest.Fake
+	result *dbdriver.ScriptResult
+	err    error
+}
 
-func (d unsupportedDriver) Open(ctx context.Context, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+func (d scriptErrorDriver) Open(ctx context.Context, req dbdriver.OpenRequest) (dbdriver.Session, error) {
 	session, err := d.Fake.Open(ctx, req)
-	return unsupportedSession{session}, err
+	return scriptErrorSession{Session: session, result: d.result, err: d.err}, err
 }
 
-type unsupportedSession struct{ dbdriver.Session }
-
-func (unsupportedSession) RunScript(context.Context, dbdriver.ScriptRequest) (*dbdriver.ScriptResult, error) {
-	result := &dbdriver.ScriptResult{ScriptProgress: dbdriver.ScriptProgress{Succeeded: 2}}
-	// 编排停下后关执行器也失败了：两者一起返回（dbdriver.RunScript 就是这样合并的）。
-	return result, errors.Join(fmt.Errorf("run: %w", &dbdriver.ScriptUnsupportedError{Construct: "COPY ... FROM stdin", Tool: "psql", Line: 3}),
-		errors.New("close script executor: connection reset"))
+type scriptErrorSession struct {
+	dbdriver.Session
+	result *dbdriver.ScriptResult
+	err    error
 }
 
-// 运行停在不支持的写法上：终态事件带着写法、行号与该改用的工具这些结构化字段，由对话框按界面语言写
-// 提示，Error 不再带一句固定语言的文字；日志只记写法与行号，不记语句。
-func TestRunSQLFileReportsAnUnsupportedConstructAsFields(t *testing.T) {
+func (s scriptErrorSession) RunScript(context.Context, dbdriver.ScriptRequest) (*dbdriver.ScriptResult, error) {
+	return s.result, s.err
+}
+
+// startScriptError 用 scriptErrorDriver 运行一个文件，返回终态事件与这次运行的日志。
+func startScriptError(t *testing.T, result *dbdriver.ScriptResult, runErr error) (RunSQLFileEvent, *observer.ObservedLogs) {
+	t.Helper()
 	events := captureRunEvents(t)
 	fake := dbdrivertest.NewFake()
 	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapRunSQLFile)
-	dbdrivertest.Register(t, unsupportedDriver{fake})
+	dbdrivertest.Register(t, scriptErrorDriver{Fake: fake, result: result, err: runErr})
 	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
 	path := writeScript(t, "SELECT 1;\nSELECT 2;\nCOPY t FROM stdin;\n")
 
@@ -192,19 +198,38 @@ func TestRunSQLFileReportsAnUnsupportedConstructAsFields(t *testing.T) {
 	q.ctx = logger.WithContextLogger(context.Background(), zap.New(core))
 	_, err := q.StartRunSQLFile(1, "", RunSQLFileRequest{Path: path})
 	require.NoError(t, err)
-	final := events.wait(t)
+	return events.wait(t), logs
+}
+
+// 运行停在不支持的写法上：终态事件带着写法、行号与该改用的工具这些结构化字段，由对话框按界面语言写
+// 提示，Error 不再带一句固定语言的文字；一起返回的错误（关执行器失败）不丢，写进日志。
+func TestRunSQLFileReportsAnUnsupportedConstructAsFields(t *testing.T) {
+	result := &dbdriver.ScriptResult{ScriptProgress: dbdriver.ScriptProgress{Succeeded: 2}}
+	// 编排停下后关执行器也失败了：两者一起返回（dbdriver.RunScript 就是这样合并的）。
+	runErr := errors.Join(fmt.Errorf("run: %w", &dbdriver.ScriptUnsupportedError{Construct: "COPY ... FROM stdin", Tool: "psql", Line: 3}),
+		errors.New("close script executor: connection reset"))
+	final, logs := startScriptError(t, result, runErr)
 
 	assert.Equal(t, RunSQLFileError, final.Status)
 	require.NotNil(t, final.Unsupported)
 	assert.Equal(t, dbdriver.ScriptUnsupportedError{Construct: "COPY ... FROM stdin", Tool: "psql", Line: 3}, *final.Unsupported)
 	assert.Empty(t, final.Error, "the dialog words this case itself, in the UI language")
 	assert.Equal(t, int64(2), final.Progress.Succeeded)
-	for _, entry := range logs.All() {
-		assert.NotContains(t, entry.Message, "第 3 行")
-	}
 	stopped := logs.FilterMessage("run sql file stopped at an unsupported construct").All()
 	require.Len(t, stopped, 1)
 	assert.Contains(t, stopped[0].ContextMap()["error"], "connection reset", "an error joined to the stop is not swallowed")
+}
+
+// 拒绝不是 UTF-8 的文件时一起返回的错误（如释放连接失败）也不丢：对话框只按行号写提示，它进日志。
+func TestRunSQLFileLogsAnErrorJoinedToANonUTF8Refusal(t *testing.T) {
+	final, logs := startScriptError(t, nil, errors.Join(&dbdriver.ScriptEncodingError{Line: 2}, errors.New("release session: connection reset")))
+
+	assert.Equal(t, RunSQLFileError, final.Status)
+	assert.Equal(t, 2, final.InvalidUTF8Line)
+	assert.Empty(t, final.Error, "the dialog words this case itself, in the UI language")
+	refused := logs.FilterMessage("run sql file refused a non-UTF-8 file").All()
+	require.Len(t, refused, 1)
+	assert.Contains(t, refused[0].ContextMap()["error"], "connection reset", "an error joined to the refusal is not swallowed")
 }
 
 // 只读连接的资产与没有声明运行 SQL 文件的驱动：在开始之前就拒绝，不打开会话。

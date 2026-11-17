@@ -29,6 +29,8 @@ type semicolonRunner struct {
 	unsupported string
 	// onStatement 在一条语句开始执行时被调用，测试用它在一批的中途要求停下（这条语句仍会执行完）。
 	onStatement func(statement string)
+	// connErr 里的语句执行时连接出错：执行器返回这个 error，这条语句不算执行过。
+	connErr map[string]error
 }
 
 func (r *semicolonRunner) SplitScript(_ context.Context, chunk ScriptChunk) (*ScriptSplit, error) {
@@ -81,6 +83,9 @@ func (r *semicolonRunner) run(_ context.Context, batch ScriptBatch) (*BatchResul
 		case <-batch.Stop:
 			return result, nil
 		default:
+		}
+		if err, ok := r.connErr[statement]; ok {
+			return result, err
 		}
 		r.executed = append(r.executed, statement)
 		if r.onStatement != nil {
@@ -345,6 +350,20 @@ func TestRunScriptStopsAtAnUnsupportedConstructAfterTheStatementsBeforeIt(t *tes
 		assert.EqualValues(t, 1, result.Succeeded, "read size %d", readSize)
 		assert.EqualValues(t, 1, result.Failed, "read size %d", readSize)
 	}
+}
+
+// 执行不支持的写法之前的语句时连接出错：运行停在那里，报连接的错误，不报还没到的不支持的写法
+// （否则会被当成「之前的语句已执行」）。
+func TestRunScriptReportsAConnectionErrorBeforeAnUnsupportedConstruct(t *testing.T) {
+	connErr := errors.New("connection reset")
+	runner := &semicolonRunner{connErr: map[string]error{"SELECT 2": connErr}, unsupported: "COPY"}
+	result, err := RunScript(context.Background(), scriptRequest("SELECT 1;\nSELECT 2;\nCOPY t FROM stdin;\n"), runner)
+	require.ErrorIs(t, err, connErr)
+	var unsupported *ScriptUnsupportedError
+	assert.False(t, errors.As(err, &unsupported), "the run never reached the construct: %v", err)
+	assert.Equal(t, []string{"SELECT 1"}, runner.executed)
+	require.NotNil(t, result)
+	assert.EqualValues(t, 1, result.Succeeded)
 }
 
 // 不继续时，不支持的写法之前已有语句失败：运行停在那条失败的语句上（照常报出），不再报不支持的写法。

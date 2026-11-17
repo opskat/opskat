@@ -391,11 +391,11 @@ func (r *scriptRun) run() error {
 }
 
 // stopAfterPending 在文件里排在攒着的语句之后的地方结束运行（切分出错、不支持的写法）：先照常执行
-// 攒着的语句，再返回 cause；执行时运行已经因失败（不继续时）或被要求停下而结束的，运行停在那里，
-// 不再报 cause。
+// 攒着的语句，再返回 cause；执行时运行已经因失败（不继续时）、被要求停下或连接出错而结束的，运行
+// 停在那里，不再报还没到的 cause（连接出错时只报连接的错误）。
 func (r *scriptRun) stopAfterPending(cause error) error {
 	if err := r.flush(); err != nil {
-		return errors.Join(err, cause)
+		return err
 	}
 	if r.done {
 		return nil
