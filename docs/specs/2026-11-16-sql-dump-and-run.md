@@ -2,7 +2,7 @@
 
 > Status: Draft
 > Owner: OpsKat 维护者
-> Last updated: 2026-11-16
+> Last updated: 2026-11-17
 
 **Objective:** 用户在数据库树上右键，就能把表、schema 或整个库转储成一个能还原的 `.sql` 文件（结构和数据 / 仅结构），也能把这样的文件在一个库上运行导入，不必再借助 Navicat 或命令行客户端。
 
@@ -45,6 +45,7 @@
 | 14 | 不包括 opsctl 与 AI 工具 | 它们是另外的入口。Rejected: 一起做——范围已经很大 |
 | 15 | **[用户决定]** 资产设为只读连接时，「运行 SQL 文件…」置灰并提示原因，所有驱动一样 | [已核实] SQL Server 的连接级只读不生效，连接时只记一条日志（`internal/dbdriver/mssql/connect.go:78`），靠驱动拒绝的话，在只读的 SQL Server 资产上运行文件会真的写入。Rejected: 照常显示，由驱动在第一条写语句处拒绝——对 SQL Server 不成立 |
 | 16 | **[用户决定]** 扩展驱动也能提供这两项能力：宿主 ABI 升到 1.1，本变更做宿主、SDK 与桥接层；Oracle 扩展紧接着在扩展仓库另起一轮实现 | [已核实] Oracle 扩展的建表语句用 `DBMS_METADATA.GET_DDL`，本来就完整（扩展仓库 `extensions/oracle/ddl.go:43`），也已有认 PL/SQL 块与单独一行 `/` 的切分（`extensions/oracle/split.go`）；契约现在就按 Oracle 的差异（23ai 之前没有 `DROP ... IF EXISTS`、不能全局关外键检查、PL/SQL 块以 `/` 结束、每次调用都要经 WASM）设计，以后不用为它返工 ABI。宿主现在只认 `hostABI` 1.0（`pkg/extmanifest/manifest.go:21-25`）。Rejected: 本变更不动、另开 issue——之后很可能要返工钩子；只做宿主、Oracle 不排期——Oracle 用户仍然用不上 |
+| 17 | **[用户决定]** 转储文件里 INSERT 的表名不带库名；值的写法仍与「复制为 INSERT」一致 | [已核实] MySQL 的「复制为 INSERT」写成 `` `库`.`表` ``，照搬的话文件只能导回同名的库，导入别的库时数据会写回源库，不能还原。Rejected: 与「复制为 INSERT」完全一致——文件只能导回同名的库 |
 
 ## 入口
 
@@ -78,7 +79,7 @@
 1. 注释头：OpsKat 版本、资产名、库名（及 schema）、转储内容、生成时间。不写主机地址、端口和账号。
 2. 驱动给出的文件开头，例如 MySQL 的 `SET NAMES utf8mb4` 与关闭外键检查，SQLite 的 `PRAGMA foreign_keys = false`。
 3. 整库或整个 schema 转储时，PostgreSQL 先写列用到的枚举类型；只转储选中表时，只写这些表的列用到的枚举类型。
-4. 每张表依次是：注释分隔行、存在则删除、建表语句（含主键、唯一约束、CHECK、索引、注释，依库而定）；选「结构和数据」时，接着写全部行，每行一条 INSERT。写法与「复制为 INSERT」对同一行生成的完全一样，但不含生成列 / 计算列。
+4. 每张表依次是：注释分隔行、存在则删除、建表语句（含主键、唯一约束、CHECK、索引、注释，依库而定）；选「结构和数据」时，接着写全部行，每行一条 INSERT。值的写法与「复制为 INSERT」对同一行生成的一样，但不含生成列 / 计算列，表名也不带库名（MySQL 的「复制为 INSERT」会带上库名，带着的话文件导入别的库时，数据会写回源库）；「复制为 INSERT」本身不变。
 5. 不能全局关闭外键检查的库（PostgreSQL、SQL Server），外键在全部表与数据之后用「修改表、加外键」写出。能关闭的库（MySQL、SQLite），外键留在建表语句里。
 6. 视图：按依赖顺序写出，被依赖的视图在前。
 7. 函数与过程（整库或整个 schema 转储时）。
