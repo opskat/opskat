@@ -161,6 +161,23 @@ describe("Secret overview", () => {
     expect(screen.getByText("not base64!")).toBeInTheDocument();
     expect(screen.getByText("11B")).toBeInTheDocument();
   });
+
+  const b64 = (bytes: number[]) => btoa(String.fromCharCode(...bytes));
+
+  it("decodes UTF-8 values (Chinese) and counts bytes of the raw data", () => {
+    const bytes = Array.from(new TextEncoder().encode("测试密码说明"));
+    render(<SecretOverview {...props("/secrets", { metadata: meta("s"), type: "Opaque", data: { k: b64(bytes) } })} />);
+    expect(screen.getByText("测试密码说明")).toBeInTheDocument();
+    expect(screen.getByText("18B")).toBeInTheDocument();
+  });
+
+  it("shows binary (non UTF-8) values as base64 with a note, byte length from raw data", () => {
+    const encoded = b64([0xff, 0xfe, 0x00, 0x80]);
+    render(<SecretOverview {...props("/secrets", { metadata: meta("s"), type: "Opaque", data: { bin: encoded } })} />);
+    expect(screen.getByText(encoded)).toBeInTheDocument();
+    expect(screen.getByText("4B")).toBeInTheDocument();
+    expect(screen.getByText("asset.k8sSecretBinary")).toBeInTheDocument();
+  });
 });
 
 describe("Node overview", () => {

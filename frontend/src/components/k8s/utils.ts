@@ -71,3 +71,13 @@ export function base64ToBytes(base64: string): Uint8Array {
   }
   return bytes;
 }
+
+/** Conditions whose name describes a problem: False is the healthy value. */
+const PROBLEM_CONDITIONS = new Set(["MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable"]);
+
+/** Colour of a condition's status: healthy → success, problem → error, Unknown → neutral. */
+export function getConditionVariant(type: string, status: string): StatusVariant {
+  if (status === "Unknown") return "neutral";
+  const healthy = PROBLEM_CONDITIONS.has(type) ? "False" : "True";
+  return status === healthy ? "success" : "error";
+}

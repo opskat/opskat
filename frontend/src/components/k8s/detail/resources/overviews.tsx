@@ -4,6 +4,7 @@ import { K8sCodeBlock } from "../../K8sCodeBlock";
 import { K8sMetadataGrid } from "../../K8sMetadataGrid";
 import { K8sSectionCard } from "../../K8sSectionCard";
 import { K8sTableSection } from "../../K8sTableSection";
+import { base64ToBytes } from "../../utils";
 import { K8sMetaSections } from "../K8sMetaSections";
 import { deriveStatus } from "../status";
 import type { K8sDetailProps } from "../registry";
@@ -177,11 +178,24 @@ export function ConfigMapOverview({ object }: K8sDetailProps) {
   );
 }
 
-function decodeSecretValue(encoded: string) {
+interface DecodedSecret {
+  text: string;
+  size: number;
+  binary: boolean;
+}
+
+/** base64 → bytes → UTF-8 text; non-UTF-8 data keeps its base64 text, undecodable input is shown as-is. */
+function decodeSecretValue(encoded: string): DecodedSecret {
+  let bytes: Uint8Array;
   try {
-    return atob(encoded);
+    bytes = base64ToBytes(encoded);
   } catch {
-    return encoded;
+    return { text: encoded, size: encoded.length, binary: false };
+  }
+  try {
+    return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes), size: bytes.length, binary: false };
+  } catch {
+    return { text: encoded, size: bytes.length, binary: true };
   }
 }
 
@@ -201,9 +215,12 @@ export function SecretOverview({ object }: K8sDetailProps) {
                 <div key={key}>
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs text-muted-foreground font-medium">{key}</span>
-                    <span className="text-[11px] text-muted-foreground">{decoded.length}B</span>
+                    <span className="text-[11px] text-muted-foreground">{decoded.size}B</span>
                   </div>
-                  <K8sCodeBlock code={decoded} maxHeight="max-h-32" />
+                  {decoded.binary && (
+                    <p className="text-[11px] text-muted-foreground mb-1">{t("asset.k8sSecretBinary")}</p>
+                  )}
+                  <K8sCodeBlock code={decoded.text} maxHeight="max-h-32" />
                 </div>
               );
             })}

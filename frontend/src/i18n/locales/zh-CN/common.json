@@ -820,6 +820,7 @@
     "k8sServiceProtocol": "协议",
     "k8sSecretType": "类型",
     "k8sSecretData": "数据",
+    "k8sSecretBinary": "二进制内容，显示为 base64",
     "k8sNoEvents": "无事件",
     "k8sPodQosClass": "QoS 等级",
     "k8sPodHostIP": "主机 IP",

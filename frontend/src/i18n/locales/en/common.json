@@ -820,6 +820,7 @@
     "k8sServiceProtocol": "Protocol",
     "k8sSecretType": "Type",
     "k8sSecretData": "Data",
+    "k8sSecretBinary": "Binary content, shown as base64",
     "k8sNoEvents": "No events",
     "k8sPodQosClass": "QoS Class",
     "k8sPodHostIP": "Host IP",

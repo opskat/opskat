@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { K8sSectionCard } from "./K8sSectionCard";
-import { statusVariantToClass } from "./utils";
+import { getConditionVariant, statusVariantToClass } from "./utils";
 
 interface Condition {
   type: string;
@@ -37,9 +37,9 @@ export function K8sConditionList({ conditions, title, defaultCollapsed = false }
               <div className="flex items-center justify-between mb-1">
                 <span className="text-sm font-medium">{c.type}</span>
                 <span
-                  className={`text-xs px-1.5 py-0.5 rounded-full ${
-                    c.status === "True" ? statusVariantToClass("success") : statusVariantToClass("error")
-                  }`}
+                  className={`text-xs px-1.5 py-0.5 rounded-full ${statusVariantToClass(
+                    getConditionVariant(c.type, c.status)
+                  )}`}
                 >
                   {c.status}
                 </span>
