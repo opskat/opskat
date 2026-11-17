@@ -2,6 +2,7 @@ package auto_backup_svc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -69,8 +70,10 @@ func TestLocalTarget(t *testing.T) {
 		Convey("文件夹不存在时报错且不创建", func() {
 			missing := filepath.Join(dir, "unmounted")
 			_, err := target.Write(context.Background(), WriteRequest{Content: []byte("enc"), At: at, Keep: 10, Settings: Settings{LocalDir: missing}})
-			So(err, ShouldNotBeNil)
-			So(err.Error(), ShouldContainSubstring, "文件夹不存在")
+			var e *Error
+			So(errors.As(err, &e), ShouldBeTrue)
+			So(e.Code, ShouldEqual, ErrCodeFolderMissing)
+			So(e.Detail, ShouldEqual, missing)
 			_, statErr := os.Stat(missing)
 			So(os.IsNotExist(statErr), ShouldBeTrue)
 		})

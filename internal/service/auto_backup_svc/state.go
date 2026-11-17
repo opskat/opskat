@@ -19,7 +19,8 @@ const (
 type TargetState struct {
 	Fingerprint   string `json:"fingerprint,omitempty"` // 最近一次成功写入的数据指纹
 	LastSuccessAt int64  `json:"lastSuccessAt,omitempty"`
-	LastError     string `json:"lastError,omitempty"`
+	ErrorCode     string `json:"errorCode,omitempty"`   // 最近一次失败的失败码（见 errors.go），成功后清空
+	ErrorDetail   string `json:"errorDetail,omitempty"` // 失败的原始细节，不翻译
 	LastErrorAt   int64  `json:"lastErrorAt,omitempty"`
 	Failures      int    `json:"failures,omitempty"`    // 连续失败次数，决定退避
 	RetryAt       int64  `json:"retryAt,omitempty"`     // 失败后的下一次重试时间
@@ -29,12 +30,13 @@ type TargetState struct {
 
 // State 是自动备份的运行状态（不是设置）。
 type State struct {
-	Targets         map[string]*TargetState `json:"targets"`
-	LastCheckAt     int64                   `json:"lastCheckAt,omitempty"`
-	LastCheckResult string                  `json:"lastCheckResult,omitempty"`
-	LastCheckError  string                  `json:"lastCheckError,omitempty"`
-	CheckFailures   int                     `json:"checkFailures,omitempty"` // 生成备份连续失败次数
-	CheckRetryAt    int64                   `json:"checkRetryAt,omitempty"`
+	Targets              map[string]*TargetState `json:"targets"`
+	LastCheckAt          int64                   `json:"lastCheckAt,omitempty"`
+	LastCheckResult      string                  `json:"lastCheckResult,omitempty"`
+	LastCheckErrorCode   string                  `json:"lastCheckErrorCode,omitempty"`
+	LastCheckErrorDetail string                  `json:"lastCheckErrorDetail,omitempty"`
+	CheckFailures        int                     `json:"checkFailures,omitempty"` // 生成备份连续失败次数
+	CheckRetryAt         int64                   `json:"checkRetryAt,omitempty"`
 }
 
 func (s *State) target(id string) *TargetState {

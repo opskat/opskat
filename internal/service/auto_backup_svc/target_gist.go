@@ -3,7 +3,6 @@ package auto_backup_svc
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/service/backup_svc"
@@ -44,7 +43,7 @@ func (g gistTarget) Write(_ context.Context, req WriteRequest) (string, error) {
 		return req.Ref, err
 	}
 	if token == "" {
-		return req.Ref, fmt.Errorf("尚未登录 GitHub")
+		return req.Ref, &Error{Code: ErrCodeGitHubSignedOut}
 	}
 	info, err := g.upsert(token, req.Ref, req.Content)
 	if errors.Is(err, backup_svc.ErrGistNotFound) {

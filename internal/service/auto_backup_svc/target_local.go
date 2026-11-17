@@ -3,7 +3,6 @@ package auto_backup_svc
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -26,7 +25,7 @@ func (localTarget) Destination(s Settings) string { return s.LocalDir }
 
 func (localTarget) Validate(s Settings) error {
 	if s.LocalDir == "" {
-		return fmt.Errorf("请选择备份文件夹")
+		return &Error{Code: ErrCodeFolderRequired}
 	}
 	return nil
 }
@@ -36,13 +35,13 @@ func (localTarget) Write(_ context.Context, req WriteRequest) (string, error) {
 	// 文件夹不存在时不创建：可能是未挂载的外接盘或同步目录。
 	info, err := os.Stat(dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("文件夹不存在: %s", dir)
+		return "", &Error{Code: ErrCodeFolderMissing, Detail: dir}
 	}
 	if err != nil {
 		return "", err
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("不是文件夹: %s", dir)
+		return "", &Error{Code: ErrCodeNotAFolder, Detail: dir}
 	}
 
 	name := backup_svc.AutoBackupName(req.At)
@@ -50,11 +49,11 @@ func (localTarget) Write(_ context.Context, req WriteRequest) (string, error) {
 	// 写到一半失败（如磁盘满）或改名失败都删掉临时文件：每次的临时文件名不同，留下就不会再被清理。
 	if err := os.WriteFile(tmp, req.Content, 0o600); err != nil {
 		removeLocalTemp(tmp)
-		return "", fmt.Errorf("写入备份文件失败: %w", err)
+		return "", &Error{Code: ErrCodeWriteFailed, Detail: err.Error()}
 	}
 	if err := os.Rename(tmp, filepath.Join(dir, name)); err != nil {
 		removeLocalTemp(tmp)
-		return "", fmt.Errorf("写入备份文件失败: %w", err)
+		return "", &Error{Code: ErrCodeWriteFailed, Detail: err.Error()}
 	}
 
 	if err := pruneLocal(dir, req.Keep); err != nil {

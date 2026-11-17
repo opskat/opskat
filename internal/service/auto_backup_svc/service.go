@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"sync"
 	"time"
 
@@ -55,8 +54,10 @@ type Status struct {
 	Targets         map[string]*TargetStatus `json:"targets"`
 	LastCheckAt     int64                    `json:"lastCheckAt"`
 	LastCheckResult string                   `json:"lastCheckResult"`
-	LastCheckError  string                   `json:"lastCheckError"`
-	NextCheckAt     int64                    `json:"nextCheckAt"`
+	// LastCheckErrorCode / Detail 是生成或加密备份失败时的失败码与原始细节（见 errors.go）。
+	LastCheckErrorCode   string `json:"lastCheckErrorCode"`
+	LastCheckErrorDetail string `json:"lastCheckErrorDetail"`
+	NextCheckAt          int64  `json:"nextCheckAt"`
 }
 
 // Service 调度并执行自动备份。
@@ -171,11 +172,12 @@ func (s *Service) Status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := Status{
-		Running:         s.running,
-		Targets:         map[string]*TargetStatus{},
-		LastCheckAt:     s.state.LastCheckAt,
-		LastCheckResult: s.state.LastCheckResult,
-		LastCheckError:  s.state.LastCheckError,
+		Running:              s.running,
+		Targets:              map[string]*TargetStatus{},
+		LastCheckAt:          s.state.LastCheckAt,
+		LastCheckResult:      s.state.LastCheckResult,
+		LastCheckErrorCode:   s.state.LastCheckErrorCode,
+		LastCheckErrorDetail: s.state.LastCheckErrorDetail,
 	}
 	for _, t := range s.opts.Targets {
 		id := t.ID()
@@ -198,7 +200,7 @@ func (s *Service) RunNow(ctx context.Context) error {
 		return err
 	}
 	if !settings.Enabled {
-		return fmt.Errorf("自动备份未开启")
+		return &Error{Code: ErrCodeDisabled}
 	}
 	s.RunCheck(ctx, true)
 	return nil
@@ -347,7 +349,7 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 		}
 	}
 	if len(due) == 0 {
-		s.finishCheck(started, settings, CheckUnchanged, "", false)
+		s.finishCheck(started, settings, CheckUnchanged, nil, false)
 		log.Info("auto backup: check finished, no available target", zap.Duration("took", s.opts.Now().Sub(started)))
 		return
 	}
@@ -358,7 +360,7 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 		fp, err = fingerprint(data)
 	}
 	if err != nil {
-		s.finishCheck(started, settings, CheckFailed, fmt.Sprintf("生成备份失败: %v", err), true)
+		s.finishCheck(started, settings, CheckFailed, &Error{Code: ErrCodeExportFailed, Detail: err.Error()}, true)
 		log.Warn("auto backup: export failed", zap.Error(err))
 		return
 	}
@@ -379,7 +381,7 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 			changed = true
 		}
 		if !force {
-			if (ts.RetryAt > 0 && started.Unix() < ts.RetryAt) || (ts.Fingerprint == fp && ts.LastError == "") {
+			if (ts.RetryAt > 0 && started.Unix() < ts.RetryAt) || (ts.Fingerprint == fp && ts.ErrorCode == "") {
 				skipped = append(skipped, t.ID())
 				continue
 			}
@@ -390,7 +392,7 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 	s.mu.Unlock()
 
 	if len(toWrite) == 0 {
-		s.finishCheck(started, settings, CheckUnchanged, "", false)
+		s.finishCheck(started, settings, CheckUnchanged, nil, false)
 		log.Info("auto backup: check finished", zap.Bool("changed", changed),
 			zap.Strings("skipped", skipped), zap.Duration("took", s.opts.Now().Sub(started)))
 		return
@@ -405,7 +407,7 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 	}
 	if err != nil {
 		s.clearPhases()
-		s.finishCheck(started, settings, CheckFailed, fmt.Sprintf("加密备份失败: %v", err), true)
+		s.finishCheck(started, settings, CheckFailed, &Error{Code: ErrCodeEncryptFailed, Detail: err.Error()}, true)
 		log.Warn("auto backup: encrypt failed", zap.Error(err))
 		return
 	}
@@ -429,7 +431,7 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 		if werr != nil {
 			failedIDs = append(failedIDs, id)
 			ts.Failures++
-			ts.LastError = werr.Error()
+			ts.ErrorCode, ts.ErrorDetail = describe(werr)
 			ts.LastErrorAt = now.Unix()
 			ts.RetryAt = now.Add(backoff(ts.Failures, settings.Interval)).Unix()
 		} else {
@@ -439,7 +441,7 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 				ts.Fingerprint = fp
 			}
 			ts.LastSuccessAt = now.Unix()
-			ts.LastError, ts.LastErrorAt, ts.Failures, ts.RetryAt = "", 0, 0, 0
+			ts.ErrorCode, ts.ErrorDetail, ts.LastErrorAt, ts.Failures, ts.RetryAt = "", "", 0, 0, 0
 		}
 		delete(s.phases, id)
 		s.mu.Unlock()
@@ -455,7 +457,7 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 	if len(failedIDs) > 0 {
 		result = CheckFailed
 	}
-	s.finishCheck(started, settings, result, "", false)
+	s.finishCheck(started, settings, result, nil, false)
 	log.Info("auto backup: check finished", zap.Bool("changed", changed), zap.Bool("force", force),
 		zap.Strings("written", written), zap.Strings("failed", failedIDs), zap.Strings("skipped", skipped),
 		zap.Duration("took", s.opts.Now().Sub(started)))
@@ -467,13 +469,17 @@ func (s *Service) clearPhases() {
 	s.mu.Unlock()
 }
 
-// finishCheck 记录本轮结果并持久化；exportFailed 时按退避安排重试。
-func (s *Service) finishCheck(at time.Time, settings Settings, result, checkErr string, exportFailed bool) {
+// finishCheck 记录本轮结果并持久化；checkErr 是生成 / 加密备份的失败（nil 表示没有），
+// exportFailed 时按退避安排重试。
+func (s *Service) finishCheck(at time.Time, settings Settings, result string, checkErr error, exportFailed bool) {
 	s.mu.Lock()
 	s.running = false
 	s.state.LastCheckAt = at.Unix()
 	s.state.LastCheckResult = result
-	s.state.LastCheckError = checkErr
+	s.state.LastCheckErrorCode, s.state.LastCheckErrorDetail = "", ""
+	if checkErr != nil {
+		s.state.LastCheckErrorCode, s.state.LastCheckErrorDetail = describe(checkErr)
+	}
 	if exportFailed {
 		s.state.CheckFailures++
 		s.state.CheckRetryAt = at.Add(backoff(s.state.CheckFailures, settings.Interval)).Unix()

@@ -32,7 +32,8 @@ function target(id: string, over: Partial<system.AutoBackupTargetStatus> = {}) {
     available: true,
     phase: "",
     lastSuccessAt: 0,
-    lastError: "",
+    errorCode: "",
+    errorDetail: "",
     lastErrorAt: 0,
     retryAt: 0,
     ...over,
@@ -44,7 +45,8 @@ function status(targets: system.AutoBackupTargetStatus[], over: Partial<system.A
     running: false,
     lastCheckAt: nowSec - 180,
     lastCheckResult: "unchanged",
-    lastCheckError: "",
+    lastCheckErrorCode: "",
+    lastCheckErrorDetail: "",
     nextCheckAt: nowSec + 1800,
     targets,
     webdavUrl: "https://dav.example.com/opskat/",
@@ -125,7 +127,8 @@ describe("AutoBackupCard", () => {
     vi.mocked(GetAutoBackupStatus).mockResolvedValue(
       status([
         target("webdav", {
-          lastError: "PUT opskat-backup-auto-x.encrypted.json: 507 Insufficient Storage",
+          errorCode: "failed",
+          errorDetail: "PUT opskat-backup-auto-x.encrypted.json: 507 Insufficient Storage",
           retryAt: nowSec + 120,
         }),
         target("gist", { phase: "running" }),
@@ -136,10 +139,30 @@ describe("AutoBackupCard", () => {
     const webdav = screen.getByTestId("auto-backup-target-webdav");
     expect(within(webdav).getByText("autoBackup.status.failedRetry")).toBeInTheDocument();
     expect(within(webdav).getByText(/507 Insufficient Storage/)).toBeInTheDocument();
+    expect(within(webdav).getByText("autoBackup.error.failed")).toBeInTheDocument();
     expect(
       within(screen.getByTestId("auto-backup-target-gist")).getByText("autoBackup.status.running")
     ).toBeInTheDocument();
     expect(within(screen.getByTestId("auto-backup-target-local")).getByText(/12/)).toBeInTheDocument();
+  });
+
+  it("shows a known failure in the UI language with the raw detail kept verbatim", async () => {
+    vi.mocked(GetAutoBackupSettings).mockResolvedValue(settings());
+    vi.mocked(GetAutoBackupStatus).mockResolvedValue(
+      status(
+        [
+          target("webdav"),
+          target("gist"),
+          target("local", { errorCode: "folder_missing", errorDetail: "/Volumes/Backup", retryAt: nowSec + 60 }),
+        ],
+        { lastCheckResult: "failed", lastCheckErrorCode: "export_failed", lastCheckErrorDetail: "decrypt failed" }
+      )
+    );
+    await renderCard();
+    const local = screen.getByTestId("auto-backup-target-local");
+    expect(within(local).getByText("autoBackup.error.folder_missing")).toBeInTheDocument();
+    expect(within(local).getByText("/Volumes/Backup")).toBeInTheDocument();
+    expect(screen.getByTestId("auto-backup-summary")).toHaveTextContent("autoBackup.summary.failedWithError");
   });
 
   it("submits the form and blocks Back up now while there are unsaved changes", async () => {

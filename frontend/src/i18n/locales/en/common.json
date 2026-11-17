@@ -1356,7 +1356,18 @@
     "saveFailed": "Couldn't save automatic backup settings",
     "runNow": "Back up now",
     "running": "Backing up…",
-    "unsavedHint": "You have unsaved changes — save them before backing up now."
+    "unsavedHint": "You have unsaved changes — save them before backing up now.",
+    "error": {
+      "failed": "Write failed",
+      "folder_missing": "Folder not found",
+      "not_a_folder": "The selected path isn't a folder",
+      "write_failed": "Couldn't write the backup file",
+      "folder_required": "Choose a folder",
+      "github_signed_out": "Not signed in to GitHub",
+      "export_failed": "Couldn't build the backup",
+      "encrypt_failed": "Couldn't encrypt the backup",
+      "disabled": "Automatic backup is off"
+    }
   },
   "backup": {
     "title": "Backup",

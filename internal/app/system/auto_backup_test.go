@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/service/auto_backup_svc"
@@ -156,4 +157,45 @@ func availability(st *AutoBackupStatus) map[string]bool {
 		out[t.ID] = t.Available
 	}
 	return out
+}
+
+// 校验错误按界面语言返回（英文界面不应出现中文）。
+func TestSaveAutoBackupSettingsErrorsFollowLanguage(t *testing.T) {
+	s := newAutoBackupTestSystem(t)
+	dir := t.TempDir()
+	cases := []func(*AutoBackupSaveInput){
+		func(in *AutoBackupSaveInput) { in.Password = "" },
+		func(in *AutoBackupSaveInput) { in.Targets = []string{"webdav"} },
+		func(in *AutoBackupSaveInput) { in.LocalDir = "" },
+		func(in *AutoBackupSaveInput) { in.IntervalMinutes = 7 },
+		func(in *AutoBackupSaveInput) { in.Keep = 3 },
+		func(in *AutoBackupSaveInput) { in.Targets = []string{"local", "ftp"} },
+	}
+	for _, lang := range []string{"en", "zh-CN"} {
+		s.SetLanguage(lang)
+		for i, mutate := range cases {
+			in := validAutoBackupInput(dir)
+			mutate(&in)
+			err := s.SaveAutoBackupSettings(in)
+			if err == nil {
+				t.Fatalf("%s case %d: want error", lang, i)
+			}
+			if hasHan(err.Error()) != (lang != "en") {
+				t.Fatalf("%s case %d: message language mismatch: %q", lang, i, err.Error())
+			}
+		}
+	}
+	s.SetLanguage("en")
+	if err := s.RunAutoBackupNow(); err == nil || hasHan(err.Error()) {
+		t.Fatalf("run now while disabled: want an English error, got %v", err)
+	}
+}
+
+func hasHan(s string) bool {
+	for _, r := range s {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
 }

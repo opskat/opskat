@@ -1356,7 +1356,18 @@
     "saveFailed": "保存自动备份设置失败",
     "runNow": "立即备份",
     "running": "备份中…",
-    "unsavedHint": "有未保存的修改，保存后才能立即备份。"
+    "unsavedHint": "有未保存的修改，保存后才能立即备份。",
+    "error": {
+      "failed": "写入失败",
+      "folder_missing": "文件夹不存在",
+      "not_a_folder": "所选路径不是文件夹",
+      "write_failed": "写入备份文件失败",
+      "folder_required": "请选择备份文件夹",
+      "github_signed_out": "尚未登录 GitHub",
+      "export_failed": "生成备份失败",
+      "encrypt_failed": "加密备份失败",
+      "disabled": "自动备份未开启"
+    }
   },
   "backup": {
     "title": "备份",

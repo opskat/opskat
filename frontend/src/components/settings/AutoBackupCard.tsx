@@ -329,7 +329,11 @@ export function AutoBackupCard() {
                               disabled={!isAvailable && id !== "local"}
                               onCheckedChange={(v) => toggleTarget(id, v)}
                               status={checked && isAvailable && ts ? <TargetStatusBadge ts={ts} rel={rel} /> : null}
-                              error={checked && isAvailable && !ts?.phase ? ts?.lastError : undefined}
+                              error={
+                                checked && isAvailable && !ts?.phase && ts?.errorCode
+                                  ? { code: ts.errorCode, detail: ts.errorDetail }
+                                  : undefined
+                              }
                             >
                               <TargetDetail
                                 id={id}
@@ -409,8 +413,13 @@ function CheckSummary({
     default:
       return (
         <>
-          {status.lastCheckError
-            ? t("autoBackup.summary.failedWithError", { time, error: status.lastCheckError })
+          {status.lastCheckErrorCode
+            ? t("autoBackup.summary.failedWithError", {
+                time,
+                error: [t(`autoBackup.error.${status.lastCheckErrorCode}`), status.lastCheckErrorDetail]
+                  .filter(Boolean)
+                  .join(": "),
+              })
             : t("autoBackup.summary.failed", { time })}
         </>
       );
@@ -431,7 +440,8 @@ function TargetRow({
   disabled: boolean;
   onCheckedChange: (v: boolean) => void;
   status: ReactNode;
-  error?: string;
+  /** 失败码（按界面语言翻译）与原始细节（原样显示）。 */
+  error?: { code: string; detail: string };
   children: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -455,9 +465,12 @@ function TargetRow({
         </div>
         <div className="min-w-0 break-all text-xs text-muted-foreground">{children}</div>
         {error && (
-          <p className="mt-1 whitespace-pre-wrap break-words rounded bg-destructive/10 px-2 py-1 font-mono text-xs text-destructive select-text">
-            {error}
-          </p>
+          <div className="mt-1 grid gap-0.5 rounded bg-destructive/10 px-2 py-1 text-xs text-destructive">
+            <span>{t(`autoBackup.error.${error.code}`)}</span>
+            {error.detail && (
+              <span className="whitespace-pre-wrap break-words font-mono select-text">{error.detail}</span>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -537,7 +550,7 @@ function TargetStatusBadge({ ts, rel }: { ts: system.AutoBackupTargetStatus; rel
       </Badge>
     );
   }
-  if (ts.lastError) {
+  if (ts.errorCode) {
     return (
       <Badge kind="error" icon={<XCircle className="h-3.5 w-3.5" />}>
         {ts.retryAt ? t("autoBackup.status.failedRetry", { time: rel(ts.retryAt) }) : t("autoBackup.status.failed")}

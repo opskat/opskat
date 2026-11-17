@@ -141,7 +141,9 @@ func TestRunCheck(t *testing.T) {
 			f.check()
 			So(f.b.count(), ShouldEqual, 1)
 			st := f.svc.Status()
-			So(st.Targets["a"].LastError, ShouldContainSubstring, "507")
+			// 外部错误不翻译：通用失败码 + 原始细节，前端按界面语言显示失败码。
+			So(st.Targets["a"].ErrorCode, ShouldEqual, ErrCodeFailed)
+			So(st.Targets["a"].ErrorDetail, ShouldContainSubstring, "507")
 			So(st.Targets["a"].RetryAt, ShouldEqual, f.now.Add(time.Minute).Unix())
 			So(st.LastCheckResult, ShouldEqual, CheckFailed)
 
@@ -167,17 +169,25 @@ func TestRunCheck(t *testing.T) {
 				f.check()
 				st := f.svc.Status()
 				So(f.a.count(), ShouldEqual, 2)
-				So(st.Targets["a"].LastError, ShouldBeEmpty)
+				So(st.Targets["a"].ErrorCode, ShouldBeEmpty)
 				So(st.Targets["a"].RetryAt, ShouldEqual, 0)
 				So(st.Targets["a"].LastSuccessAt, ShouldEqual, f.now.Unix())
 			})
+		})
+
+		Convey("位置返回的已知失败按失败码记录，细节保留原文", func() {
+			f.a.setErr(&Error{Code: ErrCodeFolderMissing, Detail: "/Volumes/Backup"})
+			f.check()
+			st := f.svc.Status()
+			So(st.Targets["a"].ErrorCode, ShouldEqual, ErrCodeFolderMissing)
+			So(st.Targets["a"].ErrorDetail, ShouldEqual, "/Volumes/Backup")
 		})
 
 		Convey("不可用的位置跳过且不记错误", func() {
 			f.b.available = false
 			f.check()
 			So(f.b.count(), ShouldEqual, 0)
-			So(f.svc.Status().Targets["b"].LastError, ShouldBeEmpty)
+			So(f.svc.Status().Targets["b"].ErrorCode, ShouldBeEmpty)
 			So(f.svc.Status().LastCheckResult, ShouldEqual, CheckWritten)
 		})
 
@@ -235,7 +245,7 @@ func TestRunCheck(t *testing.T) {
 			f.a.setDest("/new")
 			f.check()
 			So(f.a.count(), ShouldEqual, 2)
-			So(f.svc.Status().Targets["a"].LastError, ShouldBeEmpty)
+			So(f.svc.Status().Targets["a"].ErrorCode, ShouldBeEmpty)
 		})
 
 		Convey("没有可写的位置时不生成备份数据", func() {
@@ -296,7 +306,8 @@ func TestRunCheck(t *testing.T) {
 			So(f.a.count(), ShouldEqual, 0)
 			st := f.svc.Status()
 			So(st.LastCheckResult, ShouldEqual, CheckFailed)
-			So(st.LastCheckError, ShouldContainSubstring, "decrypt credential failed")
+			So(st.LastCheckErrorCode, ShouldEqual, ErrCodeExportFailed)
+			So(st.LastCheckErrorDetail, ShouldContainSubstring, "decrypt credential failed")
 		})
 
 		Convey("位置返回的引用（Gist ID）被记住并在下次传回", func() {
