@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { AlertTriangle, FolderOpen, Loader2, Square } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -33,7 +34,15 @@ export interface RunSqlFileEvent {
   /** 后面的失败不再逐条列出(只在超过上限的那个事件上为真一次)。 */
   failuresOmitted?: boolean;
   invalidUtf8Line?: number;
+  /** 停在了文件里不支持的写法上(之前的语句已执行):写法、该改用的命令行工具与行号,提示由对话框按界面语言写。 */
+  unsupported?: { construct: string; tool: string; line: number };
   error?: string;
+}
+
+/** 不支持的写法的提示:按界面语言用字段写出写法、行号与该改用的工具。 */
+function unsupportedMessage(unsupported: NonNullable<RunSqlFileEvent["unsupported"]>, t: TFunction): string {
+  const { construct, tool, line } = unsupported;
+  return t("query.runSqlFileUnsupported", { construct, tool, line: line.toLocaleString() });
 }
 
 /** 各终态在日志里的最后一行。 */
@@ -113,7 +122,7 @@ export function RunSqlFileDialog({
           `[ERR] ${t("query.runSqlFileFailedAt", { number: event.failure.number.toLocaleString(), line: event.failure.line.toLocaleString() })} ${event.failure.error}`
         );
       } else if (event.status === "error") {
-        lines.push(`[ERR] ${event.error ?? ""}`);
+        lines.push(`[ERR] ${event.unsupported ? unsupportedMessage(event.unsupported, t) : (event.error ?? "")}`);
       }
       lines.push(`[RUN] ${t(FINISHED_LOG[event.status])}`);
       setLogLines((prev) => [...prev, ...lines]);
@@ -277,7 +286,9 @@ export function RunSqlFileDialog({
             >
               {latest.invalidUtf8Line
                 ? t("query.runSqlFileNotUtf8", { line: latest.invalidUtf8Line.toLocaleString() })
-                : t("query.runSqlFileErrorSummary", { error: latest.error ?? "" })}
+                : latest.unsupported
+                  ? unsupportedMessage(latest.unsupported, t)
+                  : t("query.runSqlFileErrorSummary", { error: latest.error ?? "" })}
             </div>
           )}
 

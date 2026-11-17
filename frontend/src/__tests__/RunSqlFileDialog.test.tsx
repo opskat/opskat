@@ -141,6 +141,22 @@ describe("RunSqlFileDialog", () => {
     expect(screen.getByText("query.runSqlFileNotUtf8 42")).toBeInTheDocument();
   });
 
+  it("explains an unsupported construct from its fields, not from the backend's text", async () => {
+    renderDialog();
+    await chooseFile();
+    await userEvent.click(startButton());
+    await waitFor(() => expect(StartRunSQLFile).toHaveBeenCalled());
+
+    emit({
+      status: "error",
+      unsupported: { construct: "COPY ... FROM stdin", tool: "psql", line: 3 },
+      error: "第 3 行的 COPY ... FROM stdin 不能在这里运行",
+    });
+
+    expect(screen.getByText("query.runSqlFileUnsupported COPY ... FROM stdin psql 3")).toBeInTheDocument();
+    expect(screen.queryByText(/第 3 行/)).not.toBeInTheDocument();
+  });
+
   it("does not lose events that arrive before the run id", async () => {
     vi.mocked(StartRunSQLFile).mockImplementation(async () => {
       emit({ runId: "someone-else", status: "done" });

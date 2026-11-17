@@ -161,6 +161,47 @@ func TestRunSQLFileRefusesANonUTF8File(t *testing.T) {
 	}
 }
 
+// unsupportedDriver 的会话运行文件时停在不支持的写法上（假库的切分只认分号，认不出 psql 的写法）。
+type unsupportedDriver struct{ *dbdrivertest.Fake }
+
+func (d unsupportedDriver) Open(ctx context.Context, req dbdriver.OpenRequest) (dbdriver.Session, error) {
+	session, err := d.Fake.Open(ctx, req)
+	return unsupportedSession{session}, err
+}
+
+type unsupportedSession struct{ dbdriver.Session }
+
+func (unsupportedSession) RunScript(context.Context, dbdriver.ScriptRequest) (*dbdriver.ScriptResult, error) {
+	result := &dbdriver.ScriptResult{ScriptProgress: dbdriver.ScriptProgress{Succeeded: 2}}
+	return result, fmt.Errorf("run: %w", &dbdriver.ScriptUnsupportedError{Construct: "COPY ... FROM stdin", Tool: "psql", Line: 3})
+}
+
+// 运行停在不支持的写法上：终态事件带着写法、行号与该改用的工具这些结构化字段，由对话框按界面语言写
+// 提示，Error 不再带一句固定语言的文字；日志只记写法与行号，不记语句。
+func TestRunSQLFileReportsAnUnsupportedConstructAsFields(t *testing.T) {
+	events := captureRunEvents(t)
+	fake := dbdrivertest.NewFake()
+	fake.Desc.Capabilities = append(fake.Desc.Capabilities, dbdriver.CapRunSQLFile)
+	dbdrivertest.Register(t, unsupportedDriver{fake})
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+	path := writeScript(t, "SELECT 1;\nSELECT 2;\nCOPY t FROM stdin;\n")
+
+	core, logs := observer.New(zap.InfoLevel)
+	q.ctx = logger.WithContextLogger(context.Background(), zap.New(core))
+	_, err := q.StartRunSQLFile(1, "", RunSQLFileRequest{Path: path})
+	require.NoError(t, err)
+	final := events.wait(t)
+
+	assert.Equal(t, RunSQLFileError, final.Status)
+	require.NotNil(t, final.Unsupported)
+	assert.Equal(t, dbdriver.ScriptUnsupportedError{Construct: "COPY ... FROM stdin", Tool: "psql", Line: 3}, *final.Unsupported)
+	assert.Empty(t, final.Error, "the dialog words this case itself, in the UI language")
+	assert.Equal(t, int64(2), final.Progress.Succeeded)
+	for _, entry := range logs.All() {
+		assert.NotContains(t, entry.Message, "第 3 行")
+	}
+}
+
 // 只读连接的资产与没有声明运行 SQL 文件的驱动：在开始之前就拒绝，不打开会话。
 func TestRunSQLFileIsRefusedBeforeStarting(t *testing.T) {
 	path := writeScript(t, "DELETE FROM t;")

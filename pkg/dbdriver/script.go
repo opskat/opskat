@@ -121,11 +121,14 @@ type ScriptUnsupported struct {
 }
 
 // ScriptUnsupportedError 表示运行停在了文件里不支持的写法上：它之前的语句已经执行。
+//
+// 字段是写法、工具与行号的唯一来源：展示它的一方（运行 SQL 文件的对话框）按界面语言自己写提示，
+// Error() 只是日志与其他调用方的兜底文字。
 type ScriptUnsupportedError struct {
-	Construct string
-	Tool      string
+	Construct string `json:"construct"`
+	Tool      string `json:"tool"`
 	// Line 是写法开始的行，从 1 起。
-	Line int
+	Line int `json:"line"`
 }
 
 func (e *ScriptUnsupportedError) Error() string {

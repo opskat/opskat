@@ -2703,6 +2703,7 @@
     "runSqlFileFailedAt": "Statement {{number}} failed (starting on line {{line}}):",
     "runSqlFileNotRolledBack": "The {{count}} statements run before it are not rolled back.",
     "runSqlFileNotUtf8": "The file isn't UTF-8 encoded (first found on line {{line}}). Nothing was run.",
+    "runSqlFileUnsupported": "The file uses {{construct}} on line {{line}}, which can't run here. The statements before it were already run. Import files like this with the command-line tool {{tool}}.",
     "runSqlFileLogStart": "Running {{file}} on {{target}}",
     "runSqlFileLogProgress": "{{count}} statements run",
     "runSqlFileLogDone": "Finished",

@@ -2703,6 +2703,7 @@
     "runSqlFileFailedAt": "第 {{number}} 条语句失败（文件第 {{line}} 行）：",
     "runSqlFileNotRolledBack": "之前已执行的 {{count}} 条语句不会回滚。",
     "runSqlFileNotUtf8": "文件不是 UTF-8 编码（第 {{line}} 行），没有执行任何语句。",
+    "runSqlFileUnsupported": "文件第 {{line}} 行的 {{construct}} 不能在这里运行，在它之前的语句已执行；这类文件请改用命令行工具 {{tool}} 导入。",
     "runSqlFileLogStart": "开始运行 {{file}} → {{target}}",
     "runSqlFileLogProgress": "已执行 {{count}} 条",
     "runSqlFileLogDone": "已完成",

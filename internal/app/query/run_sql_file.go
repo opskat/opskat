@@ -55,7 +55,10 @@ type RunSQLFileEvent struct {
 	FailuresOmitted bool `json:"failuresOmitted,omitempty"`
 	// InvalidUTF8Line 是文件不是 UTF-8 时第一处非 UTF-8 内容所在的行（此时一条语句也没有执行）。
 	InvalidUTF8Line int `json:"invalidUtf8Line,omitempty"`
-	// Error 是 error 时的原因。
+	// Unsupported 是 error 时停在了文件里不支持的写法上（它之前的语句已执行）：对话框用它的字段按界面
+	// 语言写提示，此时 Error 为空。
+	Unsupported *dbdriver.ScriptUnsupportedError `json:"unsupported,omitempty"`
+	// Error 是 error 时的原因（文件不是 UTF-8、停在不支持的写法上时由对话框自己写提示）。
 	Error string `json:"error,omitempty"`
 }
 
@@ -302,10 +305,15 @@ func (q *Query) runSQLFile(runID string, log *zap.Logger, panel *panelSession, f
 	fields := []zap.Field{zap.Int64("succeeded", event.Progress.Succeeded), zap.Int64("failed", event.Progress.Failed),
 		zap.Duration("elapsed", time.Since(start))}
 	var encodingErr *dbdriver.ScriptEncodingError
+	var unsupportedErr *dbdriver.ScriptUnsupportedError
 	switch {
 	case errors.As(err, &encodingErr):
 		event.Status, event.Error, event.InvalidUTF8Line = RunSQLFileError, err.Error(), encodingErr.Line
 		log.Warn("run sql file refused a non-UTF-8 file", zap.Int("line", encodingErr.Line))
+	case errors.As(err, &unsupportedErr):
+		event.Status, event.Unsupported = RunSQLFileError, unsupportedErr
+		log.Warn("run sql file stopped at an unsupported construct", append(fields,
+			zap.String("construct", unsupportedErr.Construct), zap.Int("line", unsupportedErr.Line))...)
 	case err != nil:
 		event.Status, event.Error = RunSQLFileError, err.Error()
 		log.Error("run sql file failed", append(fields, zap.Error(err))...)
