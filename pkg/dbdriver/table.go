@@ -99,6 +99,9 @@ type SortItem struct {
 type TableQuery struct {
 	Filters []FilterItem `json:"filters"`
 	Sorts   []SortItem   `json:"sorts"`
+	// OwnRows 为真时只取表自己的行，不含它的子表（PostgreSQL 的分区、继承的子表）里的行；表不会有子表的库照常
+	// 读整张表。转储用它：每张表只写它自己的行，子表的行由子表写，还原后没有重复。
+	OwnRows bool `json:"ownRows,omitempty"`
 }
 
 // TableColumnRule 是一列在新增行时要遵守的约束。

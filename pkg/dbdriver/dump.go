@@ -192,9 +192,15 @@ type DumpObjectScript struct {
 	// 用它，如 SQLite）；Dependencies 是它用到的视图、函数与过程，带上种类（视图与函数可以同名）。视图、
 	// 函数与过程写在同一段里，按这两项排序：被依赖的先写，删除段里倒过来。不在这一段里的对象（如表、这次
 	// 没有转储的对象）不影响次序，自己依赖自己（递归的过程）也不算；没有给出依赖的对象，函数与过程在前、
-	// 视图在后，各自按列出的次序。依赖成环时转储在写出任何内容之前停下，错误里点出环上的对象。
+	// 视图在后，各自按列出的次序。表的 Dependencies 是它的父表（种类 DumpTable：分区所属的分区表、继承的
+	// 子表的父表），表那一段同样按它排序：父表先写，删除段里子表先删；没有父表的表按列出的次序。依赖成环时
+	// 转储在写出任何内容之前停下，错误里点出环上的对象。
 	DependsOn    []string         `json:"dependsOn,omitempty"`
 	Dependencies []DumpDependency `json:"dependencies,omitempty"`
+	// Partitions 是表的分区（名字的形式同 DumpObject.Name；只有分区表的父表给出，多级分区由各级给出自己的下一级）：
+	// 它们随这张表一起转储，只转储选中的表时也是，已经在这次转储里的不再重复。给出了分区的表自己没有行（行都在
+	// 分区里），结构和数据时也不为它读行、不写它的记录段。
+	Partitions []string `json:"partitions,omitempty"`
 }
 
 // DumpDependency 是一个对象用到的另一个对象（DumpObjectScript.Dependencies 里的一项）。
@@ -233,8 +239,11 @@ const dumpChunkRows = 500
 // 触发器（在所有数据之后，导入数据时不会触发它们；视图、函数与过程、触发器各自勾了时才有）、数据之后的收尾、
 // 恢复外键检查与方言的文件结尾。行边读边写，不整表留在内存里。
 //
-// 写任何内容之前先读出全部对象的定义、得到方言的语句：删除段在文件开头，要用到每个对象的删除语句；依赖
-// 成环时在这里停下，什么也不写。
+// 每张表只读它自己的行（TableQuery.OwnRows：分区表的父表、继承的父表不带子表的行）；表的分区随它转储（见
+// DumpObjectScript.Partitions），分区与继承的子表写在父表之后（见 DumpObjectScript.Dependencies）。
+//
+// 写任何内容之前先读出全部对象的定义、得到方言的语句（之后才取方言的整份文件部分，范围里已有随父表带上的
+// 分区）：删除段在文件开头，要用到每个对象的删除语句；依赖成环时在这里停下，什么也不写。
 // 任何一个对象出错（读定义、方言、读行）或 ctx 被取消都立即停下，返回的错误是点名那个对象的
 // *DumpObjectError（被取消时它包着 ctx 的错误）；已经写出的内容由调用方丢弃（见 DumpToFile）。
 func Dump(ctx context.Context, req DumpRequest, source DumpSource, dialect DumpDialect) (*DumpResult, error) {
@@ -245,17 +254,18 @@ func Dump(ctx context.Context, req DumpRequest, source DumpSource, dialect DumpD
 	if err != nil {
 		return nil, err
 	}
+	d := &dump{ctx: ctx, req: req, source: source, dialect: dialect, out: &countingWriter{w: req.Writer}}
+	if err := d.prepareAll(plan); err != nil {
+		return &DumpResult{Objects: plan.objects()}, err
+	}
+	d.progress.Objects = plan.objects()
 	file, err := dialect.DumpFile(ctx, DumpScope{
 		Database: req.Database, Schema: req.Schema, Tables: plan.listed, WithData: req.WithData, Whole: req.Whole, Options: req.Options,
 	})
 	if err != nil {
-		return nil, err
-	}
-	d := &dump{ctx: ctx, req: req, source: source, dialect: dialect, out: &countingWriter{w: req.Writer}, terminator: file.BatchTerminator}
-	d.progress.Objects = len(plan.tables) + len(plan.definitions) + len(plan.triggers)
-	if err := d.prepareAll(plan); err != nil {
 		return &DumpResult{Objects: d.progress.Objects}, err
 	}
+	d.terminator = file.BatchTerminator
 	err = d.run(file, plan)
 	return &DumpResult{Objects: d.progress.Objects, Rows: d.progress.Rows, Bytes: d.out.n}, err
 }
@@ -274,8 +284,10 @@ type dumpItem struct {
 
 // dumpPlan 是一次转储要写的对象，按段分开。
 type dumpPlan struct {
-	// listed 是转储的表与视图（交给方言的范围）。
+	// listed 是转储的表与视图（交给方言的范围），含随父表带上的分区。
 	listed []string
+	// tables 是表：列出时按选中或列出的次序，随父表带上的分区接在后面；prepareAll 之后是父表在前的次序（见
+	// dependencyOrder）。
 	tables []*dumpItem
 	// definitions 是视图，以及整库或整个 schema 时的函数与过程：列出时函数、过程在前，视图在后，各自按列出的
 	// 次序；prepareAll 之后是依赖顺序（被依赖的在前，见 dependencyOrder）。
@@ -284,6 +296,9 @@ type dumpPlan struct {
 	triggers []*dumpItem
 }
 
+// objects 是要写的对象数。
+func (p *dumpPlan) objects() int { return len(p.tables) + len(p.definitions) + len(p.triggers) }
+
 // planDump 列出要写的对象：选中的表与视图，或 Whole 时库里（schema 里）的全部对象——视图、函数与过程、
 // 触发器各自只在勾了它们的选项时。
 func planDump(ctx context.Context, req DumpRequest, source DumpSource) (*dumpPlan, error) {
@@ -291,7 +306,7 @@ func planDump(ctx context.Context, req DumpRequest, source DumpSource) (*dumpPla
 	if err != nil {
 		return nil, fmt.Errorf("list objects: %w", err)
 	}
-	plan := &dumpPlan{listed: req.Tables}
+	plan := &dumpPlan{listed: slices.Clone(req.Tables)} // 随父表带上的分区接在后面，不能写进调用方的切片
 	var views []*dumpItem
 	if req.Whole {
 		all, err := source.ListTables(ctx, req.Database)
@@ -344,9 +359,31 @@ type dump struct {
 	progress   DumpProgress
 }
 
-// prepareAll 读出全部对象的定义、得到方言的语句，并把视图、函数与过程排成依赖顺序。
+// prepareAll 读出全部对象的定义、得到方言的语句：表的分区（DumpObjectScript.Partitions）还不在这次转储里的随它
+// 加进来，一样读出，给出了分区的表不写数据；再把表排成父表在前，视图、函数与过程排成被依赖的在前（见
+// dependencyOrder）。
 func (d *dump) prepareAll(plan *dumpPlan) error {
-	for _, group := range [][]*dumpItem{plan.tables, plan.definitions, plan.triggers} {
+	tables := make(map[string]bool, len(plan.tables))
+	for _, table := range plan.tables {
+		tables[table.name] = true
+	}
+	for i := 0; i < len(plan.tables); i++ { // 分区加在后面，也在这一轮里读出
+		table := plan.tables[i]
+		if err := d.prepare(table); err != nil {
+			return &DumpObjectError{Object: table.name, Err: err}
+		}
+		if len(table.script.Partitions) > 0 { // 分区表的行都在分区里
+			table.withData = false
+		}
+		for _, partition := range table.script.Partitions {
+			if !tables[partition] {
+				tables[partition] = true
+				plan.tables = append(plan.tables, &dumpItem{kind: DumpTable, name: partition, withData: d.req.WithData})
+				plan.listed = append(plan.listed, partition)
+			}
+		}
+	}
+	for _, group := range [][]*dumpItem{plan.definitions, plan.triggers} {
 		for _, item := range group {
 			if err := d.prepare(item); err != nil {
 				return &DumpObjectError{Object: item.name, Err: err}
@@ -354,6 +391,9 @@ func (d *dump) prepareAll(plan *dumpPlan) error {
 		}
 	}
 	var err error
+	if plan.tables, err = dependencyOrder(plan.tables); err != nil {
+		return err
+	}
 	plan.definitions, err = dependencyOrder(plan.definitions)
 	return err
 }
@@ -391,7 +431,8 @@ func (d *dump) run(file *DumpFileScript, plan *dumpPlan) error {
 }
 
 // dropSection 是删除段：先删表上的外键（不能关闭外键检查的方言才给出），再按依赖倒序删除要转储的对象——
-// 触发器、视图与函数和过程（与写出的次序相反：依赖别的的先删）、表（与写出的次序相反），最后删类型。
+// 触发器、视图与函数和过程（与写出的次序相反：依赖别的的先删）、表（与写出的次序相反：分区与继承的子表先于
+// 父表），最后删类型。
 func dropSection(file *DumpFileScript, plan *dumpPlan) []string {
 	drops := collect(plan.tables, func(s *DumpObjectScript) []string { return s.DropForeignKeys })
 	for _, group := range [][]*dumpItem{plan.triggers, plan.definitions, plan.tables} {
@@ -512,9 +553,9 @@ func (d *dump) batchEnd() {
 	}
 }
 
-// dependencyOrder 把视图、函数与过程排成被依赖的在前：每个对象之前先放它依赖的（DependsOn 里的视图、
-// Dependencies 里的视图、函数与过程）里属于这一段的那些，其余保持 items 的次序（函数、过程在前，视图在后）。
-// 自己依赖自己不算；依赖成环时返回点出环上对象的错误。
+// dependencyOrder 把一段对象排成被依赖的在前：每个对象之前先放它依赖的（DependsOn 里的视图、Dependencies 里的
+// 对象）里属于这一段的那些，其余保持 items 的次序。表这一段里是分区与继承的子表依赖它们的父表；视图、函数与
+// 过程那一段里没有依赖的函数、过程在前，视图在后。自己依赖自己不算；依赖成环时返回点出环上对象的错误。
 func dependencyOrder(items []*dumpItem) ([]*dumpItem, error) {
 	key := func(kind, name string) string { return kind + " " + name }
 	byKey := make(map[string]*dumpItem, len(items))
@@ -557,7 +598,7 @@ func dependencyOrder(items []*dumpItem) ([]*dumpItem, error) {
 				names = append(names, key(member.kind, member.name))
 			}
 			names = append(names, key(item.kind, item.name))
-			return fmt.Errorf("views, functions and procedures depend on each other in a cycle: %s", strings.Join(names, " -> "))
+			return fmt.Errorf("objects depend on each other in a cycle: %s", strings.Join(names, " -> "))
 		}
 		state[item] = visiting
 		path = append(path, item)
@@ -650,7 +691,7 @@ func (d *dump) rows(table string, script *DumpObjectScript) (written int64, err 
 	if err != nil {
 		return 0, err
 	}
-	stream, err := d.source.StreamTableRows(d.ctx, d.req.Database, table, TableQuery{})
+	stream, err := d.source.StreamTableRows(d.ctx, d.req.Database, table, TableQuery{OwnRows: true})
 	if err != nil {
 		return 0, err
 	}

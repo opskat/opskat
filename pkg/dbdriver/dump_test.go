@@ -41,6 +41,20 @@ type dumpSource struct {
 	written []RowStatementsRequest
 	// onRow 在游标每前进一行时调用，测试用它在读取中途取消。
 	onRow func()
+	// children 是各表的子表（分区、继承的子表）：读一张表默认连子表的行一起读出，TableQuery.OwnRows 时只读它自己的。
+	children map[string][]string
+}
+
+// tableRows 是读一张表得到的行：它自己的，不只读自己的行时接着是子表（一路下去）的。
+func (s *dumpSource) tableRows(table string, ownRows bool) [][]any {
+	rows := s.rows[table]
+	if ownRows {
+		return rows
+	}
+	for _, child := range s.children[table] {
+		rows = append(slices.Clone(rows), s.tableRows(child, false)...)
+	}
+	return rows
 }
 
 func (s *dumpSource) ListObjects(_ context.Context, database string) (*DatabaseObjects, error) {
@@ -90,7 +104,7 @@ func (s *dumpSource) StreamTableRows(_ context.Context, database, table string, 
 	if len(query.Filters) > 0 || len(query.Sorts) > 0 {
 		return nil, errors.New("a dump reads the whole table, unfiltered and unsorted")
 	}
-	return &dumpStream{source: s, columns: s.columns[table], rows: s.rows[table], err: s.streamErr[table], next: -1}, nil
+	return &dumpStream{source: s, columns: s.columns[table], rows: s.tableRows(table, query.OwnRows), err: s.streamErr[table], next: -1}, nil
 }
 
 type dumpStream struct {
@@ -157,6 +171,8 @@ type dumpDialect struct {
 	// 键是「种类 名字」。
 	dependsOn    map[string][]string
 	dependencies map[string][]DumpDependency
+	// partitions 是各表的分区（方言给出的 Partitions）。
+	partitions map[string][]string
 	// plain 为真时对象只给出存在则删除与定义（像什么钩子都没实现的方言）。
 	plain bool
 }
@@ -174,6 +190,7 @@ func (d *dumpDialect) DumpObject(_ context.Context, object DumpObject) (*DumpObj
 		Definition:   []string{object.Definition + ";"},
 		DependsOn:    d.dependsOn[object.Name],
 		Dependencies: d.dependencies[object.Kind+" "+object.Name],
+		Partitions:   d.partitions[object.Name],
 	}
 	if d.plain || object.Kind != DumpTable {
 		return script, nil
@@ -1042,4 +1059,111 @@ func TestDumpHeaderListsTheChosenOptions(t *testing.T) {
 		"-- Options: indexes, foreign keys, views, functions and procedures, triggers, drop statements, disable foreign key checks\n")
 	assert.Contains(t, wholeDump(t, DumpOptions{Views: true, Drops: true}), "-- Options: views, drop statements\n")
 	assert.Contains(t, wholeDump(t, DumpOptions{}), "-- Options: none\n")
+}
+
+// partitionedSource 是有分区表与继承表的库：events 按年分区（events_2026 再按地区分区，events_eu 是它的分区），
+// 继承的子表 a_archive 排在它的父表 notes 前面。每张表只有它自己的一行；读父表默认连子表的行一起读出。
+func partitionedSource() *dumpSource {
+	source := &dumpSource{ddl: map[string]string{}, columns: map[string][]string{}, rows: map[string][][]any{}, children: map[string][]string{
+		"events": {"events_2025", "events_2026"}, "events_2026": {"events_eu"}, "notes": {"a_archive"},
+	}}
+	for i, table := range []string{"a_archive", "events", "events_2025", "events_2026", "events_eu", "notes"} {
+		source.tables = append(source.tables, table)
+		source.ddl[table] = "CREATE TABLE " + table
+		source.columns[table] = []string{"id"}
+		if table != "events" && table != "events_2026" { // 分区表的父表自己没有行
+			source.rows[table] = [][]any{{int64(i)}}
+		}
+	}
+	return source
+}
+
+// partitionedDialect 给出分区与父表：分区表的父表列出它的分区，分区与继承的子表依赖它们的父表。
+func partitionedDialect() *dumpDialect {
+	parent := func(name string) []DumpDependency { return []DumpDependency{{Kind: DumpTable, Name: name}} }
+	return &dumpDialect{plain: true,
+		partitions: map[string][]string{"events": {"events_2025", "events_2026"}, "events_2026": {"events_eu"}},
+		dependencies: map[string][]DumpDependency{
+			"table events_2025": parent("events"), "table events_2026": parent("events"), "table events_eu": parent("events_2026"),
+			"table a_archive": parent("notes"),
+		},
+	}
+}
+
+// tableOrder 是文件里建表的次序，以及删除段里删表的次序。
+func tableOrder(file string) (created, dropped []string) {
+	for _, line := range strings.Split(file, "\n") {
+		if name, ok := strings.CutPrefix(line, "CREATE TABLE "); ok {
+			created = append(created, strings.TrimSuffix(name, ";"))
+		}
+		if name, ok := strings.CutPrefix(line, "DROP TABLE IF EXISTS "); ok {
+			dropped = append(dropped, strings.TrimSuffix(name, ";"))
+		}
+	}
+	return created, dropped
+}
+
+// 分区与继承的子表写在它们的父表之后（方言经 Dependencies 给出父表），删除段里先删子表；其余的表保持列出的次序。
+// 每张表只写它自己的行：读表时不带子表的行，父表的行不会再在子表里写一遍。
+func TestDumpWritesChildTablesAfterTheirParentsWithTheirOwnRows(t *testing.T) {
+	source := partitionedSource()
+	var out bytes.Buffer
+
+	result, err := Dump(context.Background(), DumpRequest{
+		Database: "shop", Whole: true, WithData: true, Options: DumpOptions{Drops: true}, Header: dumpHeader(), Writer: &out,
+	}, source, partitionedDialect())
+	require.NoError(t, err)
+
+	created, dropped := tableOrder(out.String())
+	want := []string{"notes", "a_archive", "events", "events_2025", "events_2026", "events_eu"}
+	assert.Equal(t, want, created)
+	assert.Equal(t, reversedNames(want), dropped)
+	assert.EqualValues(t, 4, result.Rows, "each row is written once, by the table it belongs to")
+	for _, insert := range []string{"a_archive (id) VALUES (0)", "events_2025 (id) VALUES (2)", "events_eu (id) VALUES (4)", "notes (id) VALUES (5)"} {
+		assert.Equal(t, 1, strings.Count(out.String(), "INSERT INTO "+insert+";"), insert)
+	}
+	// 分区表（给出了分区的表）自己没有行：不读它的行，也没有它的记录段。
+	for _, partitioned := range []string{"events", "events_2026"} {
+		assert.NotContains(t, out.String(), "-- Records of "+partitioned+"\n")
+		assert.NotContains(t, source.calls, "stream shop."+partitioned)
+	}
+	assert.Contains(t, out.String(), "-- Records of notes\n")
+}
+
+// 只转储选中的表：选中分区表的父表时它的全部分区（一路下去）随它写出，排在它之后，方言拿到的范围里也有它们；
+// 选中的分区不再重复写。单独选中一个分区或继承的子表时只写它自己。
+func TestDumpBringsAlongThePartitionsOfASelectedTable(t *testing.T) {
+	dump := func(t *testing.T, tables ...string) ([]string, *dumpDialect) {
+		t.Helper()
+		dialect := partitionedDialect()
+		var out bytes.Buffer
+		_, err := Dump(context.Background(), DumpRequest{Database: "shop", Tables: tables, Header: dumpHeader(), Writer: &out},
+			partitionedSource(), dialect)
+		require.NoError(t, err)
+		created, _ := tableOrder(out.String())
+		return created, dialect
+	}
+
+	selected := append(make([]string, 0, 8), "notes", "events_2026", "events")
+	created, dialect := dump(t, selected...)
+	assert.Equal(t, []string{"notes", "events", "events_2026", "events_eu", "events_2025"}, created)
+	assert.Equal(t, make([]string, 5), selected[len(selected):cap(selected)], "the caller's selection is left as it was")
+	require.Len(t, dialect.scopes, 1)
+	assert.Equal(t, []string{"notes", "events_2026", "events", "events_eu", "events_2025"}, dialect.scopes[0].Tables)
+
+	created, _ = dump(t, "events_eu", "a_archive")
+	assert.Equal(t, []string{"events_eu", "a_archive"}, created)
+}
+
+// 分区与父表成环（方言给错了）时在写出任何内容之前停下，点出环上的表。
+func TestDumpRefusesTablesWhoseParentsFormACycle(t *testing.T) {
+	source := partitionedSource()
+	dialect := partitionedDialect()
+	dialect.dependencies["table events"] = []DumpDependency{{Kind: DumpTable, Name: "events_eu"}}
+	var out bytes.Buffer
+
+	_, err := Dump(context.Background(), DumpRequest{Database: "shop", Whole: true, Header: dumpHeader(), Writer: &out}, source, dialect)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "table events -> table events_eu -> table events_2026 -> table events")
+	assert.Empty(t, out.String())
 }

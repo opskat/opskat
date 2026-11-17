@@ -84,11 +84,25 @@ var tables = map[string]map[string]*memTable{
 			},
 			ddl: "CREATE TABLE [app].[blobs] ([id] bigint PRIMARY KEY, [data] blob)",
 		},
+		// events is partitioned: its rows are all in its partition events_2026,
+		// which SHOW TABLES lists before it (see the dump dialect's DumpObject).
+		"events": {
+			columns: []memColumn{{name: "id", typ: "int", primaryKey: true}},
+			ddl:     "CREATE TABLE [app].[events] ([id] int PRIMARY KEY) PARTITIONED",
+		},
+		"events_2026": {
+			columns: []memColumn{{name: "id", typ: "int", primaryKey: true}},
+			size:    len(events2026),
+			row:     func(i int) []driver.Value { return events2026[i] },
+			ddl:     "CREATE TABLE [app].[events_2026] PARTITION OF [events]",
+		},
 	},
 }
 
+var events2026 = [][]driver.Value{{int64(1)}, {int64(2)}}
+
 // tableOrder is the order SHOW TABLES lists them in.
-var tableOrder = []string{"users", "series", "blobs"}
+var tableOrder = []string{"users", "series", "blobs", "events_2026", "events"}
 
 var views = map[string]string{"v_users": "SELECT [id] FROM [app].[users]"}
 
@@ -241,7 +255,7 @@ func (tx) Rollback() error { return nil }
 var (
 	countOf   = regexp.MustCompile(`^COUNT OF (.+)$`)
 	pageOf    = regexp.MustCompile(`^PAGE (\d+) (\d+) OF (.+)$`)
-	selectAll = regexp.MustCompile(`^SELECT \* FROM (\S+)(?: LIMIT (\d+)(?: OFFSET (\d+))?)?$`)
+	selectAll = regexp.MustCompile(`^SELECT \* FROM (?:ONLY )?(\S+)(?: LIMIT (\d+)(?: OFFSET (\d+))?)?$`)
 	countAll  = regexp.MustCompile(`^SELECT COUNT\(\*\) FROM (\S+)$`)
 	showFrom  = regexp.MustCompile(`^SHOW (TABLES|VIEWS|FUNCTIONS) FROM \[([^\]]*)\]$`)
 	showHost  = regexp.MustCompile(`^SHOW HOST (\w+)(?: (\S+))?$`)

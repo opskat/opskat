@@ -60,11 +60,18 @@ const usersIndex = "CREATE INDEX [users_name] ON [users] ([name]);"
 // indexes (dbdriver.DumpOptions.Indexes): the export options the host was given
 // reach the guest's dump dialect with each object. The function users_count says
 // it depends on the view v_users, so the host writes the view first and drops it
-// last, against the order it uses for objects without dependencies.
+// last, against the order it uses for objects without dependencies. The
+// partitioned table events names its partition events_2026 (Partitions), which a
+// dump of events alone brings along and which says it depends on events, so the
+// host writes it after events although SHOW TABLES lists it first.
 func (dialect) DumpObject(_ context.Context, _ *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error {
 	switch {
 	case object.Kind == dbdriver.DumpTable && object.Name == "users" && object.Options.Indexes:
 		script.Definition = append(script.Definition, usersIndex)
+	case object.Kind == dbdriver.DumpTable && object.Name == "events":
+		script.Partitions = []string{"events_2026"}
+	case object.Kind == dbdriver.DumpTable && object.Name == "events_2026":
+		script.Dependencies = []dbdriver.DumpDependency{{Kind: dbdriver.DumpTable, Name: "events"}}
 	case object.Kind == dbdriver.ObjectFunction && object.Name == "users_count":
 		script.Dependencies = []dbdriver.DumpDependency{{Kind: dbdriver.ObjectView, Name: "v_users"}}
 	}

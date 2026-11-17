@@ -79,8 +79,6 @@ func TestDumpWritesRestorablePostgreSQLFile(t *testing.T) {
 	mock.ExpectQuery(functionsSQL).WillReturnRows(names("r", "public.touch"))
 	mock.ExpectQuery(triggersSQL).WillReturnRows(sqlmock.NewRows([]string{"s", "n", "t"}).AddRow("public", "items_touch", "items"))
 	mock.ExpectQuery(listTablesSQL).WillReturnRows(names("name", "app.notes", "public.items", "public.v_a", "public.v_b"))
-	mock.ExpectQuery(dumpSchemasQuery).WillReturnRows(names("nspname", "app"))
-	mock.ExpectQuery(scopeEnumsQuery).WithArgs("", `["app.notes","public.items","public.v_a","public.v_b"]`).WillReturnRows(enumRows([3]string{"public", "kind", `["new", "it's"]`}))
 
 	// app.notes：serial 主键，外键指向 public.items。
 	mock.ExpectQuery(ddlColumnsQuery).WithArgs("app", "notes").WillReturnRows(ddlColumnRows("r", nil,
@@ -90,6 +88,7 @@ func TestDumpWritesRestorablePostgreSQLFile(t *testing.T) {
 		AddRow("app", "notes_id_seq", "id", "integer", "1", "1", "1", "2147483647", false))
 	mock.ExpectQuery(tableConstraintsQuery).WithArgs("app", "notes").WillReturnRows(constraintRows([2]string{"notes_pkey", "PRIMARY KEY (id)"}))
 	mock.ExpectQuery(tableIndexesQuery).WithArgs("app", "notes").WillReturnRows(names("def"))
+	mock.ExpectQuery(dumpFamilyQuery).WithArgs("app", "notes").WillReturnRows(familyRows())
 	mock.ExpectQuery(dumpForeignKeysQuery).WithArgs("app", "notes").
 		WillReturnRows(constraintRows([2]string{"notes_item_fk", "FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE"}))
 	mock.ExpectQuery(dumpColumnsQuery).WithArgs("app", "notes").WillReturnRows(dumpColumnRows("id", "item_id"))
@@ -104,6 +103,7 @@ func TestDumpWritesRestorablePostgreSQLFile(t *testing.T) {
 	mock.ExpectQuery(ownedSequencesQuery).WithArgs("public", "items").WillReturnRows(ownedSequenceRows())
 	mock.ExpectQuery(tableConstraintsQuery).WithArgs("public", "items").WillReturnRows(constraintRows([2]string{"items_pkey", "PRIMARY KEY (id)"}))
 	mock.ExpectQuery(tableIndexesQuery).WithArgs("public", "items").WillReturnRows(names("def"))
+	mock.ExpectQuery(dumpFamilyQuery).WithArgs("public", "items").WillReturnRows(familyRows())
 	mock.ExpectQuery(dumpForeignKeysQuery).WithArgs("public", "items").
 		WillReturnRows(constraintRows([2]string{"items_parent_fk", "FOREIGN KEY (parent_id) REFERENCES items(id)"}))
 	mock.ExpectQuery(dumpColumnsQuery).WithArgs("public", "items").WillReturnRows(dumpColumnRows("id always", "kind", "parent_id"))
@@ -140,13 +140,15 @@ func TestDumpWritesRestorablePostgreSQLFile(t *testing.T) {
 	mock.ExpectQuery(triggerDefSQL).WithArgs("public", "items", "items_touch").
 		WillReturnRows(names("def", "CREATE TRIGGER items_touch BEFORE INSERT ON items FOR EACH ROW EXECUTE FUNCTION touch_items()"))
 
-	// 全部定义读完才读行（删除段在文件开头，要用到每个对象的删除语句）。
+	// 全部定义读完才取整份文件的部分、读行（删除段在文件开头，要用到每个对象的删除语句）。
+	mock.ExpectQuery(dumpSchemasQuery).WillReturnRows(names("nspname", "app"))
+	mock.ExpectQuery(scopeEnumsQuery).WithArgs("", `["app.notes","public.items","public.v_a","public.v_b"]`).WillReturnRows(enumRows([3]string{"public", "kind", `["new", "it's"]`}))
 	expectColumns(mock, "app", "notes", [2]string{"id", "integer"}, [2]string{"item_id", "integer"})
-	mock.ExpectQuery(`SELECT * FROM "app"."notes"`).WillReturnRows(sqlmock.NewRows([]string{"id", "item_id"}).
+	mock.ExpectQuery(`SELECT * FROM ONLY "app"."notes"`).WillReturnRows(sqlmock.NewRows([]string{"id", "item_id"}).
 		AddRow(int64(1), int64(7)).AddRow(int64(3), nil))
 	expectColumns(mock, "public", "items", [2]string{"id", "integer"}, [2]string{"kind", "USER-DEFINED"},
 		[2]string{"doubled", "integer"}, [2]string{"parent_id", "integer"})
-	mock.ExpectQuery(`SELECT * FROM "public"."items"`).WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "doubled", "parent_id"}).
+	mock.ExpectQuery(`SELECT * FROM ONLY "public"."items"`).WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "doubled", "parent_id"}).
 		AddRow(int64(7), "it's", int64(14), nil).AddRow(int64(9007199254740993), "new", int64(0), int64(7)))
 
 	var out strings.Builder
@@ -167,13 +169,14 @@ func TestDumpSelectedTablesWritesOnlyTheEnumsTheyUse(t *testing.T) {
 	mock.ExpectQuery(proceduresSQL).WillReturnRows(names("r"))
 	mock.ExpectQuery(functionsSQL).WillReturnRows(names("r"))
 	mock.ExpectQuery(triggersSQL).WillReturnRows(sqlmock.NewRows([]string{"s", "n", "t"}))
-	mock.ExpectQuery(usedEnumsQuery).WithArgs(`["app.notes"]`).WillReturnRows(enumRows([3]string{"lookup", "Mood", `["ok"]`}))
 	mock.ExpectQuery(ddlColumnsQuery).WithArgs("app", "notes").WillReturnRows(ddlColumnRows("r", nil,
 		ddlCol{name: "mood", dataType: `lookup."Mood"`, nullable: true}))
 	mock.ExpectQuery(ownedSequencesQuery).WithArgs("app", "notes").WillReturnRows(ownedSequenceRows())
 	mock.ExpectQuery(tableConstraintsQuery).WithArgs("app", "notes").WillReturnRows(constraintRows())
 	mock.ExpectQuery(tableIndexesQuery).WithArgs("app", "notes").WillReturnRows(names("def"))
+	mock.ExpectQuery(dumpFamilyQuery).WithArgs("app", "notes").WillReturnRows(familyRows())
 	mock.ExpectQuery(dumpForeignKeysQuery).WithArgs("app", "notes").WillReturnRows(constraintRows())
+	mock.ExpectQuery(usedEnumsQuery).WithArgs(`["app.notes"]`).WillReturnRows(enumRows([3]string{"lookup", "Mood", `["ok"]`}))
 
 	var out strings.Builder
 	_, err := session.Dump(context.Background(), dbdriver.DumpRequest{
@@ -193,13 +196,14 @@ func TestDumpWholeSchemaKeepsToItsSchema(t *testing.T) {
 	mock.ExpectQuery(functionsSQL).WillReturnRows(names("r"))
 	mock.ExpectQuery(triggersSQL).WillReturnRows(sqlmock.NewRows([]string{"s", "n", "t"}))
 	mock.ExpectQuery(listTablesSQL).WillReturnRows(names("name", "app.notes", "public.items"))
-	mock.ExpectQuery(scopeEnumsQuery).WithArgs("app", `["app.notes"]`).WillReturnRows(enumRows([3]string{"app", "state", `[]`}))
 	mock.ExpectQuery(ddlColumnsQuery).WithArgs("app", "notes").WillReturnRows(ddlColumnRows("r", nil,
 		ddlCol{name: "state", dataType: "app.state", nullable: true}))
 	mock.ExpectQuery(ownedSequencesQuery).WithArgs("app", "notes").WillReturnRows(ownedSequenceRows())
 	mock.ExpectQuery(tableConstraintsQuery).WithArgs("app", "notes").WillReturnRows(constraintRows())
 	mock.ExpectQuery(tableIndexesQuery).WithArgs("app", "notes").WillReturnRows(names("def"))
+	mock.ExpectQuery(dumpFamilyQuery).WithArgs("app", "notes").WillReturnRows(familyRows())
 	mock.ExpectQuery(dumpForeignKeysQuery).WithArgs("app", "notes").WillReturnRows(constraintRows())
+	mock.ExpectQuery(scopeEnumsQuery).WithArgs("app", `["app.notes"]`).WillReturnRows(enumRows([3]string{"app", "state", `[]`}))
 
 	var out strings.Builder
 	_, err := session.Dump(context.Background(), dbdriver.DumpRequest{
@@ -235,13 +239,14 @@ func TestDumpLeavesOutIndexesAndForeignKeysWhenExcluded(t *testing.T) {
 		mock.ExpectQuery(proceduresSQL).WillReturnRows(names("r"))
 		mock.ExpectQuery(functionsSQL).WillReturnRows(names("r"))
 		mock.ExpectQuery(triggersSQL).WillReturnRows(sqlmock.NewRows([]string{"s", "n", "t"}))
-		mock.ExpectQuery(usedEnumsQuery).WithArgs(`["app.notes"]`).WillReturnRows(enumRows())
 		expectNotesDDL(mock, true)
 		if !options.Indexes {
 			expectNotesDDL(mock, false)
 		}
+		mock.ExpectQuery(dumpFamilyQuery).WithArgs("app", "notes").WillReturnRows(familyRows())
 		mock.ExpectQuery(dumpForeignKeysQuery).WithArgs("app", "notes").
 			WillReturnRows(constraintRows([2]string{"notes_item_fk", "FOREIGN KEY (item_id) REFERENCES items(id)"}))
+		mock.ExpectQuery(usedEnumsQuery).WithArgs(`["app.notes"]`).WillReturnRows(enumRows())
 		var out strings.Builder
 		_, err := session.Dump(context.Background(), dbdriver.DumpRequest{
 			Database: "shop", Tables: []string{"app.notes"}, Options: options, Header: dumpHeader(), Writer: &out,

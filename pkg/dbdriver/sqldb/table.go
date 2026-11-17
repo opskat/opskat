@@ -172,12 +172,28 @@ func (s *Session) TableRows(ctx context.Context, database, table string, query d
 		return nil, err
 	}
 	return s.query(ctx, tables.TablePageSQL(TableSelect{
-		TableRef: tables.TableRef(database, table),
+		TableRef: s.rowsRef(tables, database, table, query),
 		Where:    where,
 		OrderBy:  orderBy,
 		Offset:   page.Index * page.Size,
 		Limit:    page.Size,
 	}))
+}
+
+// OwnRowsTable 是可选的钩子：表可以有子表（分区、继承的子表）、读表默认连子表的行一起读出的方言实现它，给出只读
+// 表自己的行时 FROM 之后写的引用（PostgreSQL 的 ONLY "schema"."table"）。dbdriver.TableQuery.OwnRows 时用它；没实现的
+// 方言的表没有子表，照常读表。
+type OwnRowsTable interface {
+	OwnRowsRef(tableRef string) string
+}
+
+// rowsRef 是取行的查询里 FROM 之后写的表：query.OwnRows 且方言实现了 OwnRowsTable 时只读表自己的行。
+func (s *Session) rowsRef(tables Tables, database, table string, query dbdriver.TableQuery) string {
+	ref := tables.TableRef(database, table)
+	if own, ok := s.dialect.(OwnRowsTable); ok && query.OwnRows {
+		return own.OwnRowsRef(ref)
+	}
+	return ref
 }
 
 // StreamTableRows 用一条不分页的查询取表里的全部行，把游标交给调用方。
@@ -198,7 +214,7 @@ func (s *Session) StreamTableRows(ctx context.Context, database, table string, q
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, streamSQL(tables.TableRef(database, table), where, orderBy)) //nolint:rowserrcheck // sqlRowStream.Err reports rows.Err
+	rows, err := s.db.QueryContext(ctx, streamSQL(s.rowsRef(tables, database, table, query), where, orderBy)) //nolint:rowserrcheck // sqlRowStream.Err reports rows.Err
 	if err != nil {
 		return nil, fmt.Errorf("SQL query failed: %w", err)
 	}

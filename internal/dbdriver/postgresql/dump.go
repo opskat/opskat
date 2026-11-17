@@ -22,6 +22,9 @@ import (
 // schema 里的；选中表时是这些表的列用到的）；每张表的 INSERT 不写生成列，有 GENERATED ALWAYS 身份列的表加
 // OVERRIDING SYSTEM VALUE，列拥有的序列在全部对象之后用 setval 同步到当前值；视图、函数与过程给出 pg_depend 里
 // 的依赖（见 dependenciesQuery）；函数与过程按每个重载删除、建出；触发器的删除带上它的表。domain、复合、range 类型与扩展不写（见 spec 的 Out of scope）。
+// 分区表与继承表（建表语句见 TableDDL）：表给出它的父表（Dependencies，编排把父表写在前、删除段里先删子表）与它的
+// 下一级分区（Partitions，只转储选中的父表时随它写出）；外键只写表自己的（在父表上定义、随之建到分区上的不再写，拆
+// 父表的外键时一并拆掉）；读行只读每张表自己的（编排给出 TableQuery.OwnRows，见 OwnRowsRef）。
 var (
 	_ sqldb.DumpFileWriter   = dialect{}
 	_ sqldb.DumpObjectWriter = dialect{}
@@ -53,10 +56,21 @@ const scopeEnumsQuery = enumTypesSelect + "n.nspname NOT IN " + systemSchemas + 
 // usedEnumsQuery 读 $1 这些表的列用到的枚举类型。
 const usedEnumsQuery = enumTypesSelect + enumUsedByTables + "$1" + enumUsedByTablesEnd + " ORDER BY n.nspname, t.typname"
 
-// dumpForeignKeysQuery 读表上的外键：名字与 pg_get_constraintdef 的原文。
+// dumpForeignKeysQuery 读表自己的外键：名字与 pg_get_constraintdef 的原文。在分区表上定义的外键在每个分区上、引用分区表
+// 的外键对每个被引用的分区各有一份由数据库建出的（conislocal 为假），随原来那个外键建出、拆掉，不写。
 const dumpForeignKeysQuery = "SELECT con.conname, pg_get_constraintdef(con.oid) FROM pg_constraint con " +
 	"JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace " +
-	"WHERE con.contype = 'f' AND n.nspname = $1 AND c.relname = $2 ORDER BY con.conname"
+	"WHERE con.contype = 'f' AND con.conislocal AND n.nspname = $1 AND c.relname = $2 ORDER BY con.conname"
+
+// dumpFamilyQuery 读表在 pg_inherits 里的父表（"parent"：分区所属的分区表、继承的子表的父表）与分区（"partition"：
+// 它的下一级分区，不含继承的子表），名字的形式同 ListTables。
+const dumpFamilyQuery = "SELECT 'parent', pn.nspname || '.' || p.relname FROM pg_inherits h " +
+	"JOIN pg_class p ON p.oid = h.inhparent JOIN pg_namespace pn ON pn.oid = p.relnamespace " +
+	"WHERE h.inhrelid = format('%I.%I', $1::text, $2::text)::regclass " +
+	"UNION ALL SELECT 'partition', cn.nspname || '.' || ch.relname FROM pg_inherits h " +
+	"JOIN pg_class ch ON ch.oid = h.inhrelid JOIN pg_namespace cn ON cn.oid = ch.relnamespace " +
+	"WHERE h.inhparent = format('%I.%I', $1::text, $2::text)::regclass " +
+	"AND COALESCE(to_jsonb(ch) ->> 'relispartition', 'false')::boolean ORDER BY 1, 2"
 
 // dumpColumnsQuery 读 INSERT 写入的列（去掉生成列），以及它是不是 GENERATED ALWAYS 身份列。attgenerated（12 起）
 // 与 attidentity（10 起）经 to_jsonb 取，没有这一列的版本取到 NULL。
@@ -226,8 +240,8 @@ func (dialect) DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.D
 // routineKeywords 是删除函数与过程的关键字。
 var routineKeywords = map[string]string{dbdriver.ObjectFunction: "FUNCTION", dbdriver.ObjectProcedure: "PROCEDURE"}
 
-// dumpTable 补上表的外键（全部数据之后加上、删除段里先拆掉），不包含索引时换成不含索引的建表语句；有数据时
-// 还有 INSERT 的列、身份列的写法与序列的同步。
+// dumpTable 补上表的父表与分区、外键（全部数据之后加上、删除段里先拆掉），不包含索引时换成不含索引的建表语句；
+// 有数据时还有 INSERT 的列、身份列的写法与序列的同步。
 func dumpTable(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, schema, name string, script *dbdriver.DumpObjectScript) error {
 	tableRef := quoteIdent(schema) + "." + quoteIdent(name)
 	if !object.Options.Indexes {
@@ -236,6 +250,9 @@ func dumpTable(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, 
 			return sqldb.Wrap("table definition", err)
 		}
 		script.Definition = []string{sqldb.TerminateStatement(definition)}
+	}
+	if err := family(ctx, conn, schema, name, script); err != nil {
+		return sqldb.Wrap("parent tables and partitions", err)
 	}
 	if err := foreignKeys(ctx, conn, schema, name, tableRef, script); err != nil {
 		return sqldb.Wrap("foreign keys", err)
@@ -252,6 +269,27 @@ func dumpTable(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, 
 	}
 	script.PostData = postData
 	return nil
+}
+
+// family 给出表的父表（Dependencies）与下一级分区（Partitions）。
+func family(ctx context.Context, conn *sql.Conn, schema, name string, script *dbdriver.DumpObjectScript) error {
+	rows, err := conn.QueryContext(ctx, dumpFamilyQuery, schema, name)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var relation, table string
+		if err := rows.Scan(&relation, &table); err != nil {
+			return err
+		}
+		if relation == "partition" {
+			script.Partitions = append(script.Partitions, table)
+		} else {
+			script.Dependencies = append(script.Dependencies, dbdriver.DumpDependency{Kind: dbdriver.DumpTable, Name: table})
+		}
+	}
+	return rows.Err()
 }
 
 // foreignKeys 给出表上的外键：加上它们的语句（pg_get_constraintdef 的原文）与存在则拆掉它们的语句。

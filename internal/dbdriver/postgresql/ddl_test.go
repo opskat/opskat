@@ -25,18 +25,42 @@ type ddlCol struct {
 	generated       any // 生成表达式
 	generatedKind   any // "s" / "v"
 	comment         any
+	// inherited 表示列继承自父表（attislocal 为假）。
+	inherited bool
+}
+
+// ddlRel 是列查询每一行里关于表本身的部分；零值是一张普通的表。
+type ddlRel struct {
+	kind    string
+	comment any
+	// partition 表示它是一个分区；parents 是父表（schema 与名字，按继承的次序）的 JSON。
+	partition bool
+	parents   string
 }
 
 func ddlColumnRows(relkind string, tableComment any, columns ...ddlCol) *sqlmock.Rows {
+	return ddlRelationRows(ddlRel{kind: relkind, comment: tableComment}, columns...)
+}
+
+func ddlRelationRows(rel ddlRel, columns ...ddlCol) *sqlmock.Rows {
 	rows := sqlmock.NewRows([]string{"attname", "format_type", "nullable", "default", "relkind",
 		"identity", "start", "increment", "min", "max", "cycle", "generated", "generated_kind",
-		"column_comment", "table_comment"})
+		"column_comment", "table_comment", "attislocal", "relispartition", "parents"})
+	parents := rel.parents
+	if parents == "" {
+		parents = "[]"
+	}
 	for _, c := range columns {
 		o := c.identityOptions
-		rows.AddRow(c.name, c.dataType, c.nullable, c.def, relkind, c.identity, o[0], o[1], o[2], o[3],
-			c.identityCycle, c.generated, c.generatedKind, c.comment, tableComment)
+		rows.AddRow(c.name, c.dataType, c.nullable, c.def, rel.kind, c.identity, o[0], o[1], o[2], o[3],
+			c.identityCycle, c.generated, c.generatedKind, c.comment, rel.comment, !c.inherited, rel.partition, parents)
 	}
 	return rows
+}
+
+// partitionRows 是分区表的分区键（pg_get_partkeydef）与分区的分区范围（pg_get_expr(relpartbound)）；nil 是没有。
+func partitionRows(key, bound any) *sqlmock.Rows {
+	return sqlmock.NewRows([]string{"partkey", "bound"}).AddRow(key, bound)
 }
 
 func ownedSequenceRows() *sqlmock.Rows {
@@ -178,4 +202,96 @@ func TestStarterQuery(t *testing.T) {
 	got, err := session.StarterQuery(context.Background(), "appdb", "reporting.events", 100)
 	require.NoError(t, err)
 	assert.Equal(t, `SELECT * FROM "reporting"."events" LIMIT 100`, got)
+}
+
+// 分区表：父表写成带分区键的 CREATE TABLE ... PARTITION BY，列与约束在父表上；分区写成 PARTITION OF 父表 FOR VALUES
+// （默认分区是 DEFAULT），不写继承来的列与约束，只写它自己的约束与只建在它上面的索引；再分区的分区接着写它自己的
+// 分区键。
+func TestTableDDLOfAPartitionedTableAndItsPartitions(t *testing.T) {
+	inherited := func(name, dataType string) ddlCol { return ddlCol{name: name, dataType: dataType, inherited: true} }
+	for _, tc := range []struct {
+		name  string
+		rel   ddlRel
+		cols  []ddlCol
+		key   any
+		bound any
+		cons  [][2]string
+		index []string
+		want  string
+	}{
+		{
+			name: "readings", rel: ddlRel{kind: "p"}, key: "RANGE (created)",
+			cols: []ddlCol{{name: "id", dataType: "integer"}, {name: "created", dataType: "date"}, {name: "region", dataType: "text"}},
+			cons: [][2]string{{"readings_pkey", "PRIMARY KEY (id, created, region)"}},
+			// 父表上的索引：查询已经去掉 pg_get_indexdef 的 ON ONLY，建出时随之建到每个分区上。
+			index: []string{"CREATE INDEX readings_region ON public.readings USING btree (region)"},
+			want: "CREATE TABLE \"public\".\"readings\" (\n  \"id\" integer NOT NULL,\n  \"created\" date NOT NULL,\n  \"region\" text NOT NULL,\n" +
+				"  CONSTRAINT \"readings_pkey\" PRIMARY KEY (id, created, region)\n) PARTITION BY RANGE (created);\n\n" +
+				"CREATE INDEX readings_region ON public.readings USING btree (region);",
+		},
+		{
+			name: "r_2026", rel: ddlRel{kind: "p", partition: true, parents: `[["public", "readings"]]`},
+			cols: []ddlCol{inherited("id", "integer"), inherited("created", "date"), inherited("region", "text")},
+			key:  "LIST (region)", bound: "FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')",
+			index: []string{"CREATE INDEX r_2026_only ON public.r_2026 USING btree (id)"},
+			want: "CREATE TABLE \"public\".\"r_2026\" PARTITION OF \"public\".\"readings\" FOR VALUES FROM ('2026-01-01') TO ('2027-01-01') " +
+				"PARTITION BY LIST (region);\n\nCREATE INDEX r_2026_only ON public.r_2026 USING btree (id);",
+		},
+		{
+			name: "r_default", rel: ddlRel{kind: "r", partition: true, parents: `[["public", "readings"]]`},
+			cols:  []ddlCol{inherited("id", "integer"), inherited("created", "date"), inherited("region", "text")},
+			bound: "DEFAULT", cons: [][2]string{{"r_default_id_check", "CHECK ((id > 0))"}},
+			want: "CREATE TABLE \"public\".\"r_default\" PARTITION OF \"public\".\"readings\" (\n" +
+				"  CONSTRAINT \"r_default_id_check\" CHECK ((id > 0))\n) DEFAULT;",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session, mock := newMock(t)
+			mock.ExpectQuery(ddlColumnsQuery).WithArgs("public", tc.name).WillReturnRows(ddlRelationRows(tc.rel, tc.cols...))
+			mock.ExpectQuery(partitionQuery).WithArgs("public", tc.name).WillReturnRows(partitionRows(tc.key, tc.bound))
+			mock.ExpectQuery(ownedSequencesQuery).WithArgs("public", tc.name).WillReturnRows(ownedSequenceRows())
+			mock.ExpectQuery(tableConstraintsQuery).WithArgs("public", tc.name).WillReturnRows(constraintRows(tc.cons...))
+			mock.ExpectQuery(tableIndexesQuery).WithArgs("public", tc.name).WillReturnRows(names("def", tc.index...))
+
+			ddl, err := session.TableDDL(context.Background(), "appdb", "public."+tc.name)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, ddl)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+// 继承的子表写成 CREATE TABLE ... (...) INHERITS (父表, ...)：只列它自己的列（继承来的列与约束由父表带来），没有自己的
+// 列时是空的括号；父表按继承的次序、带它们的 schema。
+func TestTableDDLOfAnInheritedTableListsOnlyItsOwnColumns(t *testing.T) {
+	for _, tc := range []struct {
+		name, parents string
+		cols          []ddlCol
+		want          string
+	}{
+		{
+			name: "kid", parents: `[["public", "base"]]`,
+			cols: []ddlCol{{name: "id", dataType: "integer", inherited: true}, {name: "extra", dataType: "integer", nullable: true}},
+			want: "CREATE TABLE \"public\".\"kid\" (\n  \"extra\" integer\n) INHERITS (\"public\".\"base\");",
+		},
+		{
+			name: "both", parents: `[["public", "base"], ["app", "Other"]]`,
+			cols: []ddlCol{{name: "id", dataType: "integer", inherited: true}},
+			want: "CREATE TABLE \"public\".\"both\" () INHERITS (\"public\".\"base\", \"app\".\"Other\");",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session, mock := newMock(t)
+			mock.ExpectQuery(ddlColumnsQuery).WithArgs("public", tc.name).
+				WillReturnRows(ddlRelationRows(ddlRel{kind: "r", parents: tc.parents}, tc.cols...))
+			mock.ExpectQuery(ownedSequencesQuery).WithArgs("public", tc.name).WillReturnRows(ownedSequenceRows())
+			mock.ExpectQuery(tableConstraintsQuery).WithArgs("public", tc.name).WillReturnRows(constraintRows())
+			mock.ExpectQuery(tableIndexesQuery).WithArgs("public", tc.name).WillReturnRows(names("def"))
+
+			ddl, err := session.TableDDL(context.Background(), "appdb", "public."+tc.name)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, ddl)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }

@@ -132,6 +132,11 @@ func (d dialect) TableRef(database, table string) string {
 	return d.QuoteIdent(database) + "." + d.QuoteIdent(table)
 }
 
+// OwnRowsRef reads a table's own rows as SELECT * FROM ONLY <table>
+// (sqldb.OwnRowsTable): memdb's tables have no child tables, but the far end
+// sees the ONLY and so whether dbdriver.TableQuery.OwnRows reached the guest.
+func (dialect) OwnRowsRef(tableRef string) string { return "ONLY " + tableRef }
+
 func (dialect) Descriptor() dbdriver.Descriptor { return descriptor }
 
 func (dialect) ListDatabases(ctx context.Context, conn *sql.Conn) ([]string, error) {

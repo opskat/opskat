@@ -277,8 +277,8 @@ func TestExtensionDriverDumps(t *testing.T) {
 			Header: dbdriver.DumpHeader{Version: "test", Asset: "fixture", Time: time.Unix(0, 0).UTC()},
 		}, path)
 		require.NoError(t, err)
-		assert.Equal(t, 3, dumped.Objects)
-		assert.EqualValues(t, 3+1000+1, dumped.Rows)
+		assert.Equal(t, 5, dumped.Objects)
+		assert.EqualValues(t, 3+1000+1+2, dumped.Rows)
 		file, err := os.ReadFile(path) //nolint:gosec // the test's own temp file
 		require.NoError(t, err)
 		assert.Contains(t, string(file), "\nSET FIXTURE_CHECKS = 0;\n", "the dialect's opening is written")
@@ -304,7 +304,7 @@ func TestExtensionDriverDumps(t *testing.T) {
 				inserted[table]++
 			}
 		}
-		for table, rows := range map[string]int{"users": 3, "series": 1000, "blobs": 1} {
+		for table, rows := range map[string]int{"users": 3, "series": 1000, "blobs": 1, "events": 0, "events_2026": 2} {
 			ddl, err := s.TableDDL(ctx, "app", table)
 			require.NoError(t, err)
 			assert.Contains(t, ran, "EXEC DROP TABLE IF EXISTS ["+table+"]")
@@ -355,6 +355,27 @@ func TestExtensionDriverDumps(t *testing.T) {
 		assert.Less(t, dropFunction, dropView, "the function is dropped before the view it reads")
 	})
 
+	t.Run("a partitioned table brings its partitions and each table reads only its own rows", func(t *testing.T) {
+		d := newDriver()
+		s := d.open(t)
+		defer func() { _ = s.Close() }()
+		before := len(d.server.SeenOn())
+		var out strings.Builder
+		dumped, err := s.Dump(ctx, dbdriver.DumpRequest{Database: "app", Tables: []string{"events"}, WithData: true, Writer: &out})
+		require.NoError(t, err)
+		file := out.String()
+
+		assert.Equal(t, 2, dumped.Objects, "the partition the guest named comes along")
+		assert.EqualValues(t, 2, dumped.Rows)
+		createParent, createPartition := strings.Index(file, "\nCREATE TABLE [app].[events] "), strings.Index(file, "\nCREATE TABLE [app].[events_2026] ")
+		require.Positive(t, createParent)
+		assert.Greater(t, createPartition, createParent, "the partition is written after the table it belongs to")
+		assert.NotContains(t, file, "-- Records of events\n", "a partitioned table has no rows of its own")
+		assert.Contains(t, file, "\nINSERT INTO [events_2026] ([id]) VALUES ('2');\n")
+		assert.Contains(t, lines(d.server.SeenOn()[before:]), "QUERY SELECT * FROM ONLY [app].[events_2026]",
+			"the dump asks the guest for the table's own rows")
+	})
+
 	t.Run("turning foreign key checks off fails when the guest gives no statements for it", func(t *testing.T) {
 		d := newDriver()
 		s := d.open(t)
@@ -371,7 +392,7 @@ func TestExtensionDriverDumps(t *testing.T) {
 
 	t.Run("a canceled dump leaves the target as it was", func(t *testing.T) {
 		d := newDriver()
-		d.server.Hold = "QUERY SELECT * FROM [app].[series]"
+		d.server.Hold = "QUERY SELECT * FROM ONLY [app].[series]"
 		s := d.open(t)
 		defer func() { _ = s.Close() }()
 		dir := t.TempDir()
