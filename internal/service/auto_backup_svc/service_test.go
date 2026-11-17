@@ -51,6 +51,7 @@ type fixture struct {
 	settings  Settings
 	data      *backup_svc.BackupData
 	exportErr error
+	onExport  func() // 在生成备份数据时调用，用来观察 / 操作进行中的一轮
 	a, b      *fakeTarget
 	statePath string
 }
@@ -74,6 +75,9 @@ func newFixture(t *testing.T) *fixture {
 		Now:          func() time.Time { return f.now },
 		LoadSettings: func() (Settings, error) { return f.settings, nil },
 		Export: func(context.Context, ClientSnapshot) (*backup_svc.BackupData, error) {
+			if f.onExport != nil {
+				f.onExport()
+			}
 			if f.exportErr != nil {
 				return nil, f.exportErr
 			}
@@ -196,6 +200,38 @@ func TestRunCheck(t *testing.T) {
 			So(f.a.count(), ShouldEqual, 0)
 		})
 
+		Convey("一轮进行中（含生成备份数据阶段）状态为检查中，结束后恢复", func() {
+			var during bool
+			f.onExport = func() { during = f.svc.Status().Running }
+			f.check()
+			So(during, ShouldBeTrue)
+			So(f.svc.Status().Running, ShouldBeFalse)
+
+			Convey("数据无变化的一轮同样显示检查中", func() {
+				during = false
+				f.check()
+				So(f.svc.Status().LastCheckResult, ShouldEqual, CheckUnchanged)
+				So(during, ShouldBeTrue)
+				So(f.svc.Status().Running, ShouldBeFalse)
+			})
+		})
+
+		Convey("一轮进行中收到的多次检查请求合并为本轮结束后的一轮", func() {
+			f.onExport = func() {
+				f.svc.Nudge()
+				f.svc.Nudge()
+			}
+			f.check()
+			f.onExport = nil
+			at, ok := f.svc.nextWake()
+			So(ok, ShouldBeTrue)
+			So(at, ShouldEqual, f.now.Add(2*time.Second))
+			f.now = at
+			f.check()
+			at, _ = f.svc.nextWake()
+			So(at, ShouldEqual, f.now.Add(30*time.Minute))
+		})
+
 		Convey("生成备份数据失败时所有位置都不写并记录原因", func() {
 			f.exportErr = errors.New("decrypt credential failed")
 			f.check()
@@ -267,6 +303,17 @@ func TestNextWake(t *testing.T) {
 			f.check()
 			at, _ := f.svc.nextWake()
 			So(at, ShouldEqual, f.now.Add(time.Minute))
+		})
+
+		Convey("失败后变为不可用的位置不再安排重试", func() {
+			f.a.setErr(errors.New("boom"))
+			f.check()
+			f.a.available = false
+			f.now = f.now.Add(2 * time.Minute)
+			f.check()
+			at, ok := f.svc.nextWake()
+			So(ok, ShouldBeTrue)
+			So(at, ShouldEqual, f.now.Add(30*time.Minute))
 		})
 
 		Convey("请求检查在 2 秒防抖后唤醒", func() {

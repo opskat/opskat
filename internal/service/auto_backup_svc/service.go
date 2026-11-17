@@ -51,7 +51,7 @@ type TargetStatus struct {
 
 // Status 是给界面的整体状态。
 type Status struct {
-	Running         bool                     `json:"running"`
+	Running         bool                     `json:"running"` // 一轮检查进行中（含生成备份数据）
 	Targets         map[string]*TargetStatus `json:"targets"`
 	LastCheckAt     int64                    `json:"lastCheckAt"`
 	LastCheckResult string                   `json:"lastCheckResult"`
@@ -272,8 +272,12 @@ func (s *Service) nextWakeLocked() (time.Time, bool) {
 		}
 	}
 	consider(s.state.CheckRetryAt)
-	for _, id := range settings.Targets {
-		if ts, ok := s.state.Targets[id]; ok {
+	// 只为勾选且可用的位置安排重试：不可用的位置检查时会跳过，留下的旧重试时间不能再触发检查。
+	for _, t := range s.opts.Targets {
+		if !settings.Selected(t.ID()) || !t.Available(settings) {
+			continue
+		}
+		if ts, ok := s.state.Targets[t.ID()]; ok {
 			consider(ts.RetryAt)
 		}
 	}
@@ -321,8 +325,10 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 	s.mu.Lock()
 	s.firstPending = false
 	s.nudgeAt = time.Time{}
+	s.running = true
 	snap := s.snapshot
 	s.mu.Unlock()
+	s.emit()
 
 	var due []Target
 	for _, t := range s.opts.Targets {
@@ -342,30 +348,31 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 		return
 	}
 
-	// 选出本轮要写的位置。
+	// 选出本轮要写的位置；changed 表示数据与至少一个位置上次成功写入的内容不同。
 	s.mu.Lock()
 	var toWrite []Target
+	var skipped []string
+	changed := false
 	for _, t := range due {
 		ts := s.state.target(t.ID())
+		if ts.Fingerprint != fp {
+			changed = true
+		}
 		if !force {
-			if ts.RetryAt > 0 && started.Unix() < ts.RetryAt {
-				continue
-			}
-			if ts.Fingerprint == fp && ts.LastError == "" {
+			if (ts.RetryAt > 0 && started.Unix() < ts.RetryAt) || (ts.Fingerprint == fp && ts.LastError == "") {
+				skipped = append(skipped, t.ID())
 				continue
 			}
 		}
 		toWrite = append(toWrite, t)
 		s.phases[t.ID()] = PhaseQueued
 	}
-	if len(toWrite) > 0 {
-		s.running = true
-	}
 	s.mu.Unlock()
 
 	if len(toWrite) == 0 {
 		s.finishCheck(started, settings, CheckUnchanged, "", false)
-		logger.Default().Info("auto backup: unchanged, skipped", zap.Int("targets", len(due)))
+		logger.Default().Info("auto backup: check finished", zap.Bool("changed", changed),
+			zap.Strings("skipped", skipped), zap.Duration("took", s.opts.Now().Sub(started)))
 		return
 	}
 	s.emit()
@@ -383,7 +390,7 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 		return
 	}
 
-	failed := false
+	var written, failedIDs []string
 	for _, t := range toWrite {
 		id := t.ID()
 		s.mu.Lock()
@@ -400,12 +407,13 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 		ts := s.state.target(id)
 		ts.Ref = newRef
 		if werr != nil {
-			failed = true
+			failedIDs = append(failedIDs, id)
 			ts.Failures++
 			ts.LastError = werr.Error()
 			ts.LastErrorAt = now.Unix()
 			ts.RetryAt = now.Add(backoff(ts.Failures, settings.Interval)).Unix()
 		} else {
+			written = append(written, id)
 			ts.Fingerprint = fp
 			ts.LastSuccessAt = now.Unix()
 			ts.LastError, ts.LastErrorAt, ts.Failures, ts.RetryAt = "", 0, 0, 0
@@ -421,10 +429,13 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 	}
 
 	result := CheckWritten
-	if failed {
+	if len(failedIDs) > 0 {
 		result = CheckFailed
 	}
 	s.finishCheck(started, settings, result, "", false)
+	logger.Default().Info("auto backup: check finished", zap.Bool("changed", changed), zap.Bool("force", force),
+		zap.Strings("written", written), zap.Strings("failed", failedIDs), zap.Strings("skipped", skipped),
+		zap.Duration("took", s.opts.Now().Sub(started)))
 }
 
 func (s *Service) clearPhases() {

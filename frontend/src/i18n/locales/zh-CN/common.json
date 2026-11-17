@@ -1343,7 +1343,7 @@
       "failedRetry": "失败 · {{time}}重试"
     },
     "summary": {
-      "running": "正在备份…",
+      "running": "正在检查数据变化…",
       "saved": "设置已保存 · 下次检查{{next}}",
       "never": "尚未检查",
       "unchanged": "上次检查{{time}} · 数据无变化，已跳过",

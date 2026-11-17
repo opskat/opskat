@@ -70,20 +70,9 @@ import { notifyCopied, notifySuccess } from "@/lib/notify";
 import { BrowserOpenURL } from "../../../wailsjs/runtime/runtime";
 import { SecretInput } from "@/components/SecretInput";
 import { errorMessage } from "@/lib/errorMessage";
+import { formatLocalDateTime } from "@/lib/formatDateTime";
 
 const githubTokenInvalidMarker = "[GITHUB_TOKEN_INVALID]";
-
-/** 自动备份时间（RFC3339 UTC）按本地时区显示为 YYYY-MM-DD HH:mm。 */
-function formatBackupTime(iso: string, locale: string): string {
-  return new Intl.DateTimeFormat(locale, {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(iso));
-}
 
 const emptyWebDAVExportDefaults: WebDAVExportDefaults = {
   configured: false,
@@ -135,7 +124,7 @@ function PasswordInput({
 }
 
 export function BackupSection() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
 
   // File backup
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
@@ -706,7 +695,7 @@ export function BackupSection() {
                               <SelectItem key={backup.name} value={backup.name}>
                                 {backup.auto && backup.createdAt
                                   ? t("backup.webdavAutoBackupItem", {
-                                      time: formatBackupTime(backup.createdAt, i18n.language),
+                                      time: formatLocalDateTime(backup.createdAt),
                                       size: backup.size,
                                     })
                                   : t("backup.webdavBackupItem", { name: backup.name, size: backup.size })}

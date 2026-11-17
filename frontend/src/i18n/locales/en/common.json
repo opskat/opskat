@@ -1343,7 +1343,7 @@
       "failedRetry": "Failed · retrying {{time}}"
     },
     "summary": {
-      "running": "Backing up…",
+      "running": "Checking for changes…",
       "saved": "Settings saved · next check {{next}}",
       "never": "Not checked yet",
       "unchanged": "Checked {{time}} · nothing changed, skipped",
