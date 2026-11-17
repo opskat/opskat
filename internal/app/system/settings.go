@@ -45,7 +45,11 @@ func (s *System) SaveGitHubToken(token, user string) error {
 		cfg.GitHubToken = encrypted
 		cfg.GitHubUser = user
 	}
-	return bootstrap.SaveConfig(cfg)
+	if err := bootstrap.SaveConfig(cfg); err != nil {
+		return err
+	}
+	s.notifyAutoBackupAvailability()
+	return nil
 }
 
 // GetGitHubToken 获取解密后的 GitHub token
@@ -803,7 +807,11 @@ func (s *System) SaveWebDAVConfig(in WebDAVSaveInput) error {
 		}
 		cfg.WebDAVToken = encrypted
 	}
-	return bootstrap.SaveConfig(cfg)
+	if err := bootstrap.SaveConfig(cfg); err != nil {
+		return err
+	}
+	s.notifyAutoBackupAvailability()
+	return nil
 }
 
 // GetWebDAVConfig 读取已保存的 WebDAV 配置，password / token 解密后明文回填。
@@ -866,7 +874,11 @@ func (s *System) ClearWebDAVConfig() error {
 	cfg.WebDAVPassword = ""
 	cfg.WebDAVToken = ""
 	clearWebDAVExportDefaults(cfg)
-	return bootstrap.SaveConfig(cfg)
+	if err := bootstrap.SaveConfig(cfg); err != nil {
+		return err
+	}
+	s.notifyAutoBackupAvailability()
+	return nil
 }
 
 // TestWebDAVConfig 用入参里的字段测试 WebDAV 目录连通性与写权限。

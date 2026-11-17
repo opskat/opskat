@@ -18,6 +18,8 @@ func init() { RegisterTarget(webdavTarget{}) }
 
 func (webdavTarget) ID() string { return "webdav" }
 
+func (webdavTarget) Validate(Settings) error { return nil }
+
 func (webdavTarget) Available(Settings) bool {
 	cfg := bootstrap.GetConfig()
 	return cfg != nil && cfg.WebDAVURL != ""

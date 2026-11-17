@@ -24,6 +24,7 @@ type fakeTarget struct {
 
 func (f *fakeTarget) ID() string              { return f.id }
 func (f *fakeTarget) Available(Settings) bool { return f.available }
+func (f *fakeTarget) Validate(Settings) error { return nil }
 func (f *fakeTarget) count() int              { f.mu.Lock(); defer f.mu.Unlock(); return len(f.writes) }
 func (f *fakeTarget) last() WriteRequest {
 	f.mu.Lock()

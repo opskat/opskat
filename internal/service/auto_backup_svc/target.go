@@ -12,6 +12,8 @@ type Target interface {
 	// Available 报告位置当前是否已配置好（WebDAV 已配置、GitHub 已登录、已选文件夹）；
 	// 不可用的位置在检查时跳过，不记为错误。
 	Available(s Settings) bool
+	// Validate 检查勾选这个位置时它需要的设置项（如本地文件夹路径）。
+	Validate(s Settings) error
 	// Write 写入一份加密备份；返回位置需要跨次记住的引用（如自动备份 Gist 的 ID）。
 	Write(ctx context.Context, req WriteRequest) (ref string, err error)
 }

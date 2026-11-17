@@ -22,6 +22,13 @@ func (localTarget) ID() string { return "local" }
 
 func (localTarget) Available(s Settings) bool { return s.LocalDir != "" }
 
+func (localTarget) Validate(s Settings) error {
+	if s.LocalDir == "" {
+		return fmt.Errorf("请选择备份文件夹")
+	}
+	return nil
+}
+
 func (localTarget) Write(_ context.Context, req WriteRequest) (string, error) {
 	dir := req.Settings.LocalDir
 	// 文件夹不存在时不创建：可能是未挂载的外接盘或同步目录。

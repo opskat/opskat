@@ -28,6 +28,8 @@ func init() {
 
 func (gistTarget) ID() string { return "gist" }
 
+func (gistTarget) Validate(Settings) error { return nil }
+
 func (gistTarget) Available(Settings) bool {
 	cfg := bootstrap.GetConfig()
 	return cfg != nil && cfg.GitHubToken != ""
