@@ -20,12 +20,16 @@ type fakeTarget struct {
 	err       error
 	writes    []WriteRequest
 	ref       string
+	dest      string
+	onWrite   func() // 在写入时调用，用来模拟写入进行中发生的操作
 }
 
-func (f *fakeTarget) ID() string              { return f.id }
-func (f *fakeTarget) Available(Settings) bool { return f.available }
-func (f *fakeTarget) Validate(Settings) error { return nil }
-func (f *fakeTarget) count() int              { f.mu.Lock(); defer f.mu.Unlock(); return len(f.writes) }
+func (f *fakeTarget) ID() string                  { return f.id }
+func (f *fakeTarget) Available(Settings) bool     { return f.available }
+func (f *fakeTarget) Validate(Settings) error     { return nil }
+func (f *fakeTarget) Destination(Settings) string { f.mu.Lock(); defer f.mu.Unlock(); return f.dest }
+func (f *fakeTarget) setDest(d string)            { f.mu.Lock(); defer f.mu.Unlock(); f.dest = d }
+func (f *fakeTarget) count() int                  { f.mu.Lock(); defer f.mu.Unlock(); return len(f.writes) }
 func (f *fakeTarget) last() WriteRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -33,6 +37,9 @@ func (f *fakeTarget) last() WriteRequest {
 }
 func (f *fakeTarget) setErr(err error) { f.mu.Lock(); defer f.mu.Unlock(); f.err = err }
 func (f *fakeTarget) Write(_ context.Context, req WriteRequest) (string, error) {
+	if f.onWrite != nil {
+		f.onWrite()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.writes = append(f.writes, req)
@@ -51,6 +58,7 @@ type fixture struct {
 	settings  Settings
 	data      *backup_svc.BackupData
 	exportErr error
+	exports   int
 	onExport  func() // 在生成备份数据时调用，用来观察 / 操作进行中的一轮
 	a, b      *fakeTarget
 	statePath string
@@ -75,6 +83,7 @@ func newFixture(t *testing.T) *fixture {
 		Now:          func() time.Time { return f.now },
 		LoadSettings: func() (Settings, error) { return f.settings, nil },
 		Export: func(context.Context, ClientSnapshot) (*backup_svc.BackupData, error) {
+			f.exports++
 			if f.onExport != nil {
 				f.onExport()
 			}
@@ -186,6 +195,55 @@ func TestRunCheck(t *testing.T) {
 			So(f.a.count(), ShouldEqual, 2)
 			_, err := backup_svc.DecryptBackup(f.a.last().Content, "new-pw")
 			So(err, ShouldBeNil)
+		})
+
+		Convey("写入进行中修改了密码：这一轮的旧密码内容不算数，下一轮用新密码重写", func() {
+			f.a.onWrite = func() {
+				f.a.onWrite = nil
+				f.settings.Password = "new-pw"
+				f.svc.ResetFingerprints()
+			}
+			f.check()
+			f.check()
+			So(f.a.count(), ShouldEqual, 2)
+			_, err := backup_svc.DecryptBackup(f.a.last().Content, "new-pw")
+			So(err, ShouldBeNil)
+		})
+
+		Convey("位置的写入目标变了（换文件夹 / WebDAV 地址 / GitHub 账号）视为新位置：数据未变也写，不沿用旧引用", func() {
+			f.a.dest = "/old"
+			f.a.ref = "gist-1"
+			f.check()
+			f.a.ref = ""
+			f.a.setDest("/new")
+			f.check()
+			So(f.a.count(), ShouldEqual, 2)
+			So(f.a.last().Ref, ShouldBeEmpty)
+			So(f.b.count(), ShouldEqual, 1)
+
+			Convey("新目标写入后同样按数据去重", func() {
+				f.check()
+				So(f.a.count(), ShouldEqual, 2)
+			})
+		})
+
+		Convey("旧目标还在退避中时换了目标，新目标立即写", func() {
+			f.a.dest = "/old"
+			f.a.setErr(errors.New("boom"))
+			f.check()
+			f.a.setErr(nil)
+			f.a.setDest("/new")
+			f.check()
+			So(f.a.count(), ShouldEqual, 2)
+			So(f.svc.Status().Targets["a"].LastError, ShouldBeEmpty)
+		})
+
+		Convey("没有可写的位置时不生成备份数据", func() {
+			f.a.available = false
+			f.b.available = false
+			f.check()
+			So(f.exports, ShouldEqual, 0)
+			So(f.svc.Status().LastCheckResult, ShouldEqual, CheckUnchanged)
 		})
 
 		Convey("立即备份忽略「无变化」", func() {

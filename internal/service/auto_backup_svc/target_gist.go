@@ -35,6 +35,9 @@ func (gistTarget) Available(Settings) bool {
 	return cfg != nil && cfg.GitHubToken != ""
 }
 
+// Destination 是登录的 GitHub 账号：换了账号，上一个账号的 Gist 不再沿用。
+func (gistTarget) Destination(Settings) string { return bootstrap.GetConfig().GitHubUser }
+
 func (g gistTarget) Write(_ context.Context, req WriteRequest) (string, error) {
 	token, err := g.token()
 	if err != nil {

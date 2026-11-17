@@ -25,6 +25,8 @@ func (webdavTarget) Available(Settings) bool {
 	return cfg != nil && cfg.WebDAVURL != ""
 }
 
+func (webdavTarget) Destination(Settings) string { return bootstrap.GetConfig().WebDAVURL }
+
 func (webdavTarget) Write(_ context.Context, req WriteRequest) (string, error) {
 	cfg, err := backup_svc.StoredWebDAVConfig(credential_svc.Default())
 	if err != nil {

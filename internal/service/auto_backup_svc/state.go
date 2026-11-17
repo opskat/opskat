@@ -21,9 +21,10 @@ type TargetState struct {
 	LastSuccessAt int64  `json:"lastSuccessAt,omitempty"`
 	LastError     string `json:"lastError,omitempty"`
 	LastErrorAt   int64  `json:"lastErrorAt,omitempty"`
-	Failures      int    `json:"failures,omitempty"` // 连续失败次数，决定退避
-	RetryAt       int64  `json:"retryAt,omitempty"`  // 失败后的下一次重试时间
-	Ref           string `json:"ref,omitempty"`      // 位置自己的引用（如自动备份 Gist 的 ID）
+	Failures      int    `json:"failures,omitempty"`    // 连续失败次数，决定退避
+	RetryAt       int64  `json:"retryAt,omitempty"`     // 失败后的下一次重试时间
+	Ref           string `json:"ref,omitempty"`         // 位置自己的引用（如自动备份 Gist 的 ID）
+	Destination   string `json:"destination,omitempty"` // 以上状态所属的写入目标（Target.Destination）
 }
 
 // State 是自动备份的运行状态（不是设置）。

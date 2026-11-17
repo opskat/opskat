@@ -22,11 +22,13 @@ func TestUpdateConfigConcurrentNoLostUpdates(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			_ = UpdateConfig(func(c *AppConfig) {
+			if err := UpdateConfig(func(c *AppConfig) {
 				v := c.WindowWidth
 				runtime.Gosched()
 				c.WindowWidth = v + 1
-			})
+			}); err != nil {
+				t.Error(err)
+			}
 			_ = GetConfig() // exercise reads concurrent with writes
 		}()
 	}

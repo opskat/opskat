@@ -14,6 +14,9 @@ type Target interface {
 	Available(s Settings) bool
 	// Validate 检查勾选这个位置时它需要的设置项（如本地文件夹路径）。
 	Validate(s Settings) error
+	// Destination 标识位置当前写往哪里（WebDAV 地址、GitHub 账号、文件夹路径）。它变了就是新目标：
+	// 上次的指纹、引用与退避都不再沿用，下一次检查即使数据未变也写一份。
+	Destination(s Settings) string
 	// Write 写入一份加密备份；返回位置需要跨次记住的引用（如自动备份 Gist 的 ID）。
 	Write(ctx context.Context, req WriteRequest) (ref string, err error)
 }

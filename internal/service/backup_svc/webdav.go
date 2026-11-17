@@ -124,7 +124,8 @@ func CreateOrUpdateWebDAVBackup(cfg WebDAVConfig, content []byte) (*WebDAVBackup
 }
 
 // UploadWebDAVAutoBackup 把一份自动备份写成 at 时刻命名的新文件：先 PUT 到临时文件，成功后
-// MOVE 成正式文件名；MOVE 失败时删掉临时文件，目录里已有的版本不受影响。
+// MOVE 成正式文件名；PUT 或 MOVE 失败时删掉临时文件（每次的临时文件名不同，留下就不会再被清理），
+// 目录里已有的版本不受影响。
 func UploadWebDAVAutoBackup(cfg WebDAVConfig, content []byte, at time.Time) (*WebDAVBackupInfo, error) {
 	dirURL, err := webDAVDirectoryURL(cfg.URL)
 	if err != nil {
@@ -143,12 +144,23 @@ func UploadWebDAVAutoBackup(cfg WebDAVConfig, content []byte, at time.Time) (*We
 		return nil, err
 	}
 
-	status, body, err := webDAVRequest(cfg, http.MethodPut, tempURL, content, nil)
-	if err != nil {
-		return nil, err
+	removeTemp := func(err error) error {
+		delStatus, _, delErr := webDAVRequest(cfg, http.MethodDelete, tempURL, nil, nil)
+		if delErr != nil {
+			return fmt.Errorf("%w (cleanup temp file: %v)", err, delErr)
+		}
+		if delStatus >= 300 && delStatus != http.StatusNotFound {
+			return fmt.Errorf("%w (cleanup temp file: HTTP %d)", err, delStatus)
+		}
+		return err
 	}
-	if status != http.StatusOK && status != http.StatusCreated && status != http.StatusNoContent {
-		return nil, fmt.Errorf("WebDAV upload failed: HTTP %d: %s", status, string(body))
+
+	status, body, err := webDAVRequest(cfg, http.MethodPut, tempURL, content, nil)
+	if err == nil && status != http.StatusOK && status != http.StatusCreated && status != http.StatusNoContent {
+		err = fmt.Errorf("WebDAV upload failed: HTTP %d: %s", status, string(body))
+	}
+	if err != nil {
+		return nil, removeTemp(err)
 	}
 
 	status, body, err = webDAVRequest(cfg, "MOVE", tempURL, nil, map[string]string{
@@ -159,12 +171,7 @@ func UploadWebDAVAutoBackup(cfg WebDAVConfig, content []byte, at time.Time) (*We
 		err = fmt.Errorf("WebDAV rename failed: HTTP %d: %s", status, string(body))
 	}
 	if err != nil {
-		if delStatus, _, delErr := webDAVRequest(cfg, http.MethodDelete, tempURL, nil, nil); delErr != nil {
-			return nil, fmt.Errorf("%w (cleanup temp file: %v)", err, delErr)
-		} else if delStatus >= 300 && delStatus != http.StatusNotFound {
-			return nil, fmt.Errorf("%w (cleanup temp file: HTTP %d)", err, delStatus)
-		}
-		return nil, err
+		return nil, removeTemp(err)
 	}
 	return &WebDAVBackupInfo{
 		Name:      name,

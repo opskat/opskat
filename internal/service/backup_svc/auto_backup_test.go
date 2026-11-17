@@ -23,6 +23,7 @@ type fakeWebDAV struct {
 	mu       sync.Mutex
 	files    map[string][]byte // 目录内文件名 → 内容
 	failMove bool
+	failPut  bool // 收下部分内容后返回 507，模拟上传中途失败
 	methods  []string
 	moveDest string
 	moveOver string
@@ -51,6 +52,11 @@ func (f *fakeWebDAV) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	case http.MethodPut:
 		body, _ := io.ReadAll(r.Body)
+		if f.failPut {
+			f.files[name] = body[:len(body)/2]
+			w.WriteHeader(http.StatusInsufficientStorage)
+			return
+		}
 		f.files[name] = body
 		w.WriteHeader(http.StatusCreated)
 	case "MOVE":
@@ -156,6 +162,14 @@ func TestUploadWebDAVAutoBackup(t *testing.T) {
 				"opskat-backup.encrypted.json",
 			})
 			So(string(dav.files["opskat-backup-auto-20261116T000000Z.encrypted.json"]), ShouldEqual, "old")
+		})
+
+		Convey("上传临时文件失败时同样删掉服务器上留下的部分临时文件", func() {
+			dav.failPut = true
+			_, err := UploadWebDAVAutoBackup(cfg, []byte("v2-content"), at)
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "507")
+			So(dav.names(), ShouldResemble, []string{"opskat-backup.encrypted.json"})
 		})
 
 		Convey("清理只删除超出份数的旧自动备份，手动备份保留", func() {

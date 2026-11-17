@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/service/auto_backup_svc"
@@ -164,6 +166,9 @@ func (s *System) SaveAutoBackupSettings(in AutoBackupSaveInput) error {
 	}); err != nil {
 		return err
 	}
+	logger.Ctx(s.appCtx).Info("auto backup settings saved", zap.Bool("enabled", in.Enabled),
+		zap.Int("intervalMinutes", in.IntervalMinutes), zap.Int("keep", in.Keep),
+		zap.Strings("targets", targets), zap.Bool("passwordChanged", encrypted != ""))
 
 	svc := s.autoBackupService()
 	if encrypted != "" {
@@ -207,7 +212,11 @@ func (s *System) GetAutoBackupStatus() (*AutoBackupStatus, error) {
 
 // RunAutoBackupNow 立即对每个勾选且可用的位置写一个新版本，这一轮结束后返回。
 func (s *System) RunAutoBackupNow() error {
-	return s.autoBackupService().RunNow(s.appCtx)
+	if err := s.autoBackupService().RunNow(s.appCtx); err != nil {
+		logger.Ctx(s.appCtx).Warn("run auto backup now failed", zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 // SetAutoBackupClientSnapshot 接收前端本地存储里的快捷键自定义项与自定义终端主题（JSON 字符串）。

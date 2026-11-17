@@ -64,18 +64,22 @@ type Service struct {
 	opts Options
 
 	runMu sync.Mutex // 同一时刻只有一轮检查
+	// persistMu 串行化状态文件写入（取快照+落盘），最后落盘的总是最新状态，且不会两个写入方同写临时文件。
+	persistMu sync.Mutex
 
 	mu           sync.Mutex
 	state        State
 	snapshot     ClientSnapshot
 	snapshotSet  bool
 	firstPending bool // 启动 / 设置变更后尚未做的那一次立即检查
-	nudgeAt      time.Time
-	running      bool
-	phases       map[string]string
-	wake         chan struct{}
-	cancel       context.CancelFunc
-	notify       func()
+	// passwordEpoch 在 ResetFingerprints 时递增：一轮开始后改了密码，这一轮用旧密码写的内容不记指纹。
+	passwordEpoch int
+	nudgeAt       time.Time
+	running       bool
+	phases        map[string]string
+	wake          chan struct{}
+	cancel        context.CancelFunc
+	notify        func()
 }
 
 // New 构造 Service 并读取持久化的运行状态。
@@ -154,12 +158,12 @@ func (s *Service) Reschedule() {
 // ResetFingerprints 让所有位置记住的指纹失效（修改密码后调用），下一次检查会写新版本。
 func (s *Service) ResetFingerprints() {
 	s.mu.Lock()
+	s.passwordEpoch++
 	for _, ts := range s.state.Targets {
 		ts.Fingerprint = ""
 	}
-	st := s.state.clone()
 	s.mu.Unlock()
-	s.persist(st)
+	s.persist()
 }
 
 // Status 返回当前状态。
@@ -311,16 +315,22 @@ func fingerprint(data *backup_svc.BackupData) (string, error) {
 func (s *Service) RunCheck(ctx context.Context, force bool) {
 	s.runMu.Lock()
 	defer s.runMu.Unlock()
+	log := logger.Ctx(ctx)
 
+	// 先取密码版本再读设置：之后发生的改密码一定能被发现。
+	s.mu.Lock()
+	epoch := s.passwordEpoch
+	s.mu.Unlock()
 	settings, err := s.opts.LoadSettings()
 	if err != nil {
-		logger.Default().Warn("auto backup: load settings", zap.Error(err))
+		log.Warn("auto backup: load settings", zap.Error(err))
 		return
 	}
 	if !settings.Enabled {
 		return
 	}
 	started := s.opts.Now()
+	log.Info("auto backup: check started", zap.Bool("force", force))
 
 	s.mu.Lock()
 	s.firstPending = false
@@ -336,6 +346,11 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 			due = append(due, t)
 		}
 	}
+	if len(due) == 0 {
+		s.finishCheck(started, settings, CheckUnchanged, "", false)
+		log.Info("auto backup: check finished, no available target", zap.Duration("took", s.opts.Now().Sub(started)))
+		return
+	}
 
 	data, err := s.opts.Export(ctx, snap)
 	var fp string
@@ -344,7 +359,7 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 	}
 	if err != nil {
 		s.finishCheck(started, settings, CheckFailed, fmt.Sprintf("生成备份失败: %v", err), true)
-		logger.Default().Warn("auto backup: export failed", zap.Error(err))
+		log.Warn("auto backup: export failed", zap.Error(err))
 		return
 	}
 
@@ -355,6 +370,11 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 	changed := false
 	for _, t := range due {
 		ts := s.state.target(t.ID())
+		if dest := t.Destination(settings); ts.Destination != dest {
+			// 新的写入目标：旧目标的指纹、引用与退避都不适用。
+			ts.Fingerprint, ts.Ref, ts.Failures, ts.RetryAt = "", "", 0, 0
+			ts.Destination = dest
+		}
 		if ts.Fingerprint != fp {
 			changed = true
 		}
@@ -371,7 +391,7 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 
 	if len(toWrite) == 0 {
 		s.finishCheck(started, settings, CheckUnchanged, "", false)
-		logger.Default().Info("auto backup: check finished", zap.Bool("changed", changed),
+		log.Info("auto backup: check finished", zap.Bool("changed", changed),
 			zap.Strings("skipped", skipped), zap.Duration("took", s.opts.Now().Sub(started)))
 		return
 	}
@@ -386,7 +406,7 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 	if err != nil {
 		s.clearPhases()
 		s.finishCheck(started, settings, CheckFailed, fmt.Sprintf("加密备份失败: %v", err), true)
-		logger.Default().Warn("auto backup: encrypt failed", zap.Error(err))
+		log.Warn("auto backup: encrypt failed", zap.Error(err))
 		return
 	}
 
@@ -414,7 +434,10 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 			ts.RetryAt = now.Add(backoff(ts.Failures, settings.Interval)).Unix()
 		} else {
 			written = append(written, id)
-			ts.Fingerprint = fp
+			// 这一轮进行中改了密码：写的是旧密码加密的内容，不记指纹，下一轮用新密码重写。
+			if s.passwordEpoch == epoch {
+				ts.Fingerprint = fp
+			}
 			ts.LastSuccessAt = now.Unix()
 			ts.LastError, ts.LastErrorAt, ts.Failures, ts.RetryAt = "", 0, 0, 0
 		}
@@ -422,9 +445,9 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 		s.mu.Unlock()
 
 		if werr != nil {
-			logger.Default().Warn("auto backup: target failed", zap.String("target", id), zap.Duration("took", now.Sub(begin)), zap.Error(werr))
+			log.Warn("auto backup: target failed", zap.String("target", id), zap.Duration("took", now.Sub(begin)), zap.Error(werr))
 		} else {
-			logger.Default().Info("auto backup: target written", zap.String("target", id), zap.Duration("took", now.Sub(begin)), zap.Int("bytes", len(content)))
+			log.Info("auto backup: target written", zap.String("target", id), zap.Duration("took", now.Sub(begin)), zap.Int("bytes", len(content)))
 		}
 	}
 
@@ -433,7 +456,7 @@ func (s *Service) RunCheck(ctx context.Context, force bool) {
 		result = CheckFailed
 	}
 	s.finishCheck(started, settings, result, "", false)
-	logger.Default().Info("auto backup: check finished", zap.Bool("changed", changed), zap.Bool("force", force),
+	log.Info("auto backup: check finished", zap.Bool("changed", changed), zap.Bool("force", force),
 		zap.Strings("written", written), zap.Strings("failed", failedIDs), zap.Strings("skipped", skipped),
 		zap.Duration("took", s.opts.Now().Sub(started)))
 }
@@ -457,13 +480,18 @@ func (s *Service) finishCheck(at time.Time, settings Settings, result, checkErr 
 	} else {
 		s.state.CheckFailures, s.state.CheckRetryAt = 0, 0
 	}
-	st := s.state.clone()
 	s.mu.Unlock()
-	s.persist(st)
+	s.persist()
 	s.emit()
 }
 
-func (s *Service) persist(st State) {
+// persist 把当前状态写入状态文件。
+func (s *Service) persist() {
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	s.mu.Lock()
+	st := s.state.clone()
+	s.mu.Unlock()
 	if err := saveState(s.opts.StatePath, st); err != nil {
 		logger.Default().Warn("save auto backup state", zap.Error(err))
 	}

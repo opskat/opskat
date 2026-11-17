@@ -22,6 +22,8 @@ func (localTarget) ID() string { return "local" }
 
 func (localTarget) Available(s Settings) bool { return s.LocalDir != "" }
 
+func (localTarget) Destination(s Settings) string { return s.LocalDir }
+
 func (localTarget) Validate(s Settings) error {
 	if s.LocalDir == "" {
 		return fmt.Errorf("请选择备份文件夹")
@@ -45,13 +47,13 @@ func (localTarget) Write(_ context.Context, req WriteRequest) (string, error) {
 
 	name := backup_svc.AutoBackupName(req.At)
 	tmp := filepath.Join(dir, backup_svc.AutoBackupTempName(name))
+	// 写到一半失败（如磁盘满）或改名失败都删掉临时文件：每次的临时文件名不同，留下就不会再被清理。
 	if err := os.WriteFile(tmp, req.Content, 0o600); err != nil {
+		removeLocalTemp(tmp)
 		return "", fmt.Errorf("写入备份文件失败: %w", err)
 	}
 	if err := os.Rename(tmp, filepath.Join(dir, name)); err != nil {
-		if rmErr := os.Remove(tmp); rmErr != nil {
-			logger.Default().Warn("auto backup: remove temp file", zap.String("path", tmp), zap.Error(rmErr))
-		}
+		removeLocalTemp(tmp)
 		return "", fmt.Errorf("写入备份文件失败: %w", err)
 	}
 
@@ -59,6 +61,12 @@ func (localTarget) Write(_ context.Context, req WriteRequest) (string, error) {
 		logger.Default().Warn("auto backup: prune local folder", zap.String("dir", dir), zap.Error(err))
 	}
 	return "", nil
+}
+
+func removeLocalTemp(tmp string) {
+	if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+		logger.Default().Warn("auto backup: remove temp file", zap.String("path", tmp), zap.Error(err))
+	}
 }
 
 func pruneLocal(dir string, keep int) error {
