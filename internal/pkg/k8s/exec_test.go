@@ -222,3 +222,59 @@ func TestExecReturnsClusterReasonWhenUpgradeIsRefused(t *testing.T) {
 	assert.Contains(t, err.Error(), `cannot create resource "pods/exec"`)
 	assert.False(t, connected.Load())
 }
+
+// 会话命令经包装层启动：用户的 argv 作为独立参数交给包装脚本，从不拼进脚本文本（不被 shell 再解释一遍）。
+func TestShellCommandKeepsUserArgvAsSeparateArguments(t *testing.T) {
+	argv := []string{"python3", "-c", "print('a b')", ";", "$HOME"}
+	cmd := ShellCommand("TAG1", argv)
+	require.Greater(t, len(cmd), len(argv)+3)
+	assert.Equal(t, []string{"/bin/sh", "-c"}, cmd[:2])
+	assert.Equal(t, append([]string{"TAG1"}, argv...), cmd[len(cmd)-len(argv)-1:])
+	for _, word := range []string{"TAG1", "print('a b')", "$HOME"} {
+		assert.NotContains(t, cmd[2], word, "the script never embeds caller-supplied words")
+	}
+	assert.NotEqual(t, cmd[:3], EndShellCommand("TAG1")[:3], "ending a shell runs a different script")
+}
+
+// 结束 shell 是对同一容器的一次非交互 exec（不带 stdin、不开 TTY，不在用户终端里留下任何东西）。
+func TestEndShellRunsNonInteractiveExecInTheContainer(t *testing.T) {
+	srv := k8stest.NewExecServer(t, true, nil)
+	var ran atomic.Bool
+	srv.RunNonTTY = func(*k8stest.ExecSession) int { ran.Store(true); return 0 }
+	d := &countingDial{target: srv.Host()}
+
+	err := EndShell(context.Background(), k8stest.Kubeconfig(unreachableAPI, srv.CAPEM(), "example.com"),
+		ExecTarget{Namespace: "ns1", Pod: "web-0", Container: "app"}, "TAG1", WithDial(d.dial))
+	require.NoError(t, err)
+	assert.True(t, ran.Load())
+	assert.Contains(t, d.addresses(), "k8s.invalid:6443", "the cleanup goes through the asset dial too")
+
+	reqs := srv.Requests()
+	require.Len(t, reqs, 1)
+	r := reqs[0]
+	assert.Equal(t, "/api/v1/namespaces/ns1/pods/web-0/exec", r.URL.Path)
+	q := r.URL.Query()
+	assert.Equal(t, "app", q.Get("container"))
+	assert.Equal(t, EndShellCommand("TAG1"), q["command"])
+	assert.Equal(t, "TAG1", q["command"][len(q["command"])-1])
+	assert.NotEqual(t, "true", q.Get("tty"))
+	assert.NotEqual(t, "true", q.Get("stdin"))
+	assert.Equal(t, "true", q.Get("stdout"))
+}
+
+// 清理脚本说明做不到的原因（例如找不到记录的进程号）：随错误带回，供调用方记日志。
+func TestEndShellFailureCarriesTheScriptsReason(t *testing.T) {
+	srv := k8stest.NewExecServer(t, false, nil)
+	srv.RunNonTTY = func(s *k8stest.ExecSession) int {
+		_, _ = s.Stdout.Write([]byte("shell pid file not found\n"))
+		return 3
+	}
+	d := &countingDial{target: srv.Host()}
+	err := EndShell(context.Background(), k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""),
+		ExecTarget{Namespace: "ns1", Pod: "web-0", Container: "app"}, "TAG1", WithDial(d.dial))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shell pid file not found")
+	code, ok := ExitCode(err)
+	require.True(t, ok, "err = %v", err)
+	assert.Equal(t, 3, code)
+}

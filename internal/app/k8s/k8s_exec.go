@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -41,6 +42,9 @@ var (
 
 // execConnectTimeout 限定 exec 从拨号到 SPDY 升级完成的时间；升级后的会话不设超时。
 const execConnectTimeout = 30 * time.Second
+
+// execShellEndTimeout 限定会话结束后在容器里结束 shell 的那次 exec（含拨号与约 1 秒的 SIGHUP 宽限）。
+var execShellEndTimeout = 10 * time.Second
 
 // K8sExecRequest 是 StartK8sExec 的请求。Shell 为 "auto"、"/bin/bash"、"/bin/sh" 或自定义命令（按空白拆成参数）。
 type K8sExecRequest struct {
@@ -204,17 +208,27 @@ type execSession struct {
 	stdin *io.PipeWriter
 	sizes chan k8spkg.TerminalSize
 	size  k8spkg.TerminalSize
+	// shellTag 是当前这次尝试的 shell 标记（k8spkg.ShellCommand），会话结束时据此在容器里结束 shell；
+	// 不带包装运行时为空。
+	shellTag string
 }
 
-// begin 为一次尝试准备 stdin 管道和尺寸通道（带上当前尺寸）。
-func (s *execSession) begin() (*io.PipeReader, *io.PipeWriter, <-chan k8spkg.TerminalSize) {
+// begin 为一次尝试准备 stdin 管道和尺寸通道（带上当前尺寸），并记下这次尝试的 shell 标记。
+func (s *execSession) begin(shellTag string) (*io.PipeReader, *io.PipeWriter, <-chan k8spkg.TerminalSize) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, w := io.Pipe()
 	s.stdin = w
 	s.sizes = make(chan k8spkg.TerminalSize, 1)
 	s.sizes <- s.size
+	s.shellTag = shellTag
 	return r, w, s.sizes
+}
+
+func (s *execSession) currentShellTag() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shellTag
 }
 
 func (s *execSession) writeStdin(data []byte) error {
@@ -363,59 +377,103 @@ func (k *K8s) startExec(c *k8sCallContext, req K8sExecRequest) (string, error) {
 		}
 		log.Info("k8s exec ended", fields...)
 		k.emit("k8s:exec:end:"+sessionID, end)
+		k.endShell(c, req, sess.currentShellTag(), end, log)
 	}()
 	return sessionID, nil
 }
 
+// endShell 在容器里结束会话启动的 shell 及其前台程序（kubelet 不会在 exec 连接断开时结束它们，见 k8spkg.ShellCommand）。
+// 在会话的结束协程里、结束事件发出之后运行，有时限；做不到只记日志，不影响已上报的结束原因。
+func (k *K8s) endShell(c *k8sCallContext, req K8sExecRequest, tag string, end K8sExecEnd, log *zap.Logger) {
+	// 命令没能运行、Pod 已删除或容器已终止时容器里没有要结束的 shell。
+	if end.Reason == ExecEndFailed || end.PodGone || end.ContainerReason != "" {
+		return
+	}
+	if tag == "" {
+		// 未经包装的 shell 自己退出了就没有遗留；被关闭或断开时它可能还在，但找不到它。
+		if end.Reason != ExecEndExited {
+			log.Warn("k8s exec shell cleanup unavailable",
+				zap.String("reason", "the container has no /bin/sh, so the shell was started without tracking"))
+		}
+		return
+	}
+	// shell 自己退出时这一步只删掉记录。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(k.ctx), execShellEndTimeout)
+	defer cancel()
+	started := time.Now()
+	log.Info("k8s exec shell cleanup start")
+	err := k8spkg.EndShell(ctx, c.kubeconfig, k8spkg.ExecTarget{Namespace: req.Namespace, Pod: req.Pod, Container: req.Container}, tag, c.opts...)
+	if err != nil {
+		log.Warn("k8s exec shell cleanup failed", zap.Duration("elapsed", time.Since(started)), zap.Error(err))
+		return
+	}
+	log.Info("k8s exec shell cleanup done", zap.Duration("elapsed", time.Since(started)))
+}
+
 // runAttempts 依次尝试 attempts：「自动」的 bash 在容器里不存在（且还没有任何输出）时换 sh 重来，
 // 对前端不可见；返回最后一次尝试的结果。onConnected 在首次 SPDY 升级成功后调用。
+// 每次尝试都经 k8spkg.ShellCommand 包装，以便会话结束时结束容器里的 shell；最后一次尝试的包装报告命令不存在时
+// （或容器里根本没有 /bin/sh），不带包装再运行一次：让集群给出它自己的原因，没有 sh 的容器也照常可用（只是无法清理）。
 func (k *K8s) runAttempts(ctx context.Context, c *k8sCallContext, req K8sExecRequest, sess *execSession,
 	attempts []execAttempt, sessionID string, log *zap.Logger, onConnected func()) error {
 	for i, a := range attempts {
-		stdinR, stdinW, sizes := sess.begin()
-		attemptCtx, cancelAttempt := context.WithCancel(ctx)
 		var startedOnce sync.Once
 		emitStarted := func() {
 			startedOnce.Do(func() { k.emit("k8s:exec:started:"+sessionID, K8sExecStarted{Shell: a.Shell}) })
 		}
-		var attemptConnected atomic.Bool
-		out := &execOutput{
-			onFirst: emitStarted,
-			emit: func(data []byte) {
-				k.emit("k8s:exec:data:"+sessionID, base64.StdEncoding.EncodeToString(data))
-			},
+		// 只有一种可能的 shell 时连上即知；「自动」要等首次输出才能确定没有回退。
+		announceOnConnect := len(attempts) == 1
+		tag := newShellTag()
+		connected, produced, err := k.runAttempt(ctx, c, req, sess, k8spkg.ShellCommand(tag, a.Command), tag, sessionID,
+			emitStarted, announceOnConnect, onConnected)
+		if connected && !produced && ctx.Err() == nil && shellMissing(err) {
+			if i < len(attempts)-1 {
+				log.Info("k8s exec shell missing, falling back", zap.String("shell", a.Shell), zap.Error(err))
+				continue
+			}
+			log.Info("k8s exec wrapped command did not start, running it untracked", zap.Error(err))
+			connected, _, err = k.runAttempt(ctx, c, req, sess, a.Command, "", sessionID, emitStarted, announceOnConnect, onConnected)
 		}
-		err := k8spkg.Exec(attemptCtx, c.kubeconfig, k8spkg.ExecRequest{
-			Namespace: req.Namespace,
-			Pod:       req.Pod,
-			Container: req.Container,
-			Command:   a.Command,
-			Stdin:     stdinR,
-			Stdout:    out,
-			Sizes:     sizes,
-			OnConnected: func() {
-				attemptConnected.Store(true)
-				onConnected()
-				// 只有一种可能的 shell 时连上即知；「自动」要等首次输出才能确定没有回退。
-				if len(attempts) == 1 {
-					emitStarted()
-				}
-			},
-		}, c.opts...)
-		cancelAttempt()
-		// 关写端让这次尝试遗留的 stdin 读取协程读到 EOF 后退出，不再抢后面输入。
-		_ = stdinW.Close()
-
-		if i < len(attempts)-1 && attemptConnected.Load() && !out.produced.Load() && ctx.Err() == nil && shellMissing(err) {
-			log.Info("k8s exec shell missing, falling back", zap.String("shell", a.Shell), zap.Error(err))
-			continue
-		}
-		if attemptConnected.Load() {
+		if connected {
 			emitStarted()
 		}
 		return err
 	}
 	return nil
+}
+
+// runAttempt 运行一次 exec：返回是否完成了 SPDY 升级、是否已有输出，以及 exec 的结果。
+func (k *K8s) runAttempt(ctx context.Context, c *k8sCallContext, req K8sExecRequest, sess *execSession,
+	command []string, shellTag, sessionID string, emitStarted func(), announceOnConnect bool, onConnected func()) (bool, bool, error) {
+	stdinR, stdinW, sizes := sess.begin(shellTag)
+	attemptCtx, cancelAttempt := context.WithCancel(ctx)
+	var attemptConnected atomic.Bool
+	out := &execOutput{
+		onFirst: emitStarted,
+		emit: func(data []byte) {
+			k.emit("k8s:exec:data:"+sessionID, base64.StdEncoding.EncodeToString(data))
+		},
+	}
+	err := k8spkg.Exec(attemptCtx, c.kubeconfig, k8spkg.ExecRequest{
+		Namespace: req.Namespace,
+		Pod:       req.Pod,
+		Container: req.Container,
+		Command:   command,
+		Stdin:     stdinR,
+		Stdout:    out,
+		Sizes:     sizes,
+		OnConnected: func() {
+			attemptConnected.Store(true)
+			onConnected()
+			if announceOnConnect {
+				emitStarted()
+			}
+		},
+	}, c.opts...)
+	cancelAttempt()
+	// 关写端让这次尝试遗留的 stdin 读取协程读到 EOF 后退出，不再抢后面输入。
+	_ = stdinW.Close()
+	return attemptConnected.Load(), out.produced.Load(), err
 }
 
 // enrichEnd 在会话非正常结束（非 0 退出或连接出错）后读 Pod 状态补充结束原因：容器终止原因（如 OOMKilled）、
@@ -559,3 +617,6 @@ func (k *K8s) StopK8sExec(sessionID string) {
 		v.(*execSession).cancel()
 	}
 }
+
+// newShellTag 生成每次尝试的 shell 标记（见 k8spkg.ShellCommand）。
+var newShellTag = rand.Text

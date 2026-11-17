@@ -3,9 +3,11 @@ package k8s
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -80,6 +82,11 @@ func execTestBinder(t *testing.T, target string) (*K8s, *eventRecorder, *k8sCall
 	oldInterval, oldWindow := execEndPollInterval, execEndPollWindow
 	execEndPollInterval, execEndPollWindow = 20*time.Millisecond, 300*time.Millisecond
 	t.Cleanup(func() { execEndPollInterval, execEndPollWindow = oldInterval, oldWindow })
+	// 每次尝试的 shell 标记按 tag1、tag2… 依次给出，用例据此断言清理找的是哪个会话的 shell。
+	oldTag := newShellTag
+	var tags atomic.Int32
+	newShellTag = func() string { return fmt.Sprintf("tag%d", tags.Add(1)) }
+	t.Cleanup(func() { newShellTag = oldTag })
 	rec := &eventRecorder{}
 	k := &K8s{ctx: context.Background(), emit: rec.emit}
 	dial := func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -103,6 +110,43 @@ func observeLogs(t *testing.T) *observer.ObservedLogs {
 	logger.SetLogger(zap.New(core))
 	t.Cleanup(func() { logger.SetLogger(old) })
 	return logs
+}
+
+// shellCmd 是会话经包装层运行 argv 时发给集群的命令。
+func shellCmd(tag string, argv ...string) []string { return k8spkg.ShellCommand(tag, argv) }
+
+// userArgv 取出包装层里用户要运行的命令；未经包装的命令原样返回。
+func userArgv(cmd []string) []string {
+	prefix := k8spkg.ShellCommand("", nil) // 末尾是 tag
+	n := len(prefix)
+	if len(cmd) >= n && slices.Equal(cmd[:n-1], prefix[:n-1]) {
+		return cmd[n:]
+	}
+	return cmd
+}
+
+// cleanupRequests 等到假端点收到 n 次非交互 exec（会话结束时的 shell 清理）并返回它们。
+func cleanupRequests(t *testing.T, srv *k8stest.ExecServer, n int) []*http.Request {
+	t.Helper()
+	var got []*http.Request
+	require.Eventually(t, func() bool {
+		got = got[:0]
+		for _, r := range srv.Requests() {
+			if r.URL.Query().Get("tty") != "true" {
+				got = append(got, r)
+			}
+		}
+		return len(got) >= n
+	}, 5*time.Second, 10*time.Millisecond, "expected %d shell cleanup exec(s)", n)
+	require.Len(t, got, n)
+	return got
+}
+
+func assertCleanupOf(t *testing.T, r *http.Request, pod, tag string) {
+	t.Helper()
+	assert.Equal(t, "/api/v1/namespaces/ns1/pods/"+pod+"/exec", r.URL.Path)
+	assert.Equal(t, "app", r.URL.Query().Get("container"))
+	assert.Equal(t, k8spkg.EndShellCommand(tag), r.URL.Query()["command"])
 }
 
 func assertSessionFields(t *testing.T, entry observer.LoggedEntry, pod string) {
@@ -148,7 +192,7 @@ func TestK8sExecSessionPassesInputAndResizeThenStops(t *testing.T) {
 
 	reqs := srv.Requests()
 	require.Len(t, reqs, 1)
-	assert.Equal(t, []string{"/bin/bash"}, reqs[0].URL.Query()["command"], "'auto' tries bash first")
+	assert.Equal(t, shellCmd("tag1", "/bin/bash"), reqs[0].URL.Query()["command"], "'auto' tries bash first, through the tracking wrapper")
 
 	k.StopK8sExec(id)
 	assert.Equal(t, K8sExecEnd{Reason: ExecEndClosed}, rec.waitEnd(t, id))
@@ -203,6 +247,10 @@ func TestK8sExecCleanupEndsAllSessions(t *testing.T) {
 	}
 	assert.True(t, srv.WaitEnded(5*time.Second))
 	assert.True(t, srv.WaitEnded(5*time.Second))
+	cleanups := cleanupRequests(t, srv, 2)
+	slices.SortFunc(cleanups, func(x, y *http.Request) int { return strings.Compare(x.URL.Path, y.URL.Path) })
+	assertCleanupOf(t, cleanups[0], "web-0", "tag1")
+	assertCleanupOf(t, cleanups[1], "web-1", "tag2")
 }
 
 // 会话 ID 由前端给出：重复的 ID 不能顶掉仍在运行的会话（否则旧会话再也停不掉，应用退出时也收不回）。
@@ -314,14 +362,8 @@ func startedOf(t *testing.T, rec *eventRecorder, id string) K8sExecStarted {
 	return got[0].(K8sExecStarted)
 }
 
-func commandsOf(srv *k8stest.ExecServer) [][]string {
-	reqs := srv.Requests()
-	out := make([][]string, 0, len(reqs))
-	for _, r := range reqs {
-		out = append(out, r.URL.Query()["command"])
-	}
-	return out
-}
+// commandsOf 是会话（交互式 exec）发给集群的命令，不含结束时的清理。
+func commandsOf(srv *k8stest.ExecServer) [][]string { return srv.Commands(true) }
 
 // 没有 bash 的容器：运行时要么以 126/127 退出，要么在 error 流上报「executable file not found」。
 func TestK8sExecAutoFallsBackToShWhenBashIsMissing(t *testing.T) {
@@ -336,7 +378,7 @@ func TestK8sExecAutoFallsBackToShWhenBashIsMissing(t *testing.T) {
 	for name, bashMissing := range missing {
 		t.Run(name, func(t *testing.T) {
 			srv := k8stest.NewExecServer(t, false, func(s *k8stest.ExecSession) int {
-				if s.Command()[0] == "/bin/bash" {
+				if userArgv(s.Command())[0] == "/bin/bash" {
 					return bashMissing(s)
 				}
 				_, _ = s.Stdout.Write([]byte(greeting))
@@ -348,7 +390,7 @@ func TestK8sExecAutoFallsBackToShWhenBashIsMissing(t *testing.T) {
 
 			assert.Equal(t, K8sExecStarted{Shell: "/bin/sh"}, startedOf(t, rec, id))
 			require.Eventually(t, func() bool { return strings.Contains(rec.output(id), "greeting-before-any-input") }, 5*time.Second, 10*time.Millisecond)
-			assert.Equal(t, [][]string{{"/bin/bash"}, {"/bin/sh"}}, commandsOf(srv))
+			assert.Equal(t, [][]string{shellCmd("tag1", "/bin/bash"), shellCmd("tag2", "/bin/sh")}, commandsOf(srv))
 			assert.Empty(t, rec.named("k8s:exec:end:"+id), "the fallback is invisible: the session stays alive")
 
 			require.NoError(t, k.WriteK8sExec(id, base64.StdEncoding.EncodeToString([]byte("hi\n"))), "input reaches the fallback shell")
@@ -368,7 +410,7 @@ func TestK8sExecAutoUsesBashWhenPresent(t *testing.T) {
 	id, err := k.startExec(c, execReq("web-0"))
 	require.NoError(t, err)
 	assert.Equal(t, K8sExecStarted{Shell: "/bin/bash"}, startedOf(t, rec, id))
-	assert.Equal(t, [][]string{{"/bin/bash"}}, commandsOf(srv))
+	assert.Equal(t, [][]string{shellCmd("tag1", "/bin/bash")}, commandsOf(srv))
 	k.StopK8sExec(id)
 	rec.waitEnd(t, id)
 }
@@ -384,9 +426,10 @@ func TestK8sExecDoesNotFallBackAfterOutputOrForExplicitShell(t *testing.T) {
 		require.NoError(t, err)
 		code := 127
 		assert.Equal(t, K8sExecEnd{Reason: ExecEndExited, ExitCode: &code}, rec.waitEnd(t, id))
-		assert.Len(t, srv.Requests(), 1)
+		assert.Len(t, commandsOf(srv), 1)
 	})
 	t.Run("explicit /bin/bash that is missing", func(t *testing.T) {
+		logs := observeLogs(t)
 		srv := podStatusServer(t, runningPod, func(*k8stest.ExecSession) int { return 127 })
 		k, rec, c := execTestBinder(t, srv.Host())
 		req := execReq("web-0")
@@ -395,7 +438,10 @@ func TestK8sExecDoesNotFallBackAfterOutputOrForExplicitShell(t *testing.T) {
 		require.NoError(t, err)
 		code := 127
 		assert.Equal(t, K8sExecEnd{Reason: ExecEndExited, ExitCode: &code}, rec.waitEnd(t, id))
-		assert.Equal(t, [][]string{{"/bin/bash"}}, commandsOf(srv))
+		// 包装层报告命令不存在时，不带包装再跑一次，让集群给出它自己的回答。
+		assert.Equal(t, [][]string{shellCmd("tag1", "/bin/bash"), {"/bin/bash"}}, commandsOf(srv))
+		assert.Never(t, func() bool { return logs.FilterMessage("k8s exec shell cleanup unavailable").Len() > 0 },
+			300*time.Millisecond, 10*time.Millisecond, "no shell ever ran, so there is nothing left behind to warn about")
 	})
 	t.Run("sh missing too", func(t *testing.T) {
 		srv := podStatusServer(t, runningPod, func(*k8stest.ExecSession) int { return 127 })
@@ -404,7 +450,7 @@ func TestK8sExecDoesNotFallBackAfterOutputOrForExplicitShell(t *testing.T) {
 		require.NoError(t, err)
 		code := 127
 		assert.Equal(t, K8sExecEnd{Reason: ExecEndExited, ExitCode: &code}, rec.waitEnd(t, id))
-		assert.Equal(t, [][]string{{"/bin/bash"}, {"/bin/sh"}}, commandsOf(srv))
+		assert.Equal(t, [][]string{shellCmd("tag1", "/bin/bash"), shellCmd("tag2", "/bin/sh"), {"/bin/sh"}}, commandsOf(srv))
 	})
 }
 
@@ -415,7 +461,7 @@ func TestK8sExecCustomCommandRunsAsArgvAndReportsItself(t *testing.T) {
 	req.Shell = `python3 -c "print('a b')" ; $HOME`
 	id, err := k.startExec(c, req)
 	require.NoError(t, err)
-	assert.Equal(t, [][]string{{"python3", "-c", "print('a b')", ";", "$HOME"}}, commandsOf(srv))
+	assert.Equal(t, [][]string{shellCmd("tag1", "python3", "-c", "print('a b')", ";", "$HOME")}, commandsOf(srv))
 	assert.Equal(t, K8sExecStarted{Shell: req.Shell}, startedOf(t, rec, id))
 	k.StopK8sExec(id)
 	rec.waitEnd(t, id)
@@ -435,7 +481,8 @@ func TestK8sExecMissingCustomCommandIsPassedThrough(t *testing.T) {
 	end := rec.waitEnd(t, id)
 	assert.Equal(t, ExecEndFailed, end.Reason, "the cluster refused the command; the connection was fine")
 	assert.Contains(t, end.Error, reason)
-	assert.Len(t, srv.Requests(), 1, "an explicit command never falls back")
+	assert.Equal(t, [][]string{shellCmd("tag1", "nope"), {"nope"}}, commandsOf(srv),
+		"an explicit command never falls back to another shell; it is rerun unwrapped to get the cluster's reason")
 }
 
 // 会话 ID 由前端生成并先订阅：首屏输出在 StartK8sExec 返回前就发出也不会丢。
@@ -607,6 +654,12 @@ func TestK8sExecEndOnConnectionDrop(t *testing.T) {
 			assert.NotEmpty(t, end.Error)
 			assert.Nil(t, end.ExitCode)
 			assert.Equal(t, statuses == "", end.PodGone)
+			if statuses == "" {
+				assert.Never(t, func() bool { return len(srv.Commands(false)) > 0 }, 300*time.Millisecond, 10*time.Millisecond,
+					"nothing to clean up in a deleted pod")
+			} else {
+				assertCleanupOf(t, cleanupRequests(t, srv, 1)[0], "web-0", "tag1")
+			}
 		})
 	}
 }
@@ -624,4 +677,118 @@ func TestContainerTerminationAtSecondPrecision(t *testing.T) {
 	}
 	assert.NotNil(t, containerTermination(podAt(since.Add(-800*time.Millisecond)), "app", since), "same second as session start")
 	assert.Nil(t, containerTermination(podAt(since.Add(-time.Second)), "app", since), "previous second")
+}
+
+// kubelet / 运行时不会在 exec 连接断开时结束容器里的进程：每种结束方式都要另起一次 exec，结束这个会话启动的 shell。
+func TestK8sExecEndsTheSessionShellInTheContainer(t *testing.T) {
+	cases := map[string]func(k *K8s, id string){
+		"stop":     func(k *K8s, id string) { k.StopK8sExec(id) },
+		"app exit": func(k *K8s, _ string) { k.Cleanup() },
+		// shell 自己退出时清理只删掉记录，同样要跑。
+		"shell exits": func(k *K8s, id string) {
+			_ = k.WriteK8sExec(id, base64.StdEncoding.EncodeToString([]byte("exit\n")))
+		},
+	}
+	for name, end := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv := k8stest.NewExecServer(t, false, nil)
+			k, rec, c := execTestBinder(t, srv.Host())
+			id, err := k.startExec(c, execReq("web-0"))
+			require.NoError(t, err)
+			assert.Empty(t, srv.Commands(false), "nothing is cleaned up while the session runs")
+			end(k, id)
+			rec.waitEnd(t, id)
+			assertCleanupOf(t, cleanupRequests(t, srv, 1)[0], "web-0", "tag1")
+		})
+	}
+}
+
+// 重连（切换容器 / Shell）= 结束旧会话再开新会话：只清理旧会话的 shell，新会话不受影响。
+func TestK8sExecReconnectCleansOnlyTheReplacedSession(t *testing.T) {
+	srv := k8stest.NewExecServer(t, false, nil)
+	k, rec, c := execTestBinder(t, srv.Host())
+	reqA := execReq("web-0")
+	reqA.SessionID = "sess-a"
+	a, err := k.startExec(c, reqA)
+	require.NoError(t, err)
+	k.StopK8sExec(a)
+	rec.waitEnd(t, a)
+
+	reqB := reqA
+	reqB.SessionID = "sess-b"
+	reqB.Shell = "/bin/sh"
+	b, err := k.startExec(c, reqB)
+	require.NoError(t, err)
+	assertCleanupOf(t, cleanupRequests(t, srv, 1)[0], "web-0", "tag1")
+	assert.Equal(t, shellCmd("tag2", "/bin/sh"), commandsOf(srv)[1], "the new session runs its own tracked shell")
+	require.NoError(t, k.WriteK8sExec(b, base64.StdEncoding.EncodeToString([]byte("still-here\n"))))
+	require.Eventually(t, func() bool { return strings.Contains(rec.output(b), "still-here") }, 5*time.Second, 10*time.Millisecond)
+	assert.Empty(t, rec.named("k8s:exec:end:"+b))
+
+	k.StopK8sExec(b)
+	rec.waitEnd(t, b)
+	assertCleanupOf(t, cleanupRequests(t, srv, 2)[1], "web-0", "tag2")
+}
+
+// 清理做不到（例如容器里没有可写的 /tmp）时只记日志：结束原因照旧，不打扰用户。
+func TestK8sExecShellCleanupFailureIsOnlyLogged(t *testing.T) {
+	logs := observeLogs(t)
+	srv := k8stest.NewExecServer(t, false, nil)
+	srv.RunNonTTY = func(s *k8stest.ExecSession) int {
+		_, _ = s.Stdout.Write([]byte("no record of the shell\n"))
+		return 3
+	}
+	k, rec, c := execTestBinder(t, srv.Host())
+	id, err := k.startExec(c, execReq("web-0"))
+	require.NoError(t, err)
+	k.StopK8sExec(id)
+	assert.Equal(t, K8sExecEnd{Reason: ExecEndClosed}, rec.waitEnd(t, id))
+
+	var failed []observer.LoggedEntry
+	require.Eventually(t, func() bool {
+		failed = logs.FilterMessage("k8s exec shell cleanup failed").All()
+		return len(failed) > 0
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Len(t, failed, 1)
+	assert.Equal(t, zap.WarnLevel, failed[0].Level)
+	assertSessionFields(t, failed[0], "web-0")
+	assert.Equal(t, id, failed[0].ContextMap()["sessionID"])
+	assert.Contains(t, failed[0].ContextMap()["error"], "no record of the shell")
+	assert.Len(t, rec.named("k8s:exec:end:"+id), 1, "the failure does not produce another end event")
+}
+
+// 容器里没有 /bin/sh（如 distroless 镜像里的自定义命令）时包装层起不来：不带包装照常运行，结束时记下无法清理的原因。
+func TestK8sExecWithoutShRunsUntrackedAndLogsWhyItCannotClean(t *testing.T) {
+	logs := observeLogs(t)
+	srv := k8stest.NewExecServer(t, false, func(s *k8stest.ExecSession) int {
+		if s.Command()[0] == "/bin/sh" {
+			s.Failure = `OCI runtime exec failed: exec: "/bin/sh": stat /bin/sh: no such file or directory: unknown`
+			return 0
+		}
+		_, _ = s.Stdout.Write([]byte(greeting))
+		return k8stest.EchoUntilExit(s)
+	})
+	k, rec, c := execTestBinder(t, srv.Host())
+	req := execReq("web-0")
+	req.Shell = "/busybox/sh"
+	id, err := k.startExec(c, req)
+	require.NoError(t, err)
+	assert.Equal(t, K8sExecStarted{Shell: "/busybox/sh"}, startedOf(t, rec, id))
+	require.Eventually(t, func() bool { return strings.Contains(rec.output(id), "greeting-before-any-input") }, 5*time.Second, 10*time.Millisecond)
+	require.NoError(t, k.WriteK8sExec(id, base64.StdEncoding.EncodeToString([]byte("hi\n"))))
+	require.Eventually(t, func() bool { return strings.Contains(rec.output(id), "hi") }, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, [][]string{shellCmd("tag1", "/busybox/sh"), {"/busybox/sh"}}, commandsOf(srv))
+
+	k.StopK8sExec(id)
+	assert.Equal(t, K8sExecEnd{Reason: ExecEndClosed}, rec.waitEnd(t, id))
+	var warned []observer.LoggedEntry
+	require.Eventually(t, func() bool {
+		warned = logs.FilterMessage("k8s exec shell cleanup unavailable").All()
+		return len(warned) > 0
+	}, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, zap.WarnLevel, warned[0].Level)
+	assertSessionFields(t, warned[0], "web-0")
+	assert.Equal(t, id, warned[0].ContextMap()["sessionID"])
+	assert.NotEmpty(t, warned[0].ContextMap()["reason"])
+	assert.Empty(t, srv.Commands(false), "an untracked shell cannot be found, so no cleanup exec is sent")
 }

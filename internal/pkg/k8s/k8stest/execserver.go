@@ -1,5 +1,6 @@
 // Package k8stest 提供测试用的假 K8s exec 端点：在 httptest 服务上接受 SPDY 升级，
 // 按 kubelet 的 v4 协议收发 stdin / stdout / error / resize 流，让 exec 会话的测试走真实的 client-go 执行器。
+// 交互式（TTY）exec 由 NewExecServer 的 run 处理，非 TTY 的 exec（如会话结束时的清理）由 RunNonTTY 处理。
 package k8stest
 
 import (
@@ -31,7 +32,8 @@ type TerminalSize struct {
 	Height uint16
 }
 
-// ExecSession 是一次被接受的 exec：Stdin / Stdout 已就绪，Resizes 收到客户端发来的尺寸。
+// ExecSession 是一次被接受的 exec：Stdin / Stdout 已就绪（请求不带 stdin 时 Stdin 直接读到 EOF），
+// Resizes 收到客户端发来的尺寸。
 type ExecSession struct {
 	Request *http.Request
 	Stdin   io.Reader
@@ -65,6 +67,8 @@ type ExecServer struct {
 	Server *httptest.Server
 	// Other 处理非 exec 的请求（例如读取 Pod 状态）；nil 时回 404。
 	Other http.Handler
+	// RunNonTTY 运行非 TTY 的 exec；nil 时立即以 0 退出。
+	RunNonTTY ExecFunc
 
 	mu       sync.Mutex
 	requests []*http.Request
@@ -106,7 +110,20 @@ func (s *ExecServer) Requests() []*http.Request {
 	return append([]*http.Request(nil), s.requests...)
 }
 
-// WaitEnded 等一次会话在服务端结束（命令返回或客户端断开），超时返回 false。
+// Commands 按收到的顺序返回交互式（tty 为 true）或非交互式 exec 请求的命令。
+func (s *ExecServer) Commands(tty bool) [][]string {
+	var out [][]string
+	for _, r := range s.Requests() {
+		if isTTY(r) == tty {
+			out = append(out, r.URL.Query()["command"])
+		}
+	}
+	return out
+}
+
+func isTTY(r *http.Request) bool { return r.URL.Query().Get("tty") == "true" }
+
+// WaitEnded 等一次交互式（TTY）会话在服务端结束（命令返回或客户端断开），超时返回 false；非 TTY 的 exec 不计。
 func (s *ExecServer) WaitEnded(timeout time.Duration) bool {
 	select {
 	case <-s.ended:
@@ -128,7 +145,15 @@ func (s *ExecServer) serve(w http.ResponseWriter, req *http.Request) {
 	s.mu.Lock()
 	s.requests = append(s.requests, req.Clone(req.Context()))
 	s.mu.Unlock()
-	defer func() { s.ended <- struct{}{} }()
+	run := s.run
+	if !isTTY(req) {
+		run = s.RunNonTTY
+		if run == nil {
+			run = func(*ExecSession) int { return 0 }
+		}
+	} else {
+		defer func() { s.ended <- struct{}{} }()
+	}
 
 	if _, err := httpstream.Handshake(req, w, []string{remotecommandconsts.StreamProtocolV4Name}); err != nil {
 		return
@@ -155,14 +180,21 @@ func (s *ExecServer) serve(w http.ResponseWriter, req *http.Request) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	expected := []string{corev1.StreamTypeError, corev1.StreamTypeStdin, corev1.StreamTypeStdout}
-	if req.URL.Query().Get("tty") == "true" {
-		expected = append(expected, corev1.StreamTypeResize)
+	// 与 kubelet 一样按请求参数确定客户端要建哪些流（TTY 会话含 resize 流）。
+	expected := []string{corev1.StreamTypeError}
+	q := req.URL.Query()
+	for param, kind := range map[string]string{
+		"stdin": corev1.StreamTypeStdin, "stdout": corev1.StreamTypeStdout,
+		"stderr": corev1.StreamTypeStderr, "tty": corev1.StreamTypeResize,
+	} {
+		if q.Get(param) == "true" {
+			expected = append(expected, kind)
+		}
 	}
 	ready := func() bool {
 		mu.Lock()
 		defer mu.Unlock()
-		// 与 kubelet 一样先等齐客户端要建的流（TTY 会话含 resize 流）再运行命令。
+		// 先等齐客户端要建的流再运行命令。
 		for _, kind := range expected {
 			if streams[kind] == nil {
 				return false
@@ -180,14 +212,18 @@ func (s *ExecServer) serve(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	var stdin io.Reader = strings.NewReader("")
+	if streams[corev1.StreamTypeStdin] != nil {
+		stdin = streams[corev1.StreamTypeStdin]
+	}
 	session := &ExecSession{
 		Request: req,
-		Stdin:   streams[corev1.StreamTypeStdin],
+		Stdin:   stdin,
 		Stdout:  streams[corev1.StreamTypeStdout],
 		Resizes: resizes,
 	}
 	done := make(chan int, 1)
-	go func() { done <- s.run(session) }()
+	go func() { done <- run(session) }()
 	select {
 	case code := <-done:
 		if session.Failure != "" {

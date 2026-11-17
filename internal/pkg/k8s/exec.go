@@ -1,12 +1,15 @@
 package k8s
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -42,6 +45,25 @@ type ExecRequest struct {
 
 // Exec 在容器里运行命令直到它退出、连接断开或 ctx 取消；命令以非 0 退出时返回的错误可用 ExitCode 取出退出码。
 func Exec(ctx context.Context, kubeconfig string, req ExecRequest, opts ...ClientOption) error {
+	target := ExecTarget{Namespace: req.Namespace, Pod: req.Pod, Container: req.Container}
+	return execStream(ctx, kubeconfig, target, req.Command, req.OnConnected, remotecommand.StreamOptions{
+		Stdin:             req.Stdin,
+		Stdout:            req.Stdout,
+		Tty:               true,
+		TerminalSizeQueue: &sizeQueue{ctx: ctx, sizes: req.Sizes},
+	}, opts...)
+}
+
+// ExecTarget 是 exec 所在的容器。
+type ExecTarget struct {
+	Namespace string
+	Pod       string
+	Container string
+}
+
+// execStream 按 streamOpts 建流（有 Stdin 才开 stdin，Tty 决定是否分配终端）运行一次 exec。
+func execStream(ctx context.Context, kubeconfig string, target ExecTarget, command []string, onConnected func(),
+	streamOpts remotecommand.StreamOptions, opts ...ClientOption) error {
 	// exec 会话是长连接，不能套用读取类请求的 30 秒超时。
 	config, err := restConfig(kubeconfig, append(append([]ClientOption{}, opts...), WithTimeout(0))...)
 	if err != nil {
@@ -52,17 +74,17 @@ func Exec(ctx context.Context, kubeconfig string, req ExecRequest, opts ...Clien
 		return fmt.Errorf("create k8s clientset: %w", err)
 	}
 	execURL := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").Namespace(req.Namespace).Name(req.Pod).SubResource("exec").
+		Resource("pods").Namespace(target.Namespace).Name(target.Pod).SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
-			Container: req.Container,
-			Command:   req.Command,
-			Stdin:     true,
-			Stdout:    true,
-			TTY:       true,
+			Container: target.Container,
+			Command:   command,
+			Stdin:     streamOpts.Stdin != nil,
+			Stdout:    streamOpts.Stdout != nil,
+			TTY:       streamOpts.Tty,
 		}, scheme.ParameterCodec).URL()
 
 	statusSeen := &atomic.Bool{}
-	transport, upgrader, err := spdyTransport(config, req.OnConnected, statusSeen)
+	transport, upgrader, err := spdyTransport(config, onConnected, statusSeen)
 	if err != nil {
 		return fmt.Errorf("create exec transport: %w", err)
 	}
@@ -70,12 +92,7 @@ func Exec(ctx context.Context, kubeconfig string, req ExecRequest, opts ...Clien
 	if err != nil {
 		return fmt.Errorf("create exec executor: %w", err)
 	}
-	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdin:             req.Stdin,
-		Stdout:            req.Stdout,
-		Tty:               true,
-		TerminalSizeQueue: &sizeQueue{ctx: ctx, sizes: req.Sizes},
-	})
+	err = executor.StreamWithContext(ctx, streamOpts)
 	// 命令正常结束时服务端会在 error 流上写一条 Success 状态；连接被掐断时 error 流直接 EOF，
 	// client-go 把两者都当成 nil，所以靠有没有收到状态来区分。
 	if err == nil && !statusSeen.Load() {
@@ -86,6 +103,104 @@ func Exec(ctx context.Context, kubeconfig string, req ExecRequest, opts ...Clien
 		return &CommandError{Err: err}
 	}
 	return err
+}
+
+// 结束会话时为什么要另起一次 exec 去结束 shell：kubelet / CRI 运行时（containerd 等）在 exec 的流式连接断开时
+// 不会结束 exec 启动的进程，TTY 会话里半关闭的 stdin 也到不了 shell，所以只断开连接会在容器里遗留 shell 及其前台程序。
+// 做法是会话的命令经 ShellCommand 的包装脚本启动：脚本把自己的进程号与启动时间记到 /tmp（不可写时 /dev/shm）下
+// 以 tag 命名的隐藏文件，再 exec 成用户的命令（进程号不变、终端里不输出任何东西）；会话结束时 EndShell 以一次非交互
+// exec 读回该记录，确认进程仍是那个 shell（防进程号复用）后向它所在会话的全部进程发 SIGHUP（同真实终端挂断），
+// 稍后对仍在运行的 shell 与前台进程组补 SIGKILL。只用 POSIX sh 的内建命令与 /proc，bash / busybox sh 容器都可用；
+// tag 每次会话随机生成，不会碰到其他会话的进程。
+
+// shellScript 是会话命令的包装：$1 是 tag，其后是用户的 argv。命令不存在时不留输出、以 127 退出，
+// 让调用方仍能按「可执行文件不存在」处理（「自动」回退到 sh，或不带包装重跑以拿到集群自己的原因）。
+const shellScript = `t=$1; shift
+command -v "$1" >/dev/null 2>&1 || exit 127
+st() { set -- ${1##*") "}; echo "${20}"; }
+s=; read -r s 2>/dev/null </proc/$$/stat
+r="$$ $(st "$s")"
+for d in /tmp /dev/shm; do { echo "$r" >"$d/.opskat-shell-$t"; } 2>/dev/null && break; done
+exec "$@"`
+
+// endShellScript 结束 tag 记录的 shell（见上）；做不到时在 stdout 说明原因并以非 0 退出。shell 已经退出不算失败。
+const endShellScript = `exec 2>&1
+t=$1 pid= start=
+[ -r /proc/self/stat ] || { echo "/proc is not available in the container"; exit 4; }
+for d in /tmp /dev/shm; do
+	f=$d/.opskat-shell-$t
+	if [ -f "$f" ]; then read -r pid start <"$f"; rm -f "$f" 2>/dev/null; break; fi
+done
+[ -n "$pid" ] || { echo "no record of the shell in /tmp or /dev/shm (not writable, or already ended)"; exit 3; }
+s=; read -r s 2>/dev/null <"/proc/$pid/stat" || exit 0
+set -- ${s##*") "}
+[ "$1" != Z ] && [ "${20}" = "$start" ] || exit 0
+sid=$4 tpgid=$6 all=$pid fg=$pid
+if [ "$sid" = "$pid" ]; then
+	for d in /proc/[0-9]*; do
+		p=${d#/proc/}
+		[ "$p" = "$pid" ] && continue
+		s=; read -r s 2>/dev/null <"$d/stat" || continue
+		set -- ${s##*") "}
+		[ "$4" = "$pid" ] || continue
+		all="$all $p"
+		[ "$3" = "$tpgid" ] && fg="$fg $p"
+	done
+fi
+live() { for p in $fg; do s=; read -r s 2>/dev/null <"/proc/$p/stat" || continue; set -- ${s##*") "}; [ "$1" = Z ] || echo "$p"; done; }
+kill -HUP $all 2>/dev/null
+kill -CONT $all 2>/dev/null
+i=0
+while [ -n "$(live)" ] && [ $i -lt 5 ]; do sleep 0.2 2>/dev/null || break; i=$((i+1)); done
+left=$(live)
+[ -n "$left" ] || exit 0
+kill -KILL $left 2>/dev/null
+sleep 0.2 2>/dev/null
+left=$(live)
+[ -z "$left" ] || { echo "still running after SIGKILL: $left"; exit 5; }`
+
+// ShellCommand 把会话要运行的 argv 包进记录进程号的脚本（见上）；argv 作为脚本参数原样传入，不经 shell 再解释。
+func ShellCommand(tag string, argv []string) []string {
+	return append([]string{"/bin/sh", "-c", shellScript, "opskat-shell", tag}, argv...)
+}
+
+// EndShellCommand 是 EndShell 在容器里运行的命令。
+func EndShellCommand(tag string) []string {
+	return []string{"/bin/sh", "-c", endShellScript, "opskat-shell-end", tag}
+}
+
+// EndShell 结束经 ShellCommand(tag, …) 启动、仍在容器里运行的 shell 及其前台程序；失败时错误里带上容器内给出的原因。
+func EndShell(ctx context.Context, kubeconfig string, target ExecTarget, tag string, opts ...ClientOption) error {
+	var out limitedBuffer
+	err := execStream(ctx, kubeconfig, target, EndShellCommand(tag), nil, remotecommand.StreamOptions{Stdout: &out}, opts...)
+	if err == nil {
+		return nil
+	}
+	if msg := strings.TrimSpace(out.String()); msg != "" {
+		return fmt.Errorf("%s: %w", msg, err)
+	}
+	return err
+}
+
+// limitedBuffer 只留前 4KB 输出（清理脚本的原因只有一行）；ctx 取消时执行器先返回、输出协程可能还在写，所以加锁。
+type limitedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if room := 4096 - b.buf.Len(); room > 0 {
+		b.buf.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
+}
+
+func (b *limitedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // ErrConnectionClosed 表示连接在命令结束前被对端或网络断开（没有收到命令的退出状态）。
