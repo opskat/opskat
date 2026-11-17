@@ -44,14 +44,14 @@ type ExecRequest struct {
 }
 
 // Exec 在容器里运行命令直到它退出、连接断开或 ctx 取消；命令以非 0 退出时返回的错误可用 ExitCode 取出退出码。
-func Exec(ctx context.Context, kubeconfig string, req ExecRequest, opts ...ClientOption) error {
+func Exec(ctx context.Context, conn *Conn, req ExecRequest) error {
 	target := ExecTarget{Namespace: req.Namespace, Pod: req.Pod, Container: req.Container}
-	return execStream(ctx, kubeconfig, target, req.Command, req.OnConnected, remotecommand.StreamOptions{
+	return execStream(ctx, conn, target, req.Command, req.OnConnected, remotecommand.StreamOptions{
 		Stdin:             req.Stdin,
 		Stdout:            req.Stdout,
 		Tty:               true,
 		TerminalSizeQueue: &sizeQueue{ctx: ctx, sizes: req.Sizes},
-	}, opts...)
+	})
 }
 
 // ExecTarget 是 exec 所在的容器。
@@ -62,13 +62,10 @@ type ExecTarget struct {
 }
 
 // execStream 按 streamOpts 建流（有 Stdin 才开 stdin，Tty 决定是否分配终端）运行一次 exec。
-func execStream(ctx context.Context, kubeconfig string, target ExecTarget, command []string, onConnected func(),
-	streamOpts remotecommand.StreamOptions, opts ...ClientOption) error {
-	// exec 会话是长连接，不能套用读取类请求的 30 秒超时。
-	config, err := restConfig(kubeconfig, append(append([]ClientOption{}, opts...), WithTimeout(0))...)
-	if err != nil {
-		return err
-	}
+func execStream(ctx context.Context, conn *Conn, target ExecTarget, command []string, onConnected func(),
+	streamOpts remotecommand.StreamOptions) error {
+	// exec 会话是长连接，不能套用读取类请求的 30 秒超时；它经 SPDY 升级独占一条自己拨出的连接。
+	config := conn.streamConfig()
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return fmt.Errorf("create k8s clientset: %w", err)
@@ -170,9 +167,9 @@ func EndShellCommand(tag string) []string {
 }
 
 // EndShell 结束经 ShellCommand(tag, …) 启动、仍在容器里运行的 shell 及其前台程序；失败时错误里带上容器内给出的原因。
-func EndShell(ctx context.Context, kubeconfig string, target ExecTarget, tag string, opts ...ClientOption) error {
+func EndShell(ctx context.Context, conn *Conn, target ExecTarget, tag string) error {
 	var out limitedBuffer
-	err := execStream(ctx, kubeconfig, target, EndShellCommand(tag), nil, remotecommand.StreamOptions{Stdout: &out}, opts...)
+	err := execStream(ctx, conn, target, EndShellCommand(tag), nil, remotecommand.StreamOptions{Stdout: &out})
 	if err == nil {
 		return nil
 	}

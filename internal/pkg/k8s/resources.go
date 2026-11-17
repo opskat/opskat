@@ -191,18 +191,14 @@ const (
 	metadataListAccept = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1,application/json"
 )
 
-// apiClient 是访问层的读客户端：discovery 与原始 REST 请求共用同一个由 restConfig 构造的连接。
+// apiClient 是访问层的读客户端：discovery 与原始 REST 请求共用连接的 HTTP 客户端。
 type apiClient struct {
 	discovery *discovery.DiscoveryClient
 	rest      rest.Interface
 }
 
-func newAPIClient(kubeconfig string, opts ...ClientOption) (*apiClient, error) {
-	config, err := restConfig(kubeconfig, opts...)
-	if err != nil {
-		return nil, err
-	}
-	disc, err := discovery.NewDiscoveryClientForConfig(config)
+func newAPIClient(conn *Conn) (*apiClient, error) {
+	disc, err := discovery.NewDiscoveryClientForConfigAndClient(conn.config, conn.client)
 	if err != nil {
 		return nil, fmt.Errorf("create k8s discovery client: %w", err)
 	}
@@ -253,8 +249,8 @@ func (c *apiClient) listPage(ctx context.Context, q ListQuery, accept string, li
 }
 
 // GetClusterVersion 只读取 /version：页面打开唯一依赖的读取，不受其它接口失败影响。
-func GetClusterVersion(ctx context.Context, kubeconfig string, opts ...ClientOption) (*ClusterVersion, error) {
-	c, err := newAPIClient(kubeconfig, opts...)
+func GetClusterVersion(ctx context.Context, conn *Conn) (*ClusterVersion, error) {
+	c, err := newAPIClient(conn)
 	if err != nil {
 		return nil, err
 	}
@@ -267,8 +263,8 @@ func GetClusterVersion(ctx context.Context, kubeconfig string, opts ...ClientOpt
 
 // GetResourceTypes 列出集群提供的可列出类型（每个组取首选版本），按类别归组排序；
 // 某个 API 组发现失败只记入 FailedGroups，其余照常返回。
-func GetResourceTypes(ctx context.Context, kubeconfig string, opts ...ClientOption) (*ResourceTypes, error) {
-	c, err := newAPIClient(kubeconfig, opts...)
+func GetResourceTypes(ctx context.Context, conn *Conn) (*ResourceTypes, error) {
+	c, err := newAPIClient(conn)
 	if err != nil {
 		return nil, err
 	}
@@ -340,8 +336,8 @@ func GetResourceTypes(ctx context.Context, kubeconfig string, opts ...ClientOpti
 
 // ListResources 以服务端 Table 形式分批列出资源并合并：只保留 priority 0 列（即 kubectl get 默认列），
 // 跨命名空间列出命名空间级资源时在名称后插入命名空间列。
-func ListResources(ctx context.Context, kubeconfig string, q ListQuery, opts ...ClientOption) (*ResourceList, error) {
-	c, err := newAPIClient(kubeconfig, opts...)
+func ListResources(ctx context.Context, conn *Conn, q ListQuery) (*ResourceList, error) {
+	c, err := newAPIClient(conn)
 	if err != nil {
 		return nil, err
 	}
@@ -445,8 +441,8 @@ func tableRow(tr metav1.TableRow, keep []int, includeObject, withPhase bool) (Re
 
 // CountResources 先取 limit=1 的元数据列表，有 remainingItemCount 即得总数；
 // 没有（例如带选择器）时沿 continue 分批数完。失败只影响这一个计数。
-func CountResources(ctx context.Context, kubeconfig string, q ListQuery, opts ...ClientOption) (*ResourceCount, error) {
-	c, err := newAPIClient(kubeconfig, opts...)
+func CountResources(ctx context.Context, conn *Conn, q ListQuery) (*ResourceCount, error) {
+	c, err := newAPIClient(conn)
 	if err != nil {
 		return nil, err
 	}
@@ -475,8 +471,8 @@ func CountResources(ctx context.Context, kubeconfig string, q ListQuery, opts ..
 }
 
 // GetResource 读取单个资源，返回去掉 managedFields 的对象与 YAML；资源不存在时 NotFound=true 而非报错。
-func GetResource(ctx context.Context, kubeconfig string, ref ResourceRef, opts ...ClientOption) (*ResourceObject, error) {
-	c, err := newAPIClient(kubeconfig, opts...)
+func GetResource(ctx context.Context, conn *Conn, ref ResourceRef) (*ResourceObject, error) {
+	c, err := newAPIClient(conn)
 	if err != nil {
 		return nil, err
 	}
@@ -515,8 +511,8 @@ func decodeObject(raw []byte) (map[string]any, error) {
 }
 
 // ListEvents 分批列出 core/v1 事件，可按对象（类型 + 名称）与告警过滤，按最近发生时间倒序。
-func ListEvents(ctx context.Context, kubeconfig string, q EventQuery, opts ...ClientOption) (*EventList, error) {
-	c, err := newAPIClient(kubeconfig, opts...)
+func ListEvents(ctx context.Context, conn *Conn, q EventQuery) (*EventList, error) {
+	c, err := newAPIClient(conn)
 	if err != nil {
 		return nil, err
 	}

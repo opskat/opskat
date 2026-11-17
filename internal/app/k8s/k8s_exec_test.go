@@ -22,6 +22,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/opskat/opskat/internal/connpool"
 	k8spkg "github.com/opskat/opskat/internal/pkg/k8s"
 	"github.com/opskat/opskat/internal/pkg/k8s/k8stest"
 )
@@ -88,15 +89,13 @@ func execTestBinder(t *testing.T, target string) (*K8s, *eventRecorder, *k8sCall
 	newShellTag = func() string { return fmt.Sprintf("tag%d", tags.Add(1)) }
 	t.Cleanup(func() { newShellTag = oldTag })
 	rec := &eventRecorder{}
-	k := &K8s{ctx: context.Background(), emit: rec.emit}
+	k := &K8s{ctx: context.Background(), emit: rec.emit, conns: connpool.NewAssetConnCache[*k8sCallContext]("k8s", connpool.DefaultConnIdleTTL)}
 	dial := func(ctx context.Context, network, _ string) (net.Conn, error) {
 		var d net.Dialer
 		return d.DialContext(ctx, network, target)
 	}
-	c := &k8sCallContext{
-		kubeconfig: k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""),
-		opts:       []k8spkg.ClientOption{k8spkg.WithDial(dial)},
-	}
+	c, err := newCallContext(k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""), "", k8spkg.WithDial(dial))
+	require.NoError(t, err)
 	return k, rec, c
 }
 
@@ -628,19 +627,21 @@ func TestK8sExecEndOnConnectionDrop(t *testing.T) {
 				_, _ = s.Stdout.Write([]byte(greeting))
 				select {} // 一直运行，直到连接被掐断
 			})
-			k, rec, c := execTestBinder(t, srv.Host())
+			k, rec, _ := execTestBinder(t, srv.Host())
 			var mu sync.Mutex
 			var conns []net.Conn
-			c.opts = []k8spkg.ClientOption{k8spkg.WithDial(func(ctx context.Context, network, _ string) (net.Conn, error) {
-				var d net.Dialer
-				conn, err := d.DialContext(ctx, network, srv.Host())
-				if err == nil {
-					mu.Lock()
-					conns = append(conns, conn)
-					mu.Unlock()
-				}
-				return conn, err
-			})}
+			c, err := newCallContext(k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""), "",
+				k8spkg.WithDial(func(ctx context.Context, network, _ string) (net.Conn, error) {
+					var d net.Dialer
+					conn, err := d.DialContext(ctx, network, srv.Host())
+					if err == nil {
+						mu.Lock()
+						conns = append(conns, conn)
+						mu.Unlock()
+					}
+					return conn, err
+				}))
+			require.NoError(t, err)
 			id, err := k.startExec(c, execReq("web-0"))
 			require.NoError(t, err)
 			require.Eventually(t, func() bool { return strings.Contains(rec.output(id), "greeting") }, 5*time.Second, 10*time.Millisecond)

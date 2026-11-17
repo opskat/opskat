@@ -94,14 +94,14 @@ func validateSegment(field, value string) error {
 // GetK8sClusterVersion 只读集群版本：集群页打开唯一依赖的读取。
 func (k *K8s) GetK8sClusterVersion(assetID int64) (string, error) {
 	return k.runK8sCall(assetID, "get K8S cluster version", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetClusterVersion(ctx, c.kubeconfig, c.opts...)
+		return k8spkg.GetClusterVersion(ctx, c.conn)
 	})
 }
 
 // GetK8sResourceTypes 列出集群可列出的资源类型（按类别归组），附带发现失败的 API 组。
 func (k *K8s) GetK8sResourceTypes(assetID int64) (string, error) {
 	return k.runK8sCall(assetID, "get K8S resource types", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetResourceTypes(ctx, c.kubeconfig, c.opts...)
+		return k8spkg.GetResourceTypes(ctx, c.conn)
 	})
 }
 
@@ -111,7 +111,7 @@ func (k *K8s) ListK8sResources(req K8sListRequest) (string, error) {
 		return "", fmt.Errorf("list K8S resources: %w", err)
 	}
 	return k.runK8sCall(req.AssetID, "list K8S resources", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.ListResources(ctx, c.kubeconfig, req.query(), c.opts...)
+		return k8spkg.ListResources(ctx, c.conn, req.query())
 	})
 }
 
@@ -121,7 +121,7 @@ func (k *K8s) CountK8sResources(req K8sListRequest) (string, error) {
 		return "", fmt.Errorf("count K8S resources: %w", err)
 	}
 	return k.runK8sCall(req.AssetID, "count K8S resources", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.CountResources(ctx, c.kubeconfig, req.query(), c.opts...)
+		return k8spkg.CountResources(ctx, c.conn, req.query())
 	})
 }
 
@@ -131,7 +131,7 @@ func (k *K8s) GetK8sResource(ref K8sResourceRef) (string, error) {
 		return "", fmt.Errorf("get K8S resource: %w", err)
 	}
 	return k.runK8sCall(ref.AssetID, "get K8S resource", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetResource(ctx, c.kubeconfig, ref.pkgRef(), c.opts...)
+		return k8spkg.GetResource(ctx, c.conn, ref.pkgRef())
 	})
 }
 
@@ -143,9 +143,9 @@ func (k *K8s) ListK8sEvents(req K8sEventsRequest) (string, error) {
 		}
 	}
 	return k.runK8sCall(req.AssetID, "list K8S events", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.ListEvents(ctx, c.kubeconfig, k8spkg.EventQuery{
+		return k8spkg.ListEvents(ctx, c.conn, k8spkg.EventQuery{
 			Namespace: req.Namespace, InvolvedKind: req.InvolvedKind, InvolvedName: req.InvolvedName, WarningOnly: req.WarningOnly,
-		}, c.opts...)
+		})
 	})
 }
 
@@ -158,6 +158,6 @@ func (k *K8s) GetK8sClusterHealth(assetID int64, namespace string) (string, erro
 		}
 	}
 	return k.runK8sCall(assetID, "get K8S cluster health", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetClusterHealth(ctx, c.kubeconfig, namespace, c.opts...)
+		return k8spkg.GetClusterHealth(ctx, c.conn, namespace)
 	})
 }

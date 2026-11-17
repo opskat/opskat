@@ -89,8 +89,8 @@ func listItems[T any](ctx context.Context, c *apiClient, q ListQuery) ([]T, erro
 }
 
 // GetClusterHealth 读取节点 / Pod / 工作负载 / Job / 告警事件并判定异常；namespace 为空表示全部命名空间（节点始终是全集群）。
-func GetClusterHealth(ctx context.Context, kubeconfig, namespace string, opts ...ClientOption) (*ClusterHealth, error) {
-	c, err := newAPIClient(kubeconfig, opts...)
+func GetClusterHealth(ctx context.Context, conn *Conn, namespace string) (*ClusterHealth, error) {
+	c, err := newAPIClient(conn)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +217,7 @@ func GetClusterHealth(ctx context.Context, kubeconfig, namespace string, opts ..
 		}, nil
 	})
 	section(sectionEvents, func() (func(), error) {
-		events, err := ListEvents(ctx, kubeconfig, EventQuery{Namespace: namespace, WarningOnly: true}, opts...)
+		events, err := ListEvents(ctx, conn, EventQuery{Namespace: namespace, WarningOnly: true})
 		if err != nil {
 			return nil, err
 		}

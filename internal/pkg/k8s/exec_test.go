@@ -96,11 +96,11 @@ func TestExecRunsOverSPDYThroughCustomDial(t *testing.T) {
 		_, _ = stdinW.Write([]byte("hello\n"))
 		_, _ = stdinW.Write([]byte("exit\n"))
 	}()
-	err := Exec(context.Background(), k8stest.Kubeconfig(unreachableAPI, srv.CAPEM(), "example.com"), ExecRequest{
+	err := Exec(context.Background(), testConn(t, k8stest.Kubeconfig(unreachableAPI, srv.CAPEM(), "example.com"), WithDial(d.dial)), ExecRequest{
 		Namespace: "ns1", Pod: "web-0", Container: "app", Command: []string{"/bin/sh"},
 		Stdin: stdinR, Stdout: &stdout, Sizes: resize,
 		OnConnected: func() { connected.Store(true) },
-	}, WithDial(d.dial))
+	})
 	require.NoError(t, err)
 
 	assert.True(t, connected.Load(), "OnConnected runs once the upgrade succeeds")
@@ -131,10 +131,10 @@ func TestExecRunsOverSPDYThroughCustomDial(t *testing.T) {
 func TestExecPassesEveryCommandWord(t *testing.T) {
 	srv := k8stest.NewExecServer(t, false, func(*k8stest.ExecSession) int { return 0 })
 	d := &countingDial{target: srv.Host()}
-	err := Exec(context.Background(), k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""), ExecRequest{
+	err := Exec(context.Background(), testConn(t, k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""), WithDial(d.dial)), ExecRequest{
 		Namespace: "ns1", Pod: "web-0", Container: "app", Command: []string{"python3", "-i"},
 		Stdin: bytes.NewReader(nil), Stdout: io.Discard, Sizes: make(chan TerminalSize),
-	}, WithDial(d.dial))
+	})
 	require.NoError(t, err)
 	reqs := srv.Requests()
 	require.Len(t, reqs, 1)
@@ -146,11 +146,11 @@ func TestExecVerifiesServerCertificateWithoutCA(t *testing.T) {
 	srv := k8stest.NewExecServer(t, true, nil)
 	d := &countingDial{target: srv.Host()}
 	var connected atomic.Bool
-	err := Exec(context.Background(), k8stest.Kubeconfig(unreachableAPI, nil, ""), ExecRequest{
+	err := Exec(context.Background(), testConn(t, k8stest.Kubeconfig(unreachableAPI, nil, ""), WithDial(d.dial)), ExecRequest{
 		Namespace: "ns1", Pod: "web-0", Container: "app", Command: []string{"/bin/sh"},
 		Stdin: bytes.NewReader(nil), Stdout: io.Discard, Sizes: make(chan TerminalSize),
 		OnConnected: func() { connected.Store(true) },
-	}, WithDial(d.dial))
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "certificate")
 	assert.False(t, connected.Load())
@@ -168,11 +168,11 @@ func TestExecCancelReleasesConnection(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- Exec(ctx, k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""), ExecRequest{
+		done <- Exec(ctx, testConn(t, k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""), WithDial(d.dial)), ExecRequest{
 			Namespace: "ns1", Pod: "web-0", Container: "app", Command: []string{"/bin/sh"},
 			Stdin: stdinR, Stdout: io.Discard, Sizes: make(chan TerminalSize),
 			OnConnected: func() { close(connected) },
-		}, WithDial(d.dial))
+		})
 	}()
 	select {
 	case <-connected:
@@ -194,10 +194,10 @@ func TestExecCancelReleasesConnection(t *testing.T) {
 func TestExecReportsExitCode(t *testing.T) {
 	srv := k8stest.NewExecServer(t, false, func(*k8stest.ExecSession) int { return 3 })
 	d := &countingDial{target: srv.Host()}
-	err := Exec(context.Background(), k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""), ExecRequest{
+	err := Exec(context.Background(), testConn(t, k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""), WithDial(d.dial)), ExecRequest{
 		Namespace: "ns1", Pod: "web-0", Container: "app", Command: []string{"/bin/sh"},
 		Stdin: bytes.NewReader(nil), Stdout: io.Discard, Sizes: make(chan TerminalSize),
-	}, WithDial(d.dial))
+	})
 	code, ok := ExitCode(err)
 	require.True(t, ok, "err = %v", err)
 	assert.Equal(t, 3, code)
@@ -213,11 +213,11 @@ func TestExecReturnsClusterReasonWhenUpgradeIsRefused(t *testing.T) {
 	t.Cleanup(srv.Close)
 	d := &countingDial{target: srv.Listener.Addr().String()}
 	var connected atomic.Bool
-	err := Exec(context.Background(), k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""), ExecRequest{
+	err := Exec(context.Background(), testConn(t, k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""), WithDial(d.dial)), ExecRequest{
 		Namespace: "ns1", Pod: "web-0", Container: "app", Command: []string{"/bin/sh"},
 		Stdin: bytes.NewReader(nil), Stdout: io.Discard, Sizes: make(chan TerminalSize),
 		OnConnected: func() { connected.Store(true) },
-	}, WithDial(d.dial))
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `cannot create resource "pods/exec"`)
 	assert.False(t, connected.Load())
@@ -243,8 +243,8 @@ func TestEndShellRunsNonInteractiveExecInTheContainer(t *testing.T) {
 	srv.RunNonTTY = func(*k8stest.ExecSession) int { ran.Store(true); return 0 }
 	d := &countingDial{target: srv.Host()}
 
-	err := EndShell(context.Background(), k8stest.Kubeconfig(unreachableAPI, srv.CAPEM(), "example.com"),
-		ExecTarget{Namespace: "ns1", Pod: "web-0", Container: "app"}, "TAG1", WithDial(d.dial))
+	err := EndShell(context.Background(), testConn(t, k8stest.Kubeconfig(unreachableAPI, srv.CAPEM(), "example.com"), WithDial(d.dial)),
+		ExecTarget{Namespace: "ns1", Pod: "web-0", Container: "app"}, "TAG1")
 	require.NoError(t, err)
 	assert.True(t, ran.Load())
 	assert.Contains(t, d.addresses(), "k8s.invalid:6443", "the cleanup goes through the asset dial too")
@@ -270,8 +270,8 @@ func TestEndShellFailureCarriesTheScriptsReason(t *testing.T) {
 		return 3
 	}
 	d := &countingDial{target: srv.Host()}
-	err := EndShell(context.Background(), k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""),
-		ExecTarget{Namespace: "ns1", Pod: "web-0", Container: "app"}, "TAG1", WithDial(d.dial))
+	err := EndShell(context.Background(), testConn(t, k8stest.Kubeconfig("http://k8s.invalid:6443", nil, ""), WithDial(d.dial)),
+		ExecTarget{Namespace: "ns1", Pod: "web-0", Container: "app"}, "TAG1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "shell pid file not found")
 	code, ok := ExitCode(err)

@@ -28,7 +28,7 @@ func (k *K8s) UpdateK8sResource(req K8sUpdateRequest) (string, error) {
 		return "", fmt.Errorf("update K8S resource: %w", err)
 	}
 	return k.runK8sWrite(req.Ref.AssetID, "update K8S resource", refTarget(req.Ref), func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.UpdateResource(ctx, c.kubeconfig, req.Ref.pkgRef(), req.YAML, c.opts...)
+		return k8spkg.UpdateResource(ctx, c.conn, req.Ref.pkgRef(), req.YAML)
 	})
 }
 
@@ -41,7 +41,7 @@ func (k *K8s) ApplyK8sYAML(req K8sApplyRequest) (string, error) {
 	}
 	target := []zap.Field{zap.String("selectedNamespace", req.DefaultNamespace), zap.Int("yamlBytes", len(req.YAML))}
 	return k.runK8sWrite(req.AssetID, "apply K8S YAML", target, func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.ApplyYAML(ctx, c.kubeconfig, req.YAML, applyNamespace(req.DefaultNamespace, c.namespace), c.opts...)
+		return k8spkg.ApplyYAML(ctx, c.conn, req.YAML, applyNamespace(req.DefaultNamespace, c.namespace))
 	})
 }
 
@@ -73,7 +73,7 @@ func (k *K8s) DeleteK8sResource(ref K8sResourceRef) (string, error) {
 		return "", fmt.Errorf("delete K8S resource: %w", err)
 	}
 	return k.runK8sWrite(ref.AssetID, "delete K8S resource", refTarget(ref), func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return struct{}{}, k8spkg.DeleteResource(ctx, c.kubeconfig, ref.pkgRef(), c.opts...)
+		return struct{}{}, k8spkg.DeleteResource(ctx, c.conn, ref.pkgRef())
 	})
 }
 
@@ -87,7 +87,7 @@ func (k *K8s) ScaleK8sResource(req K8sScaleRequest) (string, error) {
 	}
 	target := append(refTarget(req.Ref), zap.Int32("replicas", req.Replicas))
 	return k.runK8sWrite(req.Ref.AssetID, "scale K8S resource", target, func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return struct{}{}, k8spkg.ScaleResource(ctx, c.kubeconfig, req.Ref.pkgRef(), req.Replicas, c.opts...)
+		return struct{}{}, k8spkg.ScaleResource(ctx, c.conn, req.Ref.pkgRef(), req.Replicas)
 	})
 }
 
@@ -97,7 +97,7 @@ func (k *K8s) RestartK8sWorkload(ref K8sResourceRef) (string, error) {
 		return "", fmt.Errorf("restart K8S workload: %w", err)
 	}
 	return k.runK8sWrite(ref.AssetID, "restart K8S workload", refTarget(ref), func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return struct{}{}, k8spkg.RestartWorkload(ctx, c.kubeconfig, ref.pkgRef(), c.opts...)
+		return struct{}{}, k8spkg.RestartWorkload(ctx, c.conn, ref.pkgRef())
 	})
 }
 
@@ -150,7 +150,7 @@ func (k *K8s) TriggerK8sCronJob(req K8sCronJobRequest) (string, error) {
 	}
 	target := []zap.Field{zap.String("namespace", req.Namespace), zap.String("name", req.Name)}
 	return k.runK8sWrite(req.AssetID, "trigger K8S CronJob", target, func(ctx context.Context, c *k8sCallContext) (any, error) {
-		jobName, err := k8spkg.TriggerCronJob(ctx, c.kubeconfig, req.Namespace, req.Name, c.opts...)
+		jobName, err := k8spkg.TriggerCronJob(ctx, c.conn, req.Namespace, req.Name)
 		if err != nil {
 			return nil, err
 		}
@@ -165,7 +165,7 @@ func (k *K8s) SetK8sCronJobSuspend(req K8sCronJobSuspendRequest) (string, error)
 	}
 	target := []zap.Field{zap.String("namespace", req.Namespace), zap.String("name", req.Name), zap.Bool("suspend", req.Suspend)}
 	return k.runK8sWrite(req.AssetID, "set K8S CronJob suspend", target, func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return struct{}{}, k8spkg.SetCronJobSuspend(ctx, c.kubeconfig, req.Namespace, req.Name, req.Suspend, c.opts...)
+		return struct{}{}, k8spkg.SetCronJobSuspend(ctx, c.conn, req.Namespace, req.Name, req.Suspend)
 	})
 }
 
@@ -176,6 +176,6 @@ func (k *K8s) SetK8sNodeUnschedulable(req K8sNodeUnschedulableRequest) (string, 
 	}
 	target := []zap.Field{zap.String("name", req.Name), zap.Bool("unschedulable", req.Unschedulable)}
 	return k.runK8sWrite(req.AssetID, "set K8S node unschedulable", target, func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return struct{}{}, k8spkg.SetNodeUnschedulable(ctx, c.kubeconfig, req.Name, req.Unschedulable, c.opts...)
+		return struct{}{}, k8spkg.SetNodeUnschedulable(ctx, c.conn, req.Name, req.Unschedulable)
 	})
 }

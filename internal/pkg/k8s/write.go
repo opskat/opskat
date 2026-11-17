@@ -63,7 +63,7 @@ type ApplyResults struct {
 
 // UpdateResource 以 yamlText 整体更新 ref 指向的资源，随请求带上其中 metadata.resourceVersion：
 // 资源在读取之后被他人改过时集群回 409，映射为 Conflict 而不是错误。
-func UpdateResource(ctx context.Context, kubeconfig string, ref ResourceRef, yamlText string, opts ...ClientOption) (*UpdateResult, error) {
+func UpdateResource(ctx context.Context, conn *Conn, ref ResourceRef, yamlText string) (*UpdateResult, error) {
 	obj, err := parseObject([]byte(yamlText))
 	if err != nil {
 		return nil, err
@@ -78,13 +78,9 @@ func UpdateResource(ctx context.Context, kubeconfig string, ref ResourceRef, yam
 	if ns := obj.GetNamespace(); ns != "" && ns != ref.Namespace {
 		return nil, fmt.Errorf("metadata.namespace %q does not match the resource being edited (%q)", ns, ref.Namespace)
 	}
-	config, err := restConfig(kubeconfig, opts...)
+	dyn, err := dynamicFor(conn)
 	if err != nil {
 		return nil, err
-	}
-	dyn, err := dynamic.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("create k8s dynamic client: %w", err)
 	}
 	gvr := schema.GroupVersionResource{Group: ref.Group, Version: ref.Version, Resource: ref.Resource}
 	updated, err := resourceClient(dyn, gvr, ref.Namespace).Update(ctx, obj, metav1.UpdateOptions{FieldManager: fieldManager})
@@ -100,18 +96,14 @@ func UpdateResource(ctx context.Context, kubeconfig string, ref ResourceRef, yam
 
 // ApplyYAML 逐个文档做服务端 apply（字段管理者 opskat，不强制抢占字段）。文档按 `---` 分隔，
 // 未写命名空间的命名空间级资源落到 defaultNamespace（空则该文档失败）；某个文档失败不影响其他文档。
-func ApplyYAML(ctx context.Context, kubeconfig, yamlText, defaultNamespace string, opts ...ClientOption) (*ApplyResults, error) {
-	config, err := restConfig(kubeconfig, opts...)
-	if err != nil {
-		return nil, err
-	}
-	disc, err := discovery.NewDiscoveryClientForConfig(config)
+func ApplyYAML(ctx context.Context, conn *Conn, yamlText, defaultNamespace string) (*ApplyResults, error) {
+	disc, err := discovery.NewDiscoveryClientForConfigAndClient(conn.config, conn.client)
 	if err != nil {
 		return nil, fmt.Errorf("create k8s discovery client: %w", err)
 	}
-	dyn, err := dynamic.NewForConfig(config)
+	dyn, err := dynamicFor(conn)
 	if err != nil {
-		return nil, fmt.Errorf("create k8s dynamic client: %w", err)
+		return nil, err
 	}
 	mapper := restmapper.NewDeferredDiscoveryRESTMapper(memory.NewMemCacheClient(disc))
 
@@ -235,13 +227,9 @@ func applyDocument(ctx context.Context, dyn dynamic.Interface, mapper meta.RESTM
 // restartedAtAnnotation 是 kubectl rollout restart 写入 Pod 模板的注解，改动模板即触发滚动更新。
 const restartedAtAnnotation = "kubectl.kubernetes.io/restartedAt"
 
-// dynamicFor 用与其他读写一致的 rest 配置建 dynamic client。
-func dynamicFor(kubeconfig string, opts ...ClientOption) (dynamic.Interface, error) {
-	config, err := restConfig(kubeconfig, opts...)
-	if err != nil {
-		return nil, err
-	}
-	dyn, err := dynamic.NewForConfig(config)
+// dynamicFor 在连接共用的 HTTP 客户端上建 dynamic client。
+func dynamicFor(conn *Conn) (dynamic.Interface, error) {
+	dyn, err := dynamic.NewForConfigAndClient(conn.config, conn.client)
 	if err != nil {
 		return nil, fmt.Errorf("create k8s dynamic client: %w", err)
 	}
@@ -253,8 +241,8 @@ func gvrOf(ref ResourceRef) schema.GroupVersionResource {
 }
 
 // DeleteResource 删除 ref 指向的资源，级联策略为 Background（与 kubectl delete 默认一致：立即返回，依赖对象由 GC 后台清理）。
-func DeleteResource(ctx context.Context, kubeconfig string, ref ResourceRef, opts ...ClientOption) error {
-	dyn, err := dynamicFor(kubeconfig, opts...)
+func DeleteResource(ctx context.Context, conn *Conn, ref ResourceRef) error {
+	dyn, err := dynamicFor(conn)
 	if err != nil {
 		return err
 	}
@@ -263,11 +251,11 @@ func DeleteResource(ctx context.Context, kubeconfig string, ref ResourceRef, opt
 }
 
 // ScaleResource 通过 scale 子资源把副本数设为 replicas（≥ 0）。
-func ScaleResource(ctx context.Context, kubeconfig string, ref ResourceRef, replicas int32, opts ...ClientOption) error {
+func ScaleResource(ctx context.Context, conn *Conn, ref ResourceRef, replicas int32) error {
 	if replicas < 0 {
 		return fmt.Errorf("replicas must be >= 0, got %d", replicas)
 	}
-	dyn, err := dynamicFor(kubeconfig, opts...)
+	dyn, err := dynamicFor(conn)
 	if err != nil {
 		return err
 	}
@@ -277,8 +265,8 @@ func ScaleResource(ctx context.Context, kubeconfig string, ref ResourceRef, repl
 }
 
 // RestartWorkload 与 kubectl rollout restart 相同：把 Pod 模板注解 restartedAt 改为当前时间。
-func RestartWorkload(ctx context.Context, kubeconfig string, ref ResourceRef, opts ...ClientOption) error {
-	dyn, err := dynamicFor(kubeconfig, opts...)
+func RestartWorkload(ctx context.Context, conn *Conn, ref ResourceRef) error {
+	dyn, err := dynamicFor(conn)
 	if err != nil {
 		return err
 	}
@@ -318,8 +306,8 @@ func manualJobName(cronJob string) string {
 
 // TriggerCronJob 与 kubectl create job --from=cronjob/<name> 一样，按 CronJob 的 jobTemplate 新建一个 Job
 // （注解 instantiate=manual，属主为该 CronJob），不改动 CronJob 本身，返回新 Job 的名称。
-func TriggerCronJob(ctx context.Context, kubeconfig, namespace, name string, opts ...ClientOption) (string, error) {
-	dyn, err := dynamicFor(kubeconfig, opts...)
+func TriggerCronJob(ctx context.Context, conn *Conn, namespace, name string) (string, error) {
+	dyn, err := dynamicFor(conn)
 	if err != nil {
 		return "", err
 	}
@@ -369,8 +357,8 @@ func mergePatch(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVers
 }
 
 // SetCronJobSuspend 切换 CronJob 的 spec.suspend。
-func SetCronJobSuspend(ctx context.Context, kubeconfig, namespace, name string, suspend bool, opts ...ClientOption) error {
-	dyn, err := dynamicFor(kubeconfig, opts...)
+func SetCronJobSuspend(ctx context.Context, conn *Conn, namespace, name string, suspend bool) error {
+	dyn, err := dynamicFor(conn)
 	if err != nil {
 		return err
 	}
@@ -378,8 +366,8 @@ func SetCronJobSuspend(ctx context.Context, kubeconfig, namespace, name string, 
 }
 
 // SetNodeUnschedulable 只切换节点的 spec.unschedulable（cordon / uncordon），不驱逐任何 Pod。
-func SetNodeUnschedulable(ctx context.Context, kubeconfig, name string, unschedulable bool, opts ...ClientOption) error {
-	dyn, err := dynamicFor(kubeconfig, opts...)
+func SetNodeUnschedulable(ctx context.Context, conn *Conn, name string, unschedulable bool) error {
+	dyn, err := dynamicFor(conn)
 	if err != nil {
 		return err
 	}

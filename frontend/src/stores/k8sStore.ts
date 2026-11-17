@@ -7,6 +7,7 @@ import {
   GetK8sResourceTypes,
   ListK8sEvents,
   ListK8sResources,
+  ReleaseK8sConnections,
 } from "../../wailsjs/go/k8s/K8s";
 import { errorMessage } from "@/lib/errorMessage";
 import type { K8sActionContext } from "@/components/k8s/actions";
@@ -1031,9 +1032,14 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
 export const K8S_CLUSTER_PAGE_ID = "k8s-cluster";
 
 // The cluster page unmounts on every top-level tab switch, so its state lives here until its tab closes.
+// Closing the tab also releases the backend's cached connections to that cluster.
 registerTabCloseHook((tab) => {
   if (tab.type !== "page") return;
   const meta = tab.meta as PageTabMeta;
   if (meta.pageId !== K8S_CLUSTER_PAGE_ID || meta.assetId == null) return;
-  useK8sStore.getState().clearCluster(meta.assetId);
+  const assetId = meta.assetId;
+  useK8sStore.getState().clearCluster(assetId);
+  ReleaseK8sConnections(assetId).catch((error) =>
+    console.error(`Failed to release K8S connections of asset ${assetId}:`, error)
+  );
 });

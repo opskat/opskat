@@ -67,7 +67,16 @@ func (f *fakeAPIServer) requests(path string) []*http.Request {
 	return out
 }
 
-func (f *fakeAPIServer) kubeconfig() string { return kubeconfigFor(f.srv.URL) }
+func (f *fakeAPIServer) conn() *Conn { return testConn(f.t, kubeconfigFor(f.srv.URL)) }
+
+// testConn 构造连接，测试结束时关闭。
+func testConn(t *testing.T, kubeconfig string, opts ...ClientOption) *Conn {
+	t.Helper()
+	c, err := NewConn(kubeconfig, opts...)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	return c
+}
 
 func kubeconfigFor(server string) string {
 	return fmt.Sprintf(`apiVersion: v1
@@ -101,7 +110,7 @@ func TestGetClusterVersionReadsOnlyVersion(t *testing.T) {
 	f := newFakeAPIServer(t)
 	f.json("/version", `{"gitVersion":"v1.31.2+k3s1","platform":"linux/amd64"}`)
 
-	got, err := GetClusterVersion(context.Background(), f.kubeconfig())
+	got, err := GetClusterVersion(context.Background(), f.conn())
 	require.NoError(t, err)
 	assert.Equal(t, &ClusterVersion{Version: "v1.31.2+k3s1", Platform: "linux/amd64"}, got)
 	f.mu.Lock()
@@ -154,7 +163,7 @@ func TestGetResourceTypesGroupsIntoCategoriesAndKeepsRestOnGroupFailure(t *testi
 	f := newFakeAPIServer(t)
 	serveDiscovery(f)
 
-	got, err := GetResourceTypes(context.Background(), f.kubeconfig())
+	got, err := GetResourceTypes(context.Background(), f.conn())
 	require.NoError(t, err, "a failing API group must not fail the whole discovery")
 
 	type key struct{ group, resource string }
@@ -236,7 +245,7 @@ func TestListResourcesUsesServerSideTableAndMergesPages(t *testing.T) {
 		_, _ = w.Write([]byte(tableBody("", podRow("api-2", "default", "u2", false))))
 	})
 
-	got, err := ListResources(context.Background(), f.kubeconfig(), ListQuery{
+	got, err := ListResources(context.Background(), f.conn(), ListQuery{
 		Version: "v1", Resource: "pods", Namespace: "default",
 		LabelSelector: "app=api,tier!=db", FieldSelector: "status.phase=Running",
 	})
@@ -280,7 +289,7 @@ func TestListResourcesAllNamespacesAddsNamespaceColumn(t *testing.T) {
 		_, _ = w.Write([]byte(tableBody("", podRow("api-1", "prod", "u1", false), podRow("web-1", "dev", "u2", false))))
 	})
 
-	got, err := ListResources(context.Background(), f.kubeconfig(), ListQuery{Version: "v1", Resource: "pods"})
+	got, err := ListResources(context.Background(), f.conn(), ListQuery{Version: "v1", Resource: "pods"})
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(got.Columns), 2)
 	assert.Equal(t, "Name", got.Columns[0].Name)
@@ -296,7 +305,7 @@ func TestListResourcesClusterScopedHasNoNamespaceColumn(t *testing.T) {
 		_, _ = w.Write([]byte(tableBody("", podRow("n1", "", "u1", false))))
 	})
 
-	got, err := ListResources(context.Background(), f.kubeconfig(), ListQuery{Version: "v1", Resource: "nodes"})
+	got, err := ListResources(context.Background(), f.conn(), ListQuery{Version: "v1", Resource: "nodes"})
 	require.NoError(t, err)
 	for _, c := range got.Columns {
 		assert.NotEqual(t, "Namespace", c.Name)
@@ -311,7 +320,7 @@ func TestListResourcesIncludeObjectStripsManagedFields(t *testing.T) {
 		_, _ = w.Write([]byte(tableBody("", podRow("c1", "ns1", "u1", true))))
 	})
 
-	got, err := ListResources(context.Background(), f.kubeconfig(), ListQuery{
+	got, err := ListResources(context.Background(), f.conn(), ListQuery{
 		Group: "stable.example.com", Version: "v1", Resource: "crontabs", Namespace: "ns1", IncludeObject: true,
 	})
 	require.NoError(t, err)
@@ -338,7 +347,7 @@ func TestListResourcesWithPhaseCarriesStatusPhaseWithoutTheObject(t *testing.T) 
 		_, _ = w.Write([]byte(tableBody("", podRow("api-1", "default", "u1", withObject))))
 	})
 
-	got, err := ListResources(context.Background(), f.kubeconfig(), ListQuery{
+	got, err := ListResources(context.Background(), f.conn(), ListQuery{
 		Version: "v1", Resource: "pods", Namespace: "default", WithPhase: true,
 	})
 	require.NoError(t, err)
@@ -347,7 +356,7 @@ func TestListResourcesWithPhaseCarriesStatusPhaseWithoutTheObject(t *testing.T) 
 	assert.Equal(t, "Running", got.Rows[0].Phase)
 	assert.Nil(t, got.Rows[0].Object, "the object stays on the server side of the IPC")
 
-	plain, err := ListResources(context.Background(), f.kubeconfig(), ListQuery{Version: "v1", Resource: "pods", Namespace: "default"})
+	plain, err := ListResources(context.Background(), f.conn(), ListQuery{Version: "v1", Resource: "pods", Namespace: "default"})
 	require.NoError(t, err)
 	assert.Empty(t, plain.Rows[0].Phase)
 	assert.Equal(t, "Metadata", f.requests(path)[1].URL.Query().Get("includeObject"), "without WithPhase the cheap metadata table is used")
@@ -359,7 +368,7 @@ func TestListResourcesReturnsClusterErrorVerbatim(t *testing.T) {
 		writeStatus(w, http.StatusBadRequest, "BadRequest", "unable to parse requirement: found '=', expected: identifier")
 	})
 
-	_, err := ListResources(context.Background(), f.kubeconfig(), ListQuery{Version: "v1", Resource: "pods", Namespace: "default", LabelSelector: "=x"})
+	_, err := ListResources(context.Background(), f.conn(), ListQuery{Version: "v1", Resource: "pods", Namespace: "default", LabelSelector: "=x"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unable to parse requirement: found '=', expected: identifier")
 }
@@ -383,7 +392,7 @@ func TestListResourcesGoesThroughCustomDial(t *testing.T) {
 		return d.DialContext(ctx, network, target.Host)
 	}
 	// kubeconfig 指向一个不可解析的主机，只有经自定义拨号才能连上。
-	_, err = ListResources(context.Background(), kubeconfigFor("http://k8s.invalid:6443"), ListQuery{Version: "v1", Resource: "pods"}, WithDial(dial))
+	_, err = ListResources(context.Background(), testConn(t, kubeconfigFor("http://k8s.invalid:6443"), WithDial(dial)), ListQuery{Version: "v1", Resource: "pods"})
 	require.NoError(t, err)
 	mu.Lock()
 	defer mu.Unlock()
@@ -409,7 +418,7 @@ func TestCountResourcesUsesRemainingItemCount(t *testing.T) {
 	remaining := int64(41)
 	f.json(path, metaListBody("tok", &remaining, "d1"))
 
-	got, err := CountResources(context.Background(), f.kubeconfig(), ListQuery{Group: "apps", Version: "v1", Resource: "deployments", Namespace: "default"})
+	got, err := CountResources(context.Background(), f.conn(), ListQuery{Group: "apps", Version: "v1", Resource: "deployments", Namespace: "default"})
 	require.NoError(t, err)
 	assert.Equal(t, &ResourceCount{Count: 42}, got)
 	reqs := f.requests(path)
@@ -433,7 +442,7 @@ func TestCountResourcesPagesWhenRemainingItemCountMissing(t *testing.T) {
 		}
 	})
 
-	got, err := CountResources(context.Background(), f.kubeconfig(), ListQuery{Version: "v1", Resource: "pods", LabelSelector: "app=api"})
+	got, err := CountResources(context.Background(), f.conn(), ListQuery{Version: "v1", Resource: "pods", LabelSelector: "app=api"})
 	require.NoError(t, err)
 	assert.Equal(t, int64(5), got.Count)
 	reqs := f.requests(path)
@@ -450,7 +459,7 @@ func TestCountResourcesReturnsPermissionError(t *testing.T) {
 		writeStatus(w, http.StatusForbidden, "Forbidden", `secrets is forbidden: User "viewer" cannot list resource "secrets"`)
 	})
 
-	_, err := CountResources(context.Background(), f.kubeconfig(), ListQuery{Version: "v1", Resource: "secrets"})
+	_, err := CountResources(context.Background(), f.conn(), ListQuery{Version: "v1", Resource: "secrets"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `User "viewer" cannot list resource "secrets"`)
 }
@@ -461,7 +470,7 @@ func TestGetResourceStripsManagedFields(t *testing.T) {
 	f.json(path, `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"web","namespace":"default",
 	 "managedFields":[{"manager":"kubectl","operation":"Apply"}]},"spec":{"replicas":3}}`)
 
-	got, err := GetResource(context.Background(), f.kubeconfig(), ResourceRef{Group: "apps", Version: "v1", Resource: "deployments", Namespace: "default", Name: "web"})
+	got, err := GetResource(context.Background(), f.conn(), ResourceRef{Group: "apps", Version: "v1", Resource: "deployments", Namespace: "default", Name: "web"})
 	require.NoError(t, err)
 	assert.False(t, got.NotFound)
 	assert.Equal(t, map[string]any{"replicas": json.Number("3")}, got.Object["spec"], "numbers keep their exact value")
@@ -480,7 +489,7 @@ func TestGetResourceReportsNotFound(t *testing.T) {
 		writeStatus(w, http.StatusNotFound, "NotFound", `pods "gone" not found`)
 	})
 
-	got, err := GetResource(context.Background(), f.kubeconfig(), ResourceRef{Version: "v1", Resource: "pods", Namespace: "default", Name: "gone"})
+	got, err := GetResource(context.Background(), f.conn(), ResourceRef{Version: "v1", Resource: "pods", Namespace: "default", Name: "gone"})
 	require.NoError(t, err, "a deleted resource is a state, not an error")
 	assert.Equal(t, &ResourceObject{NotFound: true}, got)
 }
@@ -491,7 +500,7 @@ func TestGetResourceReturnsPermissionError(t *testing.T) {
 		writeStatus(w, http.StatusForbidden, "Forbidden", `secrets "s1" is forbidden`)
 	})
 
-	_, err := GetResource(context.Background(), f.kubeconfig(), ResourceRef{Version: "v1", Resource: "secrets", Namespace: "default", Name: "s1"})
+	_, err := GetResource(context.Background(), f.conn(), ResourceRef{Version: "v1", Resource: "secrets", Namespace: "default", Name: "s1"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `secrets "s1" is forbidden`)
 }
@@ -514,7 +523,7 @@ func TestListEventsFiltersByObjectAndSortsNewestFirst(t *testing.T) {
 		]}`))
 	})
 
-	got, err := ListEvents(context.Background(), f.kubeconfig(), EventQuery{Namespace: "default", InvolvedKind: "Pod", InvolvedName: "api-1", WarningOnly: true})
+	got, err := ListEvents(context.Background(), f.conn(), EventQuery{Namespace: "default", InvolvedKind: "Pod", InvolvedName: "api-1", WarningOnly: true})
 	require.NoError(t, err)
 
 	reqs := f.requests(path)
@@ -536,7 +545,7 @@ func TestListEventsAllNamespacesWithoutFilters(t *testing.T) {
 	f := newFakeAPIServer(t)
 	f.json("/api/v1/events", `{"kind":"EventList","apiVersion":"v1","metadata":{},"items":[]}`)
 
-	got, err := ListEvents(context.Background(), f.kubeconfig(), EventQuery{})
+	got, err := ListEvents(context.Background(), f.conn(), EventQuery{})
 	require.NoError(t, err)
 	assert.NotNil(t, got.Events)
 	assert.Empty(t, got.Events)
@@ -550,7 +559,7 @@ func TestListResourcesRejectsRowWithMissingCells(t *testing.T) {
 	f.json("/api/v1/pods", fmt.Sprintf(`{"kind":"Table","apiVersion":"meta.k8s.io/v1","metadata":{},"columnDefinitions":%s,
 	 "rows":[{"cells":["api-1"],"object":{"metadata":{"name":"api-1","namespace":"default"}}}]}`, podTableColumns))
 
-	_, err := ListResources(context.Background(), f.kubeconfig(), ListQuery{Version: "v1", Resource: "pods"})
+	_, err := ListResources(context.Background(), f.conn(), ListQuery{Version: "v1", Resource: "pods"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cells")
 }

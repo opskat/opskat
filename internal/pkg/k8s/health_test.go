@@ -60,7 +60,7 @@ func TestGetClusterHealthClassifiesPods(t *testing.T) {
 		podJSON("completed", "Succeeded", `{"name":"c","ready":false,"restartCount":1,"state":{"terminated":{"exitCode":0,"reason":"Completed"}},"lastState":{"terminated":{"exitCode":1}}}`),
 	))
 
-	got, err := GetClusterHealth(context.Background(), f.kubeconfig(), "")
+	got, err := GetClusterHealth(context.Background(), f.conn(), "")
 	require.NoError(t, err)
 
 	assert.Equal(t, 13, got.Pods.Total)
@@ -95,7 +95,7 @@ func TestGetClusterHealthNodes(t *testing.T) {
 		nodeJSON("d", "Unknown", true),
 	))
 
-	got, err := GetClusterHealth(context.Background(), f.kubeconfig(), "")
+	got, err := GetClusterHealth(context.Background(), f.conn(), "")
 	require.NoError(t, err)
 	assert.Equal(t, 4, got.Nodes.Total)
 	assert.Equal(t, 2, got.Nodes.Schedulable)
@@ -127,7 +127,7 @@ func TestGetClusterHealthWorkloadsAndJobs(t *testing.T) {
 		`{"metadata":{"name":"retrying","namespace":"prod"},"status":{"failed":1,"active":1}}`,
 	))
 
-	got, err := GetClusterHealth(context.Background(), f.kubeconfig(), "")
+	got, err := GetClusterHealth(context.Background(), f.conn(), "")
 	require.NoError(t, err)
 
 	byName := map[string]AttentionItem{}
@@ -167,7 +167,7 @@ func TestGetClusterHealthScopesToNamespaceExceptNodes(t *testing.T) {
 		`{"metadata":{"name":"e2"},"type":"Warning","reason":"Failed","lastTimestamp":"2026-11-10T09:00:00Z"}`,
 	))
 
-	got, err := GetClusterHealth(context.Background(), f.kubeconfig(), "prod")
+	got, err := GetClusterHealth(context.Background(), f.conn(), "prod")
 	require.NoError(t, err)
 	assert.Equal(t, 1, got.Nodes.Total)
 	assert.Equal(t, 1, got.Pods.Total)
@@ -189,7 +189,7 @@ func TestGetClusterHealthIsolatesForbiddenSections(t *testing.T) {
 		writeStatus(w, http.StatusForbidden, "Forbidden", `jobs.batch is forbidden`)
 	})
 
-	got, err := GetClusterHealth(context.Background(), f.kubeconfig(), "")
+	got, err := GetClusterHealth(context.Background(), f.conn(), "")
 	require.NoError(t, err, "a forbidden section must not fail the others")
 
 	assert.Contains(t, got.Nodes.Error, "forbidden")

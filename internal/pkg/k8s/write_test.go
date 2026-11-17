@@ -63,7 +63,7 @@ func TestUpdateResourcePutsWithReadTimeResourceVersion(t *testing.T) {
 	f := newFakeAPIServer(t)
 	f.handle("/api/v1/namespaces/default/configmaps/cm1", echoObject(t))
 
-	res, err := UpdateResource(context.Background(), f.kubeconfig(), cmRef, cmYAML)
+	res, err := UpdateResource(context.Background(), f.conn(), cmRef, cmYAML)
 	require.NoError(t, err)
 	assert.False(t, res.Conflict)
 	assert.Equal(t, "v", res.Object["data"].(map[string]any)["k"])
@@ -81,7 +81,7 @@ func TestUpdateResourceSendsResourceVersionInBody(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(sent)
 	})
-	_, err := UpdateResource(context.Background(), f.kubeconfig(), cmRef, cmYAML)
+	_, err := UpdateResource(context.Background(), f.conn(), cmRef, cmYAML)
 	require.NoError(t, err)
 	assert.Equal(t, "42", sent["metadata"].(map[string]any)["resourceVersion"])
 }
@@ -91,7 +91,7 @@ func TestUpdateResourceMapsConflict(t *testing.T) {
 	f.handle("/api/v1/namespaces/default/configmaps/cm1", func(w http.ResponseWriter, _ *http.Request) {
 		writeStatus(w, http.StatusConflict, "Conflict", `Operation cannot be fulfilled on configmaps "cm1": the object has been modified`)
 	})
-	res, err := UpdateResource(context.Background(), f.kubeconfig(), cmRef, cmYAML)
+	res, err := UpdateResource(context.Background(), f.conn(), cmRef, cmYAML)
 	require.NoError(t, err)
 	assert.True(t, res.Conflict)
 	assert.Contains(t, res.Message, "the object has been modified")
@@ -103,15 +103,15 @@ func TestUpdateResourcePassesThroughOtherFailures(t *testing.T) {
 	f.handle("/api/v1/namespaces/default/configmaps/cm1", func(w http.ResponseWriter, _ *http.Request) {
 		writeStatus(w, http.StatusForbidden, "Forbidden", `configmaps "cm1" is forbidden: User "u" cannot update resource`)
 	})
-	_, err := UpdateResource(context.Background(), f.kubeconfig(), cmRef, cmYAML)
+	_, err := UpdateResource(context.Background(), f.conn(), cmRef, cmYAML)
 	require.ErrorContains(t, err, `cannot update resource`)
 }
 
 func TestUpdateResourceRejectsBadInput(t *testing.T) {
 	f := newFakeAPIServer(t)
-	_, err := UpdateResource(context.Background(), f.kubeconfig(), cmRef, "metadata: [unclosed")
+	_, err := UpdateResource(context.Background(), f.conn(), cmRef, "metadata: [unclosed")
 	require.Error(t, err)
-	_, err = UpdateResource(context.Background(), f.kubeconfig(), cmRef, "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm1\n")
+	_, err = UpdateResource(context.Background(), f.conn(), cmRef, "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm1\n")
 	require.ErrorContains(t, err, "resourceVersion")
 	assert.Empty(t, f.requests("/api/v1/namespaces/default/configmaps/cm1"), "nothing is sent for invalid input")
 }
@@ -123,11 +123,11 @@ func TestUpdateResourceRejectsYAMLForAnotherResource(t *testing.T) {
 	f.handle("/api/v1/namespaces/other/configmaps/cm1", echoObject(t))
 
 	renamed := strings.Replace(cmYAML, "name: cm1", "name: cm2", 1)
-	_, err := UpdateResource(context.Background(), f.kubeconfig(), cmRef, renamed)
+	_, err := UpdateResource(context.Background(), f.conn(), cmRef, renamed)
 	require.ErrorContains(t, err, "cm2")
 
 	moved := strings.Replace(cmYAML, "namespace: default", "namespace: other", 1)
-	_, err = UpdateResource(context.Background(), f.kubeconfig(), cmRef, moved)
+	_, err = UpdateResource(context.Background(), f.conn(), cmRef, moved)
 	require.ErrorContains(t, err, "other")
 
 	assert.Empty(t, f.requests("/api/v1/namespaces/default/configmaps/cm2"))
@@ -199,7 +199,7 @@ kind: Namespace
 metadata:
   name: ops
 `
-	got, err := ApplyYAML(context.Background(), f.kubeconfig(), yamlText, "team")
+	got, err := ApplyYAML(context.Background(), f.conn(), yamlText, "team")
 	require.NoError(t, err)
 	require.Len(t, got.Results, 5)
 
@@ -234,7 +234,7 @@ func TestApplyYAMLWithoutAnyNamespaceFailsOnlyNamespacedDocuments(t *testing.T) 
 	})
 	yamlText := "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cm\n---\napiVersion: v1\nkind: Namespace\nmetadata:\n  name: ops\n"
 
-	got, err := ApplyYAML(context.Background(), f.kubeconfig(), yamlText, "")
+	got, err := ApplyYAML(context.Background(), f.conn(), yamlText, "")
 	require.NoError(t, err)
 	require.Len(t, got.Results, 2)
 	assert.Equal(t, ApplyFailed, got.Results[0].Action)
@@ -248,7 +248,7 @@ func TestApplyYAMLReportsSyntaxErrorsAndMissingNamesPerDocument(t *testing.T) {
 	serveWriteDiscovery(f)
 	yamlText := "metadata: [unclosed\n---\napiVersion: v1\nkind: ConfigMap\nmetadata: {}\n---\n# only a comment\n"
 
-	got, err := ApplyYAML(context.Background(), f.kubeconfig(), yamlText, "team")
+	got, err := ApplyYAML(context.Background(), f.conn(), yamlText, "team")
 	require.NoError(t, err)
 	require.Len(t, got.Results, 2, "a comment-only document is not a document")
 	for i, r := range got.Results {
@@ -270,7 +270,7 @@ func TestDeleteResourceUsesBackgroundPropagation(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Success"}`))
 	})
-	require.NoError(t, DeleteResource(context.Background(), f.kubeconfig(), deployRef))
+	require.NoError(t, DeleteResource(context.Background(), f.conn(), deployRef))
 
 	reqs := f.requests(deployPath)
 	require.Len(t, reqs, 1)
@@ -284,7 +284,7 @@ func TestDeleteResourceClusterScopedHasNoNamespaceInPath(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"kind":"Status","apiVersion":"v1","status":"Success"}`))
 	})
-	require.NoError(t, DeleteResource(context.Background(), f.kubeconfig(), ResourceRef{Version: "v1", Resource: "namespaces", Name: "team"}))
+	require.NoError(t, DeleteResource(context.Background(), f.conn(), ResourceRef{Version: "v1", Resource: "namespaces", Name: "team"}))
 	require.Len(t, f.requests("/api/v1/namespaces/team"), 1)
 }
 
@@ -293,10 +293,10 @@ func TestDeleteResourcePassesThroughClusterError(t *testing.T) {
 	f.handle(deployPath, func(w http.ResponseWriter, _ *http.Request) {
 		writeStatus(w, http.StatusForbidden, "Forbidden", `deployments.apps "web" is forbidden: User "u" cannot delete resource`)
 	})
-	require.ErrorContains(t, DeleteResource(context.Background(), f.kubeconfig(), deployRef), "cannot delete resource")
+	require.ErrorContains(t, DeleteResource(context.Background(), f.conn(), deployRef), "cannot delete resource")
 
 	g := newFakeAPIServer(t)
-	err := DeleteResource(context.Background(), g.kubeconfig(), deployRef)
+	err := DeleteResource(context.Background(), g.conn(), deployRef)
 	require.Error(t, err)
 	assert.True(t, apierrors.IsNotFound(err), "a missing object stays a NotFound error")
 }
@@ -310,7 +310,7 @@ func TestScaleResourcePatchesScaleSubresource(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"kind":"Scale","apiVersion":"autoscaling/v1","spec":{"replicas":5}}`))
 	})
-	require.NoError(t, ScaleResource(context.Background(), f.kubeconfig(), deployRef, 5))
+	require.NoError(t, ScaleResource(context.Background(), f.conn(), deployRef, 5))
 
 	reqs := f.requests(deployPath + "/scale")
 	require.Len(t, reqs, 1)
@@ -328,10 +328,10 @@ func TestScaleResourceAllowsZeroAndRejectsNegative(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"kind":"Scale","apiVersion":"autoscaling/v1"}`))
 	})
-	require.NoError(t, ScaleResource(context.Background(), f.kubeconfig(), deployRef, 0))
+	require.NoError(t, ScaleResource(context.Background(), f.conn(), deployRef, 0))
 	assert.Equal(t, float64(0), body["spec"].(map[string]any)["replicas"])
 
-	require.Error(t, ScaleResource(context.Background(), f.kubeconfig(), deployRef, -1))
+	require.Error(t, ScaleResource(context.Background(), f.conn(), deployRef, -1))
 	assert.Len(t, f.requests(deployPath+"/scale"), 1, "a negative target never reaches the cluster")
 }
 
@@ -340,7 +340,7 @@ func TestScaleResourcePassesThroughClusterError(t *testing.T) {
 	f.handle(deployPath+"/scale", func(w http.ResponseWriter, _ *http.Request) {
 		writeStatus(w, http.StatusForbidden, "Forbidden", `deployments.apps "web" is forbidden: cannot patch resource "deployments/scale"`)
 	})
-	require.ErrorContains(t, ScaleResource(context.Background(), f.kubeconfig(), deployRef, 2), `deployments/scale`)
+	require.ErrorContains(t, ScaleResource(context.Background(), f.conn(), deployRef, 2), `deployments/scale`)
 }
 
 func TestRestartWorkloadPatchesRestartedAtAnnotation(t *testing.T) {
@@ -353,7 +353,7 @@ func TestRestartWorkloadPatchesRestartedAtAnnotation(t *testing.T) {
 		_, _ = w.Write([]byte(`{"kind":"Deployment","apiVersion":"apps/v1","metadata":{"name":"web"}}`))
 	})
 	before := time.Now().Add(-time.Second)
-	require.NoError(t, RestartWorkload(context.Background(), f.kubeconfig(), deployRef))
+	require.NoError(t, RestartWorkload(context.Background(), f.conn(), deployRef))
 
 	reqs := f.requests(deployPath)
 	require.Len(t, reqs, 1)
@@ -371,7 +371,7 @@ func TestRestartWorkloadPassesThroughClusterError(t *testing.T) {
 	f.handle(deployPath, func(w http.ResponseWriter, _ *http.Request) {
 		writeStatus(w, http.StatusForbidden, "Forbidden", `deployments.apps "web" is forbidden: cannot patch resource`)
 	})
-	require.ErrorContains(t, RestartWorkload(context.Background(), f.kubeconfig(), deployRef), "cannot patch resource")
+	require.ErrorContains(t, RestartWorkload(context.Background(), f.conn(), deployRef), "cannot patch resource")
 }
 
 const cronPath = "/apis/batch/v1/namespaces/default/cronjobs/nightly"
@@ -396,7 +396,7 @@ func TestTriggerCronJobCreatesJobFromTemplateWithOwnerReference(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(posted)
 	})
 
-	name, err := TriggerCronJob(context.Background(), f.kubeconfig(), "default", "nightly")
+	name, err := TriggerCronJob(context.Background(), f.conn(), "default", "nightly")
 	require.NoError(t, err)
 
 	assert.Regexp(t, `^nightly-manual-[a-z0-9]{5}$`, name)
@@ -431,7 +431,7 @@ func TestTriggerCronJobTruncatesLongNamesToALegalJobName(t *testing.T) {
 	serveCron(f, path, strings.Replace(cronJSON, `"name":"nightly"`, `"name":"`+long+`"`, 1))
 	f.handle(jobsPath, echoObject(t))
 
-	name, err := TriggerCronJob(context.Background(), f.kubeconfig(), "default", long)
+	name, err := TriggerCronJob(context.Background(), f.conn(), "default", long)
 	require.NoError(t, err)
 	assert.LessOrEqual(t, len(name), 63)
 	assert.Regexp(t, `^a{49}-manual-[a-z0-9]{5}$`, name, "no dangling '-' before the suffix")
@@ -443,11 +443,11 @@ func TestTriggerCronJobPassesThroughClusterErrors(t *testing.T) {
 	f.handle(jobsPath, func(w http.ResponseWriter, _ *http.Request) {
 		writeStatus(w, http.StatusForbidden, "Forbidden", `jobs.batch is forbidden: cannot create resource "jobs"`)
 	})
-	_, err := TriggerCronJob(context.Background(), f.kubeconfig(), "default", "nightly")
+	_, err := TriggerCronJob(context.Background(), f.conn(), "default", "nightly")
 	require.ErrorContains(t, err, `cannot create resource "jobs"`)
 
 	g := newFakeAPIServer(t)
-	_, err = TriggerCronJob(context.Background(), g.kubeconfig(), "default", "nightly")
+	_, err = TriggerCronJob(context.Background(), g.conn(), "default", "nightly")
 	require.Error(t, err)
 	assert.True(t, apierrors.IsNotFound(err))
 }
@@ -462,7 +462,7 @@ func TestSetCronJobSuspendMergePatchesOnlySuspend(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(cronJSON))
 		})
-		require.NoError(t, SetCronJobSuspend(context.Background(), f.kubeconfig(), "default", "nightly", suspend))
+		require.NoError(t, SetCronJobSuspend(context.Background(), f.conn(), "default", "nightly", suspend))
 		reqs := f.requests(cronPath)
 		require.Len(t, reqs, 1)
 		assert.Equal(t, http.MethodPatch, reqs[0].Method)
@@ -476,7 +476,7 @@ func TestSetCronJobSuspendPassesThroughClusterError(t *testing.T) {
 	f.handle(cronPath, func(w http.ResponseWriter, _ *http.Request) {
 		writeStatus(w, http.StatusForbidden, "Forbidden", `cronjobs.batch "nightly" is forbidden: cannot patch resource`)
 	})
-	require.ErrorContains(t, SetCronJobSuspend(context.Background(), f.kubeconfig(), "default", "nightly", true), "cannot patch resource")
+	require.ErrorContains(t, SetCronJobSuspend(context.Background(), f.conn(), "default", "nightly", true), "cannot patch resource")
 }
 
 func TestSetNodeUnschedulableMergePatchesOnlyThatField(t *testing.T) {
@@ -489,7 +489,7 @@ func TestSetNodeUnschedulableMergePatchesOnlyThatField(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"kind":"Node","apiVersion":"v1","metadata":{"name":"n1"}}`))
 		})
-		require.NoError(t, SetNodeUnschedulable(context.Background(), f.kubeconfig(), "n1", unschedulable))
+		require.NoError(t, SetNodeUnschedulable(context.Background(), f.conn(), "n1", unschedulable))
 		reqs := f.requests("/api/v1/nodes/n1")
 		require.Len(t, reqs, 1, "no eviction / pod calls")
 		assert.Equal(t, http.MethodPatch, reqs[0].Method)
@@ -503,5 +503,5 @@ func TestSetNodeUnschedulablePassesThroughClusterError(t *testing.T) {
 	f.handle("/api/v1/nodes/n1", func(w http.ResponseWriter, _ *http.Request) {
 		writeStatus(w, http.StatusForbidden, "Forbidden", `nodes "n1" is forbidden: cannot patch resource "nodes"`)
 	})
-	require.ErrorContains(t, SetNodeUnschedulable(context.Background(), f.kubeconfig(), "n1", true), `cannot patch resource "nodes"`)
+	require.ErrorContains(t, SetNodeUnschedulable(context.Background(), f.conn(), "n1", true), `cannot patch resource "nodes"`)
 }

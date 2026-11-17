@@ -282,7 +282,7 @@ func (k *K8s) StartK8sExec(req K8sExecRequest) (string, error) {
 	}
 	loadCtx, cancel := context.WithTimeout(k.ctx, 30*time.Second)
 	defer cancel()
-	c, err := k.loadK8sCall(loadCtx, req.AssetID)
+	c, err := k.call(loadCtx, req.AssetID)
 	if err != nil {
 		logger.Ctx(k.ctx).Error("k8s exec failed", execLogFields(req, zap.Error(err))...)
 		return "", err
@@ -402,7 +402,7 @@ func (k *K8s) endShell(c *k8sCallContext, req K8sExecRequest, tag string, end K8
 	defer cancel()
 	started := time.Now()
 	log.Info("k8s exec shell cleanup start")
-	err := k8spkg.EndShell(ctx, c.kubeconfig, k8spkg.ExecTarget{Namespace: req.Namespace, Pod: req.Pod, Container: req.Container}, tag, c.opts...)
+	err := k8spkg.EndShell(ctx, c.conn, k8spkg.ExecTarget{Namespace: req.Namespace, Pod: req.Pod, Container: req.Container}, tag)
 	if err != nil {
 		log.Warn("k8s exec shell cleanup failed", zap.Duration("elapsed", time.Since(started)), zap.Error(err))
 		return
@@ -454,7 +454,7 @@ func (k *K8s) runAttempt(ctx context.Context, c *k8sCallContext, req K8sExecRequ
 			k.emit("k8s:exec:data:"+sessionID, base64.StdEncoding.EncodeToString(data))
 		},
 	}
-	err := k8spkg.Exec(attemptCtx, c.kubeconfig, k8spkg.ExecRequest{
+	err := k8spkg.Exec(attemptCtx, c.conn, k8spkg.ExecRequest{
 		Namespace: req.Namespace,
 		Pod:       req.Pod,
 		Container: req.Container,
@@ -469,7 +469,7 @@ func (k *K8s) runAttempt(ctx context.Context, c *k8sCallContext, req K8sExecRequ
 				emitStarted()
 			}
 		},
-	}, c.opts...)
+	})
 	cancelAttempt()
 	// 关写端让这次尝试遗留的 stdin 读取协程读到 EOF 后退出，不再抢后面输入。
 	_ = stdinW.Close()
@@ -483,9 +483,9 @@ func (k *K8s) enrichEnd(c *k8sCallContext, req K8sExecRequest, since time.Time, 
 	ctx, cancel := context.WithTimeout(k.ctx, execEndPollWindow)
 	defer cancel()
 	for {
-		pod, err := k8spkg.GetResource(ctx, c.kubeconfig, k8spkg.ResourceRef{
+		pod, err := k8spkg.GetResource(ctx, c.conn, k8spkg.ResourceRef{
 			Version: "v1", Resource: "pods", Namespace: req.Namespace, Name: req.Pod,
-		}, c.opts...)
+		})
 		if err != nil {
 			if ctx.Err() == nil {
 				log.Warn("k8s exec end: read pod status failed", zap.Error(err))

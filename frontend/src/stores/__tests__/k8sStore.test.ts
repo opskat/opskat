@@ -5,6 +5,7 @@ import {
   GetK8sResourceTypes,
   ListK8sEvents,
   ListK8sResources,
+  ReleaseK8sConnections,
 } from "../../../wailsjs/go/k8s/K8s";
 import type { k8s } from "../../../wailsjs/go/models";
 import { objectsKey, resourceTabId, useK8sStore } from "../k8sStore";
@@ -432,5 +433,32 @@ describe("k8sStore", () => {
     expect(state.clusters[assetId]).toBeUndefined();
     expect(state.lists[assetId]).toBeUndefined();
     expect(state.clusters[other]).toBeDefined();
+  });
+
+  it("releases only that asset's cluster connections when its cluster tab closes", () => {
+    const other = assetId + 600;
+    const openCluster = (id: number) =>
+      useTabStore.getState().openTab({
+        id: `k8s-${id}`,
+        type: "page",
+        label: "k8s",
+        meta: { type: "page", pageId: "k8s-cluster", assetId: id },
+      });
+    openCluster(assetId);
+    openCluster(other);
+    useTabStore.getState().openTab({
+      id: "settings",
+      type: "page",
+      label: "settings",
+      meta: { type: "page", pageId: "settings" },
+    });
+    vi.mocked(ReleaseK8sConnections).mockClear();
+
+    useTabStore.getState().closeTab("settings");
+    expect(ReleaseK8sConnections).not.toHaveBeenCalled();
+
+    useTabStore.getState().closeTab(`k8s-${assetId}`);
+    expect(ReleaseK8sConnections).toHaveBeenCalledTimes(1);
+    expect(ReleaseK8sConnections).toHaveBeenCalledWith(assetId);
   });
 });

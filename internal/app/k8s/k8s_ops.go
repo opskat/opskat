@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -24,16 +25,50 @@ import (
 	"go.uber.org/zap"
 )
 
-// k8sCallContext 加载 K8S 资产时返回的所有调用上下文。
-// kubeconfig 是已解密的 YAML 文本，opts 已带上 SSH 隧道 dial 函数（若配置）。
+// k8sCallContext 是一个 K8S 资产的调用上下文，按资产缓存在 K8s.conns 里，同一资产的请求共用它。
 type k8sCallContext struct {
-	kubeconfig string
+	// conn 按资产配置（kubeconfig、context、SSH 隧道 / 代理链拨号）建立，请求经它复用到集群的连接。
+	conn *k8spkg.Conn
 	// namespace 是资产配置的默认命名空间，空表示未配置。
 	namespace string
-	opts      []k8spkg.ClientOption
 }
 
-// loadK8sCall 校验资产、解析 K8S 配置、解密 kubeconfig、构造 ClientOption。
+// Close 让缓存丢弃这一项时关闭它的连接。
+func (c *k8sCallContext) Close() error { return c.conn.Close() }
+
+// call 取资产的调用上下文：已缓存则复用，否则按资产当前配置新建并缓存。
+// 资产改配置 / 删除、集群标签关闭、空闲超时后缓存项被丢弃，下次调用按最新配置重建；
+// 连接断开由 HTTP 客户端在下次请求时重新拨号，缓存项本身不会因此失效。
+func (k *K8s) call(ctx context.Context, assetID int64) (*k8sCallContext, error) {
+	created := false
+	c, _, err := k.conns.GetOrDial(assetID, strconv.FormatInt(assetID, 10), func() (*k8sCallContext, io.Closer, error) {
+		created = true
+		c, err := k.loadCall(ctx, assetID)
+		return c, nil, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if created {
+		logger.Ctx(ctx).Debug("k8s connection created", zap.Int64("assetID", assetID))
+	} else {
+		logger.Ctx(ctx).Debug("k8s connection reused", zap.Int64("assetID", assetID))
+	}
+	return c, nil
+}
+
+// ReleaseK8sConnections 关闭并丢弃该资产缓存的集群连接（前端关闭集群标签时调用）；之后的请求按资产当前配置重新建立。
+func (k *K8s) ReleaseK8sConnections(assetID int64) {
+	k.dropAssetConns(k.ctx, assetID)
+}
+
+// dropAssetConns 丢弃该资产缓存的连接；也由 assetconn 在资产改配置或被删除时调用（见 New）。
+func (k *K8s) dropAssetConns(ctx context.Context, assetID int64) {
+	k.conns.DropAsset(assetID)
+	logger.Ctx(ctx).Info("k8s connections released", zap.Int64("assetID", assetID))
+}
+
+// loadK8sCall 校验资产、解析 K8S 配置、解密 kubeconfig、按 SSH 隧道 / 代理链构造连接。
 func (k *K8s) loadK8sCall(ctx context.Context, assetID int64) (*k8sCallContext, error) {
 	asset, err := asset_svc.Asset().Get(ctx, assetID)
 	if err != nil {
@@ -61,11 +96,16 @@ func (k *K8s) loadK8sCall(ctx context.Context, assetID int64) (*k8sCallContext, 
 	if err != nil {
 		return nil, fmt.Errorf("resolve K8S proxy chain: %w", err)
 	}
-	return &k8sCallContext{
-		kubeconfig: kubeconfig,
-		namespace:  cfg.Namespace,
-		opts:       opts,
-	}, nil
+	return newCallContext(kubeconfig, cfg.Namespace, opts...)
+}
+
+// newCallContext 由已解密的 kubeconfig、默认命名空间与拨号选项构造调用上下文。
+func newCallContext(kubeconfig, namespace string, opts ...k8spkg.ClientOption) (*k8sCallContext, error) {
+	conn, err := k8spkg.NewConn(kubeconfig, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &k8sCallContext{conn: conn, namespace: namespace}, nil
 }
 
 // runK8sCall 是 K8S 读取类 IPC 共用的模板：加载上下文 → 调用 fn → JSON 序列化，
@@ -101,7 +141,7 @@ func (k *K8s) runLogged(assetID int64, label string, timeout time.Duration, writ
 }
 
 func (k *K8s) doK8sCall(ctx context.Context, assetID int64, label string, fn func(ctx context.Context, c *k8sCallContext) (any, error)) (string, error) {
-	c, err := k.loadK8sCall(ctx, assetID)
+	c, err := k.call(ctx, assetID)
 	if err != nil {
 		return "", err
 	}
@@ -119,7 +159,7 @@ func (k *K8s) doK8sCall(ctx context.Context, assetID int64, label string, fn fun
 func (k *K8s) StartK8sPodLogs(assetID int64, namespace, podName, container string, tailLines int64) (string, error) {
 	loadCtx, loadCancel := context.WithTimeout(k.ctx, 30*time.Second)
 	defer loadCancel()
-	c, err := k.loadK8sCall(loadCtx, assetID)
+	c, err := k.call(loadCtx, assetID)
 	if err != nil {
 		return "", err
 	}
@@ -128,7 +168,7 @@ func (k *K8s) StartK8sPodLogs(assetID int64, namespace, podName, container strin
 	ctx, cancel := context.WithCancel(k.ctx)
 	k.logStreams.Store(streamID, cancel)
 
-	reader, err := k8spkg.StreamPodLogs(ctx, c.kubeconfig, namespace, podName, container, tailLines, c.opts...)
+	reader, err := k8spkg.StreamPodLogs(ctx, c.conn, namespace, podName, container, tailLines)
 	if err != nil {
 		cancel()
 		k.logStreams.Delete(streamID)
