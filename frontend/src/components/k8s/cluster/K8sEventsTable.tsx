@@ -24,61 +24,65 @@ export function K8sEventsTable({ assetId, types, events, compact, hideObject }: 
   const { t } = useTranslation();
   const openTab = useK8sStore((s) => s.openTab);
   return (
-    <table className="w-full text-left text-sm">
-      <thead>
-        <tr className="border-b text-xs text-muted-foreground">
-          <th className="py-2 pr-4 font-medium">{t("asset.k8sEventType")}</th>
-          <th className="py-2 pr-4 font-medium">{t("asset.k8sEventReason")}</th>
-          {!hideObject && <th className="py-2 pr-4 font-medium">{t("asset.k8sEventObject")}</th>}
-          <th className="py-2 pr-4 font-medium">{t("asset.k8sEventMessage")}</th>
-          {!compact && <th className="py-2 pr-4 font-medium">{t("asset.k8sEventCount")}</th>}
-          <th className="py-2 font-medium">{t("asset.k8sEventLastSeen")}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {events.map((e, i) => {
-          const obj = e.involvedObject;
-          const target = typeOfObject(types, obj);
-          const label = `${obj.kind}/${obj.name}`;
-          return (
-            <tr key={i} className="border-b align-top last:border-0" data-testid="k8s-event-row">
-              <td className="py-2 pr-4">
-                <span
-                  className={`rounded-full px-1.5 py-0.5 text-xs ${statusVariantToClass(e.type === "Warning" ? "warning" : "info")}`}
-                >
-                  {e.type}
-                </span>
-              </td>
-              <td className="py-2 pr-4 text-xs" data-testid="k8s-event-reason">
-                {e.reason}
-              </td>
-              {!hideObject && (
-                <td className="py-2 pr-4 font-mono text-xs">
-                  {target ? (
-                    <button
-                      className="text-primary hover:underline"
-                      data-testid="k8s-event-object"
-                      onClick={() =>
-                        openTab(assetId, {
-                          id: resourceTabId(typeKeyOf(target), obj.namespace, obj.name),
-                          label: obj.name,
-                        })
-                      }
-                    >
-                      {label}
-                    </button>
-                  ) : (
-                    <span data-testid="k8s-event-object">{label}</span>
-                  )}
+    <div className="overflow-x-auto">
+      <table className="w-full text-left text-sm">
+        <thead>
+          <tr className="border-b text-xs text-muted-foreground">
+            <th className="py-2 pr-4 font-medium">{t("asset.k8sEventType")}</th>
+            <th className="py-2 pr-4 font-medium">{t("asset.k8sEventReason")}</th>
+            {!hideObject && <th className="py-2 pr-4 font-medium">{t("asset.k8sEventObject")}</th>}
+            <th className="min-w-48 py-2 pr-4 font-medium">{t("asset.k8sEventMessage")}</th>
+            {!compact && <th className="py-2 pr-4 font-medium">{t("asset.k8sEventCount")}</th>}
+            <th className="whitespace-nowrap py-2 font-medium">{t("asset.k8sEventLastSeen")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {events.map((e, i) => {
+            const obj = e.involvedObject;
+            const target = typeOfObject(types, obj);
+            const label = `${obj.kind}/${obj.name}`;
+            return (
+              <tr key={i} className="border-b align-top last:border-0" data-testid="k8s-event-row">
+                <td className="py-2 pr-4">
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-xs ${statusVariantToClass(e.type === "Warning" ? "warning" : "info")}`}
+                  >
+                    {e.type}
+                  </span>
                 </td>
-              )}
-              <td className="select-text break-words py-2 pr-4 text-xs text-muted-foreground">{e.message}</td>
-              {!compact && <td className="py-2 pr-4 font-mono text-xs">{e.count}</td>}
-              <td className="whitespace-nowrap py-2 text-xs text-muted-foreground">{e.lastTimestamp}</td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+                <td className="py-2 pr-4 text-xs" data-testid="k8s-event-reason">
+                  {e.reason}
+                </td>
+                {!hideObject && (
+                  <td className="break-all py-2 pr-4 font-mono text-xs">
+                    {target ? (
+                      <button
+                        className="text-primary hover:underline"
+                        data-testid="k8s-event-object"
+                        onClick={() =>
+                          openTab(assetId, {
+                            id: resourceTabId(typeKeyOf(target), obj.namespace, obj.name),
+                            label: obj.name,
+                          })
+                        }
+                      >
+                        {label}
+                      </button>
+                    ) : (
+                      <span data-testid="k8s-event-object">{label}</span>
+                    )}
+                  </td>
+                )}
+                <td className="min-w-48 select-text break-words py-2 pr-4 text-xs text-muted-foreground">
+                  {e.message}
+                </td>
+                {!compact && <td className="py-2 pr-4 font-mono text-xs">{e.count}</td>}
+                <td className="whitespace-nowrap py-2 text-xs text-muted-foreground">{e.lastTimestamp}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }

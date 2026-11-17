@@ -13,6 +13,29 @@ function cellText(cell: unknown): string {
 
 export { cellText };
 
+const CHAR_PX = 7.5; // text-xs mono/sans average, with headroom
+const CELL_PAD_PX = 32; // pr-4 plus the status pill's own padding
+const MIN_COL_PX = 72;
+const SIZED_ROWS = 1000;
+
+/** Display width in characters: CJK counts double. */
+function textUnits(text: string): number {
+  let n = 0;
+  for (const ch of text) n += ch.charCodeAt(0) > 0x2e80 ? 2 : 1;
+  return n;
+}
+
+/** Pixel width per column so that the header and every value (of the first rows) fits without truncation. */
+export function columnWidths(columns: { name: string }[], rows: Pick<K8sResourceRow, "cells">[]): number[] {
+  const sample = rows.length > SIZED_ROWS ? rows.slice(0, SIZED_ROWS) : rows;
+  return columns.map((col, i) => {
+    // The header leaves room for the sort arrow.
+    let units = textUnits(col.name) + 2;
+    for (const row of sample) units = Math.max(units, textUnits(cellText(row.cells[i])));
+    return Math.max(MIN_COL_PX, Math.ceil(units * CHAR_PX) + CELL_PAD_PX);
+  });
+}
+
 /** Name filter (a filter holding `=` is a label selector the cluster already applied) then sort. */
 export function visibleRows(
   columns: K8sTableColumn[],

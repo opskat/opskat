@@ -161,7 +161,7 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
 
   return (
     <div className="flex h-full flex-col" data-testid="k8s-pod-terminal">
-      <div className="flex h-10 shrink-0 items-center gap-2 border-b px-3 text-xs">
+      <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-1 text-xs">
         <TerminalSquare className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="truncate font-mono font-medium">
           {state.namespace}/{state.pod}
@@ -215,7 +215,7 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
           />
         )}
         <StatusBadge status={state.status} shell={state.shellUsed} />
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           <Button
             variant="ghost"
             size="icon"

@@ -1,4 +1,4 @@
-import { Fragment, useRef, type ComponentType, type ReactNode } from "react";
+import { Fragment, useMemo, useRef, type ComponentType, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronUp, ExternalLink, Copy, MoreHorizontal } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -26,7 +26,7 @@ import { notifyCopied } from "@/lib/notify";
 import type { K8sListSort, K8sResourceRow, K8sTableColumn } from "@/stores/k8sStore";
 import { actionLabelKey, getK8sActions, type K8sAction, type K8sActionContext } from "../actions";
 import { getK8sStatusColor, isStatusColumn, statusVariantToClass } from "../utils";
-import { cellText } from "./listModel";
+import { cellText, columnWidths } from "./listModel";
 
 const ROW_HEIGHT = 32;
 const ACTIONS_WIDTH = 96;
@@ -59,8 +59,10 @@ export function K8sResourceGrid({ assetId, typeKey, columns, rows, sort, onSort,
     overscan: 20,
   });
 
-  const template = `${columns.map((_, i) => (i === 0 ? "minmax(200px,2fr)" : "minmax(100px,1fr)")).join(" ")} ${ACTIONS_WIDTH}px`;
-  const minWidth = 200 + (columns.length - 1) * 100 + ACTIONS_WIDTH;
+  // Columns size to their content; the table scrolls horizontally when it is wider than the pane.
+  const widths = useMemo(() => columnWidths(columns, rows), [columns, rows]);
+  const template = `${widths.map((w) => `${w}px`).join(" ")} ${ACTIONS_WIDTH}px`;
+  const minWidth = widths.reduce((a, b) => a + b, 0) + ACTIONS_WIDTH;
 
   const contextOf = (row: K8sResourceRow): K8sActionContext => ({
     assetId,
@@ -79,7 +81,7 @@ export function K8sResourceGrid({ assetId, typeKey, columns, rows, sort, onSort,
   return (
     <TooltipProvider delayDuration={300}>
       <div ref={scrollRef} className="h-full overflow-auto" data-testid="k8s-grid">
-        <div style={{ minWidth }}>
+        <div style={{ minWidth, width: "max-content" }}>
           <div
             role="row"
             className="sticky top-0 z-10 grid border-b bg-background text-xs text-muted-foreground"
@@ -120,7 +122,7 @@ export function K8sResourceGrid({ assetId, typeKey, columns, rows, sort, onSort,
                       {columns.map((col, i) => (
                         <div
                           key={col.name}
-                          className={cn("truncate pr-4", i === 0 && "pl-3 font-mono font-medium")}
+                          className={cn("whitespace-nowrap pr-4", i === 0 && "pl-3 font-mono font-medium")}
                           title={i === 0 ? row.name : undefined}
                         >
                           {isStatusColumn(col) ? <StatusCell text={cellText(row.cells[i])} /> : cellText(row.cells[i])}
@@ -214,7 +216,12 @@ export function K8sResourceGrid({ assetId, typeKey, columns, rows, sort, onSort,
 function StatusCell({ text }: { text: string }): ReactNode {
   if (!text) return null;
   return (
-    <span className={cn("rounded-sm px-1.5 py-0.5 text-xs", statusVariantToClass(getK8sStatusColor(text)))}>
+    <span
+      className={cn(
+        "whitespace-nowrap rounded-sm px-1.5 py-0.5 text-xs",
+        statusVariantToClass(getK8sStatusColor(text))
+      )}
+    >
       {text}
     </span>
   );

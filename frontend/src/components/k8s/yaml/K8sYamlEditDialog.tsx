@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   Button,
@@ -157,7 +157,10 @@ export function K8sYamlEditDialog({ assetId, ctx }: { assetId: number; ctx: K8sA
             {readError}
           </p>
         ) : !read ? (
-          <div className="flex-1" />
+          <div role="status" className="flex flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {t("asyncState.loading")}
+          </div>
         ) : (
           <>
             <Tabs value={mode} onValueChange={(v) => setMode(v as "edit" | "diff")}>
