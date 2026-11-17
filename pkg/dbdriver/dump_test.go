@@ -153,8 +153,10 @@ type dumpDialect struct {
 	dataColumn map[string][]string
 	// insertModifier 是各表的 InsertModifier。
 	insertModifier map[string]string
-	// dependsOn 是各对象依赖的对象（方言给出的 DependsOn）。
-	dependsOn map[string][]string
+	// dependsOn 是各对象依赖的视图（方言给出的 DependsOn）；dependencies 是带种类的依赖（Dependencies），
+	// 键是「种类 名字」。
+	dependsOn    map[string][]string
+	dependencies map[string][]DumpDependency
 	// plain 为真时对象只给出存在则删除与定义（像什么钩子都没实现的方言）。
 	plain bool
 }
@@ -168,9 +170,10 @@ func (d *dumpDialect) DumpFile(_ context.Context, scope DumpScope) (*DumpFileScr
 func (d *dumpDialect) DumpObject(_ context.Context, object DumpObject) (*DumpObjectScript, error) {
 	d.objects = append(d.objects, object)
 	script := &DumpObjectScript{
-		Drop:       []string{fmt.Sprintf("DROP %s IF EXISTS %s;", strings.ToUpper(object.Kind), object.Name)},
-		Definition: []string{object.Definition + ";"},
-		DependsOn:  d.dependsOn[object.Name],
+		Drop:         []string{fmt.Sprintf("DROP %s IF EXISTS %s;", strings.ToUpper(object.Kind), object.Name)},
+		Definition:   []string{object.Definition + ";"},
+		DependsOn:    d.dependsOn[object.Name],
+		Dependencies: d.dependencies[object.Kind+" "+object.Name],
 	}
 	if d.plain || object.Kind != DumpTable {
 		return script, nil
@@ -606,7 +609,7 @@ func newWholeDumpSource() *dumpSource {
 }
 
 // 整库转储：表来自 ListTables（视图除外），视图、函数、过程与触发器来自 ListObjects；文件依次是表与数据、
-// 外键、视图、函数、过程、触发器（在所有数据之后，导入数据时不会触发）、数据之后的收尾与文件结尾。函数、
+// 外键、函数、过程与视图（同一段，没有依赖时按这个次序）、触发器（在所有数据之后，导入数据时不会触发）、数据之后的收尾与文件结尾。函数、
 // 过程与触发器的定义来自 ObjectSource（触发器带上它的表），表与视图的来自 TableDDL。
 func TestDumpWholeDatabaseWritesEveryObjectInItsSection(t *testing.T) {
 	source := newWholeDumpSource()
@@ -664,11 +667,6 @@ ADD FK orders;
 ADD FK users;
 
 -- ----------------------------
--- View structure for v_big
--- ----------------------------
-CREATE VIEW v_big AS SELECT * FROM orders;
-
--- ----------------------------
 -- Function structure for f_total
 -- ----------------------------
 CREATE FUNCTION f_total() RETURNS int;
@@ -677,6 +675,11 @@ CREATE FUNCTION f_total() RETURNS int;
 -- Procedure structure for p_clean
 -- ----------------------------
 CREATE PROCEDURE p_clean();
+
+-- ----------------------------
+-- View structure for v_big
+-- ----------------------------
+CREATE VIEW v_big AS SELECT * FROM orders;
 
 -- ----------------------------
 -- Trigger structure for trg_audit
@@ -696,9 +699,9 @@ SET FK ON;
 	assert.Equal(t, []DumpObject{
 		{Database: "shop", Kind: DumpTable, Name: "orders", Definition: source.ddl["orders"], WithData: true, Options: options},
 		{Database: "shop", Kind: DumpTable, Name: "users", Definition: source.ddl["users"], WithData: true, Options: options},
-		{Database: "shop", Kind: ObjectView, Name: "v_big", Definition: source.ddl["v_big"], Options: options},
 		{Database: "shop", Kind: ObjectFunction, Name: "f_total", Definition: source.sources["function f_total"], Options: options},
 		{Database: "shop", Kind: ObjectProcedure, Name: "p_clean", Definition: source.sources["procedure p_clean"], Options: options},
+		{Database: "shop", Kind: ObjectView, Name: "v_big", Definition: source.ddl["v_big"], Options: options},
 		{Database: "shop", Kind: ObjectTrigger, Name: "trg_audit", Table: "users", Definition: source.sources["trigger trg_audit"], Options: options},
 	}, dialect.objects)
 	assert.Contains(t, source.calls, "source shop trigger trg_audit users")
@@ -735,7 +738,7 @@ func TestDumpWholeSchemaKeepsToItsSchema(t *testing.T) {
 	for _, object := range dialect.objects {
 		names = append(names, object.Kind+" "+object.Name)
 	}
-	assert.Equal(t, []string{"table sales.b", "view sales.v", "function sales.f", "trigger sales.t"}, names)
+	assert.Equal(t, []string{"table sales.b", "function sales.f", "view sales.v", "trigger sales.t"}, names)
 	assert.Equal(t, 4, result.Objects)
 	assert.Equal(t, []DumpScope{{Database: "shop", Schema: "sales", Tables: []string{"sales.b", "sales.v"}, Whole: true, Options: allOptions}}, dialect.scopes)
 }
@@ -755,47 +758,117 @@ func TestDumpSelectedTablesLeavesOutRoutinesAndTriggers(t *testing.T) {
 	assert.Equal(t, []string{"objects shop", "ddl shop.users"}, source.calls)
 }
 
-// 视图按依赖顺序写出：被依赖的在前（方言经 DependsOn 给出依赖，不在这次转储里的名字如表不算）；方言不给
-// 依赖时按列出的次序。
-func TestDumpWritesViewsInDependencyOrder(t *testing.T) {
-	newSource := func() *dumpSource {
-		return &dumpSource{
-			ddl: map[string]string{
-				"a_report": "CREATE VIEW a_report", "b_mid": "CREATE VIEW b_mid", "c_base": "CREATE VIEW c_base",
-				"d_alone": "CREATE VIEW d_alone", "users": "CREATE TABLE users",
-			},
-			tables: []string{"a_report", "b_mid", "c_base", "d_alone", "users"},
-			views:  []string{"a_report", "b_mid", "c_base", "d_alone"},
-		}
+// definitionsSource 是只有视图、函数与过程（和一张表）的库：视图的定义来自 TableDDL，其余的来自 ObjectSource。
+func definitionsSource(functions, procedures, views []string) *dumpSource {
+	source := &dumpSource{
+		ddl: map[string]string{"users": "CREATE TABLE users"}, sources: map[string]string{},
+		tables: append([]string{"users"}, views...), views: views, functions: functions, procedures: procedures,
 	}
-	viewOrder := func(t *testing.T, dialect *dumpDialect, req DumpRequest) []string {
-		t.Helper()
-		var out bytes.Buffer
-		req.Header, req.Writer = dumpHeader(), &out
-		_, err := Dump(context.Background(), req, newSource(), dialect)
-		require.NoError(t, err)
-		var order []string
-		for _, line := range strings.Split(out.String(), "\n") {
-			if name, ok := strings.CutPrefix(line, "-- View structure for "); ok {
-				order = append(order, name)
+	for _, name := range views {
+		source.ddl[name] = "CREATE VIEW " + name
+	}
+	for _, name := range functions {
+		source.sources[ObjectFunction+" "+name] = "CREATE FUNCTION " + name
+	}
+	for _, name := range procedures {
+		source.sources[ObjectProcedure+" "+name] = "CREATE PROCEDURE " + name
+	}
+	return source
+}
+
+// definitionOrder 是文件里视图、函数与过程建出的次序（「种类 名字」），以及删除段里删除它们的次序。
+func definitionOrder(t *testing.T, source *dumpSource, dialect *dumpDialect, req DumpRequest) (created, dropped []string) {
+	t.Helper()
+	var out bytes.Buffer
+	req.Header, req.Writer = dumpHeader(), &out
+	_, err := Dump(context.Background(), req, source, dialect)
+	require.NoError(t, err)
+	for _, line := range strings.Split(out.String(), "\n") {
+		for _, kind := range []string{ObjectView, ObjectFunction, ObjectProcedure} {
+			if name, ok := strings.CutPrefix(line, "CREATE "+strings.ToUpper(kind)+" "); ok {
+				created = append(created, kind+" "+strings.TrimSuffix(name, ";"))
+			}
+			if name, ok := strings.CutPrefix(line, "DROP "+strings.ToUpper(kind)+" IF EXISTS "); ok {
+				dropped = append(dropped, kind+" "+strings.TrimSuffix(name, ";"))
 			}
 		}
-		return order
 	}
-	dependsOn := map[string][]string{"a_report": {"users", "b_mid"}, "b_mid": {"c_base"}}
+	return created, dropped
+}
 
-	t.Run("whole database", func(t *testing.T) {
-		assert.Equal(t, []string{"c_base", "b_mid", "a_report", "d_alone"},
-			viewOrder(t, &dumpDialect{plain: true, dependsOn: dependsOn}, DumpRequest{Database: "shop", Whole: true, Options: allOptions}))
+func reversedNames(names []string) []string {
+	out := slices.Clone(names)
+	slices.Reverse(out)
+	return out
+}
+
+// 视图、函数与过程在同一段里按依赖排序，被依赖的在前：视图可以依赖函数，函数也可以依赖视图；方言经
+// Dependencies（带种类）或 DependsOn（视图）给出依赖，不在这一段里的名字（表）不算。没给依赖的对象函数与过程
+// 在前、视图在后，各自按列出的次序。删除段按这个次序倒过来删。
+func TestDumpOrdersViewsFunctionsAndProceduresByTheirDependencies(t *testing.T) {
+	whole := DumpRequest{Database: "shop", Whole: true, Options: allOptions}
+
+	t.Run("across kinds", func(t *testing.T) {
+		source := definitionsSource([]string{"f_reads", "f_used"}, []string{"p_run"}, []string{"v_calls", "v_base"})
+		dialect := &dumpDialect{plain: true, dependencies: map[string][]DumpDependency{
+			// 引用视图的函数（PostgreSQL 的 BEGIN ATOMIC、SQL Server 的 SCHEMABINDING）。
+			"function f_reads": {{Kind: ObjectView, Name: "v_base"}},
+			// 调用函数的视图。
+			"view v_calls": {{Kind: ObjectFunction, Name: "f_used"}},
+			"view v_base":  {{Kind: DumpTable, Name: "users"}},
+			"procedure p_run": {{Kind: ObjectFunction, Name: "f_reads"}, {Kind: ObjectView, Name: "v_calls"},
+				{Kind: ObjectProcedure, Name: "p_run"}},
+		}}
+		created, dropped := definitionOrder(t, source, dialect, whole)
+		want := []string{"view v_base", "function f_reads", "function f_used", "view v_calls", "procedure p_run"}
+		assert.Equal(t, want, created)
+		assert.Equal(t, reversedNames(want), dropped)
 	})
-	t.Run("selected views", func(t *testing.T) {
-		assert.Equal(t, []string{"d_alone", "c_base", "b_mid", "a_report"}, viewOrder(t, &dumpDialect{plain: true, dependsOn: dependsOn},
-			DumpRequest{Database: "shop", Tables: []string{"d_alone", "a_report", "c_base", "b_mid"}}))
+	t.Run("without dependencies functions and procedures come before views", func(t *testing.T) {
+		source := definitionsSource([]string{"f_b", "f_a"}, []string{"p_z"}, []string{"a_view", "z_view"})
+		created, dropped := definitionOrder(t, source, &dumpDialect{plain: true}, whole)
+		want := []string{"function f_b", "function f_a", "procedure p_z", "view a_view", "view z_view"}
+		assert.Equal(t, want, created)
+		assert.Equal(t, reversedNames(want), dropped)
 	})
-	t.Run("a dialect without dependencies", func(t *testing.T) {
-		assert.Equal(t, []string{"a_report", "b_mid", "c_base", "d_alone"},
-			viewOrder(t, &dumpDialect{plain: true}, DumpRequest{Database: "shop", Whole: true, Options: allOptions}))
+	t.Run("a view and a function of the same name are told apart by their kind", func(t *testing.T) {
+		source := definitionsSource([]string{"same"}, nil, []string{"v_a", "same"})
+		dialect := &dumpDialect{plain: true, dependencies: map[string][]DumpDependency{
+			"view v_a":  {{Kind: ObjectFunction, Name: "same"}},
+			"view same": {{Kind: ObjectView, Name: "v_a"}},
+		}}
+		created, _ := definitionOrder(t, source, dialect, whole)
+		assert.Equal(t, []string{"function same", "view v_a", "view same"}, created)
 	})
+	t.Run("DependsOn names views", func(t *testing.T) {
+		source := definitionsSource([]string{"v_base"}, nil, []string{"v_top", "v_base"})
+		dialect := &dumpDialect{plain: true, dependsOn: map[string][]string{"v_top": {"users", "v_base"}}}
+		created, _ := definitionOrder(t, source, dialect, whole)
+		assert.Equal(t, []string{"function v_base", "view v_base", "view v_top"}, created)
+	})
+	t.Run("selected views keep the selected order where nothing depends", func(t *testing.T) {
+		source := definitionsSource(nil, nil, []string{"a_report", "b_mid", "c_base", "d_alone"})
+		dialect := &dumpDialect{plain: true, dependsOn: map[string][]string{"a_report": {"users", "b_mid"}, "b_mid": {"c_base"}}}
+		created, _ := definitionOrder(t, source, dialect, DumpRequest{Database: "shop", Tables: []string{"d_alone", "a_report", "c_base", "b_mid"}})
+		assert.Equal(t, []string{"view d_alone", "view c_base", "view b_mid", "view a_report"}, created)
+	})
+}
+
+// 依赖成环时转储在写出任何内容之前停下，错误里按环的次序点出环上的对象。
+func TestDumpRefusesDependenciesInACycle(t *testing.T) {
+	source := definitionsSource([]string{"f_loop"}, nil, []string{"v_a", "v_b"})
+	dialect := &dumpDialect{plain: true, dependencies: map[string][]DumpDependency{
+		"function f_loop": {{Kind: ObjectView, Name: "v_a"}},
+		"view v_a":        {{Kind: ObjectView, Name: "v_b"}},
+		"view v_b":        {{Kind: ObjectFunction, Name: "f_loop"}},
+	}}
+	var out bytes.Buffer
+
+	_, err := Dump(context.Background(), DumpRequest{Database: "shop", Whole: true, Options: allOptions, Header: dumpHeader(), Writer: &out},
+		source, dialect)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "function f_loop -> view v_a -> view v_b -> function f_loop")
+	assert.Empty(t, out.String())
 }
 
 // 整库转储里函数、过程或触发器的定义读不到时同样立即停下，错误说出那个对象。
@@ -881,7 +954,7 @@ func withoutOptionsLine(text string) string {
 	return strings.Join(slices.DeleteFunc(lines, func(line string) bool { return strings.HasPrefix(line, "-- Options: ") }), "\n")
 }
 
-// 删除段：在文件开头（开头与关闭外键检查之后、类型之前），先删外键，再按倒序删触发器、过程与函数、视图、表，
+// 删除段：在文件开头（开头与关闭外键检查之后、类型之前），先删外键，再按倒序删触发器、视图与过程和函数、表，
 // 最后删类型；对象自己的位置上不再有删除语句。
 func TestDumpWritesTheDropSectionFirst(t *testing.T) {
 	full := wholeDump(t, allOptions)
@@ -895,9 +968,9 @@ SET FK OFF;
 DROP FK orders;
 DROP FK users;
 DROP TRIGGER IF EXISTS trg_audit;
+DROP VIEW IF EXISTS v_big;
 DROP PROCEDURE IF EXISTS p_clean;
 DROP FUNCTION IF EXISTS f_total;
-DROP VIEW IF EXISTS v_big;
 DROP TABLE IF EXISTS users;
 DROP TABLE IF EXISTS orders;
 DROP TYPE IF EXISTS mood;
@@ -910,22 +983,6 @@ CREATE TYPE mood;
 CREATE TABLE orders (id int, user_id int);
 `)
 	assert.Equal(t, 9, strings.Count(full, "DROP "), "the drop statements are written once, all in the drop section")
-}
-
-// 视图在删除段里按依赖倒序：依赖别的视图的先删。
-func TestDumpDropsViewsInReverseDependencyOrder(t *testing.T) {
-	source := &dumpSource{
-		ddl:    map[string]string{"a_report": "CREATE VIEW a_report", "b_mid": "CREATE VIEW b_mid", "c_base": "CREATE VIEW c_base"},
-		tables: []string{"a_report", "b_mid", "c_base"},
-		views:  []string{"a_report", "b_mid", "c_base"},
-	}
-	var out bytes.Buffer
-	_, err := Dump(context.Background(), DumpRequest{
-		Database: "shop", Whole: true, Options: allOptions, Header: dumpHeader(), Writer: &out,
-	}, source, &dumpDialect{plain: true, dependsOn: map[string][]string{"a_report": {"b_mid"}, "b_mid": {"c_base"}}})
-	require.NoError(t, err)
-
-	assert.Contains(t, out.String(), "DROP VIEW IF EXISTS a_report;\nDROP VIEW IF EXISTS b_mid;\nDROP VIEW IF EXISTS c_base;\n")
 }
 
 // 每个选项不勾时，文件里正好少了它的那一部分，其余一字不差（注释头里列出的选项除外）。
@@ -952,8 +1009,8 @@ func TestDumpOptionsLeaveOutExactlyTheirPart(t *testing.T) {
 			"DROP TRIGGER IF EXISTS trg_audit;\n", section("Trigger structure for trg_audit", "CREATE TRIGGER trg_audit AFTER INSERT ON users;"),
 		}},
 		"drop statements": {func(o *DumpOptions) { o.Drops = false }, []string{section("Drop existing objects",
-			"DROP FK orders;", "DROP FK users;", "DROP TRIGGER IF EXISTS trg_audit;", "DROP PROCEDURE IF EXISTS p_clean;",
-			"DROP FUNCTION IF EXISTS f_total;", "DROP VIEW IF EXISTS v_big;", "DROP TABLE IF EXISTS users;",
+			"DROP FK orders;", "DROP FK users;", "DROP TRIGGER IF EXISTS trg_audit;", "DROP VIEW IF EXISTS v_big;",
+			"DROP PROCEDURE IF EXISTS p_clean;", "DROP FUNCTION IF EXISTS f_total;", "DROP TABLE IF EXISTS users;",
 			"DROP TABLE IF EXISTS orders;", "DROP TYPE IF EXISTS mood;")}},
 		"disable foreign key checks": {func(o *DumpOptions) { o.DisableForeignKeyChecks = false }, []string{"SET FK OFF;\n", "SET FK ON;\n"}},
 	}

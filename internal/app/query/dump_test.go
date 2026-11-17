@@ -12,9 +12,12 @@ import (
 	"time"
 
 	"github.com/cago-frame/cago/configs"
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/opskat/opskat/internal/connpool"
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
@@ -211,6 +214,37 @@ func TestDumpSQLFileFailureLeavesTheTargetAsItWas(t *testing.T) {
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1)
+}
+
+// 日志不记语句与数据：转储停在对象上时，数据库的错误原文（常带着名字与值）只给对话框，失败的那一行日志只记
+// 对象、计数与耗时。
+func TestDumpSQLFileFailureLogLeavesOutTheDatabaseError(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	oldLogger := logger.Default()
+	logger.SetLogger(zap.New(core))
+	t.Cleanup(func() { logger.SetLogger(oldLogger) })
+	events := captureDumpEvents(t)
+	fake := dumpingFake()
+	const secret = "log_sentinel_value"
+	fake.TableErr = errors.New("duplicate key value (" + secret + ")")
+	dbdrivertest.Register(t, fake)
+	q := newNamedPanelQuery(t, "db", &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
+
+	_, err := q.StartDumpSQLFile(1, DumpSQLFileRequest{Database: "app", Tables: []string{"users"}, Path: filepath.Join(t.TempDir(), "users.sql")})
+	require.NoError(t, err)
+	final := events.wait(t)
+
+	require.Equal(t, DumpSQLFileFailed, final.Status)
+	require.Contains(t, final.Error, secret, "the dialog still gets the database's error")
+	failed := logs.FilterMessage("dump sql file failed").All()
+	require.Len(t, failed, 1)
+	assert.Equal(t, "users", failed[0].ContextMap()["object"])
+	for _, entry := range logs.All() {
+		assert.NotContains(t, entry.Message, secret)
+		for key, value := range entry.ContextMap() {
+			assert.NotContains(t, fmt.Sprint(value), secret, "log %q field %q", entry.Message, key)
+		}
+	}
 }
 
 // 驱动没有声明转储、要结构和数据而驱动生成不了行语句、没有选位置或没有表：在开始之前就拒绝，不打开会话。

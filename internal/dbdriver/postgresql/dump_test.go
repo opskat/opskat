@@ -47,6 +47,15 @@ func enumRows(enums ...[3]string) *sqlmock.Rows {
 	return rows
 }
 
+// dependencyRows 是 pg_depend 里依赖的对象：种类与名字。视图的重写规则也依赖视图自己，编排不把它算作依赖。
+func dependencyRows(dependencies ...[2]string) *sqlmock.Rows {
+	rows := sqlmock.NewRows([]string{"kind", "name"})
+	for _, d := range dependencies {
+		rows.AddRow(d[0], d[1])
+	}
+	return rows
+}
+
 func dumpColumnRows(columns ...string) *sqlmock.Rows {
 	rows := sqlmock.NewRows([]string{"attname", "identity_always"})
 	for _, c := range columns {
@@ -58,10 +67,11 @@ func dumpColumnRows(columns ...string) *sqlmock.Rows {
 
 // 整库转储（结构和数据，除了关闭外键检查全勾）写出的文件：开头关掉函数体检查、建出 public 之外的 schema；删除段
 // 先删各表上的外键（PostgreSQL 不能关闭外键检查，被引用的表要先拆外键才删得掉），再删触发器（带上它的表）、过程、
-// 函数（每个重载带完整的参数）、视图（依赖别的视图的先删）、表，最后删枚举类型，都不带 CASCADE；枚举类型在所有表之前；
+// 视图与函数和过程（按依赖倒序，每个重载带完整的参数）、表，最后删枚举类型，都不带 CASCADE；枚举类型在所有表之前；
 // 表之后是它的行（不写生成列，有 GENERATED ALWAYS 身份列的表用 OVERRIDING SYSTEM VALUE），外键（含自引用）
-// 在全部数据之后用 ALTER TABLE 加上；视图按 pg_depend 的依赖排序；函数每个重载都写出，删除带完整的参数；
-// 过程同样；触发器在所有数据之后，删除带上它的表；序列在最后同步到当前值；结尾恢复函数体检查。
+// 在全部数据之后用 ALTER TABLE 加上；视图、函数与过程在同一段里按 pg_depend 的依赖排序（视图调用函数、过程
+// 用到视图）；函数每个重载都写出，删除带完整的参数；过程同样；触发器在所有数据之后，删除带上它的表；序列在最后
+// 同步到当前值；结尾恢复函数体检查。
 func TestDumpWritesRestorablePostgreSQLFile(t *testing.T) {
 	session, mock := newMock(t)
 	mock.ExpectQuery(viewsSQL).WillReturnRows(names("v", "public.v_a", "public.v_b"))
@@ -99,16 +109,9 @@ func TestDumpWritesRestorablePostgreSQLFile(t *testing.T) {
 	mock.ExpectQuery(dumpColumnsQuery).WithArgs("public", "items").WillReturnRows(dumpColumnRows("id always", "kind", "parent_id"))
 	mock.ExpectQuery(dumpSequencesQuery).WithArgs("public", "items").WillReturnRows(sqlmock.NewRows([]string{"attname", "last_value"}).AddRow("id", 9007199254740993))
 
-	// 视图：列出的次序是 v_a、v_b，v_a 用到 v_b。
-	mock.ExpectQuery(ddlColumnsQuery).WithArgs("public", "v_a").WillReturnRows(ddlColumnRows("v", nil, ddlCol{name: "id", dataType: "integer", nullable: true}))
-	mock.ExpectQuery(viewDefSQL).WithArgs("public", "v_a").WillReturnRows(names("def", " SELECT id\n   FROM v_b;"))
-	mock.ExpectQuery(viewDependenciesQuery).WithArgs("public", "v_a").WillReturnRows(names("name", "public.v_b"))
-	mock.ExpectQuery(ddlColumnsQuery).WithArgs("public", "v_b").WillReturnRows(ddlColumnRows("v", nil, ddlCol{name: "id", dataType: "integer", nullable: true}))
-	mock.ExpectQuery(viewDefSQL).WithArgs("public", "v_b").WillReturnRows(names("def", " SELECT id\n   FROM items;"))
-	mock.ExpectQuery(viewDependenciesQuery).WithArgs("public", "v_b").WillReturnRows(names("name", "public.items"))
-
-	// 函数的两个重载、过程、触发器。
-	// 每个对象先读源码（ObjectSource），方言再读一次它的重载。
+	// 函数的两个重载、过程，再是视图（没有依赖时函数与过程在前、视图在后）：v_b 调用函数 touch，v_a 用到 v_b，
+	// 过程 cleanup（BEGIN ATOMIC）用到视图 v_a，所以写出的次序是 touch、v_b、v_a、cleanup。
+	// 每个函数与过程先读源码（ObjectSource），方言再读一次它的重载，接着读它们在 pg_depend 里的依赖。
 	touch := func() *sqlmock.Rows {
 		return routineRows(
 			[2]string{"n integer", "CREATE OR REPLACE FUNCTION public.touch(n integer)\n RETURNS integer\n LANGUAGE sql\nAS $function$SELECT n$function$\n"},
@@ -116,11 +119,24 @@ func TestDumpWritesRestorablePostgreSQLFile(t *testing.T) {
 	}
 	mock.ExpectQuery(routinesQuery).WithArgs("public", "touch", "f").WillReturnRows(touch())
 	mock.ExpectQuery(routinesQuery).WithArgs("public", "touch", "f").WillReturnRows(touch())
+	mock.ExpectQuery(routineDependenciesQuery).WithArgs("public", "touch", "f").WillReturnRows(dependencyRows())
 	cleanup := func() *sqlmock.Rows {
-		return routineRows([2]string{"", "CREATE OR REPLACE PROCEDURE app.cleanup()\n LANGUAGE sql\nAS $procedure$DELETE FROM app.notes$procedure$\n"})
+		return routineRows([2]string{"", "CREATE OR REPLACE PROCEDURE app.cleanup()\n LANGUAGE sql\nBEGIN ATOMIC\n DELETE FROM app.notes\n  WHERE (notes.item_id IN ( SELECT v_a.id\n           FROM v_a));\nEND\n"})
 	}
 	mock.ExpectQuery(routinesQuery).WithArgs("app", "cleanup", "p").WillReturnRows(cleanup())
 	mock.ExpectQuery(routinesQuery).WithArgs("app", "cleanup", "p").WillReturnRows(cleanup())
+	mock.ExpectQuery(routineDependenciesQuery).WithArgs("app", "cleanup", "p").
+		WillReturnRows(dependencyRows([2]string{dbdriver.ObjectView, "public.v_a"}))
+	mock.ExpectQuery(ddlColumnsQuery).WithArgs("public", "v_a").WillReturnRows(ddlColumnRows("v", nil, ddlCol{name: "id", dataType: "integer", nullable: true}))
+	mock.ExpectQuery(viewDefSQL).WithArgs("public", "v_a").WillReturnRows(names("def", " SELECT id\n   FROM v_b;"))
+	mock.ExpectQuery(viewDependenciesQuery).WithArgs("public", "v_a").
+		WillReturnRows(dependencyRows([2]string{dbdriver.ObjectView, "public.v_a"}, [2]string{dbdriver.ObjectView, "public.v_b"}))
+	mock.ExpectQuery(ddlColumnsQuery).WithArgs("public", "v_b").WillReturnRows(ddlColumnRows("v", nil, ddlCol{name: "id", dataType: "integer", nullable: true}))
+	mock.ExpectQuery(viewDefSQL).WithArgs("public", "v_b").WillReturnRows(names("def", " SELECT touch(id) AS id\n   FROM items;"))
+	mock.ExpectQuery(viewDependenciesQuery).WithArgs("public", "v_b").
+		WillReturnRows(dependencyRows([2]string{dbdriver.ObjectFunction, "public.touch"}, [2]string{dbdriver.ObjectView, "public.v_b"}))
+
+	// 触发器在所有数据之后。
 	mock.ExpectQuery(triggerDefSQL).WithArgs("public", "items", "items_touch").
 		WillReturnRows(names("def", "CREATE TRIGGER items_touch BEFORE INSERT ON items FOR EACH ROW EXECUTE FUNCTION touch_items()"))
 

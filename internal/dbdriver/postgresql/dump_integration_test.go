@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -306,4 +307,75 @@ INSERT INTO public.readings VALUES (1, 'NaN', 'Infinity'), (2, '-Infinity', 1.5)
 	require.NoError(t, err)
 	require.Nil(t, result.Failure, "the dump must run on an empty database: %+v", result.Failure)
 	assert.Equal(t, tableData(t, sourceDB), tableData(t, targetDB))
+}
+
+// crossDependencySQL 是视图与函数互相依赖的样例：调用函数的视图（a_doubled 调用 z_double），引用视图的函数
+// （BEGIN ATOMIC 的 a_total 读 a_doubled，返回视图行类型的 a_rows），以及调用这个函数的视图（b_summary）。
+// 名字的字母序（列出的次序）与依赖相反：视图在前时 a_doubled 建不出，函数在前（驱动给不出依赖时的写法）时
+// a_total 与 a_rows 建不出。
+const crossDependencySQL = `CREATE TABLE public.items (id integer PRIMARY KEY, price integer NOT NULL);
+INSERT INTO public.items VALUES (1, 10), (2, 25);
+CREATE FUNCTION public.z_double(n integer) RETURNS integer LANGUAGE sql IMMUTABLE RETURN n * 2;
+CREATE VIEW public.a_doubled AS SELECT id, public.z_double(price) AS doubled FROM public.items;
+CREATE FUNCTION public.a_total() RETURNS bigint LANGUAGE sql BEGIN ATOMIC SELECT sum(doubled) FROM public.a_doubled; END;
+CREATE FUNCTION public.a_rows() RETURNS SETOF public.a_doubled LANGUAGE sql AS $$ SELECT * FROM public.a_doubled ORDER BY id $$;
+CREATE VIEW public.b_summary AS SELECT public.a_total() AS total;`
+
+// crossDependencyResults 是用到这些视图与函数的查询结果。
+func crossDependencyResults(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	return slices.Concat(queryLines(t, db, "SELECT total::text FROM public.b_summary"),
+		queryLines(t, db, "SELECT r::text FROM public.a_rows() r"))
+}
+
+func dumpWhole(t *testing.T, db *sql.DB, database string, options dbdriver.DumpOptions) string {
+	t.Helper()
+	var out strings.Builder
+	_, err := newSession(db).Dump(context.Background(), dbdriver.DumpRequest{
+		Database: database, Whole: true, WithData: true, Writer: &out, Options: options,
+		Header: dbdriver.DumpHeader{Version: "test", Asset: "pg", Time: time.Now()},
+	})
+	require.NoError(t, err)
+	return out.String()
+}
+
+func runDump(t *testing.T, db *sql.DB, database, script string) {
+	t.Helper()
+	result, err := newSession(db).RunScript(context.Background(), dbdriver.ScriptRequest{
+		Database: database, Script: strings.NewReader(script), Size: int64(len(script)),
+	})
+	require.NoError(t, err)
+	require.Nil(t, result.Failure, "%+v", result.Failure)
+	assert.Zero(t, result.Failed)
+}
+
+// 视图调用函数、函数引用视图（BEGIN ATOMIC、视图行类型）：按 pg_depend 的依赖排序后，文件在另一个名字的空库上
+// 每条语句都成功，结构与查询结果一样；勾了「写入删除语句」时，文件运行回源库本身也成功（删除段按依赖倒序，
+// 不带 CASCADE 也删得掉）。
+func TestIntegrationDumpRestoresViewsAndFunctionsThatUseEachOther(t *testing.T) {
+	admin := openDDLDatabase(t, os.Getenv("E2E_POSTGRES_DATABASE"))
+	suffix := time.Now().UnixNano()
+	source, target := fmt.Sprintf("opskat_dump_deps_src_%d", suffix), fmt.Sprintf("opskat_dump_deps_dst_%d", suffix)
+	createScratchDatabase(t, admin, source)
+	createScratchDatabase(t, admin, target)
+	sourceDB, targetDB := openDDLDatabase(t, source), openDDLDatabase(t, target)
+	_, err := sourceDB.Exec(crossDependencySQL)
+	require.NoError(t, err)
+	structure, results := queryLines(t, sourceDB, structureQuery), crossDependencyResults(t, sourceDB)
+	require.Equal(t, []string{"70", "(1,20)", "(2,50)"}, results)
+
+	t.Run("into an empty database", func(t *testing.T) {
+		script := dumpWhole(t, sourceDB, source, structureOptions)
+		t.Log(script)
+		runDump(t, targetDB, target, script)
+		assert.Equal(t, structure, queryLines(t, targetDB, structureQuery))
+		assert.Equal(t, results, crossDependencyResults(t, targetDB))
+	})
+	t.Run("over the original database", func(t *testing.T) {
+		options := structureOptions
+		options.Drops = true
+		runDump(t, sourceDB, source, dumpWhole(t, sourceDB, source, options))
+		assert.Equal(t, structure, queryLines(t, sourceDB, structureQuery))
+		assert.Equal(t, results, crossDependencyResults(t, sourceDB))
+	})
 }

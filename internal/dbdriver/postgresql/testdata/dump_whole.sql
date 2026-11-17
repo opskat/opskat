@@ -19,10 +19,10 @@ ALTER TABLE IF EXISTS "app"."notes" DROP CONSTRAINT IF EXISTS "notes_item_fk";
 ALTER TABLE IF EXISTS "public"."items" DROP CONSTRAINT IF EXISTS "items_parent_fk";
 DROP TRIGGER IF EXISTS "items_touch" ON "public"."items";
 DROP PROCEDURE IF EXISTS "app"."cleanup"();
-DROP FUNCTION IF EXISTS "public"."touch"(n integer);
-DROP FUNCTION IF EXISTS "public"."touch"(t text);
 DROP VIEW IF EXISTS "public"."v_a";
 DROP VIEW IF EXISTS "public"."v_b";
+DROP FUNCTION IF EXISTS "public"."touch"(n integer);
+DROP FUNCTION IF EXISTS "public"."touch"(t text);
 DROP TABLE IF EXISTS "public"."items";
 DROP TABLE IF EXISTS "app"."notes";
 DROP TYPE IF EXISTS "public"."kind";
@@ -72,18 +72,6 @@ ALTER TABLE "app"."notes" ADD CONSTRAINT "notes_item_fk" FOREIGN KEY (item_id) R
 ALTER TABLE "public"."items" ADD CONSTRAINT "items_parent_fk" FOREIGN KEY (parent_id) REFERENCES items(id);
 
 -- ----------------------------
--- View structure for public.v_b
--- ----------------------------
-CREATE VIEW "public"."v_b" AS SELECT id
-   FROM items;
-
--- ----------------------------
--- View structure for public.v_a
--- ----------------------------
-CREATE VIEW "public"."v_a" AS SELECT id
-   FROM v_b;
-
--- ----------------------------
 -- Function structure for public.touch
 -- ----------------------------
 CREATE OR REPLACE FUNCTION public.touch(n integer)
@@ -96,11 +84,27 @@ CREATE OR REPLACE FUNCTION public.touch(t text)
 AS $function$SELECT t$function$;
 
 -- ----------------------------
+-- View structure for public.v_b
+-- ----------------------------
+CREATE VIEW "public"."v_b" AS SELECT touch(id) AS id
+   FROM items;
+
+-- ----------------------------
+-- View structure for public.v_a
+-- ----------------------------
+CREATE VIEW "public"."v_a" AS SELECT id
+   FROM v_b;
+
+-- ----------------------------
 -- Procedure structure for app.cleanup
 -- ----------------------------
 CREATE OR REPLACE PROCEDURE app.cleanup()
  LANGUAGE sql
-AS $procedure$DELETE FROM app.notes$procedure$;
+BEGIN ATOMIC
+ DELETE FROM app.notes
+  WHERE (notes.item_id IN ( SELECT v_a.id
+           FROM v_a));
+END;
 
 -- ----------------------------
 -- Trigger structure for public.items_touch

@@ -333,6 +333,28 @@ func TestExtensionDriverDumps(t *testing.T) {
 		assert.Contains(t, dump(dbdriver.DumpOptions{Drops: true}), "\nDROP TABLE IF EXISTS [users];\n")
 	})
 
+	t.Run("a function's dependency on a view reaches the host", func(t *testing.T) {
+		d := newDriver()
+		s := d.open(t)
+		defer func() { _ = s.Close() }()
+		var out strings.Builder
+		_, err := s.Dump(ctx, dbdriver.DumpRequest{
+			Database: "app", Whole: true, Writer: &out, Options: dbdriver.DumpOptions{Views: true, Routines: true, Drops: true},
+		})
+		require.NoError(t, err)
+		file := out.String()
+
+		// Without the dependency the function would come first (routines before views).
+		createView, createFunction := strings.Index(file, "\nCREATE VIEW"), strings.Index(file, "\nCREATE FUNCTION [users_count]")
+		require.Positive(t, createView)
+		require.Positive(t, createFunction)
+		assert.Less(t, createView, createFunction, "the view the function reads is created first")
+		dropView, dropFunction := strings.Index(file, "\nDROP VIEW IF EXISTS [v_users];"), strings.Index(file, "\nDROP FUNCTION IF EXISTS [users_count];")
+		require.Positive(t, dropView)
+		require.Positive(t, dropFunction)
+		assert.Less(t, dropFunction, dropView, "the function is dropped before the view it reads")
+	})
+
 	t.Run("turning foreign key checks off fails when the guest gives no statements for it", func(t *testing.T) {
 		d := newDriver()
 		s := d.open(t)

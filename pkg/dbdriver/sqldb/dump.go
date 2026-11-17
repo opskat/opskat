@@ -14,7 +14,8 @@ import (
 //
 // 什么钩子都不实现时得到的是默认写法：没有文件开头结尾与批分隔符，每个对象的删除按种类写
 // DROP TABLE / VIEW / FUNCTION / PROCEDURE / TRIGGER IF EXISTS（编排只在勾了「写入删除语句」时写进删除段）（引用是 Tables.TableRef("", 名字)：空库名给不带库名的引用，文件导入哪个库就写哪个库），定义是会话给出的
-// 原文补上分号，INSERT 写读出的全部列，外键留在定义里，视图不给依赖（按列出的次序写）。要改的方言再实现
+// 原文补上分号，INSERT 写读出的全部列，外键留在定义里，视图、函数与过程不给依赖（函数与过程在前、视图在后，
+// 各自按列出的次序写）。要改的方言再实现
 // DumpFileWriter / DumpObjectWriter。
 type DumpDialect interface {
 	DumpSyntax() DumpSyntax
@@ -46,7 +47,8 @@ type DumpFileWriter interface {
 // 包装（DELIMITER、/）与附属定义（索引，只在 object.Options.Indexes 时写），INSERT 的列（去掉生成列），数据
 // 前后的开关（IDENTITY_INSERT），挪到全部数据之后的外键与删除段里先删的外键（不能在会话里关闭外键检查的
 // 库；定义里就要去掉它们），留在定义里的外键（object.Options.ForeignKeys 不勾时去掉），数据之后的收尾
-// （setval），以及视图依赖的对象（DependsOn）。删除语句与挪走的外键总是给出，写不写由编排按选项决定。
+// （setval），以及视图、函数与过程依赖的对象（Dependencies，或只认视图的 DependsOn；见 QueryDumpDependencies）。
+// 删除语句与挪走的外键总是给出，写不写由编排按选项决定。
 type DumpObjectWriter interface {
 	DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error
 }
@@ -139,4 +141,23 @@ func TerminateStatement(statement string) string {
 		return statement
 	}
 	return statement + ";"
+}
+
+// QueryDumpDependencies 读一个对象依赖的对象（dbdriver.DumpObjectScript.Dependencies）：query 每行两列，种类
+// （dbdriver.ObjectView、ObjectFunction、ObjectProcedure）与名字（形式同 DumpObject.Name）。
+func QueryDumpDependencies(ctx context.Context, conn *sql.Conn, query string, args ...any) ([]dbdriver.DumpDependency, error) {
+	rows, err := conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var dependencies []dbdriver.DumpDependency
+	for rows.Next() {
+		var dependency dbdriver.DumpDependency
+		if err := rows.Scan(&dependency.Kind, &dependency.Name); err != nil {
+			return nil, err
+		}
+		dependencies = append(dependencies, dependency)
+	}
+	return dependencies, rows.Err()
 }

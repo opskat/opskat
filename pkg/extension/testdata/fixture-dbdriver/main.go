@@ -53,7 +53,7 @@ var descriptor = dbdriver.Descriptor{
 		{Tab: dbdriver.TabTLS, Fields: []dbdriver.FormField{dbdriver.FieldTLSCert}},
 	},
 	Capabilities: append([]dbdriver.Capability{
-		dbdriver.CapViews, dbdriver.CapViewDDL, dbdriver.CapCreateTable, dbdriver.CapDropTable,
+		dbdriver.CapViews, dbdriver.CapFunctions, dbdriver.CapViewDDL, dbdriver.CapCreateTable, dbdriver.CapDropTable,
 		dbdriver.CapTruncateTable, dbdriver.CapExportSQL, dbdriver.CapClassifyStatements,
 	}, abiCapabilities...),
 }
@@ -162,12 +162,23 @@ func (d dialect) ListObjects(ctx context.Context, conn *sql.Conn, database strin
 	if err := sqldb.CollectObjects(ctx, conn, "SHOW VIEWS FROM "+d.QuoteIdent(database), dbdriver.ObjectView, &objects.Views); err != nil {
 		return nil, err
 	}
+	if err := sqldb.CollectObjects(ctx, conn, "SHOW FUNCTIONS FROM "+d.QuoteIdent(database), dbdriver.ObjectFunction, &objects.Functions); err != nil {
+		return nil, err
+	}
 	return objects, nil
 }
 
-func (d dialect) ObjectSource(ctx context.Context, conn *sql.Conn, database, _, name, _ string) (string, error) {
+// sourceCommands are the SHOW ... SOURCE statements of the object types fixturedb
+// keeps the source of.
+var sourceCommands = map[string]string{dbdriver.ObjectView: "SHOW VIEW SOURCE ", dbdriver.ObjectFunction: "SHOW FUNCTION SOURCE "}
+
+func (d dialect) ObjectSource(ctx context.Context, conn *sql.Conn, database, objType, name, _ string) (string, error) {
+	command, ok := sourceCommands[objType]
+	if !ok {
+		return "", fmt.Errorf("%w: fixturedb keeps no source of a %s", dbdriver.ErrUnsupported, objType)
+	}
 	var source string
-	err := conn.QueryRowContext(ctx, "SHOW VIEW SOURCE "+d.TableRef(database, name)).Scan(&source)
+	err := conn.QueryRowContext(ctx, command+d.TableRef(database, name)).Scan(&source)
 	return source, err
 }
 

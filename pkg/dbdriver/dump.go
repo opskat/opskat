@@ -166,7 +166,7 @@ type DumpObject struct {
 
 // DumpObjectScript 是方言为一个对象给出的语句：每条都是写进文件的原文（含结束符），一条写一行。
 type DumpObjectScript struct {
-	// Drop 是「存在则删除」。勾了 DumpOptions.Drops 时写在文件开头的删除段里：触发器、函数与过程、视图
+	// Drop 是「存在则删除」。勾了 DumpOptions.Drops 时写在文件开头的删除段里：触发器、视图与函数和过程
 	// （按依赖倒序）、表（倒序）。方言总是给出它，写不写由编排决定。
 	Drop []string `json:"drop"`
 	// DropForeignKeys 是表上的外键「存在则删除」：不能关闭外键检查的库（外键挡着，被引用的表删不掉）给出，
@@ -188,9 +188,21 @@ type DumpObjectScript struct {
 	ForeignKeys []string `json:"foreignKeys,omitempty"`
 	// PostData 写在全部对象之后：序列与自增的收尾（如 PostgreSQL 的 setval）。
 	PostData []string `json:"postData,omitempty"`
-	// DependsOn 是它的定义用到的对象（名字的形式同 DumpObject.Name）：视图按它排序，被依赖的视图先写。
-	// 不是这次转储里的视图的名字（如表）不影响次序；不给时视图按列出的次序写。
-	DependsOn []string `json:"dependsOn,omitempty"`
+	// DependsOn 是它的定义用到的视图（名字的形式同 DumpObject.Name；只认视图，只知道视图之间依赖的驱动
+	// 用它，如 SQLite）；Dependencies 是它用到的视图、函数与过程，带上种类（视图与函数可以同名）。视图、
+	// 函数与过程写在同一段里，按这两项排序：被依赖的先写，删除段里倒过来。不在这一段里的对象（如表、这次
+	// 没有转储的对象）不影响次序，自己依赖自己（递归的过程）也不算；没有给出依赖的对象，函数与过程在前、
+	// 视图在后，各自按列出的次序。依赖成环时转储在写出任何内容之前停下，错误里点出环上的对象。
+	DependsOn    []string         `json:"dependsOn,omitempty"`
+	Dependencies []DumpDependency `json:"dependencies,omitempty"`
+}
+
+// DumpDependency 是一个对象用到的另一个对象（DumpObjectScript.Dependencies 里的一项）。
+type DumpDependency struct {
+	// Kind 是 ObjectView、ObjectFunction 或 ObjectProcedure（其余的种类，如 DumpTable，不影响次序）。
+	Kind string `json:"kind"`
+	// Name 的形式同 DumpObject.Name。
+	Name string `json:"name"`
 }
 
 // DumpDialect 是驱动在转储里的部分：输入输出都能序列化，按整份文件一次、按对象一次调用（不按行），
@@ -216,11 +228,13 @@ const dumpChunkRows = 500
 // Dump 是转储的编排，各驱动的 Session.Dump 用它：依次写出注释头（含所选的导出选项）、方言的文件开头（勾了
 // 「关闭外键检查」时接着关闭）、删除段（勾了「写入删除语句」时，见 dropSection）、类型、每张表（注释分隔行、
 // 定义；结构和数据时接着是它的全部行，每行一条与「复制为 INSERT」一样的 INSERT，只写方言给出的列；表名不带
-// 库名，文件导入哪个库数据就写进哪个库）、全部表之后的外键（勾了「包含外键」时）、视图（只有定义，按依赖
-// 顺序）、整库或整个 schema 时的函数、过程与触发器（各自勾了时；在所有数据之后，导入数据时不会触发它们）、
-// 数据之后的收尾、恢复外键检查与方言的文件结尾。行边读边写，不整表留在内存里。
+// 库名，文件导入哪个库数据就写进哪个库）、全部表之后的外键（勾了「包含外键」时）、视图与整库或整个 schema
+// 时的函数和过程（同一段，只有定义，按依赖顺序，见 DumpObjectScript.Dependencies）、整库或整个 schema 时的
+// 触发器（在所有数据之后，导入数据时不会触发它们；视图、函数与过程、触发器各自勾了时才有）、数据之后的收尾、
+// 恢复外键检查与方言的文件结尾。行边读边写，不整表留在内存里。
 //
-// 写任何内容之前先读出全部对象的定义、得到方言的语句：删除段在文件开头，要用到每个对象的删除语句。
+// 写任何内容之前先读出全部对象的定义、得到方言的语句：删除段在文件开头，要用到每个对象的删除语句；依赖
+// 成环时在这里停下，什么也不写。
 // 任何一个对象出错（读定义、方言、读行）或 ctx 被取消都立即停下，返回的错误是点名那个对象的
 // *DumpObjectError（被取消时它包着 ctx 的错误）；已经写出的内容由调用方丢弃（见 DumpToFile）。
 func Dump(ctx context.Context, req DumpRequest, source DumpSource, dialect DumpDialect) (*DumpResult, error) {
@@ -238,7 +252,7 @@ func Dump(ctx context.Context, req DumpRequest, source DumpSource, dialect DumpD
 		return nil, err
 	}
 	d := &dump{ctx: ctx, req: req, source: source, dialect: dialect, out: &countingWriter{w: req.Writer}, terminator: file.BatchTerminator}
-	d.progress.Objects = len(plan.tables) + len(plan.views) + len(plan.routines)
+	d.progress.Objects = len(plan.tables) + len(plan.definitions) + len(plan.triggers)
 	if err := d.prepareAll(plan); err != nil {
 		return &DumpResult{Objects: d.progress.Objects}, err
 	}
@@ -263,10 +277,11 @@ type dumpPlan struct {
 	// listed 是转储的表与视图（交给方言的范围）。
 	listed []string
 	tables []*dumpItem
-	// views 在 prepareAll 之后是依赖顺序（被依赖的在前）。
-	views []*dumpItem
-	// routines 是整库或整个 schema 时的函数、过程与触发器，按写出的次序。
-	routines []*dumpItem
+	// definitions 是视图，以及整库或整个 schema 时的函数与过程：列出时函数、过程在前，视图在后，各自按列出的
+	// 次序；prepareAll 之后是依赖顺序（被依赖的在前，见 dependencyOrder）。
+	definitions []*dumpItem
+	// triggers 是整库或整个 schema 时的触发器。
+	triggers []*dumpItem
 }
 
 // planDump 列出要写的对象：选中的表与视图，或 Whole 时库里（schema 里）的全部对象——视图、函数与过程、
@@ -277,6 +292,7 @@ func planDump(ctx context.Context, req DumpRequest, source DumpSource) (*dumpPla
 		return nil, fmt.Errorf("list objects: %w", err)
 	}
 	plan := &dumpPlan{listed: req.Tables}
+	var views []*dumpItem
 	if req.Whole {
 		all, err := source.ListTables(ctx, req.Database)
 		if err != nil {
@@ -288,28 +304,28 @@ func planDump(ctx context.Context, req DumpRequest, source DumpSource) (*dumpPla
 		if !slices.ContainsFunc(objects.Views, func(view ObjectMeta) bool { return view.Name == name }) {
 			plan.tables = append(plan.tables, &dumpItem{kind: DumpTable, name: name, withData: req.WithData})
 		} else if !req.Whole || req.Options.Views {
-			plan.views = append(plan.views, &dumpItem{kind: ObjectView, name: name})
+			views = append(views, &dumpItem{kind: ObjectView, name: name})
 		}
 	}
-	if !req.Whole {
-		return plan, nil
+	if req.Whole && req.Options.Routines {
+		plan.definitions = slices.Concat(wholeItems(req.Schema, objects.Functions), wholeItems(req.Schema, objects.Procedures))
 	}
-	for _, group := range []struct {
-		objects  []ObjectMeta
-		included bool
-	}{
-		{objects.Functions, req.Options.Routines}, {objects.Procedures, req.Options.Routines}, {objects.Triggers, req.Options.Triggers},
-	} {
-		if !group.included {
-			continue
-		}
-		for _, object := range group.objects {
-			if inDumpSchema(req.Schema, object.Name) {
-				plan.routines = append(plan.routines, &dumpItem{kind: object.Type, name: object.Name, table: object.Table})
-			}
-		}
+	plan.definitions = append(plan.definitions, views...)
+	if req.Whole && req.Options.Triggers {
+		plan.triggers = wholeItems(req.Schema, objects.Triggers)
 	}
 	return plan, nil
+}
+
+// wholeItems 是整库或整个 schema 时要写的一种对象：schema 里的那些，按列出的次序。
+func wholeItems(schema string, objects []ObjectMeta) []*dumpItem {
+	var items []*dumpItem
+	for _, object := range objects {
+		if inDumpSchema(schema, object.Name) {
+			items = append(items, &dumpItem{kind: object.Type, name: object.Name, table: object.Table})
+		}
+	}
+	return items
 }
 
 // inDumpSchema 报告一个对象是否在要转储的 schema 里；schema 为空（整个库）时都在。
@@ -328,17 +344,18 @@ type dump struct {
 	progress   DumpProgress
 }
 
-// prepareAll 读出全部对象的定义、得到方言的语句，并把视图排成依赖顺序。
+// prepareAll 读出全部对象的定义、得到方言的语句，并把视图、函数与过程排成依赖顺序。
 func (d *dump) prepareAll(plan *dumpPlan) error {
-	for _, group := range [][]*dumpItem{plan.tables, plan.views, plan.routines} {
+	for _, group := range [][]*dumpItem{plan.tables, plan.definitions, plan.triggers} {
 		for _, item := range group {
 			if err := d.prepare(item); err != nil {
 				return &DumpObjectError{Object: item.name, Err: err}
 			}
 		}
 	}
-	plan.views = dependencyOrder(plan.views)
-	return nil
+	var err error
+	plan.definitions, err = dependencyOrder(plan.definitions)
+	return err
 }
 
 func (d *dump) run(file *DumpFileScript, plan *dumpPlan) error {
@@ -362,22 +379,22 @@ func (d *dump) run(file *DumpFileScript, plan *dumpPlan) error {
 	if options.ForeignKeys {
 		d.section("Foreign keys", collect(plan.tables, func(s *DumpObjectScript) []string { return s.ForeignKeys }))
 	}
-	for _, item := range slices.Concat(plan.views, plan.routines) {
+	for _, item := range slices.Concat(plan.definitions, plan.triggers) {
 		if err := d.write(item); err != nil {
 			return err
 		}
 	}
 	d.section("Sequence and auto-increment values",
-		collect(slices.Concat(plan.tables, plan.views, plan.routines), func(s *DumpObjectScript) []string { return s.PostData }))
+		collect(slices.Concat(plan.tables, plan.definitions, plan.triggers), func(s *DumpObjectScript) []string { return s.PostData }))
 	d.section("", closing)
 	return d.out.err
 }
 
 // dropSection 是删除段：先删表上的外键（不能关闭外键检查的方言才给出），再按依赖倒序删除要转储的对象——
-// 触发器、函数与过程、视图（依赖别的视图的先删）、表（与写出的次序相反），最后删类型。
+// 触发器、视图与函数和过程（与写出的次序相反：依赖别的的先删）、表（与写出的次序相反），最后删类型。
 func dropSection(file *DumpFileScript, plan *dumpPlan) []string {
 	drops := collect(plan.tables, func(s *DumpObjectScript) []string { return s.DropForeignKeys })
-	for _, group := range [][]*dumpItem{plan.routines, plan.views, plan.tables} {
+	for _, group := range [][]*dumpItem{plan.triggers, plan.definitions, plan.tables} {
 		drops = append(drops, collect(reversed(group), func(s *DumpObjectScript) []string { return s.Drop })...)
 	}
 	return append(drops, file.DropTypes...)
@@ -495,32 +512,71 @@ func (d *dump) batchEnd() {
 	}
 }
 
-// dependencyOrder 把视图排成被依赖的在前：每个视图之前先放它 DependsOn 里属于这批视图的那些，其余保持
-// 列出的次序。每个视图只放一次，所以依赖成环时也会停下。
-func dependencyOrder(views []*dumpItem) []*dumpItem {
-	byName := make(map[string]*dumpItem, len(views))
-	for _, view := range views {
-		byName[view.name] = view
+// dependencyOrder 把视图、函数与过程排成被依赖的在前：每个对象之前先放它依赖的（DependsOn 里的视图、
+// Dependencies 里的视图、函数与过程）里属于这一段的那些，其余保持 items 的次序（函数、过程在前，视图在后）。
+// 自己依赖自己不算；依赖成环时返回点出环上对象的错误。
+func dependencyOrder(items []*dumpItem) ([]*dumpItem, error) {
+	key := func(kind, name string) string { return kind + " " + name }
+	byKey := make(map[string]*dumpItem, len(items))
+	for _, item := range items {
+		byKey[key(item.kind, item.name)] = item
 	}
-	placed := make(map[string]bool, len(views))
-	ordered := make([]*dumpItem, 0, len(views))
-	var place func(view *dumpItem)
-	place = func(view *dumpItem) {
-		if placed[view.name] {
-			return
+	dependencies := func(item *dumpItem) []*dumpItem {
+		keys := make([]string, 0, len(item.script.DependsOn)+len(item.script.Dependencies))
+		for _, name := range item.script.DependsOn {
+			keys = append(keys, key(ObjectView, name))
 		}
-		placed[view.name] = true
-		for _, name := range view.script.DependsOn {
-			if dependency, ok := byName[name]; ok {
-				place(dependency)
+		for _, dependency := range item.script.Dependencies {
+			keys = append(keys, key(dependency.Kind, dependency.Name))
+		}
+		var out []*dumpItem
+		for _, k := range keys {
+			if dependency, ok := byKey[k]; ok && dependency != item {
+				out = append(out, dependency)
 			}
 		}
-		ordered = append(ordered, view)
+		return out
 	}
-	for _, view := range views {
-		place(view)
+	const (
+		visiting = 1
+		placed   = 2
+	)
+	state := make(map[*dumpItem]int, len(items))
+	ordered := make([]*dumpItem, 0, len(items))
+	// path 是正在放的对象与它们一路依赖下去的对象：再遇到其中一个就是成环。
+	var path []*dumpItem
+	var place func(item *dumpItem) error
+	place = func(item *dumpItem) error {
+		switch state[item] {
+		case placed:
+			return nil
+		case visiting:
+			cycle := path[slices.Index(path, item):]
+			names := make([]string, 0, len(cycle)+1)
+			for _, member := range cycle {
+				names = append(names, key(member.kind, member.name))
+			}
+			names = append(names, key(item.kind, item.name))
+			return fmt.Errorf("views, functions and procedures depend on each other in a cycle: %s", strings.Join(names, " -> "))
+		}
+		state[item] = visiting
+		path = append(path, item)
+		for _, dependency := range dependencies(item) {
+			if err := place(dependency); err != nil {
+				return err
+			}
+		}
+		path = path[:len(path)-1]
+		state[item] = placed
+		ordered = append(ordered, item)
+		return nil
 	}
-	return ordered
+	for _, item := range items {
+		if err := place(item); err != nil {
+			return nil, err
+		}
+	}
+	return ordered, nil
 }
 
 // prepare 读出一个对象的定义，交给方言得到它的语句。

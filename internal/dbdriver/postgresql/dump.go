@@ -20,8 +20,8 @@ import (
 // 建表语句不含索引。文件开头关掉函数体检查（函数可以先于它用到的对象建出），建出转储范围里
 // public 之外的 schema，接着是枚举类型（整库 / 整个 schema 时是范围里的全部，加上范围里的表的列用到的别的
 // schema 里的；选中表时是这些表的列用到的）；每张表的 INSERT 不写生成列，有 GENERATED ALWAYS 身份列的表加
-// OVERRIDING SYSTEM VALUE，列拥有的序列在全部对象之后用 setval 同步到当前值；视图给出 pg_depend 里的依赖；函数与过程按每个重载删除、建出；触发器的
-// 删除带上它的表。domain、复合、range 类型与扩展不写（见 spec 的 Out of scope）。
+// OVERRIDING SYSTEM VALUE，列拥有的序列在全部对象之后用 setval 同步到当前值；视图、函数与过程给出 pg_depend 里
+// 的依赖（见 dependenciesQuery）；函数与过程按每个重载删除、建出；触发器的删除带上它的表。domain、复合、range 类型与扩展不写（见 spec 的 Out of scope）。
 var (
 	_ sqldb.DumpFileWriter   = dialect{}
 	_ sqldb.DumpObjectWriter = dialect{}
@@ -74,11 +74,29 @@ const dumpSequencesQuery = "SELECT a.attname, s.last_value FROM pg_attribute a "
 	"JOIN pg_sequences s ON s.schemaname = sn.nspname AND s.sequencename = sc.relname " +
 	"WHERE a.attrelid = format('%I.%I', $1::text, $2::text)::regclass AND s.last_value IS NOT NULL ORDER BY a.attnum"
 
-// viewDependenciesQuery 读视图（的重写规则）在 pg_depend 里依赖的表与视图，名字的形式同 ListTables。
-const viewDependenciesQuery = "SELECT DISTINCT rn.nspname || '.' || rc.relname FROM pg_rewrite r " +
-	"JOIN pg_depend d ON d.classid = 'pg_rewrite'::regclass AND d.objid = r.oid AND d.refclassid = 'pg_class'::regclass " +
-	"JOIN pg_class rc ON rc.oid = d.refobjid JOIN pg_namespace rn ON rn.oid = rc.relnamespace " +
-	"WHERE r.ev_class = format('%I.%I', $1::text, $2::text)::regclass AND rc.oid <> r.ev_class ORDER BY 1"
+// dependenciesQuery 读一个对象（dependents 是 pg_depend 里依赖方的条件）在 pg_depend 里依赖的视图、函数与过程：
+// 种类与名字（形式同 ListTables / ListObjects）。视图的重写规则与 BEGIN ATOMIC 的函数、过程体都记在 pg_depend
+// 里：调用函数的视图、引用视图的函数都在其中；用到视图的行类型（RETURNS SETOF 视图、这种类型的参数）也算依赖
+// 这个视图。字符串写的函数体（AS $$ … $$）没有记录，建出时也不检查（文件开头关掉了 check_function_bodies）。
+func dependenciesQuery(dependents string) string {
+	return "WITH refs AS (SELECT d.refclassid, d.refobjid FROM pg_depend d WHERE " + dependents + ") " +
+		"SELECT '" + dbdriver.ObjectView + "', n.nspname || '.' || c.relname FROM refs JOIN pg_class c ON c.relkind = 'v' AND " +
+		"((refs.refclassid = 'pg_class'::regclass AND c.oid = refs.refobjid) OR (refs.refclassid = 'pg_type'::regclass AND c.reltype = refs.refobjid)) " +
+		"JOIN pg_namespace n ON n.oid = c.relnamespace " +
+		"UNION SELECT CASE WHEN COALESCE(to_jsonb(p) ->> 'prokind', 'f') = 'p' THEN '" + dbdriver.ObjectProcedure + "' ELSE '" + dbdriver.ObjectFunction + "' END, " +
+		"n.nspname || '.' || p.proname FROM refs JOIN pg_proc p ON refs.refclassid = 'pg_proc'::regclass AND p.oid = refs.refobjid " +
+		"JOIN pg_namespace n ON n.oid = p.pronamespace ORDER BY 1, 2"
+}
+
+var (
+	// viewDependenciesQuery 是视图（$1 schema、$2 名字）的重写规则依赖的对象。
+	viewDependenciesQuery = dependenciesQuery("d.classid = 'pg_rewrite'::regclass AND d.objid IN " +
+		"(SELECT r.oid FROM pg_rewrite r WHERE r.ev_class = format('%I.%I', $1::text, $2::text)::regclass)")
+	// routineDependenciesQuery 是函数或过程（$1 schema、$2 名字、$3 prokind，同 routinesQuery）每个重载依赖的对象。
+	routineDependenciesQuery = dependenciesQuery("d.classid = 'pg_proc'::regclass AND d.objid IN " +
+		"(SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace " +
+		"WHERE n.nspname = $1 AND p.proname = $2 AND COALESCE(to_jsonb(p) ->> 'prokind', 'f') = $3)")
+)
 
 func (dialect) DumpFile(ctx context.Context, conn *sql.Conn, scope dbdriver.DumpScope, script *dbdriver.DumpFileScript) error {
 	schemas := map[string]bool{}
@@ -175,11 +193,11 @@ func (dialect) DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.D
 	case dbdriver.DumpTable:
 		return dumpTable(ctx, conn, object, schema, name, script)
 	case dbdriver.ObjectView:
-		used, err := sqldb.QueryNames(ctx, conn, viewDependenciesQuery, schema, name)
+		used, err := sqldb.QueryDumpDependencies(ctx, conn, viewDependenciesQuery, schema, name)
 		if err != nil {
 			return sqldb.Wrap("view dependencies", err)
 		}
-		script.DependsOn = used
+		script.Dependencies = used
 		return nil
 	case dbdriver.ObjectTrigger:
 		// 触发器名只在表内唯一，删除要带上表（与触发器同在一个 schema）。
@@ -196,6 +214,11 @@ func (dialect) DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.D
 				routineKeywords[object.Kind], quoteIdent(schema), quoteIdent(name), overload.arguments))
 			script.Definition = append(script.Definition, sqldb.TerminateStatement(overload.definition))
 		}
+		used, err := sqldb.QueryDumpDependencies(ctx, conn, routineDependenciesQuery, schema, name, routineKinds[object.Kind])
+		if err != nil {
+			return sqldb.Wrap("dependencies", err)
+		}
+		script.Dependencies = used
 		return nil
 	}
 }

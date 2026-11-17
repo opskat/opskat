@@ -310,3 +310,75 @@ func TestIntegrationDumpWithoutIndexesKeepsUniqueIndexes(t *testing.T) {
 		assert.Equal(t, tableRows(t, sourceDB, table), tableRows(t, targetDB, table))
 	}
 }
+
+// crossDependencyBatches 是视图与函数互相依赖的样例，每项一批：调用函数的视图（a_doubled 调用 z_double），引用视图
+// 的函数（SCHEMABINDING 的 a_total、内联表值函数 a_rows，建出时都要视图已在），以及调用这个函数的视图（b_summary）。
+// 名字的字母序（列出的次序）与依赖相反：视图在前时 a_doubled 建不出，函数在前（驱动给不出依赖时的写法）时 a_rows
+// 与 a_total 建不出；删除时 SCHEMABINDING 挡着，被它引用的视图要等它先删。
+var crossDependencyBatches = []string{
+	"CREATE TABLE [dbo].[items] ([id] int NOT NULL PRIMARY KEY, [price] int NOT NULL)",
+	"INSERT INTO [dbo].[items] VALUES (1, 10), (2, 25)",
+	"CREATE FUNCTION [dbo].[z_double](@n int) RETURNS int WITH SCHEMABINDING AS BEGIN RETURN @n * 2; END",
+	"CREATE VIEW [dbo].[a_doubled] WITH SCHEMABINDING AS SELECT [id], [dbo].[z_double]([price]) AS [doubled] FROM [dbo].[items]",
+	"CREATE FUNCTION [dbo].[a_total]() RETURNS int WITH SCHEMABINDING AS BEGIN RETURN (SELECT SUM([doubled]) FROM [dbo].[a_doubled]); END",
+	"CREATE FUNCTION [dbo].[a_rows]() RETURNS TABLE AS RETURN SELECT [id], [doubled] FROM [dbo].[a_doubled]",
+	"CREATE VIEW [dbo].[b_summary] AS SELECT [dbo].[a_total]() AS [total]",
+}
+
+// crossDependencyState 是这些视图与函数的原文与用到它们的查询结果。
+func crossDependencyState(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	return slices.Concat(
+		queryLines(t, db, "SELECT s.name + '.' + o.name, o.type, m.definition FROM sys.sql_modules m "+
+			"JOIN sys.objects o ON o.object_id = m.object_id JOIN sys.schemas s ON s.schema_id = o.schema_id"),
+		queryLines(t, db, "SELECT [total] FROM [dbo].[b_summary]"),
+		queryLines(t, db, "SELECT [id], [doubled] FROM [dbo].[a_rows]()"))
+}
+
+func runFile(t *testing.T, db *sql.DB, database string, file []byte) {
+	t.Helper()
+	result, err := newSession(db).RunScript(context.Background(), dbdriver.ScriptRequest{
+		Database: database, Script: bytes.NewReader(file), Size: int64(len(file)),
+	})
+	require.NoError(t, err)
+	require.Nil(t, result.Failure, "%+v\n%s", result.Failure, file)
+	assert.Zero(t, result.Failed)
+}
+
+// 视图调用函数、函数引用视图（SCHEMABINDING、内联表值函数）：按 sys.sql_expression_dependencies 排序后，文件在
+// 另一个名字的空库上每条语句都成功，原文与查询结果一样；勾了「写入删除语句」时，文件运行回源库本身也成功（删除段
+// 按依赖倒序，SCHEMABINDING 不挡）。
+func TestIntegrationDumpRestoresViewsAndFunctionsThatUseEachOther(t *testing.T) {
+	master := openDDLDatabase(t, "master")
+	suffix := time.Now().UnixNano()
+	source, target := fmt.Sprintf("opskat_dump_deps_src_%d", suffix), fmt.Sprintf("opskat_dump_deps_dst_%d", suffix)
+	createScratchDatabase(t, master, source)
+	createScratchDatabase(t, master, target)
+	sourceDB, targetDB := openDDLDatabase(t, source), openDDLDatabase(t, target)
+	for _, batch := range crossDependencyBatches {
+		_, err := sourceDB.Exec(batch)
+		require.NoError(t, err, batch)
+	}
+	want := crossDependencyState(t, sourceDB)
+	require.Contains(t, want, "70")
+	dump := func(options dbdriver.DumpOptions) []byte {
+		var file bytes.Buffer
+		_, err := newSession(sourceDB).Dump(context.Background(), dbdriver.DumpRequest{
+			Database: source, Whole: true, WithData: true, Writer: &file, Options: options,
+			Header: dbdriver.DumpHeader{Version: "test", Asset: "mssql", Time: time.Now()},
+		})
+		require.NoError(t, err)
+		return file.Bytes()
+	}
+
+	t.Run("into an empty database", func(t *testing.T) {
+		runFile(t, targetDB, target, dump(structureOptions))
+		assert.Equal(t, want, crossDependencyState(t, targetDB))
+	})
+	t.Run("over the original database", func(t *testing.T) {
+		options := structureOptions
+		options.Drops = true
+		runFile(t, sourceDB, source, dump(options))
+		assert.Equal(t, want, crossDependencyState(t, sourceDB))
+	})
+}

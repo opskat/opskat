@@ -44,9 +44,10 @@ const (
 	tableIdentitySQL    = "SELECT CAST(last_value AS NVARCHAR(40)) FROM sys.identity_columns WHERE object_id = OBJECT_ID(@p1)"
 	insertableColumnSQL = "SELECT name FROM sys.columns WHERE object_id = OBJECT_ID(@p1) " +
 		"AND is_computed = 0 AND system_type_id <> 189 ORDER BY column_id"
-	viewDependenciesSQL = "SELECT DISTINCT s.name + '.' + o.name FROM sys.sql_expression_dependencies d " +
+	dependenciesSQL = "SELECT DISTINCT CASE WHEN o.type = 'V' THEN 'view' WHEN o.type IN ('FN', 'IF', 'TF') THEN 'function' " +
+		"ELSE 'procedure' END, s.name + '.' + o.name FROM sys.sql_expression_dependencies d " +
 		"JOIN sys.objects o ON o.object_id = d.referenced_id JOIN sys.schemas s ON s.schema_id = o.schema_id " +
-		"WHERE d.referencing_id = OBJECT_ID(@p1)"
+		"WHERE d.referencing_id = OBJECT_ID(@p1) AND (o.type IN ('V', 'FN', 'IF', 'TF') OR o.object_id IN (SELECT object_id FROM sys.procedures))"
 )
 
 // guidRaw 是 6F9619FF-8B86-D011-B42D-00C04FC964FF 在 SQL Server 里的 16 个字节（前三段按小端存放）。
@@ -99,11 +100,20 @@ func expectCustomersStructure(mock sqlmock.Sqlmock) {
 	mock.ExpectQuery(tableIdentitySQL).WithArgs("[sales].[customers]").WillReturnRows(names("last_value", "110"))
 }
 
-func expectView(mock sqlmock.Sqlmock, name, object, definition string, dependencies ...string) {
+// dependencyRows 是 sys.sql_expression_dependencies 里用到的视图、函数与过程：种类与名字。
+func dependencyRows(dependencies ...[2]string) *sqlmock.Rows {
+	rows := sqlmock.NewRows([]string{"kind", "name"})
+	for _, d := range dependencies {
+		rows.AddRow(d[0], d[1])
+	}
+	return rows
+}
+
+func expectView(mock sqlmock.Sqlmock, object, definition string, dependencies ...[2]string) {
 	expectTableDDL(mock, object, ddlColumnRows().
 		AddRow("id", "int", int64(4), int64(10), int64(0), false, nil, nil, nil, nil, nil, false), "", "")
 	mock.ExpectQuery(objectDefinitionSQL).WithArgs(object).WillReturnRows(names("definition", definition))
-	mock.ExpectQuery(viewDependenciesSQL).WithArgs(object).WillReturnRows(names("name", dependencies...))
+	mock.ExpectQuery(dependenciesSQL).WithArgs(object).WillReturnRows(dependencyRows(dependencies...))
 }
 
 func triggerStateRows() *sqlmock.Rows {
@@ -119,10 +129,11 @@ func expectTableTrigger(mock sqlmock.Sqlmock) {
 
 // 整库转储（结构和数据，除了关闭外键检查全勾）写出的文件：每批之后 GO；删除段先拆掉各表上的外键（SQL Server
 // 不能在会话里关闭外键检查；表不存在时跳过），再按倒序 DROP ... IF EXISTS 触发器（库级 DDL 触发器带 ON
-// DATABASE）、过程、函数、视图（依赖别的视图的先删）、表；表的 INSERT 不写计算列与 rowversion，uniqueidentifier 写成 GUID、二进制写成 0x…、2^53 以上的
+// DATABASE）、视图与过程和函数（按依赖倒序）、表；表的 INSERT 不写计算列与 rowversion，uniqueidentifier 写成 GUID、二进制写成 0x…、2^53 以上的
 // bigint 不丢位；有 IDENTITY 列的表数据前后开、关 IDENTITY_INSERT；外键（含自引用，禁用的、不受信任的保持原状）
-// 在全部数据之后；视图写服务器的原文、被依赖的在前（不在列出的次序）；函数、过程、触发器写服务器的原文、不补
-// 分号，禁用的触发器建出后再禁用；最后把 IDENTITY 的当前值设回源库的。
+// 在全部数据之后；视图、函数与过程在同一段里按 sys.sql_expression_dependencies 排序，被依赖的在前（视图调用
+// 函数、过程用到视图）；视图、函数、过程、触发器写服务器的原文、不补分号，禁用的触发器建出后再禁用；最后把
+// IDENTITY 的当前值设回源库的。
 func TestDumpWritesRestorableSQLServerFile(t *testing.T) {
 	session, mock := newMock(t)
 	expectSampleObjects(mock)
@@ -143,16 +154,18 @@ func TestDumpWritesRestorableSQLServerFile(t *testing.T) {
 	expectCustomersStructure(mock)
 	mock.ExpectQuery(insertableColumnSQL).WithArgs("[sales].[customers]").WillReturnRows(names("name", "id", "parent_id", "name"))
 
-	expectView(mock, "dbo.v_named", "[dbo].[v_named]",
-		"CREATE VIEW dbo.v_named AS\nSELECT o.id, n.name FROM dbo.orders o JOIN sales.v_names n ON n.id = o.customer_id\n",
-		"dbo.orders", "sales.v_names")
-	expectView(mock, "sales.v_names", "[sales].[v_names]", "CREATE VIEW sales.v_names AS SELECT id, name FROM sales.customers",
-		"sales.customers")
-
+	// 函数、过程，再是视图（没有依赖时函数与过程在前、视图在后）：v_named 调用函数 f_net、用到视图 v_names，过程
+	// p_rename 用到视图 v_named，所以写出的次序是 f_net、v_names、v_named、p_rename。
 	mock.ExpectQuery(objectDefinitionSQL).WithArgs("dbo.f_net").WillReturnRows(names("definition",
 		"CREATE FUNCTION dbo.f_net(@price decimal(18, 4)) RETURNS decimal(18, 4)\nAS\nBEGIN\n  RETURN @price * 0.9;\nEND\r\n\r\n"))
+	mock.ExpectQuery(dependenciesSQL).WithArgs("[dbo].[f_net]").WillReturnRows(dependencyRows())
 	mock.ExpectQuery(objectDefinitionSQL).WithArgs("sales.p_rename").WillReturnRows(names("definition",
-		"CREATE PROCEDURE sales.p_rename @id int, @name nvarchar(100) AS\nUPDATE sales.customers SET name = @name WHERE id = @id;"))
+		"CREATE PROCEDURE sales.p_rename @id int, @name nvarchar(100) AS\nUPDATE sales.customers SET name = @name WHERE id = @id AND id IN (SELECT id FROM dbo.v_named);"))
+	mock.ExpectQuery(dependenciesSQL).WithArgs("[sales].[p_rename]").WillReturnRows(dependencyRows([2]string{"view", "dbo.v_named"}))
+	expectView(mock, "[dbo].[v_named]",
+		"CREATE VIEW dbo.v_named AS\nSELECT o.id, n.name, dbo.f_net(o.id) AS net FROM dbo.orders o JOIN sales.v_names n ON n.id = o.customer_id\n",
+		[2]string{"function", "dbo.f_net"}, [2]string{"view", "sales.v_names"})
+	expectView(mock, "[sales].[v_names]", "CREATE VIEW sales.v_names AS SELECT id, name FROM sales.customers")
 	expectTableTrigger(mock)
 	mock.ExpectQuery(triggerSourceSQL).WithArgs("tr_ddl", "[dbo].[tr_ddl]").
 		WillReturnRows(names("definition", "CREATE TRIGGER tr_ddl ON DATABASE FOR CREATE_TABLE AS PRINT 'ddl'"))
@@ -187,10 +200,10 @@ func TestDumpOfASchemaKeepsToTheSchema(t *testing.T) {
 	session, mock := newMock(t)
 	expectSampleObjects(mock)
 	expectCustomersStructure(mock)
-	expectView(mock, "sales.v_names", "[sales].[v_names]", "CREATE VIEW sales.v_names AS SELECT id, name FROM sales.customers",
-		"sales.customers")
 	mock.ExpectQuery(objectDefinitionSQL).WithArgs("sales.p_rename").WillReturnRows(names("definition",
 		"CREATE PROCEDURE sales.p_rename AS SELECT 1"))
+	mock.ExpectQuery(dependenciesSQL).WithArgs("[sales].[p_rename]").WillReturnRows(dependencyRows())
+	expectView(mock, "[sales].[v_names]", "CREATE VIEW sales.v_names AS SELECT id, name FROM sales.customers")
 	expectTableTrigger(mock)
 
 	var out strings.Builder
@@ -203,8 +216,8 @@ func TestDumpOfASchemaKeepsToTheSchema(t *testing.T) {
 	assert.Equal(t, []string{
 		"-- Table structure for sales.customers",
 		"-- Foreign keys",
-		"-- View structure for sales.v_names",
 		"-- Procedure structure for sales.p_rename",
+		"-- View structure for sales.v_names",
 		"-- Trigger structure for sales.tr_customers_upd",
 		"-- Sequence and auto-increment values",
 	}, regexp.MustCompile(`(?m)^-- (Table|View|Procedure|Function|Trigger) structure for .*$|^-- Foreign keys$|^-- Sequence and auto-increment values$`).

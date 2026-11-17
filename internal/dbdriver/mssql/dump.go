@@ -17,8 +17,8 @@ import (
 // CONSTRAINT 加上（勾了「包含外键」时），禁用的、不受信任的保持原状；SQL Server 不能在会话里关闭外键检查，删除段
 // 先拆掉要转储的表上的外键（表或外键不存在时跳过），被引用的表才删得掉。INSERT 不写计算列与 rowversion；有 IDENTITY 列的表，数据前后开、关
 // IDENTITY_INSERT，全部数据之后用 DBCC CHECKIDENT 把当前值设回源库的。视图、函数、过程与触发器写服务器
-// 保存的原文（OBJECT_DEFINITION），不补分号：GO 切分去掉批末尾的空白，原文才与源库一样；视图的依赖取自
-// sys.sql_expression_dependencies；禁用的触发器建出后再禁用。扩展属性、权限与 schema 的创建不写（导入前
+// 保存的原文（OBJECT_DEFINITION），不补分号：GO 切分去掉批末尾的空白，原文才与源库一样；视图、函数与过程的依赖
+// 取自 sys.sql_expression_dependencies（见 dumpDependenciesQuery）；禁用的触发器建出后再禁用。扩展属性、权限与 schema 的创建不写（导入前
 // 目标库里要已有这些 schema）。
 var (
 	_ sqldb.DumpDialect      = dialect{}
@@ -36,9 +36,9 @@ func (dialect) DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.D
 	case dbdriver.ObjectTrigger:
 		script.Definition = []string{moduleDefinition(object.Definition)}
 		return dumpTrigger(ctx, conn, object, script)
-	default:
+	default: // 函数与过程
 		script.Definition = []string{moduleDefinition(object.Definition)}
-		return nil
+		return dumpDependencies(ctx, conn, object, script)
 	}
 }
 
@@ -208,10 +208,24 @@ func unicodeString(text string) string {
 // dumpViewDefinitionQuery 是视图保存的原文（会话给出的定义是 TableDDL 按列拼的建表语句，不能用）。
 const dumpViewDefinitionQuery = "SELECT OBJECT_DEFINITION(OBJECT_ID(@p1))"
 
-// dumpViewDependenciesQuery 是视图用到的对象，写成 ListTables 的 schema.name。
-const dumpViewDependenciesQuery = "SELECT DISTINCT s.name + '.' + o.name FROM sys.sql_expression_dependencies d " +
+// dumpDependenciesQuery 是视图、函数或过程用到的视图、函数与过程：种类与名字（ListTables / ListObjects 的
+// schema.name）。sys.sql_expression_dependencies 记着模块里写到的对象：调用函数的视图、引用视图的函数（含
+// SCHEMABINDING 的）都在其中；种类与 ListObjects 列出它们的一样（函数是 FN、IF、TF，过程是 sys.procedures 的）。
+const dumpDependenciesQuery = "SELECT DISTINCT CASE WHEN o.type = 'V' THEN '" + dbdriver.ObjectView + "' " +
+	"WHEN o.type IN ('FN', 'IF', 'TF') THEN '" + dbdriver.ObjectFunction + "' ELSE '" + dbdriver.ObjectProcedure + "' END, " +
+	"s.name + '.' + o.name FROM sys.sql_expression_dependencies d " +
 	"JOIN sys.objects o ON o.object_id = d.referenced_id JOIN sys.schemas s ON s.schema_id = o.schema_id " +
-	"WHERE d.referencing_id = OBJECT_ID(@p1)"
+	"WHERE d.referencing_id = OBJECT_ID(@p1) AND (o.type IN ('V', 'FN', 'IF', 'TF') OR o.object_id IN (SELECT object_id FROM sys.procedures))"
+
+// dumpDependencies 给出视图、函数或过程用到的视图、函数与过程（DumpObjectScript.Dependencies）。
+func dumpDependencies(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error {
+	used, err := sqldb.QueryDumpDependencies(ctx, conn, dumpDependenciesQuery, sql.Named("p1", objectRef(object.Name)))
+	if err != nil {
+		return sqldb.Wrap("dependencies", err)
+	}
+	script.Dependencies = used
+	return nil
+}
 
 func dumpView(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error {
 	id := objectRef(object.Name)
@@ -223,12 +237,7 @@ func dumpView(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, s
 		return fmt.Errorf("the database gave no definition for view %s (it may be created WITH ENCRYPTION)", object.Name)
 	}
 	script.Definition = []string{moduleDefinition(definition.String)}
-	used, err := sqldb.QueryNames(ctx, conn, dumpViewDependenciesQuery, sql.Named("p1", id))
-	if err != nil {
-		return sqldb.Wrap("view dependencies", err)
-	}
-	script.DependsOn = used
-	return nil
+	return dumpDependencies(ctx, conn, object, script)
 }
 
 // triggerLookup 找出一个触发器：ListObjects 给库级 DDL 触发器的是裸名（@p1，它们不属于 schema，OBJECT_ID 找

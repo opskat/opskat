@@ -58,10 +58,15 @@ const usersIndex = "CREATE INDEX [users_name] ON [users] ([name]);"
 
 // DumpObject writes usersIndex after the users table only when the dump includes
 // indexes (dbdriver.DumpOptions.Indexes): the export options the host was given
-// reach the guest's dump dialect with each object.
+// reach the guest's dump dialect with each object. The function users_count says
+// it depends on the view v_users, so the host writes the view first and drops it
+// last, against the order it uses for objects without dependencies.
 func (dialect) DumpObject(_ context.Context, _ *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error {
-	if object.Kind == dbdriver.DumpTable && object.Name == "users" && object.Options.Indexes {
+	switch {
+	case object.Kind == dbdriver.DumpTable && object.Name == "users" && object.Options.Indexes:
 		script.Definition = append(script.Definition, usersIndex)
+	case object.Kind == dbdriver.ObjectFunction && object.Name == "users_count":
+		script.Dependencies = []dbdriver.DumpDependency{{Kind: dbdriver.ObjectView, Name: "v_users"}}
 	}
 	return nil
 }

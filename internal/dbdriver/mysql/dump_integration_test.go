@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -235,4 +236,69 @@ func TestDumpOverwritesTheOriginalDatabaseOnARealMySQL(t *testing.T) {
 	require.Nil(t, run.Failure, "%+v", run.Failure)
 	assert.Zero(t, run.Failed)
 	assert.Equal(t, before, snapshot(t, sourceDB))
+}
+
+// crossDependencySchema 是视图与函数互相依赖的样例：调用函数的视图（b_calls 调用 z_used），引用视图的函数（a_reads
+// 读 b_calls），以及调用这个函数的视图（c_top）。名字的字母序（列出的次序）里视图 b_calls 与 c_top 在它们调用的
+// 函数之后：视图写在函数之前时 b_calls 建不出。
+var crossDependencySchema = []string{
+	"CREATE TABLE items (id INT NOT NULL PRIMARY KEY, price INT NOT NULL)",
+	"INSERT INTO items VALUES (1, 10), (2, 25)",
+	"CREATE FUNCTION z_used(n INT) RETURNS INT DETERMINISTIC RETURN n * 2",
+	"CREATE VIEW b_calls AS SELECT id, z_used(price) AS doubled FROM items",
+	"CREATE FUNCTION a_reads() RETURNS INT READS SQL DATA RETURN (SELECT SUM(doubled) FROM b_calls)",
+	"CREATE VIEW c_top AS SELECT a_reads() AS total",
+}
+
+// crossDependencyState 是这些视图与函数的定义与用到它们的查询结果。
+func crossDependencyState(t *testing.T, db *sql.DB, database string) []string {
+	t.Helper()
+	return slices.Concat(
+		strings.Split(bare(strings.Join(query(t, db,
+			"SELECT TABLE_NAME, VIEW_DEFINITION FROM information_schema.VIEWS WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME"), "\n"), database), "\n"),
+		query(t, db, "SELECT ROUTINE_NAME, ROUTINE_DEFINITION FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() ORDER BY ROUTINE_NAME"),
+		query(t, db, "SELECT total FROM c_top"),
+		query(t, db, "SELECT id, doubled FROM b_calls ORDER BY id"))
+}
+
+// 视图调用函数、函数引用视图：整库转储后，文件在另一个名字的空库上每条语句都成功，定义与查询结果一样；勾了「写入
+// 删除语句」时，文件运行回源库本身也成功。服务器有 VIEW_ROUTINE_USAGE（8.0.13 起）时视图调用的函数取自它。
+func TestDumpRestoresViewsAndFunctionsThatUseEachOtherOnARealMySQL(t *testing.T) {
+	admin := openScriptDatabase(t, "")
+	ctx := context.Background()
+	source := createScratchDatabase(t, admin, "deps_src")
+	target := createScratchDatabase(t, admin, "deps_dst")
+	sourceDB, targetDB := openScriptDatabase(t, source), openScriptDatabase(t, target)
+	exec(t, sourceDB, crossDependencySchema...)
+	t.Log("server version:", query(t, admin, "SELECT VERSION()"))
+	want := crossDependencyState(t, sourceDB, source)
+	require.Contains(t, want, "70")
+	dump := func(options dbdriver.DumpOptions) string {
+		var file strings.Builder
+		_, err := newSession(sourceDB).Dump(ctx, dbdriver.DumpRequest{
+			Database: source, Whole: true, WithData: true, Options: options, Header: dumpHeader(), Writer: &file,
+		})
+		require.NoError(t, err)
+		return file.String()
+	}
+	run := func(t *testing.T, db *sql.DB, database, content string) {
+		t.Helper()
+		result, err := newSession(db).RunScript(ctx, dbdriver.ScriptRequest{
+			Database: database, Script: strings.NewReader(content), Size: int64(len(content)),
+		})
+		require.NoError(t, err)
+		require.Nil(t, result.Failure, "%+v\n%s", result.Failure, content)
+		assert.Zero(t, result.Failed)
+	}
+
+	t.Run("into an empty database", func(t *testing.T) {
+		withoutDrops := allOptions
+		withoutDrops.Drops = false
+		run(t, targetDB, target, dump(withoutDrops))
+		assert.Equal(t, want, crossDependencyState(t, targetDB, target))
+	})
+	t.Run("over the original database", func(t *testing.T) {
+		run(t, sourceDB, source, dump(allOptions))
+		assert.Equal(t, want, crossDependencyState(t, sourceDB, source))
+	})
 }

@@ -92,6 +92,10 @@ var tableOrder = []string{"users", "series", "blobs"}
 
 var views = map[string]string{"v_users": "SELECT [id] FROM [app].[users]"}
 
+// functions are fixturedb's stored functions: SHOW FUNCTIONS lists them and SHOW
+// FUNCTION SOURCE gives their source. users_count reads the view v_users.
+var functions = map[string]string{"users_count": "CREATE FUNCTION [users_count]() RETURNS int AS SELECT COUNT(*) FROM [v_users]"}
+
 // seriesProduced counts the rows the most recent read of series has produced so
 // far; SHOW STREAM PROGRESS answers it.
 var seriesProduced int
@@ -239,12 +243,12 @@ var (
 	pageOf    = regexp.MustCompile(`^PAGE (\d+) (\d+) OF (.+)$`)
 	selectAll = regexp.MustCompile(`^SELECT \* FROM (\S+)(?: LIMIT (\d+)(?: OFFSET (\d+))?)?$`)
 	countAll  = regexp.MustCompile(`^SELECT COUNT\(\*\) FROM (\S+)$`)
-	showFrom  = regexp.MustCompile(`^SHOW (TABLES|VIEWS) FROM \[([^\]]*)\]$`)
+	showFrom  = regexp.MustCompile(`^SHOW (TABLES|VIEWS|FUNCTIONS) FROM \[([^\]]*)\]$`)
 	showHost  = regexp.MustCompile(`^SHOW HOST (\w+)(?: (\S+))?$`)
 	// showTicket asks the host for the Kerberos ticket of service on host, as a
 	// login handshake does, whether or not the session uses Kerberos.
 	showTicket = regexp.MustCompile(`^SHOW KERBEROS TICKET (\S+) (\S+)$`)
-	showOf     = regexp.MustCompile(`^SHOW (COLUMNS FROM|PRIMARY KEY FROM|CREATE TABLE|VIEW SOURCE) (\S+)$`)
+	showOf     = regexp.MustCompile(`^SHOW (COLUMNS FROM|PRIMARY KEY FROM|CREATE TABLE|VIEW SOURCE|FUNCTION SOURCE) (\S+)$`)
 	tableRef   = regexp.MustCompile(`^(?:\[([^\]]*)\]\.)?\[([^\]]+)\]$`)
 )
 
@@ -374,12 +378,20 @@ func showNames(what, database string) (driver.Rows, error) {
 		return nil, fmt.Errorf("fixturedb: unknown database %q", database)
 	}
 	var names [][]driver.Value
-	if what == "TABLES" {
+	switch what {
+	case "TABLES": // the tables, then the views (as ListTables gives them)
 		for _, name := range tableOrder {
 			names = append(names, []driver.Value{name})
 		}
-	} else {
 		for name := range views {
+			names = append(names, []driver.Value{name})
+		}
+	case "VIEWS":
+		for name := range views {
+			names = append(names, []driver.Value{name})
+		}
+	default: // FUNCTIONS
+		for name := range functions {
 			names = append(names, []driver.Value{name})
 		}
 	}
@@ -387,16 +399,19 @@ func showNames(what, database string) (driver.Rows, error) {
 }
 
 func show(what, ref string) (driver.Rows, error) {
-	if what == "VIEW SOURCE" {
+	if sources, ok := map[string]map[string]string{"VIEW SOURCE": views, "FUNCTION SOURCE": functions}[what]; ok {
 		_, name, err := splitRef(ref)
 		if err != nil {
 			return nil, err
 		}
-		source, ok := views[name]
+		source, ok := sources[name]
 		if !ok {
-			return nil, fmt.Errorf("fixturedb: no view %s", ref)
+			return nil, fmt.Errorf("fixturedb: no %s for %s", strings.ToLower(what), ref)
 		}
 		return values([]string{"source"}, []driver.Value{source}), nil
+	}
+	if _, name, err := splitRef(ref); err == nil && what == "CREATE TABLE" && views[name] != "" {
+		return values([]string{"ddl"}, []driver.Value{"CREATE VIEW [" + name + "] AS " + views[name]}), nil
 	}
 	t, err := lookup(ref)
 	if err != nil {

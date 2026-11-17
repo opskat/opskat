@@ -22,11 +22,11 @@ DROP TRIGGER IF EXISTS [sales].[tr_customers_upd];
 GO
 DROP PROCEDURE IF EXISTS [sales].[p_rename];
 GO
-DROP FUNCTION IF EXISTS [dbo].[f_net];
-GO
 DROP VIEW IF EXISTS [dbo].[v_named];
 GO
 DROP VIEW IF EXISTS [sales].[v_names];
+GO
+DROP FUNCTION IF EXISTS [dbo].[f_net];
 GO
 DROP TABLE IF EXISTS [sales].[customers];
 GO
@@ -88,19 +88,6 @@ ALTER TABLE [sales].[customers] NOCHECK CONSTRAINT [FK_customers_parent];
 GO
 
 -- ----------------------------
--- View structure for sales.v_names
--- ----------------------------
-CREATE VIEW sales.v_names AS SELECT id, name FROM sales.customers
-GO
-
--- ----------------------------
--- View structure for dbo.v_named
--- ----------------------------
-CREATE VIEW dbo.v_named AS
-SELECT o.id, n.name FROM dbo.orders o JOIN sales.v_names n ON n.id = o.customer_id
-GO
-
--- ----------------------------
 -- Function structure for dbo.f_net
 -- ----------------------------
 CREATE FUNCTION dbo.f_net(@price decimal(18, 4)) RETURNS decimal(18, 4)
@@ -111,10 +98,23 @@ END
 GO
 
 -- ----------------------------
+-- View structure for sales.v_names
+-- ----------------------------
+CREATE VIEW sales.v_names AS SELECT id, name FROM sales.customers
+GO
+
+-- ----------------------------
+-- View structure for dbo.v_named
+-- ----------------------------
+CREATE VIEW dbo.v_named AS
+SELECT o.id, n.name, dbo.f_net(o.id) AS net FROM dbo.orders o JOIN sales.v_names n ON n.id = o.customer_id
+GO
+
+-- ----------------------------
 -- Procedure structure for sales.p_rename
 -- ----------------------------
 CREATE PROCEDURE sales.p_rename @id int, @name nvarchar(100) AS
-UPDATE sales.customers SET name = @name WHERE id = @id;
+UPDATE sales.customers SET name = @name WHERE id = @id AND id IN (SELECT id FROM dbo.v_named);
 GO
 
 -- ----------------------------

@@ -15,8 +15,9 @@ import (
 // 转储：文件以 SET NAMES utf8mb4 开头，勾了「关闭外键检查」时接着关闭、结尾恢复；外键留在建表语句里（能在
 // 会话里关闭外键检查，删除段也不先删外键）。定义都用服务器的原文（SHOW CREATE，DEFINER 保留；不勾「包含索引」
 // 「包含外键」时去掉建表语句里对应的行），去掉对象所在库的限定（视图里的 `库`.`表` 等），文件才能还原进另一个名字
-// 的库；过程、函数、触发器用 DELIMITER ;; 包起来；INSERT 不写生成列；视图给出它用到的对象，编排据此把被
-// 依赖的视图先写。
+// 的库；过程、函数、触发器用 DELIMITER ;; 包起来；INSERT 不写生成列；视图给出它用到的视图与函数（见
+// viewDependencies），编排据此把被依赖的先写。函数与过程不给依赖：服务器不记录过程体里用到的对象，建出时也不
+// 检查它们，所以引用视图的函数写在视图之前（编排在没有依赖时的次序）也建得出。
 var (
 	_ sqldb.DumpDialect      = dialect{}
 	_ sqldb.DumpObjectWriter = dialect{}
@@ -44,7 +45,7 @@ func (dialect) DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.D
 	case dbdriver.ObjectView:
 		script.Definition = []string{sqldb.TerminateStatement(definition)}
 		used, err := viewDependencies(ctx, conn, object, referenced)
-		script.DependsOn = used
+		script.Dependencies = used
 		return err
 	default:
 		// 过程、函数、触发器体里的分号会被切成多条语句，要改分隔符。
@@ -115,26 +116,42 @@ func insertableColumns(ctx context.Context, conn *sql.Conn, object dbdriver.Dump
 }
 
 // errUnknownTable / errNoSuchTable 是查不存在的 information_schema 表时服务器的报错：5.7 与 MariaDB 没有
-// information_schema.VIEW_TABLE_USAGE，报 ER_UNKNOWN_TABLE；ER_NO_SUCH_TABLE 是一般的「表不存在」。
+// information_schema.VIEW_TABLE_USAGE 与 VIEW_ROUTINE_USAGE，报 ER_UNKNOWN_TABLE；ER_NO_SUCH_TABLE 是一般的
+// 「表不存在」。
 const (
 	errUnknownTable = 1109
 	errNoSuchTable  = 1146
 )
 
-// viewDependencies 是视图用到的同库对象：8.0.13 起 information_schema.VIEW_TABLE_USAGE 有精确的记录；没有
-// 这张表的服务器改看定义里写出的名字（referenced），其中不是这批视图的名字不影响次序。
-func viewDependencies(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, referenced []string) ([]string, error) {
-	used, err := sqldb.QueryNames(ctx, conn,
-		"SELECT TABLE_NAME FROM information_schema.VIEW_TABLE_USAGE WHERE VIEW_SCHEMA = ? AND TABLE_SCHEMA = VIEW_SCHEMA AND VIEW_NAME = ?",
-		object.Database, object.Name)
-	var mysqlErr *gomysql.MySQLError
-	switch {
-	case err == nil:
-		return used, nil
-	case errors.As(err, &mysqlErr) && (mysqlErr.Number == errUnknownTable || mysqlErr.Number == errNoSuchTable):
-		return referenced, nil
+const (
+	// viewTableUsageQuery 是视图用到的同库的表与视图（表不在视图、函数与过程那一段里，不影响次序）。
+	viewTableUsageQuery = "SELECT TABLE_NAME FROM information_schema.VIEW_TABLE_USAGE WHERE VIEW_SCHEMA = ? AND TABLE_SCHEMA = VIEW_SCHEMA AND VIEW_NAME = ?"
+	// viewRoutineUsageQuery 是视图调用的同库的函数（视图不能调用过程）。
+	viewRoutineUsageQuery = "SELECT SPECIFIC_NAME FROM information_schema.VIEW_ROUTINE_USAGE WHERE TABLE_SCHEMA = ? AND SPECIFIC_SCHEMA = TABLE_SCHEMA AND TABLE_NAME = ?"
+)
+
+// viewDependencies 是视图用到的同库的视图与函数：8.0.13 起 information_schema.VIEW_TABLE_USAGE 与
+// VIEW_ROUTINE_USAGE 有精确的记录；没有这两张表的服务器改看定义里写出的名字（referenced），每个名字都可能是
+// 视图或函数（不是这一段里的对象的名字不影响次序）。
+func viewDependencies(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, referenced []string) ([]dbdriver.DumpDependency, error) {
+	var dependencies []dbdriver.DumpDependency
+	for _, usage := range []struct{ kind, query string }{
+		{dbdriver.ObjectView, viewTableUsageQuery}, {dbdriver.ObjectFunction, viewRoutineUsageQuery},
+	} {
+		used, err := sqldb.QueryNames(ctx, conn, usage.query, object.Database, object.Name)
+		var mysqlErr *gomysql.MySQLError
+		switch {
+		case err == nil:
+		case errors.As(err, &mysqlErr) && (mysqlErr.Number == errUnknownTable || mysqlErr.Number == errNoSuchTable):
+			used = referenced
+		default:
+			return nil, sqldb.Wrap("view dependencies", err)
+		}
+		for _, name := range used {
+			dependencies = append(dependencies, dbdriver.DumpDependency{Kind: usage.kind, Name: name})
+		}
 	}
-	return nil, sqldb.Wrap("view dependencies", err)
+	return dependencies, nil
 }
 
 // stripDatabase 去掉定义里写成 `database`.xxx 的库名限定（字符串与注释里的不动），并返回定义里出现的

@@ -317,7 +317,8 @@ func (q *Query) dumpSQLFile(ctx context.Context, dumpID string, log *zap.Logger,
 		if objectErr != nil {
 			event.Error = objectErr.Err.Error()
 		}
-		log.Error("dump sql file failed", append(fields, zap.String("object", event.Object), zap.Error(err))...)
+		// 数据库的错误原文常带着名字与值，只给对话框，不进日志。
+		log.Error("dump sql file failed", append(fields, zap.String("object", event.Object))...)
 	}
 	emitDumpSQLFileEvent(q.ctx, event)
 }
