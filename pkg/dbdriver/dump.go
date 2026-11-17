@@ -194,7 +194,7 @@ type DumpObjectScript struct {
 	// 没有转储的对象）不影响次序，自己依赖自己（递归的过程）也不算；没有给出依赖的对象，函数与过程在前、
 	// 视图在后，各自按列出的次序。表的 Dependencies 是它的父表（种类 DumpTable：分区所属的分区表、继承的
 	// 子表的父表），表那一段同样按它排序：父表先写，删除段里子表先删；没有父表的表按列出的次序。依赖成环时
-	// 转储在写出任何内容之前停下，错误里点出环上的对象。
+	// （如 SQL Server 里互相调用的过程：延迟名称解析，谁先建都行）环在回到正在排的对象处断开，照样写出。
 	DependsOn    []string         `json:"dependsOn,omitempty"`
 	Dependencies []DumpDependency `json:"dependencies,omitempty"`
 	// Partitions 是表的分区（名字的形式同 DumpObject.Name；只有分区表的父表给出，多级分区由各级给出自己的下一级）：
@@ -243,7 +243,7 @@ const dumpChunkRows = 500
 // DumpObjectScript.Partitions），分区与继承的子表写在父表之后（见 DumpObjectScript.Dependencies）。
 //
 // 写任何内容之前先读出全部对象的定义、得到方言的语句（之后才取方言的整份文件部分，范围里已有随父表带上的
-// 分区）：删除段在文件开头，要用到每个对象的删除语句；依赖成环时在这里停下，什么也不写。
+// 分区）：删除段在文件开头，要用到每个对象的删除语句。
 // 任何一个对象出错（读定义、方言、读行）或 ctx 被取消都立即停下，返回的错误是点名那个对象的
 // *DumpObjectError（被取消时它包着 ctx 的错误）；已经写出的内容由调用方丢弃（见 DumpToFile）。
 func Dump(ctx context.Context, req DumpRequest, source DumpSource, dialect DumpDialect) (*DumpResult, error) {
@@ -390,12 +390,9 @@ func (d *dump) prepareAll(plan *dumpPlan) error {
 			}
 		}
 	}
-	var err error
-	if plan.tables, err = dependencyOrder(plan.tables); err != nil {
-		return err
-	}
-	plan.definitions, err = dependencyOrder(plan.definitions)
-	return err
+	plan.tables = dependencyOrder(plan.tables)
+	plan.definitions = dependencyOrder(plan.definitions)
+	return nil
 }
 
 func (d *dump) run(file *DumpFileScript, plan *dumpPlan) error {
@@ -555,8 +552,9 @@ func (d *dump) batchEnd() {
 
 // dependencyOrder 把一段对象排成被依赖的在前：每个对象之前先放它依赖的（DependsOn 里的视图、Dependencies 里的
 // 对象）里属于这一段的那些，其余保持 items 的次序。表这一段里是分区与继承的子表依赖它们的父表；视图、函数与
-// 过程那一段里没有依赖的函数、过程在前，视图在后。自己依赖自己不算；依赖成环时返回点出环上对象的错误。
-func dependencyOrder(items []*dumpItem) ([]*dumpItem, error) {
+// 过程那一段里没有依赖的函数、过程在前，视图在后。自己依赖自己不算；依赖成环时，回到正在放的对象的那条依赖
+// 不算（环在那里断开，与 pg_dump 一样照样写出），环上的对象按放到的次序。
+func dependencyOrder(items []*dumpItem) []*dumpItem {
 	key := func(kind, name string) string { return kind + " " + name }
 	byKey := make(map[string]*dumpItem, len(items))
 	for _, item := range items {
@@ -572,52 +570,30 @@ func dependencyOrder(items []*dumpItem) ([]*dumpItem, error) {
 		}
 		var out []*dumpItem
 		for _, k := range keys {
-			if dependency, ok := byKey[k]; ok && dependency != item {
+			if dependency, ok := byKey[k]; ok {
 				out = append(out, dependency)
 			}
 		}
 		return out
 	}
-	const (
-		visiting = 1
-		placed   = 2
-	)
-	state := make(map[*dumpItem]int, len(items))
+	// started 是已经开始放的对象（含正在放、还在等它依赖的那些）：再遇到它时不再进去，自己依赖自己与成环都在这里断开。
+	started := make(map[*dumpItem]bool, len(items))
 	ordered := make([]*dumpItem, 0, len(items))
-	// path 是正在放的对象与它们一路依赖下去的对象：再遇到其中一个就是成环。
-	var path []*dumpItem
-	var place func(item *dumpItem) error
-	place = func(item *dumpItem) error {
-		switch state[item] {
-		case placed:
-			return nil
-		case visiting:
-			cycle := path[slices.Index(path, item):]
-			names := make([]string, 0, len(cycle)+1)
-			for _, member := range cycle {
-				names = append(names, key(member.kind, member.name))
-			}
-			names = append(names, key(item.kind, item.name))
-			return fmt.Errorf("objects depend on each other in a cycle: %s", strings.Join(names, " -> "))
+	var place func(item *dumpItem)
+	place = func(item *dumpItem) {
+		if started[item] {
+			return
 		}
-		state[item] = visiting
-		path = append(path, item)
+		started[item] = true
 		for _, dependency := range dependencies(item) {
-			if err := place(dependency); err != nil {
-				return err
-			}
+			place(dependency)
 		}
-		path = path[:len(path)-1]
-		state[item] = placed
 		ordered = append(ordered, item)
-		return nil
 	}
 	for _, item := range items {
-		if err := place(item); err != nil {
-			return nil, err
-		}
+		place(item)
 	}
-	return ordered, nil
+	return ordered
 }
 
 // prepare 读出一个对象的定义，交给方言得到它的语句。

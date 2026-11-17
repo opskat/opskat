@@ -121,9 +121,12 @@ type driverEntry struct {
 //     user's export options (dbdriver.DumpOptions): the dialect writes indexes only
 //     with Options.Indexes and leaves foreign keys inside a definition out without
 //     Options.ForeignKeys; the host decides whether drops and the deferred foreign
-//     keys are written. A table's script may name the tables it is created from
-//     (Dependencies of kind dbdriver.DumpTable, written first) and, for a
-//     partitioned table, its partitions (Partitions, dumped along with it). The rows
+//     keys are written. A view's, function's or procedure's script may name the
+//     views, functions and procedures it uses (Dependencies with their kind, written
+//     before it in one section and dropped after it). A table's script may name the
+//     tables it is created from (Dependencies of kind dbdriver.DumpTable, written
+//     first) and, for a partitioned table, its partitions (Partitions, dumped along
+//     with it). The rows
 //     are read with the session's cursor and written with its row statements, the
 //     INSERTs "copy as INSERT" makes, binary values as bytes; the cursor is asked
 //     for each table's own rows (dbdriver.TableQuery.OwnRows), which a dialect whose

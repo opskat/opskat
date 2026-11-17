@@ -382,3 +382,33 @@ func TestIntegrationDumpRestoresViewsAndFunctionsThatUseEachOther(t *testing.T) 
 		assert.Equal(t, want, crossDependencyState(t, sourceDB))
 	})
 }
+
+// 互相调用的过程（延迟名称解析，谁先建都行）：sys.sql_expression_dependencies 里两个方向都有记录，依赖成环；整库
+// 转储照样成功，文件在另一个名字的空库上每条语句都成功，原文一样。
+func TestIntegrationDumpRestoresProceduresThatCallEachOther(t *testing.T) {
+	master := openDDLDatabase(t, "master")
+	suffix := time.Now().UnixNano()
+	source, target := fmt.Sprintf("opskat_dump_cycle_src_%d", suffix), fmt.Sprintf("opskat_dump_cycle_dst_%d", suffix)
+	createScratchDatabase(t, master, source)
+	createScratchDatabase(t, master, target)
+	sourceDB, targetDB := openDDLDatabase(t, source), openDDLDatabase(t, target)
+	for _, batch := range []string{
+		"CREATE PROCEDURE [dbo].[p_even] @n int AS IF @n > 0 BEGIN DECLARE @m int = @n - 1; EXEC [dbo].[p_odd] @m; END",
+		"CREATE PROCEDURE [dbo].[p_odd] @n int AS IF @n > 0 BEGIN DECLARE @m int = @n - 1; EXEC [dbo].[p_even] @m; END",
+	} {
+		_, err := sourceDB.Exec(batch)
+		require.NoError(t, err, batch)
+	}
+	modules := func(db *sql.DB) []string {
+		return queryLines(t, db, "SELECT s.name + '.' + o.name, m.definition FROM sys.sql_modules m "+
+			"JOIN sys.objects o ON o.object_id = m.object_id JOIN sys.schemas s ON s.schema_id = o.schema_id")
+	}
+	var file bytes.Buffer
+	_, err := newSession(sourceDB).Dump(context.Background(), dbdriver.DumpRequest{
+		Database: source, Whole: true, WithData: true, Writer: &file, Options: structureOptions,
+		Header: dbdriver.DumpHeader{Version: "test", Asset: "mssql", Time: time.Now()},
+	})
+	require.NoError(t, err)
+	runFile(t, targetDB, target, file.Bytes())
+	assert.Equal(t, modules(sourceDB), modules(targetDB))
+}

@@ -2,7 +2,7 @@
 
 > Status: Draft
 > Owner: OpsKat 维护者
-> Last updated: 2026-11-18（修订：导出选项；视图与函数按依赖排序；PostgreSQL 分区表与继承表）
+> Last updated: 2026-11-17（修订：导出选项；视图与函数按依赖排序；PostgreSQL 分区表与继承表）
 
 **Objective:** 用户在数据库树上右键，就能把表、schema 或整个库转储成一个能还原的 `.sql` 文件（结构和数据 / 仅结构），也能把这样的文件在一个库上运行导入，不必再借助 Navicat 或命令行客户端。
 

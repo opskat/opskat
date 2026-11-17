@@ -871,21 +871,20 @@ func TestDumpOrdersViewsFunctionsAndProceduresByTheirDependencies(t *testing.T) 
 	})
 }
 
-// 依赖成环时转储在写出任何内容之前停下，错误里按环的次序点出环上的对象。
-func TestDumpRefusesDependenciesInACycle(t *testing.T) {
-	source := definitionsSource([]string{"f_loop"}, nil, []string{"v_a", "v_b"})
+// 依赖成环时（如 SQL Server 里互相调用的过程，延迟名称解析，谁先建都行）转储照样写出：环在回到正在放的对象处断开，
+// 环外被依赖的仍在前；删除段按这个次序倒过来删。
+func TestDumpBreaksADependencyCycle(t *testing.T) {
+	source := definitionsSource([]string{"f_loop"}, []string{"p_alone"}, []string{"v_a", "v_b"})
 	dialect := &dumpDialect{plain: true, dependencies: map[string][]DumpDependency{
 		"function f_loop": {{Kind: ObjectView, Name: "v_a"}},
 		"view v_a":        {{Kind: ObjectView, Name: "v_b"}},
-		"view v_b":        {{Kind: ObjectFunction, Name: "f_loop"}},
+		"view v_b":        {{Kind: ObjectFunction, Name: "f_loop"}, {Kind: ObjectProcedure, Name: "p_alone"}},
 	}}
-	var out bytes.Buffer
 
-	_, err := Dump(context.Background(), DumpRequest{Database: "shop", Whole: true, Options: allOptions, Header: dumpHeader(), Writer: &out},
-		source, dialect)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "function f_loop -> view v_a -> view v_b -> function f_loop")
-	assert.Empty(t, out.String())
+	created, dropped := definitionOrder(t, source, dialect, DumpRequest{Database: "shop", Whole: true, Options: allOptions})
+	want := []string{"procedure p_alone", "view v_b", "view v_a", "function f_loop"}
+	assert.Equal(t, want, created)
+	assert.Equal(t, reversedNames(want), dropped)
 }
 
 // 整库转储里函数、过程或触发器的定义读不到时同样立即停下，错误说出那个对象。
@@ -1153,17 +1152,4 @@ func TestDumpBringsAlongThePartitionsOfASelectedTable(t *testing.T) {
 
 	created, _ = dump(t, "events_eu", "a_archive")
 	assert.Equal(t, []string{"events_eu", "a_archive"}, created)
-}
-
-// 分区与父表成环（方言给错了）时在写出任何内容之前停下，点出环上的表。
-func TestDumpRefusesTablesWhoseParentsFormACycle(t *testing.T) {
-	source := partitionedSource()
-	dialect := partitionedDialect()
-	dialect.dependencies["table events"] = []DumpDependency{{Kind: DumpTable, Name: "events_eu"}}
-	var out bytes.Buffer
-
-	_, err := Dump(context.Background(), DumpRequest{Database: "shop", Whole: true, Header: dumpHeader(), Writer: &out}, source, dialect)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "table events -> table events_eu -> table events_2026 -> table events")
-	assert.Empty(t, out.String())
 }
