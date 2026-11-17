@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { requestAutoBackupCheck } from "@/lib/autoBackupSync";
 import { useTranslation } from "react-i18next";
 import { Lock, Copy, Trash2, Plus, Save, ChevronDown, ChevronRight, Puzzle } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, Button, Input, Separator, ConfirmDialog } from "@opskat/ui";
@@ -207,6 +208,7 @@ export function PolicyGroupManager({ open, onOpenChange, onGroupsChanged, initia
 
   const notifyChanged = () => {
     changedRef.current = true;
+    requestAutoBackupCheck();
   };
 
   const handleOpenChange = (newOpen: boolean) => {

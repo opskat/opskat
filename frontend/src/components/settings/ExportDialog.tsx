@@ -9,7 +9,7 @@ import { backup_svc } from "../../../wailsjs/go/models";
 import { ExportToFile } from "../../../wailsjs/go/system/System";
 import { AssetMultiSelect } from "@/components/asset/AssetMultiSelect";
 import { useAssetStore } from "@/stores/assetStore";
-import { useShortcutStore, DEFAULT_SHORTCUTS } from "@/stores/shortcutStore";
+import { useShortcutStore, customShortcuts } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
 import { errorMessage } from "@/lib/errorMessage";
 
@@ -117,22 +117,7 @@ export function ExportDialog({
     opts.include_themes = includeThemes;
 
     if (includeShortcuts) {
-      // Export only custom (non-default) bindings
-      const custom: Record<string, unknown> = {};
-      for (const key of Object.keys(shortcuts) as (keyof typeof DEFAULT_SHORTCUTS)[]) {
-        const val = shortcuts[key];
-        const def = DEFAULT_SHORTCUTS[key];
-        if (
-          def &&
-          (val.code !== def.code ||
-            val.mod !== def.mod ||
-            val.ctrl !== def.ctrl ||
-            val.shift !== def.shift ||
-            val.alt !== def.alt)
-        ) {
-          custom[key] = val;
-        }
-      }
+      const custom = customShortcuts(shortcuts);
       if (Object.keys(custom).length > 0) {
         opts.shortcuts = JSON.stringify(custom);
       }

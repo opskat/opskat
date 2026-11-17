@@ -22,6 +22,7 @@ import { AISettingsSection } from "@/components/settings/AISettingsSection";
 import { CommandReviewSection } from "@/components/settings/CommandReviewSection";
 import { ImportSection } from "@/components/settings/ImportSection";
 import { BackupSection } from "@/components/settings/BackupSection";
+import { AutoBackupCard } from "@/components/settings/AutoBackupCard";
 import { AppearanceSection, TerminalSection } from "@/components/settings/AppearanceSection";
 import { ConnectionSection } from "@/components/settings/ConnectionSection";
 import { UpdateSection } from "@/components/settings/UpdateSection";
@@ -149,6 +150,7 @@ export function SettingsPage() {
             {(activeTab === "import" || activeTab === "backup") && (
               <>
                 <ImportSection />
+                <AutoBackupCard />
                 <BackupSection />
               </>
             )}

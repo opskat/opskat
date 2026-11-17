@@ -50,6 +50,7 @@ import {
 import { backup_svc } from "../../../wailsjs/go/models";
 import { ExportDialog, type WebDAVExportDefaults } from "@/components/settings/ExportDialog";
 import { BackupImportDialog, type BackupImportSource } from "@/components/settings/BackupImportDialog";
+import { BACKUP_GIST_CARD_ID, BACKUP_WEBDAV_CARD_ID } from "@/components/settings/AutoBackupCard";
 import {
   Download,
   Upload,
@@ -71,6 +72,18 @@ import { SecretInput } from "@/components/SecretInput";
 import { errorMessage } from "@/lib/errorMessage";
 
 const githubTokenInvalidMarker = "[GITHUB_TOKEN_INVALID]";
+
+/** 自动备份时间（RFC3339 UTC）按本地时区显示为 YYYY-MM-DD HH:mm。 */
+function formatBackupTime(iso: string, locale: string): string {
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(iso));
+}
 
 const emptyWebDAVExportDefaults: WebDAVExportDefaults = {
   configured: false,
@@ -122,7 +135,7 @@ function PasswordInput({
 }
 
 export function BackupSection() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
 
   // File backup
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
@@ -534,7 +547,7 @@ export function BackupSection() {
       </Card>
 
       {/* Gist backup */}
-      <Card>
+      <Card id={BACKUP_GIST_CARD_ID} className="scroll-mt-4">
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-1.5">
             <Github className="h-4 w-4" />
@@ -596,7 +609,7 @@ export function BackupSection() {
       </Card>
 
       {/* WebDAV backup */}
-      <Card>
+      <Card id={BACKUP_WEBDAV_CARD_ID} className="scroll-mt-4">
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-1.5">
             <Cloud className="h-4 w-4" />
@@ -691,7 +704,12 @@ export function BackupSection() {
                           <SelectContent>
                             {webdavBackups.map((backup) => (
                               <SelectItem key={backup.name} value={backup.name}>
-                                {t("backup.webdavBackupItem", { name: backup.name, size: backup.size })}
+                                {backup.auto && backup.createdAt
+                                  ? t("backup.webdavAutoBackupItem", {
+                                      time: formatBackupTime(backup.createdAt, i18n.language),
+                                      size: backup.size,
+                                    })
+                                  : t("backup.webdavBackupItem", { name: backup.name, size: backup.size })}
                               </SelectItem>
                             ))}
                           </SelectContent>
