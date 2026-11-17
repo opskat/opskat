@@ -316,6 +316,9 @@ type RowStatementsRequest struct {
 	// PrimaryKeys 是 UPDATE 定位那一行的列（值取自同一行）；为空时按全部 Columns 定位。
 	// INSERT 不用它。
 	PrimaryKeys []string `json:"primaryKeys"`
+	// OmitDatabase 为真时语句里的表引用不带库名（Tables.TableRef 给空库名的写法）：转储文件里用，
+	// 这样文件导入哪个库，数据就写进哪个库。「复制为 INSERT」不设，仍带库名。
+	OmitDatabase bool `json:"omitDatabase,omitempty"`
 }
 
 // GridEditRequest 是 Session.GridEditStatements 要生成的语句：表格里新增、改动与删除的行。

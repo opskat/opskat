@@ -335,11 +335,28 @@ func TestDumpWritesRowsLikeCopyAsInsertWithTheDialectsColumns(t *testing.T) {
 
 	require.Len(t, source.written, 1)
 	assert.Equal(t, RowStatementsRequest{
-		Kind: RowInsert, Columns: []string{"id", "name", "created"},
+		Kind: RowInsert, Columns: []string{"id", "name", "created"}, OmitDatabase: true,
 		Rows: []map[string]any{{"id": float64(1), "name": "alice", "upper_name": "ALICE", "created": "2026-01-02T03:04:05Z"}},
 	}, source.written[0])
 	// writer 在游标打开之前备好（远端 SQLite 只有一条连接，游标占着它时不能再查列类型）。
 	assert.Equal(t, []string{"objects shop", "ddl shop.users", "prepare shop.users", "stream shop.users", "close stream"}, source.calls)
+}
+
+// 二进制的值（不是合法 UTF-8 的字符串、[]byte）以字节交给 writer，不经 JSON 往返：JSON 会把非法字节换成
+// U+FFFD、把 []byte 变成 base64，转储出的数据就不是原来的了。
+func TestDumpKeepsBinaryValuesAsBytes(t *testing.T) {
+	source := newDumpSource()
+	source.ddl["blobs"] = "CREATE TABLE blobs (id int)"
+	source.columns["blobs"] = []string{"id", "raw", "text", "bytes"}
+	source.rows["blobs"] = [][]any{{int64(1), "\x00\xff\x10", "plain", []byte{0xfe, 0x01}}}
+
+	_, err := Dump(context.Background(), DumpRequest{
+		Database: "shop", Tables: []string{"blobs"}, WithData: true, Header: dumpHeader(), Writer: &bytes.Buffer{},
+	}, source, &dumpDialect{})
+	require.NoError(t, err)
+
+	require.Len(t, source.written, 1)
+	assert.Equal(t, []map[string]any{{"id": float64(1), "raw": []byte{0x00, 0xff, 0x10}, "text": "plain", "bytes": []byte{0xfe, 0x01}}}, source.written[0].Rows)
 }
 
 // 方言有批分隔符（SQL Server 的 GO）时：每条结构语句之后、每一块数据之后都写一行分隔符。

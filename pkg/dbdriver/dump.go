@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // DumpTable 是转储里表的种类；视图、函数、过程与触发器用对应的 Object*。
@@ -169,7 +170,7 @@ const dumpChunkRows = 500
 
 // Dump 是转储的编排，各驱动的 Session.Dump 用它：依次写出注释头、方言的文件开头与类型、每张表（注释
 // 分隔行、存在则删除、定义；结构和数据时接着是它的全部行，每行一条与「复制为 INSERT」一样的 INSERT，
-// 只写方言给出的列）、全部表之后的外键、视图（只有定义，按依赖顺序）、整库或整个 schema 时的函数、过程
+// 只写方言给出的列；表名不带库名，文件导入哪个库数据就写进哪个库）、全部表之后的外键、视图（只有定义，按依赖顺序）、整库或整个 schema 时的函数、过程
 // 与触发器（在所有数据之后，导入数据时不会触发它们）、数据之后的收尾与方言的文件结尾。行边读边写，不整表
 // 留在内存里。
 //
@@ -544,7 +545,7 @@ func (d *dump) rows(table string, columns []string) (written int64, err error) {
 }
 
 // insertStatements 生成一块行的 INSERT。行先转成前端拿到再带回来的样子（经 JSON：nil、字符串、数字、
-// 布尔），语句才与「复制为 INSERT」对这些行给出的一字不差。
+// 布尔），语句才与「复制为 INSERT」对这些行给出的一字不差；二进制的值除外（见 binaryValue）。
 func insertStatements(writer RowStatementWriter, columns []string, rows []map[string]any) ([]string, error) {
 	data, err := json.Marshal(rows)
 	if err != nil {
@@ -554,7 +555,29 @@ func insertStatements(writer RowStatementWriter, columns []string, rows []map[st
 	if err := json.Unmarshal(data, &sent); err != nil {
 		return nil, fmt.Errorf("decode rows: %w", err)
 	}
-	return writer.RowStatements(RowStatementsRequest{Kind: RowInsert, Columns: columns, Rows: sent})
+	for i, row := range rows {
+		for column, value := range row {
+			if raw, ok := binaryValue(value); ok {
+				sent[i][column] = raw
+			}
+		}
+	}
+	return writer.RowStatements(RowStatementsRequest{Kind: RowInsert, Columns: columns, Rows: sent, OmitDatabase: true})
+}
+
+// binaryValue 认出不能经 JSON 往返的值：[]byte（JSON 把它变成 base64）与不是合法 UTF-8 的字符串（驱动把
+// 二进制列读成字符串，JSON 会把非法字节换成 U+FFFD）。它们以字节交给 writer，写成二进制列的字面量；
+// 「复制为 INSERT」读到的值在表格里已经是文本，这一点只有转储需要。
+func binaryValue(value any) ([]byte, bool) {
+	switch v := value.(type) {
+	case []byte:
+		return v, true
+	case string:
+		if !utf8.ValidString(v) {
+			return []byte(v), true
+		}
+	}
+	return nil, false
 }
 
 func (d *dump) report(finished *DumpedObject) {

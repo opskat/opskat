@@ -51,7 +51,7 @@ func TestDumpWritesSQLiteDefinitionsAndRows(t *testing.T) {
 	require.NoError(t, err)
 
 	inserts, err := dbdrivertest.RowStatements(context.Background(), session, "main", "notes", dbdriver.RowStatementsRequest{
-		Kind: dbdriver.RowInsert, Columns: []string{"id", "body"},
+		Kind: dbdriver.RowInsert, Columns: []string{"id", "body"}, OmitDatabase: true,
 		Rows: []map[string]any{{"id": float64(1), "body": "it's"}, {"id": float64(2), "body": nil}},
 	})
 	require.NoError(t, err)
@@ -70,7 +70,7 @@ PRAGMA foreign_keys = false;
 -- ----------------------------
 -- Table structure for notes
 -- ----------------------------
-DROP TABLE IF EXISTS "main"."notes";
+DROP TABLE IF EXISTS "notes";
 CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT, size INT GENERATED ALWAYS AS (length(body)) VIRTUAL);
 CREATE INDEX notes_body ON notes (body);
 
@@ -82,7 +82,7 @@ CREATE INDEX notes_body ON notes (body);
 -- ----------------------------
 -- View structure for short_notes
 -- ----------------------------
-DROP VIEW IF EXISTS "main"."short_notes";
+DROP VIEW IF EXISTS "short_notes";
 CREATE VIEW short_notes AS SELECT id FROM notes WHERE size < 10;
 
 PRAGMA foreign_keys = true;
@@ -194,37 +194,37 @@ PRAGMA foreign_keys = false;
 -- ----------------------------
 -- Table structure for audit
 -- ----------------------------
-DROP TABLE IF EXISTS "main"."audit";
+DROP TABLE IF EXISTS "audit";
 CREATE TABLE audit (id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INT);
 
 -- ----------------------------
 -- Table structure for items
 -- ----------------------------
-DROP TABLE IF EXISTS "main"."items";
+DROP TABLE IF EXISTS "items";
 CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
 
 -- ----------------------------
 -- View structure for a_label
 -- ----------------------------
-DROP VIEW IF EXISTS "main"."a_label";
+DROP VIEW IF EXISTS "a_label";
 CREATE VIEW a_label AS SELECT 'b_base' AS label /* b_base */ FROM items;
 
 -- ----------------------------
 -- View structure for b_base
 -- ----------------------------
-DROP VIEW IF EXISTS "main"."b_base";
+DROP VIEW IF EXISTS "b_base";
 CREATE VIEW b_base AS SELECT id, name FROM items WHERE id > 0;
 
 -- ----------------------------
 -- View structure for a_top
 -- ----------------------------
-DROP VIEW IF EXISTS "main"."a_top";
+DROP VIEW IF EXISTS "a_top";
 CREATE VIEW a_top AS SELECT name FROM "b_base";
 
 -- ----------------------------
 -- Trigger structure for items_audit
 -- ----------------------------
-DROP TRIGGER IF EXISTS "main"."items_audit";
+DROP TRIGGER IF EXISTS "items_audit";
 CREATE TRIGGER items_audit AFTER INSERT ON items BEGIN INSERT INTO audit (item_id) VALUES (new.id); END;
 
 PRAGMA foreign_keys = true;

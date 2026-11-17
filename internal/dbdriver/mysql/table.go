@@ -13,7 +13,13 @@ var _ sqldb.Tables = dialect{}
 
 func (dialect) QuoteIdent(name string) string { return quoteIdent(name) }
 
-func (dialect) TableRef(database, table string) string { return quoteTableRef(database, table) }
+// TableRef 在库名为空时不带库名（转储文件里的引用）。
+func (dialect) TableRef(database, table string) string {
+	if database == "" {
+		return quoteIdent(table)
+	}
+	return quoteTableRef(database, table)
+}
 
 func (dialect) PrimaryKeys(ctx context.Context, conn *sql.Conn, database, table string) ([]string, error) {
 	return sqldb.QueryPrimaryKeys(ctx, conn, "Column_name",

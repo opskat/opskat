@@ -13,7 +13,7 @@ import (
 // Tables）才提供转储（Session.Dump）；没实现的方言以 dbdriver.ErrUnsupported 拒绝。
 //
 // 什么钩子都不实现时得到的是默认写法：没有文件开头结尾与批分隔符，每个对象之前按种类写
-// DROP TABLE / VIEW / FUNCTION / PROCEDURE / TRIGGER IF EXISTS（引用用 Tables.TableRef），定义是会话给出的
+// DROP TABLE / VIEW / FUNCTION / PROCEDURE / TRIGGER IF EXISTS（引用是 Tables.TableRef("", 名字)：空库名给不带库名的引用，文件导入哪个库就写哪个库），定义是会话给出的
 // 原文补上分号，INSERT 写读出的全部列，外键留在定义里，视图不给依赖（按列出的次序写）。要改的方言再实现
 // DumpFileWriter / DumpObjectWriter。
 type DumpDialect interface {
@@ -93,7 +93,7 @@ func (d dumpDialect) DumpObject(ctx context.Context, object dbdriver.DumpObject)
 		return nil, fmt.Errorf("no default dump for a %s", object.Kind)
 	}
 	script := &dbdriver.DumpObjectScript{
-		Drop:       []string{fmt.Sprintf("DROP %s IF EXISTS %s;", keyword, d.tables.TableRef(object.Database, object.Name))},
+		Drop:       []string{fmt.Sprintf("DROP %s IF EXISTS %s;", keyword, d.tables.TableRef("", object.Name))},
 		Definition: []string{TerminateStatement(object.Definition)},
 	}
 	hook, ok := d.session.dialect.(DumpObjectWriter)

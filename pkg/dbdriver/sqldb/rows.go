@@ -52,7 +52,9 @@ func (s *Session) PrepareRowStatements(ctx context.Context, database, table stri
 		if err != nil {
 			return nil, err
 		}
-		return s.rowSQL(tables, writer, tables.TableRef(database, table), columns, literals), nil
+		w := s.rowSQL(tables, writer, tables.TableRef(database, table), columns, literals)
+		w.bareRef = tables.TableRef("", table)
+		return w, nil
 	})
 }
 
@@ -80,6 +82,8 @@ func (s *Session) rowSQL(tables Tables, writer RowWriter, tableRef string, colum
 // rowSQL 是写一张表的行语句所需的方言部分。
 type rowSQL struct {
 	tableRef string
+	// bareRef 是不带库名的表引用（RowStatementsRequest.OmitDatabase）。
+	bareRef  string
 	quote    func(string) string
 	literals Literals
 	// types 是列名到列类型文本；表的列里没有的列不在其中。
@@ -110,6 +114,10 @@ func (w rowSQL) RowStatements(req dbdriver.RowStatementsRequest) ([]string, erro
 }
 
 func (w rowSQL) statement(req dbdriver.RowStatementsRequest, row map[string]any) (string, error) {
+	tableRef := w.tableRef
+	if req.OmitDatabase {
+		tableRef = w.bareRef
+	}
 	if req.Kind == dbdriver.RowInsert {
 		names := make([]string, len(req.Columns))
 		values := make([]string, len(req.Columns))
@@ -120,7 +128,7 @@ func (w rowSQL) statement(req dbdriver.RowStatementsRequest, row map[string]any)
 			}
 			names[i], values[i] = w.quote(column), value
 		}
-		return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);", w.tableRef, strings.Join(names, ", "), strings.Join(values, ", ")), nil
+		return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);", tableRef, strings.Join(names, ", "), strings.Join(values, ", ")), nil
 	}
 
 	set := make([]string, len(req.Columns))
@@ -139,7 +147,7 @@ func (w rowSQL) statement(req dbdriver.RowStatementsRequest, row map[string]any)
 	if err != nil {
 		return "", err
 	}
-	return w.update(w.tableRef, strings.Join(set, ", "), where), nil
+	return w.update(tableRef, strings.Join(set, ", "), where), nil
 }
 
 // where 是按 keys 列的值定位 row 的条件（不含关键字）：NULL 写成 IS NULL，其余按方言的相等比较

@@ -22,6 +22,14 @@ func (rowsDialect) Literals(context.Context, *sql.Conn) (Literals, error) {
 	return Literals{UnicodeText: func(columnType string) bool { return columnType == "ntext" }}, nil
 }
 
+// TableRef 给空库名时不带库的限定（Tables.TableRef 的约定）。
+func (rowsDialect) TableRef(database, table string) string {
+	if database == "" {
+		return angle(table)
+	}
+	return angle(database) + "." + angle(table)
+}
+
 func (rowsDialect) UpdateRowSQL(tableRef, set, where string) string {
 	return "UPDATE " + tableRef + " SET " + set + " WHERE " + where + " ONE ROW;"
 }
@@ -58,6 +66,34 @@ func TestRowStatementsInsertsOneStatementPerRow(t *testing.T) {
 		"INSERT INTO <db>.<t> (<id>, <name>, <memo>) VALUES ('2', N'O''Reilly', NULL);",
 	}, statements)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// OmitDatabase 为真时表引用不带库名（转储文件导入别的库时不会写回源库），INSERT 与 UPDATE 都一样；
+// 不设时仍带库名。
+func TestRowStatementsOmitDatabaseDropsTheQualifier(t *testing.T) {
+	session, mock := newRowsSession(t)
+	expectColumnTypes(mock)
+	rows := []map[string]any{{"id": float64(1), "memo": "x"}}
+
+	statements, err := dbdrivertest.RowStatements(context.Background(), session, "db", "t", dbdriver.RowStatementsRequest{
+		Kind: dbdriver.RowInsert, Columns: []string{"id", "memo"}, Rows: rows, OmitDatabase: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"INSERT INTO <t> (<id>, <memo>) VALUES ('1', 'x');"}, statements)
+
+	expectColumnTypes(mock)
+	statements, err = dbdrivertest.RowStatements(context.Background(), session, "db", "t", dbdriver.RowStatementsRequest{
+		Kind: dbdriver.RowUpdate, Columns: []string{"memo"}, Rows: rows, PrimaryKeys: []string{"id"}, OmitDatabase: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"UPDATE <t> SET <memo> = 'x' WHERE <id> = '1' ONE ROW;"}, statements)
+
+	expectColumnTypes(mock)
+	statements, err = dbdrivertest.RowStatements(context.Background(), session, "db", "t", dbdriver.RowStatementsRequest{
+		Kind: dbdriver.RowInsert, Columns: []string{"id"}, Rows: rows,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"INSERT INTO <db>.<t> (<id>) VALUES ('1');"}, statements)
 }
 
 // UPDATE 按主键定位那一行（定位的值同样按列类型写），没有主键时按全部列定位，NULL 用 IS NULL；

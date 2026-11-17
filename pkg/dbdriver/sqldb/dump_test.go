@@ -18,10 +18,26 @@ type plainDumpDialect struct{ tablesDialect }
 
 func (plainDumpDialect) DumpSyntax() DumpSyntax { return DumpSyntax{} }
 
+// TableRef 给空库名时不带库的限定（Tables.TableRef 的约定）。
+func (plainDumpDialect) TableRef(database, table string) string {
+	return unqualifiedWhenNoDatabase(database, table)
+}
+
+func unqualifiedWhenNoDatabase(database, table string) string {
+	if database == "" {
+		return angle(table)
+	}
+	return angle(database) + "." + angle(table)
+}
+
 // hookedDumpDialect 用上了全部钩子：文件开头结尾、批分隔符、类型，以及对象的每一处。
 type hookedDumpDialect struct {
 	tablesDialect
 	conns *[]*sql.Conn
+}
+
+func (hookedDumpDialect) TableRef(database, table string) string {
+	return unqualifiedWhenNoDatabase(database, table)
 }
 
 func (hookedDumpDialect) DumpSyntax() DumpSyntax {
@@ -71,20 +87,20 @@ func TestDumpDefaultsWhenTheDialectHasNoHooks(t *testing.T) {
 	table, err := dialect.DumpObject(ctx, dbdriver.DumpObject{Database: "db", Kind: dbdriver.DumpTable, Name: "t", Definition: "CREATE TABLE t (id int)\n"})
 	require.NoError(t, err)
 	assert.Equal(t, dbdriver.DumpObjectScript{
-		Drop:       []string{"DROP TABLE IF EXISTS <db>.<t>;"},
+		Drop:       []string{"DROP TABLE IF EXISTS <t>;"},
 		Definition: []string{"CREATE TABLE t (id int);"},
 	}, *table)
 
 	view, err := dialect.DumpObject(ctx, dbdriver.DumpObject{Database: "db", Kind: dbdriver.ObjectView, Name: "v", Definition: "CREATE VIEW v AS SELECT 1;"})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"DROP VIEW IF EXISTS <db>.<v>;"}, view.Drop)
+	assert.Equal(t, []string{"DROP VIEW IF EXISTS <v>;"}, view.Drop)
 	assert.Equal(t, []string{"CREATE VIEW v AS SELECT 1;"}, view.Definition)
 
 	for kind, keyword := range map[string]string{dbdriver.ObjectFunction: "FUNCTION", dbdriver.ObjectProcedure: "PROCEDURE", dbdriver.ObjectTrigger: "TRIGGER"} {
 		object, err := dialect.DumpObject(ctx, dbdriver.DumpObject{Database: "db", Kind: kind, Name: "o", Definition: "CREATE " + keyword + " o"})
 		require.NoError(t, err, kind)
 		assert.Equal(t, dbdriver.DumpObjectScript{
-			Drop:       []string{"DROP " + keyword + " IF EXISTS <db>.<o>;"},
+			Drop:       []string{"DROP " + keyword + " IF EXISTS <o>;"},
 			Definition: []string{"CREATE " + keyword + " o;"},
 		}, *object, kind)
 	}
@@ -113,7 +129,7 @@ func TestDumpHooksAdjustTheDefaultsOnAConnection(t *testing.T) {
 	table, err := dialect.DumpObject(ctx, dbdriver.DumpObject{Database: "db", Kind: dbdriver.DumpTable, Name: "t", Definition: "CREATE TABLE t (id int)", WithData: true})
 	require.NoError(t, err)
 	assert.Equal(t, dbdriver.DumpObjectScript{
-		Drop:         []string{"DROP TABLE IF EXISTS <db>.<t>;"},
+		Drop:         []string{"DROP TABLE IF EXISTS <t>;"},
 		Definition:   []string{"DELIMITER ;;", "CREATE TABLE t (id int);"},
 		DataColumns:  []string{"id"},
 		DataPrologue: []string{"IDENTITY ON t;"},
