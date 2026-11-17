@@ -72,8 +72,20 @@ export function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-/** Conditions whose name describes a problem: False is the healthy value. */
-const PROBLEM_CONDITIONS = new Set(["MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable"]);
+/**
+ * Built-in conditions whose name describes a problem, so False is the healthy value: node pressure / network,
+ * Job `Failed` / `FailureTarget`, Deployment / ReplicaSet `ReplicaFailure`, Pod `DisruptionTarget`.
+ */
+const PROBLEM_CONDITIONS = new Set([
+  "MemoryPressure",
+  "DiskPressure",
+  "PIDPressure",
+  "NetworkUnavailable",
+  "Failed",
+  "FailureTarget",
+  "ReplicaFailure",
+  "DisruptionTarget",
+]);
 
 /** Colour of a condition's status: healthy → success, problem → error, Unknown → neutral. */
 export function getConditionVariant(type: string, status: string): StatusVariant {

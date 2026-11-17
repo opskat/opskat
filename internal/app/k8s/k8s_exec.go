@@ -416,8 +416,10 @@ func (k *K8s) endShell(c *k8sCallContext, req K8sExecRequest, tag string, end K8
 
 // runAttempts 依次尝试 attempts：「自动」的 bash 在容器里不存在（且还没有任何输出）时换 sh 重来，
 // 对前端不可见；返回最后一次尝试的结果。onConnected 在首次 SPDY 升级成功后调用。
-// 每次尝试都经 k8spkg.ShellCommand 包装，以便会话结束时结束容器里的 shell；最后一次尝试的包装报告命令不存在时
-// （或容器里根本没有 /bin/sh），不带包装再运行一次：让集群给出它自己的原因，没有 sh 的容器也照常可用（只是无法清理）。
+// 每次尝试都经 k8spkg.ShellCommand 包装，以便会话结束时结束容器里的 shell。包装没能运行用户的命令时：
+// 包装自己报告命令不存在（以 127 退出）且还有下一个 shell 就换下一个；否则（容器里没有 /bin/sh，包装本身起不来，
+// 或已是最后一次尝试）不带包装再运行一次——让集群给出它自己的原因，没有 sh 的容器也照常可用（只是无法清理），
+// 这次仍不存在且还有下一个 shell 时再换下一个。
 func (k *K8s) runAttempts(ctx context.Context, c *k8sCallContext, req K8sExecRequest, sess *execSession,
 	attempts []execAttempt, sessionID string, log *zap.Logger, onConnected func()) error {
 	for i, a := range attempts {
@@ -427,16 +429,24 @@ func (k *K8s) runAttempts(ctx context.Context, c *k8sCallContext, req K8sExecReq
 		}
 		// 只有一种可能的 shell 时连上即知；「自动」要等首次输出才能确定没有回退。
 		announceOnConnect := len(attempts) == 1
+		hasNext := i < len(attempts)-1
+		missing := func(connected, produced bool, err error) bool {
+			return connected && !produced && ctx.Err() == nil && shellMissing(err)
+		}
 		tag := newShellTag()
 		connected, produced, err := k.runAttempt(ctx, c, req, sess, k8spkg.ShellCommand(tag, a.Command), tag, sessionID,
 			emitStarted, announceOnConnect, onConnected)
-		if connected && !produced && ctx.Err() == nil && shellMissing(err) {
-			if i < len(attempts)-1 {
+		if missing(connected, produced, err) {
+			if code, isExit := k8spkg.ExitCode(err); isExit && code == k8spkg.ShellCommandNotFound && hasNext {
 				log.Info("k8s exec shell missing, falling back", zap.String("shell", a.Shell), zap.Error(err))
 				continue
 			}
 			log.Info("k8s exec wrapped command did not start, running it untracked", zap.Error(err))
-			connected, _, err = k.runAttempt(ctx, c, req, sess, a.Command, "", sessionID, emitStarted, announceOnConnect, onConnected)
+			connected, produced, err = k.runAttempt(ctx, c, req, sess, a.Command, "", sessionID, emitStarted, announceOnConnect, onConnected)
+			if missing(connected, produced, err) && hasNext {
+				log.Info("k8s exec shell missing, falling back", zap.String("shell", a.Shell), zap.Error(err))
+				continue
+			}
 		}
 		if connected {
 			emitStarted()
@@ -634,10 +644,7 @@ func EndExecSessions(k *K8s, bound time.Duration) bool {
 	}
 	started := time.Now()
 	logger.Default().Info("k8s exec sessions ending on quit", zap.Int("sessions", sessions), zap.Duration("bound", bound))
-	k.execSessions.Range(func(_, v any) bool {
-		v.(*execSession).cancel()
-		return true
-	})
+	k.cancelExecSessions()
 	done := make(chan struct{})
 	go func() {
 		k.execEnding.Wait()

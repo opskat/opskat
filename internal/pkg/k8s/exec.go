@@ -156,6 +156,9 @@ sleep 0.2 2>/dev/null
 left=$(live)
 [ -z "$left" ] || { echo "still running after SIGKILL: $left"; exit 5; }`
 
+// ShellCommandNotFound 是 ShellCommand 的包装找不到用户命令时的退出码（shellScript 第二行）。
+const ShellCommandNotFound = 127
+
 // ShellCommand 把会话要运行的 argv 包进记录进程号的脚本（见上）；argv 作为脚本参数原样传入，不经 shell 再解释。
 func ShellCommand(tag string, argv []string) []string {
 	return append([]string{"/bin/sh", "-c", shellScript, "opskat-shell", tag}, argv...)

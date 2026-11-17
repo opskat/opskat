@@ -76,7 +76,7 @@ func limitDialedConns(rt http.RoundTripper) http.RoundTripper {
 	return rt
 }
 
-// Close 关闭空闲连接；进行中的请求照常完成，完成后其连接随即关闭。
+// Close 关闭当前空闲的连接；进行中的请求照常完成，其连接随后空闲，到传输层的空闲超时才关闭。
 func (c *Conn) Close() error {
 	utilnet.CloseIdleConnectionsFor(c.client.Transport)
 	return nil

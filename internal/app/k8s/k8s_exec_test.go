@@ -364,9 +364,35 @@ func startedOf(t *testing.T, rec *eventRecorder, id string) K8sExecStarted {
 // commandsOf 是会话（交互式 exec）发给集群的命令，不含结束时的清理。
 func commandsOf(srv *k8stest.ExecServer) [][]string { return srv.Commands(true) }
 
-// 没有 bash 的容器：运行时要么以 126/127 退出，要么在 error 流上报「executable file not found」。
+// 没有 bash 的容器：包装层（/bin/sh）照常起来，找不到 bash 时以 127 退出，直接换 sh，不必不带包装再跑一次。
 func TestK8sExecAutoFallsBackToShWhenBashIsMissing(t *testing.T) {
-	missing := map[string]func(s *k8stest.ExecSession) int{
+	srv := k8stest.NewExecServer(t, false, func(s *k8stest.ExecSession) int {
+		if userArgv(s.Command())[0] == "/bin/bash" {
+			return k8spkg.ShellCommandNotFound
+		}
+		_, _ = s.Stdout.Write([]byte(greeting))
+		return k8stest.EchoUntilExit(s)
+	})
+	k, rec, c := execTestBinder(t, srv.Host())
+	id, err := k.startExec(c, execReq("web-0"))
+	require.NoError(t, err)
+
+	assert.Equal(t, K8sExecStarted{Shell: "/bin/sh"}, startedOf(t, rec, id))
+	require.Eventually(t, func() bool { return strings.Contains(rec.output(id), "greeting-before-any-input") }, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, [][]string{shellCmd("tag1", "/bin/bash"), shellCmd("tag2", "/bin/sh")}, commandsOf(srv))
+	assert.Empty(t, rec.named("k8s:exec:end:"+id), "the fallback is invisible: the session stays alive")
+
+	require.NoError(t, k.WriteK8sExec(id, base64.StdEncoding.EncodeToString([]byte("hi\n"))), "input reaches the fallback shell")
+	require.Eventually(t, func() bool { return strings.Contains(rec.output(id), "hi") }, 5*time.Second, 10*time.Millisecond)
+	k.StopK8sExec(id)
+	rec.waitEnd(t, id)
+}
+
+// 容器里没有 /bin/sh 时「自动」的每个 shell 都不带包装再试：运行时报告 bash 不存在的各种方式（以 126/127 退出，
+// 或在 error 流上报「executable file not found」）都让它换下一个 shell。
+func TestK8sExecAutoWithoutShFallsBackWhenBashIsMissingToo(t *testing.T) {
+	const shMissing = `OCI runtime exec failed: exec: "/bin/sh": stat /bin/sh: no such file or directory: unknown`
+	bashMissing := map[string]func(s *k8stest.ExecSession) int{
 		"exit 127": func(*k8stest.ExecSession) int { return 127 },
 		"exit 126": func(*k8stest.ExecSession) int { return 126 },
 		"runtime error": func(s *k8stest.ExecSession) int {
@@ -374,28 +400,22 @@ func TestK8sExecAutoFallsBackToShWhenBashIsMissing(t *testing.T) {
 			return 0
 		},
 	}
-	for name, bashMissing := range missing {
+	for name, missing := range bashMissing {
 		t.Run(name, func(t *testing.T) {
 			srv := k8stest.NewExecServer(t, false, func(s *k8stest.ExecSession) int {
-				if userArgv(s.Command())[0] == "/bin/bash" {
-					return bashMissing(s)
+				if s.Command()[0] == "/bin/sh" {
+					s.Failure = shMissing
+					return 0
 				}
-				_, _ = s.Stdout.Write([]byte(greeting))
-				return k8stest.EchoUntilExit(s)
+				return missing(s)
 			})
 			k, rec, c := execTestBinder(t, srv.Host())
 			id, err := k.startExec(c, execReq("web-0"))
 			require.NoError(t, err)
-
-			assert.Equal(t, K8sExecStarted{Shell: "/bin/sh"}, startedOf(t, rec, id))
-			require.Eventually(t, func() bool { return strings.Contains(rec.output(id), "greeting-before-any-input") }, 5*time.Second, 10*time.Millisecond)
-			assert.Equal(t, [][]string{shellCmd("tag1", "/bin/bash"), shellCmd("tag2", "/bin/sh")}, commandsOf(srv))
-			assert.Empty(t, rec.named("k8s:exec:end:"+id), "the fallback is invisible: the session stays alive")
-
-			require.NoError(t, k.WriteK8sExec(id, base64.StdEncoding.EncodeToString([]byte("hi\n"))), "input reaches the fallback shell")
-			require.Eventually(t, func() bool { return strings.Contains(rec.output(id), "hi") }, 5*time.Second, 10*time.Millisecond)
-			k.StopK8sExec(id)
-			rec.waitEnd(t, id)
+			end := rec.waitEnd(t, id)
+			assert.Equal(t, ExecEndFailed, end.Reason)
+			assert.Contains(t, end.Error, shMissing)
+			assert.Equal(t, [][]string{shellCmd("tag1", "/bin/bash"), {"/bin/bash"}, shellCmd("tag2", "/bin/sh"), {"/bin/sh"}}, commandsOf(srv))
 		})
 	}
 }
@@ -792,6 +812,27 @@ func TestK8sExecWithoutShRunsUntrackedAndLogsWhyItCannotClean(t *testing.T) {
 	assert.Equal(t, id, warned[0].ContextMap()["sessionID"])
 	assert.NotEmpty(t, warned[0].ContextMap()["reason"])
 	assert.Empty(t, srv.Commands(false), "an untracked shell cannot be found, so no cleanup exec is sent")
+}
+
+// 「自动」遇到有 bash 但没有 /bin/sh 的容器：包装层起不来不等于 bash 不存在，bash 不带包装照常运行，而不是回退到同样不存在的 sh。
+func TestK8sExecAutoWithoutShStillRunsBashUntracked(t *testing.T) {
+	srv := k8stest.NewExecServer(t, false, func(s *k8stest.ExecSession) int {
+		if s.Command()[0] == "/bin/sh" {
+			s.Failure = `OCI runtime exec failed: exec: "/bin/sh": stat /bin/sh: no such file or directory: unknown`
+			return 0
+		}
+		_, _ = s.Stdout.Write([]byte(greeting))
+		return k8stest.EchoUntilExit(s)
+	})
+	k, rec, c := execTestBinder(t, srv.Host())
+	id, err := k.startExec(c, execReq("web-0"))
+	require.NoError(t, err)
+	assert.Equal(t, K8sExecStarted{Shell: "/bin/bash"}, startedOf(t, rec, id))
+	require.Eventually(t, func() bool { return strings.Contains(rec.output(id), "greeting-before-any-input") }, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, [][]string{shellCmd("tag1", "/bin/bash"), {"/bin/bash"}}, commandsOf(srv))
+	assert.Empty(t, rec.named("k8s:exec:end:"+id))
+	k.StopK8sExec(id)
+	assert.Equal(t, K8sExecEnd{Reason: ExecEndClosed}, rec.waitEnd(t, id))
 }
 
 func TestEndExecSessionsWaitsForShellCleanup(t *testing.T) {

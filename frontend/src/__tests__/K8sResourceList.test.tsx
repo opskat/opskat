@@ -272,6 +272,7 @@ describe("K8s resource list", () => {
     expect(screen.getByText("Mystery").className).toContain("text-muted-foreground");
   });
 
+  // Rendering the page with 5000 rows takes about 1s on an idle machine; the budget allows for heavily loaded CI hosts.
   it("virtualises a 5000 row list", async () => {
     const user = userEvent.setup();
     const pods = Array.from({ length: 5000 }, (_, i) => ({ name: `pod-${String(i).padStart(4, "0")}` }));
@@ -283,7 +284,7 @@ describe("K8s resource list", () => {
     expect(rendered).toBeGreaterThan(0);
     expect(rendered).toBeLessThan(500);
     expect(screen.getByText("5000")).toBeInTheDocument();
-  });
+  }, 20_000);
 
   it("opens the detail tab when a row is clicked", async () => {
     const user = userEvent.setup();

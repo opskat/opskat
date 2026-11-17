@@ -78,6 +78,11 @@ func (k *K8s) Cleanup() {
 		}
 		return true
 	})
+	k.cancelExecSessions()
+}
+
+// cancelExecSessions 结束全部终端会话（含连接中的）；各会话的结束流程随后在自己的协程里跑完。
+func (k *K8s) cancelExecSessions() {
 	k.execSessions.Range(func(_, v any) bool {
 		v.(*execSession).cancel()
 		return true

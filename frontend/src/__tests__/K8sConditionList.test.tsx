@@ -20,14 +20,20 @@ describe("K8sConditionList colours", () => {
     expect(pill("Unknown").className).toContain("text-muted-foreground");
   });
 
-  it.each(["MemoryPressure", "DiskPressure", "PIDPressure", "NetworkUnavailable"])(
-    "colours problem condition %s False as success and True as error",
-    (type) => {
-      const { unmount } = render(<K8sConditionList conditions={[{ type, status: "False" }]} />);
-      expect(pill("False").className).toContain("text-success");
-      unmount();
-      render(<K8sConditionList conditions={[{ type, status: "True" }]} />);
-      expect(pill("True").className).toContain("text-destructive");
-    }
-  );
+  it.each([
+    "MemoryPressure",
+    "DiskPressure",
+    "PIDPressure",
+    "NetworkUnavailable",
+    "Failed",
+    "FailureTarget",
+    "ReplicaFailure",
+    "DisruptionTarget",
+  ])("colours problem condition %s False as success and True as error", (type) => {
+    const { unmount } = render(<K8sConditionList conditions={[{ type, status: "False" }]} />);
+    expect(pill("False").className).toContain("text-success");
+    unmount();
+    render(<K8sConditionList conditions={[{ type, status: "True" }]} />);
+    expect(pill("True").className).toContain("text-destructive");
+  });
 });
