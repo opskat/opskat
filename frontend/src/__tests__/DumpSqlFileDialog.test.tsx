@@ -398,6 +398,8 @@ describe("DumpSqlFileDialog", () => {
   it("under StrictMode, unmounting while running still cancels, also when Start resolves after unmount", async () => {
     const running = renderDialog({}, true);
     await startDump();
+    await waitFor(() => expect(screen.getByRole("button", { name: /action\.cancel/ })).toBeEnabled());
+    expect(CancelDumpSQLFile).not.toHaveBeenCalled();
     running.unmount();
     expect(CancelDumpSQLFile).toHaveBeenCalledWith("dump-1");
 
