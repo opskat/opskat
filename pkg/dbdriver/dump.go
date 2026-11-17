@@ -188,14 +188,12 @@ type DumpObjectScript struct {
 	ForeignKeys []string `json:"foreignKeys,omitempty"`
 	// PostData 写在全部对象之后：序列与自增的收尾（如 PostgreSQL 的 setval）。
 	PostData []string `json:"postData,omitempty"`
-	// DependsOn 是它的定义用到的视图（名字的形式同 DumpObject.Name；只认视图，只知道视图之间依赖的驱动
-	// 用它，如 SQLite）；Dependencies 是它用到的视图、函数与过程，带上种类（视图与函数可以同名）。视图、
-	// 函数与过程写在同一段里，按这两项排序：被依赖的先写，删除段里倒过来。不在这一段里的对象（如表、这次
+	// Dependencies 是它的定义用到的视图、函数与过程，带上种类（视图与函数可以同名）。视图、
+	// 函数与过程写在同一段里，按它排序：被依赖的先写，删除段里倒过来。不在这一段里的对象（如表、这次
 	// 没有转储的对象）不影响次序，自己依赖自己（递归的过程）也不算；没有给出依赖的对象，函数与过程在前、
 	// 视图在后，各自按列出的次序。表的 Dependencies 是它的父表（种类 DumpTable：分区所属的分区表、继承的
 	// 子表的父表），表那一段同样按它排序：父表先写，删除段里子表先删；没有父表的表按列出的次序。依赖成环时
 	// （如 SQL Server 里互相调用的过程：延迟名称解析，谁先建都行）环在回到正在排的对象处断开，照样写出。
-	DependsOn    []string         `json:"dependsOn,omitempty"`
 	Dependencies []DumpDependency `json:"dependencies,omitempty"`
 	// Partitions 是表的分区（名字的形式同 DumpObject.Name；只有分区表的父表给出，多级分区由各级给出自己的下一级）：
 	// 它们随这张表一起转储，只转储选中的表时也是，已经在这次转储里的不再重复。给出了分区的表自己没有行（行都在
@@ -550,8 +548,8 @@ func (d *dump) batchEnd() {
 	}
 }
 
-// dependencyOrder 把一段对象排成被依赖的在前：每个对象之前先放它依赖的（DependsOn 里的视图、Dependencies 里的
-// 对象）里属于这一段的那些，其余保持 items 的次序。表这一段里是分区与继承的子表依赖它们的父表；视图、函数与
+// dependencyOrder 把一段对象排成被依赖的在前：每个对象之前先放它依赖的（Dependencies）里属于这一段的那些，
+// 其余保持 items 的次序。表这一段里是分区与继承的子表依赖它们的父表；视图、函数与
 // 过程那一段里没有依赖的函数、过程在前，视图在后。自己依赖自己不算；依赖成环时，回到正在放的对象的那条依赖
 // 不算（环在那里断开，与 pg_dump 一样照样写出），环上的对象按放到的次序。
 func dependencyOrder(items []*dumpItem) []*dumpItem {
@@ -561,17 +559,10 @@ func dependencyOrder(items []*dumpItem) []*dumpItem {
 		byKey[key(item.kind, item.name)] = item
 	}
 	dependencies := func(item *dumpItem) []*dumpItem {
-		keys := make([]string, 0, len(item.script.DependsOn)+len(item.script.Dependencies))
-		for _, name := range item.script.DependsOn {
-			keys = append(keys, key(ObjectView, name))
-		}
-		for _, dependency := range item.script.Dependencies {
-			keys = append(keys, key(dependency.Kind, dependency.Name))
-		}
 		var out []*dumpItem
-		for _, k := range keys {
-			if dependency, ok := byKey[k]; ok {
-				out = append(out, dependency)
+		for _, dependency := range item.script.Dependencies {
+			if found, ok := byKey[key(dependency.Kind, dependency.Name)]; ok {
+				out = append(out, found)
 			}
 		}
 		return out

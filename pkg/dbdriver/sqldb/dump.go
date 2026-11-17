@@ -47,7 +47,7 @@ type DumpFileWriter interface {
 // 包装（DELIMITER、/）与附属定义（索引，只在 object.Options.Indexes 时写），INSERT 的列（去掉生成列），数据
 // 前后的开关（IDENTITY_INSERT），挪到全部数据之后的外键与删除段里先删的外键（不能在会话里关闭外键检查的
 // 库；定义里就要去掉它们），留在定义里的外键（object.Options.ForeignKeys 不勾时去掉），数据之后的收尾
-// （setval），以及视图、函数与过程依赖的对象（Dependencies，或只认视图的 DependsOn；见 QueryDumpDependencies）。
+// （setval），以及视图、函数与过程依赖的对象（Dependencies；见 QueryDumpDependencies）。
 // 删除语句与挪走的外键总是给出，写不写由编排按选项决定。
 type DumpObjectWriter interface {
 	DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error

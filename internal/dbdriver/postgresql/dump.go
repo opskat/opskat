@@ -63,13 +63,14 @@ const dumpForeignKeysQuery = "SELECT con.conname, pg_get_constraintdef(con.oid) 
 	"WHERE con.contype = 'f' AND con.conislocal AND n.nspname = $1 AND c.relname = $2 ORDER BY con.conname"
 
 // dumpFamilyQuery 读表在 pg_inherits 里的父表（"parent"：分区所属的分区表、继承的子表的父表）与分区（"partition"：
-// 它的下一级分区，不含继承的子表），名字的形式同 ListTables。
+// 它的下一级分区，不含继承的子表），名字的形式同 ListTables。分区只算表（relkind 'r'、'p'，同 ListTables 的 BASE
+// TABLE）：外部表分区（postgres_fdw 分片）与 ListTables 不列出的外部表一样不转储。
 const dumpFamilyQuery = "SELECT 'parent', pn.nspname || '.' || p.relname FROM pg_inherits h " +
 	"JOIN pg_class p ON p.oid = h.inhparent JOIN pg_namespace pn ON pn.oid = p.relnamespace " +
 	"WHERE h.inhrelid = format('%I.%I', $1::text, $2::text)::regclass " +
 	"UNION ALL SELECT 'partition', cn.nspname || '.' || ch.relname FROM pg_inherits h " +
 	"JOIN pg_class ch ON ch.oid = h.inhrelid JOIN pg_namespace cn ON cn.oid = ch.relnamespace " +
-	"WHERE h.inhparent = format('%I.%I', $1::text, $2::text)::regclass " +
+	"WHERE h.inhparent = format('%I.%I', $1::text, $2::text)::regclass AND ch.relkind IN ('r', 'p') " +
 	"AND COALESCE(to_jsonb(ch) ->> 'relispartition', 'false')::boolean ORDER BY 1, 2"
 
 // dumpColumnsQuery 读 INSERT 写入的列（去掉生成列），以及它是不是 GENERATED ALWAYS 身份列。attgenerated（12 起）

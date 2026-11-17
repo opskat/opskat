@@ -37,7 +37,7 @@ func (dialect) DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.D
 	return nil
 }
 
-// dumpView 给出视图用到的其他视图（DependsOn）：SQLite 不记录视图之间的依赖，就看定义里的标识符（字符串
+// dumpView 给出视图用到的其他视图（Dependencies）：SQLite 不记录视图之间的依赖，就看定义里的标识符（字符串
 // 与注释除外）有哪些是库里别的视图的名字。SQLite 的标识符不分 ASCII 大小写。
 func dumpView(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error {
 	views, err := sqldb.QueryNames(ctx, conn,
@@ -51,7 +51,7 @@ func dumpView(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, s
 	}
 	for _, view := range views {
 		if used[strings.ToLower(view)] {
-			script.DependsOn = append(script.DependsOn, view)
+			script.Dependencies = append(script.Dependencies, dbdriver.DumpDependency{Kind: dbdriver.ObjectView, Name: view})
 		}
 	}
 	return nil

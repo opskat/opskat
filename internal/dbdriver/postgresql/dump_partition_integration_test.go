@@ -181,3 +181,35 @@ func TestIntegrationDumpOfASelectedPartitionedTableBringsItsPartitions(t *testin
 		assert.NotContains(t, script, `CREATE TABLE "public"."readings" `)
 	})
 }
+
+// 分区表有一个外部表分区（postgres_fdw 分片的写法）：外部表不在转储里（ListTables 不列出它），分区表照样转储——整库与
+// 只选中父表时都成功，本地分区与它们的行写出、运行到空库每条语句都成功，外部表分区不读、不写。这里的外部数据包装器
+// 没有处理函数，读外部表就会出错。
+func TestIntegrationDumpSkipsAForeignTablePartition(t *testing.T) {
+	admin := openDDLDatabase(t, os.Getenv("E2E_POSTGRES_DATABASE"))
+	suffix := time.Now().UnixNano()
+	source, target := fmt.Sprintf("opskat_dump_pfdw_src_%d", suffix), fmt.Sprintf("opskat_dump_pfdw_dst_%d", suffix)
+	createScratchDatabase(t, admin, source)
+	createScratchDatabase(t, admin, target)
+	sourceDB, targetDB := openDDLDatabase(t, source), openDDLDatabase(t, target)
+	_, err := sourceDB.Exec(`CREATE FOREIGN DATA WRAPPER opskat_no_handler;
+CREATE SERVER opskat_remote FOREIGN DATA WRAPPER opskat_no_handler;
+CREATE TABLE public.metrics (id integer NOT NULL, at date NOT NULL) PARTITION BY RANGE (at);
+CREATE TABLE public.metrics_local PARTITION OF public.metrics FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');
+CREATE FOREIGN TABLE public.metrics_remote PARTITION OF public.metrics FOR VALUES FROM ('2025-01-01') TO ('2026-01-01') SERVER opskat_remote;
+INSERT INTO public.metrics_local VALUES (1, '2026-02-01'), (2, '2026-03-01');`)
+	require.NoError(t, err)
+
+	for _, req := range []dbdriver.DumpRequest{
+		{Database: source, Whole: true, WithData: true, Options: structureOptions},
+		{Database: source, Tables: []string{"public.metrics"}, WithData: true, Options: structureOptions},
+	} {
+		script, dumped := dumpPartitionSource(t, sourceDB, req)
+		assert.Equal(t, 2, dumped.Objects, "the parent and its local partition")
+		assert.EqualValues(t, 2, dumped.Rows)
+		assert.NotContains(t, script, "metrics_remote")
+	}
+	script, _ := dumpPartitionSource(t, sourceDB, dbdriver.DumpRequest{Database: source, Whole: true, WithData: true, Options: structureOptions})
+	runDump(t, targetDB, target, script)
+	assert.Equal(t, []string{"metrics own 0 all 2", "metrics_local own 2 all 2"}, ownRows(t, targetDB))
+}

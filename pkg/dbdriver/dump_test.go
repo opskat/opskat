@@ -167,9 +167,7 @@ type dumpDialect struct {
 	dataColumn map[string][]string
 	// insertModifier 是各表的 InsertModifier。
 	insertModifier map[string]string
-	// dependsOn 是各对象依赖的视图（方言给出的 DependsOn）；dependencies 是带种类的依赖（Dependencies），
-	// 键是「种类 名字」。
-	dependsOn    map[string][]string
+	// dependencies 是各对象带种类的依赖（方言给出的 Dependencies），键是「种类 名字」。
 	dependencies map[string][]DumpDependency
 	// partitions 是各表的分区（方言给出的 Partitions）。
 	partitions map[string][]string
@@ -188,7 +186,6 @@ func (d *dumpDialect) DumpObject(_ context.Context, object DumpObject) (*DumpObj
 	script := &DumpObjectScript{
 		Drop:         []string{fmt.Sprintf("DROP %s IF EXISTS %s;", strings.ToUpper(object.Kind), object.Name)},
 		Definition:   []string{object.Definition + ";"},
-		DependsOn:    d.dependsOn[object.Name],
 		Dependencies: d.dependencies[object.Kind+" "+object.Name],
 		Partitions:   d.partitions[object.Name],
 	}
@@ -820,7 +817,7 @@ func reversedNames(names []string) []string {
 }
 
 // 视图、函数与过程在同一段里按依赖排序，被依赖的在前：视图可以依赖函数，函数也可以依赖视图；方言经
-// Dependencies（带种类）或 DependsOn（视图）给出依赖，不在这一段里的名字（表）不算。没给依赖的对象函数与过程
+// Dependencies（带种类）给出依赖，不在这一段里的名字（表）不算。没给依赖的对象函数与过程
 // 在前、视图在后，各自按列出的次序。删除段按这个次序倒过来删。
 func TestDumpOrdersViewsFunctionsAndProceduresByTheirDependencies(t *testing.T) {
 	whole := DumpRequest{Database: "shop", Whole: true, Options: allOptions}
@@ -857,15 +854,12 @@ func TestDumpOrdersViewsFunctionsAndProceduresByTheirDependencies(t *testing.T) 
 		created, _ := definitionOrder(t, source, dialect, whole)
 		assert.Equal(t, []string{"function same", "view v_a", "view same"}, created)
 	})
-	t.Run("DependsOn names views", func(t *testing.T) {
-		source := definitionsSource([]string{"v_base"}, nil, []string{"v_top", "v_base"})
-		dialect := &dumpDialect{plain: true, dependsOn: map[string][]string{"v_top": {"users", "v_base"}}}
-		created, _ := definitionOrder(t, source, dialect, whole)
-		assert.Equal(t, []string{"function v_base", "view v_base", "view v_top"}, created)
-	})
 	t.Run("selected views keep the selected order where nothing depends", func(t *testing.T) {
 		source := definitionsSource(nil, nil, []string{"a_report", "b_mid", "c_base", "d_alone"})
-		dialect := &dumpDialect{plain: true, dependsOn: map[string][]string{"a_report": {"users", "b_mid"}, "b_mid": {"c_base"}}}
+		dialect := &dumpDialect{plain: true, dependencies: map[string][]DumpDependency{
+			"view a_report": {{Kind: DumpTable, Name: "users"}, {Kind: ObjectView, Name: "b_mid"}},
+			"view b_mid":    {{Kind: ObjectView, Name: "c_base"}},
+		}}
 		created, _ := definitionOrder(t, source, dialect, DumpRequest{Database: "shop", Tables: []string{"d_alone", "a_report", "c_base", "b_mid"}})
 		assert.Equal(t, []string{"view d_alone", "view c_base", "view b_mid", "view a_report"}, created)
 	})
