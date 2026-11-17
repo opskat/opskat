@@ -5,7 +5,7 @@ import { isCronJobSuspended, isNodeUnschedulable } from "./schedulingState";
 
 const SCALABLE = new Set(["apps/deployments", "apps/statefulsets", "apps/replicasets"]);
 const RESTARTABLE = new Set(["apps/deployments", "apps/statefulsets", "apps/daemonsets"]);
-// A Node is cordoned / drained, not deleted from here.
+// A Node is cordoned / uncordoned here, never deleted.
 const NOT_DELETABLE = new Set(["/nodes"]);
 
 const supportsDelete = (typeKey: string, assetId?: number) =>
