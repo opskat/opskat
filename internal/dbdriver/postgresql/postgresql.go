@@ -62,7 +62,7 @@ func init() {
 
 func (driver) Descriptor() dbdriver.Descriptor { return descriptor }
 
-// 转储先用共用的默认写法（每个对象之前 DROP ... IF EXISTS，定义取 TableDDL 的原文）。
+// 转储的文件没有共用的开头结尾与批分隔符，也不能在会话里关闭外键检查；其余写法见 dump.go。
 var _ sqldb.DumpDialect = dialect{}
 
 func (dialect) DumpSyntax() sqldb.DumpSyntax { return sqldb.DumpSyntax{} }

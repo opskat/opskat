@@ -2757,7 +2757,7 @@
     "dumpSqlFileOpenFile": "Open File",
     "dumpSqlFileLogStart": "Dumping {{target}} ({{content}})",
     "dumpSqlFileLogStructure": "structure",
-    "dumpSqlFileLogData": "data, {{count}} rows",
+    "dumpSqlFileLogStructureAndData": "structure and data, {{count}} rows",
     "dumpSqlFileLogDone": "Done in {{seconds}}s",
     "dumpSqlFileLogCanceled": "Cancelled; the unfinished file was deleted",
     "viewStructure": "View Structure",

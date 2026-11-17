@@ -289,8 +289,22 @@ describe("DumpSqlFileDialog", () => {
         finished: { name: "users", kind: "table", data: true, rows: 1200 },
       },
     });
-    expect(screen.getByText("[DMP] users: query.dumpSqlFileLogStructure")).toBeInTheDocument();
-    expect(screen.getByText("[DMP] users: query.dumpSqlFileLogData 1,200")).toBeInTheDocument();
+    // 一个对象一行:结构、数据及行数都在这一行里。
+    expect(screen.getAllByText(/^\[DMP\] users: /).map((line) => line.textContent)).toEqual([
+      "[DMP] users: query.dumpSqlFileLogStructureAndData 1,200",
+    ]);
+    emit({
+      progress: {
+        objects: 2,
+        object: 2,
+        name: "v_users",
+        rows: 1200,
+        finished: { name: "v_users", kind: "view", data: false, rows: 0 },
+      },
+    });
+    expect(screen.getAllByText(/^\[DMP\] v_users: /).map((line) => line.textContent)).toEqual([
+      "[DMP] v_users: query.dumpSqlFileLogStructure",
+    ]);
 
     expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });

@@ -311,8 +311,9 @@ func (q *Query) runSQLFile(runID string, log *zap.Logger, panel *panelSession, f
 		log.Error("run sql file failed", append(fields, zap.Error(err))...)
 	case result.Failure != nil:
 		event.Status, event.Failure = RunSQLFileFailed, result.Failure
+		// 数据库的错误原文常带着语句里的名字与值，只给对话框，不进日志。
 		log.Warn("run sql file stopped at a failed statement", append(fields,
-			zap.Int64("statement", result.Failure.Number), zap.Int("line", result.Failure.Line), zap.String("error", result.Failure.Error))...)
+			zap.Int64("statement", result.Failure.Number), zap.Int("line", result.Failure.Line))...)
 	case result.Stopped:
 		event.Status = RunSQLFileStopped
 		log.Info("run sql file stopped", fields...)

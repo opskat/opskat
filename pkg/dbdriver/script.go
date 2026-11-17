@@ -153,8 +153,8 @@ type ScriptBatch struct {
 	Statements []string `json:"statements"`
 	// ContinueOnError 为假时停在这批里第一条失败的语句。
 	ContinueOnError bool `json:"continueOnError"`
-	// Stop 被关闭后，执行器在当前语句之后停下，没轮到的语句不执行、也不记在结果里。批仍是粗粒度的
-	// 一次调用；这个信号不进序列化，扩展里的驱动在宿主侧按批收到它。nil 表示不会被要求停下。
+	// Stop 被关闭后，执行器在当前语句之后停下，没轮到的语句不执行、也不记在结果里。这个信号不进序列化：
+	// 扩展里的驱动经宿主的停下检查（ShouldStop）在每条语句之前收到它。nil 表示不会被要求停下。
 	Stop <-chan struct{} `json:"-"`
 }
 

@@ -200,12 +200,11 @@ export function DumpSqlFileDialog({
       const lines: string[] = [];
       const finished = event.progress.finished;
       if (finished) {
-        lines.push(`[DMP] ${finished.name}: ${t("query.dumpSqlFileLogStructure")}`);
-        if (finished.data) {
-          lines.push(
-            `[DMP] ${finished.name}: ${t("query.dumpSqlFileLogData", { count: finished.rows.toLocaleString() })}`
-          );
-        }
+        // 一个对象一行:结构,写了数据的再带上行数。
+        const written = finished.data
+          ? t("query.dumpSqlFileLogStructureAndData", { count: finished.rows.toLocaleString() })
+          : t("query.dumpSqlFileLogStructure");
+        lines.push(`[DMP] ${finished.name}: ${written}`);
         setFinishedObjects((count) => count + 1);
       }
       if (event.status === "running") {

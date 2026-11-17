@@ -169,6 +169,30 @@ func (inv *invocation) shouldStop() bool {
 	return inv.cancel != nil && inv.cancel.shouldStop()
 }
 
+type stopSignalKeyType struct{}
+
+var stopSignalKey stopSignalKeyType
+
+// WithStopSignal returns ctx carrying stop: once stop is closed, the stop check of
+// a call made under ctx (Instance.Invoke) — the guest's ShouldStop, host call
+// tool.should_stop — answers true, so the guest stops at its next check and
+// returns on its own. The call is not cut off; that is what ending ctx does. A
+// nil stop never signals.
+func WithStopSignal(ctx context.Context, stop <-chan struct{}) context.Context {
+	return context.WithValue(ctx, stopSignalKey, stop)
+}
+
+// stopSignaled reports whether the stop ctx carries (WithStopSignal) is closed.
+func stopSignaled(ctx context.Context) bool {
+	stop, _ := ctx.Value(stopSignalKey).(<-chan struct{})
+	select {
+	case <-stop:
+		return true
+	default:
+		return false
+	}
+}
+
 type invocationKeyType struct{}
 
 // invocationKey addresses the invocation inside the context wazero hands to

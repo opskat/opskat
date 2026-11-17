@@ -89,8 +89,10 @@ const (
 	DriverOpOpenScriptExecutor = "openScriptExecutor"
 	// DriverOpExecuteScriptBatch runs a batch of statements in order on executor
 	// DriverArgs.Executor (dbdriver.ScriptBatch → dbdriver.BatchResult; a failing
-	// connection answers both what ran and the error). The host checks for Stop
-	// before each batch: a batch is one call.
+	// connection answers both what ran and the error). A batch is one call: the
+	// host sends none once the run is stopped, and during the call answers the
+	// stop check (tool.should_stop) true once it is, which the guest asks before
+	// each statement — the run stops after the statement in flight.
 	DriverOpExecuteScriptBatch = "executeScriptBatch"
 	// DriverOpCloseScriptExecutor gives executor DriverArgs.Executor's connection
 	// back. Closing the session closes its executors too.

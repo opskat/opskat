@@ -2757,7 +2757,7 @@
     "dumpSqlFileOpenFile": "打开文件",
     "dumpSqlFileLogStart": "开始转储 {{target}}（{{content}}）",
     "dumpSqlFileLogStructure": "结构",
-    "dumpSqlFileLogData": "数据 {{count}} 行",
+    "dumpSqlFileLogStructureAndData": "结构，数据 {{count}} 行",
     "dumpSqlFileLogDone": "完成，用时 {{seconds}} 秒",
     "dumpSqlFileLogCanceled": "已取消，未完成的文件已删除",
     "viewStructure": "查看结构",

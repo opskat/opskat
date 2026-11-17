@@ -1039,9 +1039,11 @@ type driverScriptExecutor struct {
 	id     uint64
 }
 
-// ExecuteScriptBatch sends the batch as one call. Stop cannot reach into a call
-// (dbdriver.ScriptBatch.Stop is not serialized), so it is honored at the batch: a
-// batch handed over once it is closed runs nothing.
+// ExecuteScriptBatch sends the batch as one call. dbdriver.ScriptBatch.Stop is not
+// serialized: a batch handed over once it is closed runs nothing, and during the
+// call it is the call's stop signal (extension.WithStopSignal) — the guest checks
+// it before each statement, so the run stops after the statement in flight, as a
+// built-in driver's does.
 func (e *driverScriptExecutor) ExecuteScriptBatch(ctx context.Context, batch dbdriver.ScriptBatch) (*dbdriver.BatchResult, error) {
 	select {
 	case <-batch.Stop:
@@ -1053,7 +1055,7 @@ func (e *driverScriptExecutor) ExecuteScriptBatch(ctx context.Context, batch dbd
 		return nil, fmt.Errorf("marshal database driver %s request: %w", extwire.DriverOpExecuteScriptBatch, err)
 	}
 	var result *dbdriver.BatchResult
-	err = e.runner.inst.call(ctx, extwire.DriverCall{Op: extwire.DriverOpExecuteScriptBatch, Args: extwire.DriverArgs{
+	err = e.runner.inst.call(extension.WithStopSignal(ctx, batch.Stop), extwire.DriverCall{Op: extwire.DriverOpExecuteScriptBatch, Args: extwire.DriverArgs{
 		Executor: e.id, Request: raw,
 	}}, &result)
 	if err == nil && result == nil {

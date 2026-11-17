@@ -228,3 +228,44 @@ func TestIntegrationDumpOverwritesTheOriginalDatabase(t *testing.T) {
 	assert.Equal(t, structure, queryLines(t, sourceDB, structureQuery))
 	assert.Equal(t, data, tableData(t, sourceDB))
 }
+
+// 整个 schema：schema 里的表的列用到别的 schema 的枚举类型（含它的数组）时，这个枚举类型也写进文件（连同它的
+// schema），文件在空库上运行得出这些表；schema 里没被用到的枚举照样写出，别的 schema 里没被用到的不写。
+func TestIntegrationDumpWholeSchemaWritesTheEnumsItsColumnsUse(t *testing.T) {
+	admin := openDDLDatabase(t, os.Getenv("E2E_POSTGRES_DATABASE"))
+	suffix := time.Now().UnixNano()
+	source, target := fmt.Sprintf("opskat_dump_schema_src_%d", suffix), fmt.Sprintf("opskat_dump_schema_dst_%d", suffix)
+	createScratchDatabase(t, admin, source)
+	createScratchDatabase(t, admin, target)
+	sourceDB, targetDB := openDDLDatabase(t, source), openDDLDatabase(t, target)
+	_, err := sourceDB.Exec(`CREATE SCHEMA app;
+CREATE SCHEMA lookup;
+CREATE TYPE lookup.mood AS ENUM ('happy', 'sad');
+CREATE TYPE lookup.level AS ENUM ('low', 'high');
+CREATE TYPE lookup.unused AS ENUM ('x');
+CREATE TYPE app.state AS ENUM ('open', 'closed');
+CREATE TYPE app.spare AS ENUM ('y');
+CREATE TABLE app.notes (id integer PRIMARY KEY, mood lookup.mood, levels lookup.level[], state app.state);
+INSERT INTO app.notes VALUES (1, 'sad', '{low,high}', 'open'), (2, NULL, NULL, 'closed');`)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	var out strings.Builder
+	_, err = newSession(sourceDB).Dump(ctx, dbdriver.DumpRequest{
+		Database: source, Schema: "app", Whole: true, WithData: true, Writer: &out, Options: structureOptions,
+		Header: dbdriver.DumpHeader{Version: "test", Asset: "pg", Time: time.Now()},
+	})
+	require.NoError(t, err)
+	script := out.String()
+	t.Log(script)
+
+	result, err := newSession(targetDB).RunScript(ctx, dbdriver.ScriptRequest{
+		Database: target, Script: strings.NewReader(script), Size: int64(len(script)),
+	})
+	require.NoError(t, err)
+	require.Nil(t, result.Failure, "the schema dump must run on an empty database: %+v", result.Failure)
+	enums := "SELECT n.nspname || '.' || t.typname FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace " +
+		"WHERE t.typtype = 'e' ORDER BY 1"
+	assert.Equal(t, []string{"app.spare", "app.state", "lookup.level", "lookup.mood"}, queryLines(t, targetDB, enums))
+	assert.Equal(t, tableData(t, sourceDB), tableData(t, targetDB))
+}

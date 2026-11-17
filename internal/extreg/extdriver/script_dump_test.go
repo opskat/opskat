@@ -154,7 +154,9 @@ func TestExtensionDriverRunsSQLFiles(t *testing.T) {
 		assert.Equal(t, []string{"EXEC SET A", "EXEC NOT A STATEMENT", "EXEC SET B"}, lines(execsFrom(d.server, before)))
 	})
 
-	t.Run("stop takes effect after the batch in flight", func(t *testing.T) {
+	// Like a built-in driver's: the statement running when stop is asked for runs to
+	// its end, and none after it — not the rest of the batch the guest was handed.
+	t.Run("stop takes effect after the statement in flight", func(t *testing.T) {
 		d := newDriver()
 		d.server.Hold = "EXEC INSERT INTO [t] VALUES (1)"
 		s := d.open(t)
@@ -180,10 +182,10 @@ func TestExtensionDriverRunsSQLFiles(t *testing.T) {
 			t.Fatal("the stopped run did not come back")
 		}
 		assert.True(t, result.Stopped)
-		execs := execsFrom(d.server, before)
-		assert.EqualValues(t, len(execs), result.Succeeded, "every statement sent ran and is counted")
-		assert.Greater(t, len(execs), 2, "the batch in flight runs to its end")
-		assert.Less(t, len(execs), 450, "no batch is sent once stop is asked for")
+		assert.Equal(t, []string{"EXEC SET MODE strict", "EXEC INSERT INTO [t] VALUES (1)"}, lines(execsFrom(d.server, before)),
+			"the held statement finishes; the rest of its batch does not run")
+		assert.EqualValues(t, 2, result.Succeeded)
+		assert.Zero(t, result.Failed)
 	})
 
 	t.Run("canceling the run ends the call and closes the run's connection", func(t *testing.T) {

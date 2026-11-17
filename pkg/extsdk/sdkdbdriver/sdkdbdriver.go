@@ -102,8 +102,10 @@ type driverEntry struct {
 //     The statements of one run go, in batches, to a single database connection the
 //     SDK takes from the session for the length of the run, so a setting a
 //     statement makes holds for the ones after it; each statement commits on its
-//     own. The host asks for a stop between batches, and closes the connection's
-//     instance when the run is canceled or the guest fails.
+//     own. The SDK runs a batch a statement at a time and asks the host's stop
+//     check (ShouldStop) before each, so a stopped run ends after the statement in
+//     flight; the host closes the connection's instance when the run is canceled or
+//     the guest fails.
 //   - Dump, declared with dbdriver.CapDumpSQL together with dbdriver.CapViewDDL
 //     (the definitions are what TableDDL and ObjectSource give) and, for structure
 //     and data, a capability that generates row statements (dbdriver.CapExportSQL):
@@ -258,7 +260,8 @@ func runDriverOp(ctx context.Context, call extwire.DriverCall) (any, error) {
 			return nil, fmt.Errorf("no database driver SQL file executor %d", a.Executor)
 		}
 		return withDriverRequest(a.Request, func(batch dbdriver.ScriptBatch) (*dbdriver.BatchResult, error) {
-			return executor.executor.ExecuteScriptBatch(ctx, batch)
+			// The host's stop check of this call (ShouldStop) turns true once the run is stopped.
+			return executeScriptBatch(ctx, executor.executor, batch, new(opskat.ToolContext).ShouldStop)
 		})
 	case extwire.DriverOpCloseScriptExecutor:
 		executor, ok := driverHandles.executors[a.Executor]
@@ -466,6 +469,32 @@ func openDriverSession(ctx context.Context, a extwire.DriverArgs) (any, error) {
 // ticket for spn. The host bounds the request by the call it runs in.
 func hostKerberosTicket(_ context.Context, spn string) ([]byte, error) {
 	return opskat.KerberosTicket(spn)
+}
+
+// executeScriptBatch runs a batch the host sent (extwire.DriverOpExecuteScriptBatch)
+// on executor a statement at a time, asking shouldStop before each: the batch's
+// Stop does not cross the ABI, so a run stopped while the batch is in flight ends
+// after the statement running then, as it does for a built-in driver — not at the
+// end of the batch. Executed indexes are the batch's.
+func executeScriptBatch(ctx context.Context, executor dbdriver.ScriptExecutor, batch dbdriver.ScriptBatch, shouldStop func() bool) (*dbdriver.BatchResult, error) {
+	result := &dbdriver.BatchResult{Executed: []dbdriver.BatchStatement{}}
+	for index, statement := range batch.Statements {
+		if shouldStop() {
+			return result, nil
+		}
+		one, err := executor.ExecuteScriptBatch(ctx, dbdriver.ScriptBatch{Statements: []string{statement}, ContinueOnError: batch.ContinueOnError})
+		for _, executed := range one.Executed {
+			executed.Index = index
+			result.Executed = append(result.Executed, executed)
+		}
+		if err != nil {
+			return result, err
+		}
+		if one.Failed() && !batch.ContinueOnError {
+			break
+		}
+	}
+	return result, nil
 }
 
 // closeDriverSession closes the session's cursors and SQL file executors, then the

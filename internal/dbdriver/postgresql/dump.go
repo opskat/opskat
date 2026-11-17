@@ -18,9 +18,9 @@ import (
 // ALTER TABLE ... ADD CONSTRAINT 加上（勾了「包含外键」时）；删除段先用 ALTER TABLE IF EXISTS ... DROP CONSTRAINT
 // IF EXISTS 拆掉要转储的表上的外键，被引用的表才删得掉，最后删枚举类型（都不带 CASCADE）。不勾「包含索引」时
 // 建表语句不含索引。文件开头关掉函数体检查（函数可以先于它用到的对象建出），建出转储范围里
-// public 之外的 schema，接着是枚举类型（整库 / 整个 schema 时是范围里的全部，选中表时是这些表的列用到的）；
-// 每张表的 INSERT 不写生成列，有 GENERATED ALWAYS 身份列的表加 OVERRIDING SYSTEM VALUE，列拥有的序列在
-// 全部对象之后用 setval 同步到当前值；视图给出 pg_depend 里的依赖；函数与过程按每个重载删除、建出；触发器的
+// public 之外的 schema，接着是枚举类型（整库 / 整个 schema 时是范围里的全部，加上范围里的表的列用到的别的
+// schema 里的；选中表时是这些表的列用到的）；每张表的 INSERT 不写生成列，有 GENERATED ALWAYS 身份列的表加
+// OVERRIDING SYSTEM VALUE，列拥有的序列在全部对象之后用 setval 同步到当前值；视图给出 pg_depend 里的依赖；函数与过程按每个重载删除、建出；触发器的
 // 删除带上它的表。domain、复合、range 类型与扩展不写（见 spec 的 Out of scope）。
 var (
 	_ sqldb.DumpFileWriter   = dialect{}
@@ -35,16 +35,23 @@ const dumpSchemasQuery = "SELECT nspname FROM pg_namespace WHERE nspname NOT IN 
 const enumTypesSelect = "SELECT n.nspname, t.typname, (SELECT COALESCE(json_agg(e.enumlabel ORDER BY e.enumsortorder), '[]') " +
 	"FROM pg_enum e WHERE e.enumtypid = t.oid) FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE t.typtype = 'e' AND "
 
-// scopeEnumsQuery 读整个库（$1 为空）或整个 schema（$1）里的枚举类型。
-const scopeEnumsQuery = enumTypesSelect + "n.nspname NOT IN " + systemSchemas + " AND ($1::text = '' OR n.nspname = $1::text) " +
-	"ORDER BY n.nspname, t.typname"
+// enumUsedByTables 是「枚举类型 t 被一些表的列用到（含枚举的数组）」的条件，接在它后面的参数（JSON 数组，ListTables
+// 的「schema.名字」）是这些表，再接 enumUsedByTablesEnd。
+const (
+	enumUsedByTables = "EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid " +
+		"JOIN pg_namespace cn ON cn.oid = c.relnamespace JOIN pg_type at ON at.oid = a.atttypid " +
+		"WHERE a.attnum > 0 AND NOT a.attisdropped AND t.oid IN (at.oid, at.typelem) " +
+		"AND cn.nspname || '.' || c.relname IN (SELECT jsonb_array_elements_text("
+	enumUsedByTablesEnd = "::jsonb)))"
+)
 
-// usedEnumsQuery 读 $1（JSON 数组，ListTables 的「schema.名字」）这些表的列用到的枚举类型（含枚举的数组）。
-const usedEnumsQuery = enumTypesSelect + "EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid " +
-	"JOIN pg_namespace cn ON cn.oid = c.relnamespace JOIN pg_type at ON at.oid = a.atttypid " +
-	"WHERE a.attnum > 0 AND NOT a.attisdropped AND t.oid IN (at.oid, at.typelem) " +
-	"AND cn.nspname || '.' || c.relname IN (SELECT jsonb_array_elements_text($1::jsonb))) " +
-	"ORDER BY n.nspname, t.typname"
+// scopeEnumsQuery 读整个库（$1 为空）或整个 schema（$1）里的枚举类型，以及范围里的表（$2）的列用到的别的 schema
+// 里的枚举类型：没有它们，这些表在空库上建不出来。
+const scopeEnumsQuery = enumTypesSelect + "n.nspname NOT IN " + systemSchemas + " AND ($1::text = '' OR n.nspname = $1::text OR " +
+	enumUsedByTables + "$2" + enumUsedByTablesEnd + ") ORDER BY n.nspname, t.typname"
+
+// usedEnumsQuery 读 $1 这些表的列用到的枚举类型。
+const usedEnumsQuery = enumTypesSelect + enumUsedByTables + "$1" + enumUsedByTablesEnd + " ORDER BY n.nspname, t.typname"
 
 // dumpForeignKeysQuery 读表上的外键：名字与 pg_get_constraintdef 的原文。
 const dumpForeignKeysQuery = "SELECT con.conname, pg_get_constraintdef(con.oid) FROM pg_constraint con " +
@@ -79,12 +86,15 @@ func (dialect) DumpFile(ctx context.Context, conn *sql.Conn, scope dbdriver.Dump
 		schema, _ := splitSchemaTable(table)
 		schemas[schema] = true
 	}
+	tables, err := json.Marshal(scope.Tables)
+	if err != nil {
+		return err
+	}
 	var enums []enumType
-	var err error
 	switch {
 	case scope.Whole && scope.Schema != "":
 		schemas[scope.Schema] = true
-		enums, err = queryEnums(ctx, conn, scopeEnumsQuery, scope.Schema)
+		enums, err = queryEnums(ctx, conn, scopeEnumsQuery, scope.Schema, string(tables))
 	case scope.Whole:
 		var all []string
 		if all, err = sqldb.QueryNames(ctx, conn, dumpSchemasQuery); err != nil {
@@ -93,12 +103,8 @@ func (dialect) DumpFile(ctx context.Context, conn *sql.Conn, scope dbdriver.Dump
 		for _, schema := range all {
 			schemas[schema] = true
 		}
-		enums, err = queryEnums(ctx, conn, scopeEnumsQuery, "")
+		enums, err = queryEnums(ctx, conn, scopeEnumsQuery, "", string(tables))
 	default:
-		var tables []byte
-		if tables, err = json.Marshal(scope.Tables); err != nil {
-			return err
-		}
 		enums, err = queryEnums(ctx, conn, usedEnumsQuery, string(tables))
 	}
 	if err != nil {
@@ -142,8 +148,8 @@ func (e enumType) createSQL() (string, error) {
 	return fmt.Sprintf("CREATE TYPE %s AS ENUM (%s);", e.ref(), strings.Join(labels, ", ")), nil
 }
 
-func queryEnums(ctx context.Context, conn *sql.Conn, query string, arg string) ([]enumType, error) {
-	rows, err := conn.QueryContext(ctx, query, arg)
+func queryEnums(ctx context.Context, conn *sql.Conn, query string, args ...any) ([]enumType, error) {
+	rows, err := conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

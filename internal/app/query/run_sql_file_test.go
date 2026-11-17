@@ -11,8 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/opskat/opskat/internal/dbdriver/dbdrivertest"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -105,6 +108,37 @@ func TestRunSQLFileReportsTheStatementItStoppedAt(t *testing.T) {
 	require.Len(t, sessions, 1)
 	assert.Equal(t, []string{"SELECT 1", dbdrivertest.ConformanceFailingStatement}, sessions[0].Statements())
 	assert.Equal(t, "app", sessions[0].Request.Config.Database)
+}
+
+// 日志不记语句与数据：停在失败的语句上时，数据库的错误原文（常带着语句里的名字与值）只给对话框，日志只记
+// 条号、行号与计数。
+func TestRunSQLFileLogLeavesOutTheStatementAndItsError(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	oldLogger := logger.Default()
+	logger.SetLogger(zap.New(core))
+	t.Cleanup(func() { logger.SetLogger(oldLogger) })
+	events := captureRunEvents(t)
+	q := newPanelQuery(t, &asset_entity.DatabaseConfig{
+		Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "panel.db"),
+	})
+	const secret = "log_sentinel_value"
+	path := writeScript(t, "CREATE TABLE t (id INTEGER);\nSELECT "+secret+" FROM t;\n")
+
+	_, err := q.StartRunSQLFile(1, "main", RunSQLFileRequest{Path: path})
+	require.NoError(t, err)
+	final := events.wait(t)
+
+	require.Equal(t, RunSQLFileFailed, final.Status)
+	require.Contains(t, final.Failure.Error, secret, "the dialog still gets the database's error")
+	stopped := logs.FilterMessage("run sql file stopped at a failed statement").All()
+	require.Len(t, stopped, 1)
+	assert.EqualValues(t, 2, stopped[0].ContextMap()["statement"])
+	for _, entry := range logs.All() {
+		assert.NotContains(t, entry.Message, secret)
+		for key, value := range entry.ContextMap() {
+			assert.NotContains(t, fmt.Sprint(value), secret, "log %q field %q", entry.Message, key)
+		}
+	}
 }
 
 // 不是 UTF-8 的文件：一条也不执行，终态是 error，带着第一处非 UTF-8 内容所在的行。

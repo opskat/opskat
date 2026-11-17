@@ -70,7 +70,7 @@ func TestDumpWritesRestorablePostgreSQLFile(t *testing.T) {
 	mock.ExpectQuery(triggersSQL).WillReturnRows(sqlmock.NewRows([]string{"s", "n", "t"}).AddRow("public", "items_touch", "items"))
 	mock.ExpectQuery(listTablesSQL).WillReturnRows(names("name", "app.notes", "public.items", "public.v_a", "public.v_b"))
 	mock.ExpectQuery(dumpSchemasQuery).WillReturnRows(names("nspname", "app"))
-	mock.ExpectQuery(scopeEnumsQuery).WithArgs("").WillReturnRows(enumRows([3]string{"public", "kind", `["new", "it's"]`}))
+	mock.ExpectQuery(scopeEnumsQuery).WithArgs("", `["app.notes","public.items","public.v_a","public.v_b"]`).WillReturnRows(enumRows([3]string{"public", "kind", `["new", "it's"]`}))
 
 	// app.notes：serial 主键，外键指向 public.items。
 	mock.ExpectQuery(ddlColumnsQuery).WithArgs("app", "notes").WillReturnRows(ddlColumnRows("r", nil,
@@ -177,7 +177,7 @@ func TestDumpWholeSchemaKeepsToItsSchema(t *testing.T) {
 	mock.ExpectQuery(functionsSQL).WillReturnRows(names("r"))
 	mock.ExpectQuery(triggersSQL).WillReturnRows(sqlmock.NewRows([]string{"s", "n", "t"}))
 	mock.ExpectQuery(listTablesSQL).WillReturnRows(names("name", "app.notes", "public.items"))
-	mock.ExpectQuery(scopeEnumsQuery).WithArgs("app").WillReturnRows(enumRows([3]string{"app", "state", `[]`}))
+	mock.ExpectQuery(scopeEnumsQuery).WithArgs("app", `["app.notes"]`).WillReturnRows(enumRows([3]string{"app", "state", `[]`}))
 	mock.ExpectQuery(ddlColumnsQuery).WithArgs("app", "notes").WillReturnRows(ddlColumnRows("r", nil,
 		ddlCol{name: "state", dataType: "app.state", nullable: true}))
 	mock.ExpectQuery(ownedSequencesQuery).WithArgs("app", "notes").WillReturnRows(ownedSequenceRows())
