@@ -18,3 +18,14 @@ describe("columnWidths", () => {
     expect(w).toBeGreaterThan(columnWidths([{ name: "A" }] as never, [row(["x"])])[0]);
   });
 });
+
+describe("columnWidths on large lists", () => {
+  it("fits a long value that appears late in a 5000 row list", () => {
+    const rows = Array.from({ length: 5000 }, (_, i) => row([`pod-${i}`, "Running", "0"]));
+    const short = columnWidths(cols, rows);
+    rows[4999] = row(["pod-4999", "CrashLoopBackOff", "7 (111s ago)"]);
+    const withLate = columnWidths(cols, rows);
+    expect(withLate[1]).toBeGreaterThan(short[1]);
+    expect(withLate[2]).toBeGreaterThan(short[2]);
+  });
+});

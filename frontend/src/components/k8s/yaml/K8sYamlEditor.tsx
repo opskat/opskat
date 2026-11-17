@@ -21,6 +21,19 @@ export function K8sYamlEditor({
 }) {
   const { t } = useTranslation();
   const [ready, setReady] = useState(false);
+  // CodeEditor shows its own failure and retry when Monaco cannot load; the loading indicator must give way to it.
+  const [loadFailed, setLoadFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    import("@/lib/monaco-setup")
+      .then(({ setupMonaco }) => setupMonaco())
+      .catch(() => {
+        if (!cancelled) setLoadFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const mounted = useRef<{ editor: MonacoNS.editor.IStandaloneCodeEditor; monaco: typeof MonacoNS } | null>(null);
 
   const applyMarkers = useCallback((err: YamlSyntaxError | null | undefined) => {
@@ -63,7 +76,7 @@ export function K8sYamlEditor({
   return (
     <div className="relative h-full">
       <CodeEditor value={value} onChange={onChange} language="yaml" placeholder={placeholder} onMount={onMount} />
-      {!ready && (
+      {!ready && !loadFailed && (
         <div
           role="status"
           className="absolute inset-0 flex items-center justify-center gap-2 bg-background text-xs text-muted-foreground"
