@@ -352,7 +352,11 @@ func (k *K8s) startExec(c *k8sCallContext, req K8sExecRequest) (string, error) {
 	}
 
 	log.Info("k8s exec connected", zap.Duration("elapsed", time.Since(started)))
+	k.execEnding.Add(1)
+	k.execLive.Add(1)
 	go func() {
+		defer k.execEnding.Done()
+		defer k.execLive.Add(-1)
 		err := <-result
 		k.execSessions.Delete(sessionID)
 		closed := ctx.Err() != nil
@@ -620,3 +624,34 @@ func (k *K8s) StopK8sExec(sessionID string) {
 
 // newShellTag 生成每次尝试的 shell 标记（见 k8spkg.ShellCommand）。
 var newShellTag = rand.Text
+
+// EndExecSessions 结束全部已连上的终端会话，并等它们在容器里的 shell 清理跑完，最多等 bound；返回是否在期限内完成。
+// 供应用退出时同步调用（binder 的 Cleanup 是异步的，进程会赶在清理之前退出）；没有会话时立即返回。
+func EndExecSessions(k *K8s, bound time.Duration) bool {
+	sessions := int(k.execLive.Load())
+	if sessions == 0 {
+		return true
+	}
+	started := time.Now()
+	logger.Default().Info("k8s exec sessions ending on quit", zap.Int("sessions", sessions), zap.Duration("bound", bound))
+	k.execSessions.Range(func(_, v any) bool {
+		v.(*execSession).cancel()
+		return true
+	})
+	done := make(chan struct{})
+	go func() {
+		k.execEnding.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+	timedOut := false
+	select {
+	case <-done:
+	case <-timer.C:
+		timedOut = true
+	}
+	logger.Default().Info("k8s exec sessions ended on quit",
+		zap.Int("sessions", sessions), zap.Duration("elapsed", time.Since(started)), zap.Bool("timedOut", timedOut))
+	return !timedOut
+}

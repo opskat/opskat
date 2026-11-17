@@ -82,6 +82,8 @@ const (
 	quitConfirmAckTimeout = 2 * time.Second
 	// 等待前端把活跃 AI 会话落盘完成的超时。
 	aiFlushAckTimeout = 2 * time.Second
+	// k8sExecCleanupTimeout 限定退出时等待 Pod 终端会话清理容器内 shell 的时间。
+	k8sExecCleanupTimeout = 2 * time.Second
 )
 
 // Lifecycle 是 binder 必须实现的生命周期接口（Wails 不会自动调用 bound struct 的 Startup/Cleanup，
@@ -351,6 +353,8 @@ func main() {
 			// socket Stop 只做监听器/连接断开且不等待，先同步执行以保证在返回
 			// Wails 前已向所有 opsctl 客户端广播关闭。
 			opsctlB.Cleanup()
+			// 打开的 Pod 终端要在容器里结束它们的 shell：这一步有界地同步等待，没有会话时立即返回。
+			k8s.EndExecSessions(k8sB, k8sExecCleanupTimeout)
 			// 用户已经确认退出后不再等待任何资源自然收尾。各 Cleanup 只负责
 			// 广播取消和主动断开；放到独立 goroutine，避免异常远端或第三方库
 			// 的 Close 阻塞 Wails 的进程退出。

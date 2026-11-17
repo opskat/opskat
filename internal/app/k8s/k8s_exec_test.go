@@ -793,3 +793,59 @@ func TestK8sExecWithoutShRunsUntrackedAndLogsWhyItCannotClean(t *testing.T) {
 	assert.NotEmpty(t, warned[0].ContextMap()["reason"])
 	assert.Empty(t, srv.Commands(false), "an untracked shell cannot be found, so no cleanup exec is sent")
 }
+
+func TestEndExecSessionsWaitsForShellCleanup(t *testing.T) {
+	logs := observeLogs(t)
+	srv := k8stest.NewExecServer(t, false, nil)
+	k, rec, c := execTestBinder(t, srv.Host())
+	a, err := k.startExec(c, execReq("web-0"))
+	require.NoError(t, err)
+	b, err := k.startExec(c, execReq("web-1"))
+	require.NoError(t, err)
+
+	assert.True(t, EndExecSessions(k, 10*time.Second))
+	// 返回时清理已经发出并完成，不需要再等。
+	assert.Len(t, srv.Commands(false), 2)
+	assert.Len(t, logs.FilterMessage("k8s exec shell cleanup done").All(), 2)
+	rec.waitEnd(t, a)
+	rec.waitEnd(t, b)
+	done := logs.FilterMessage("k8s exec sessions ended on quit").All()
+	require.Len(t, done, 1)
+	assert.EqualValues(t, 2, done[0].ContextMap()["sessions"])
+	assert.Equal(t, false, done[0].ContextMap()["timedOut"])
+}
+
+func TestEndExecSessionsGivesUpAtTheBound(t *testing.T) {
+	logs := observeLogs(t)
+	srv := k8stest.NewExecServer(t, false, nil)
+	release := make(chan struct{})
+	srv.RunNonTTY = func(s *k8stest.ExecSession) int {
+		<-release
+		return 0
+	}
+	t.Cleanup(func() { close(release) })
+	k, _, c := execTestBinder(t, srv.Host())
+	_, err := k.startExec(c, execReq("web-0"))
+	require.NoError(t, err)
+
+	started := time.Now()
+	assert.False(t, EndExecSessions(k, 200*time.Millisecond))
+	elapsed := time.Since(started)
+	assert.GreaterOrEqual(t, elapsed, 200*time.Millisecond)
+	assert.Less(t, elapsed, 3*time.Second)
+	done := logs.FilterMessage("k8s exec sessions ended on quit").All()
+	require.Len(t, done, 1)
+	assert.Equal(t, true, done[0].ContextMap()["timedOut"])
+}
+
+func TestEndExecSessionsWithoutSessionsReturnsImmediately(t *testing.T) {
+	logs := observeLogs(t)
+	srv := k8stest.NewExecServer(t, false, nil)
+	k, _, _ := execTestBinder(t, srv.Host())
+
+	started := time.Now()
+	assert.True(t, EndExecSessions(k, 10*time.Second))
+	assert.Less(t, time.Since(started), time.Second)
+	assert.Empty(t, srv.Commands(false))
+	assert.Empty(t, logs.FilterMessage("k8s exec sessions ended on quit").All())
+}
