@@ -8,24 +8,31 @@ import (
 	"github.com/opskat/opskat/pkg/dbdriver"
 )
 
-// RunScript 运行 SQL 文件：方言给出脚本词法（ScriptDialect）时，经 dbdriver.RunScript 的编排在会话的
-// 一条独立连接上逐条执行；没给出的以 dbdriver.ErrUnsupported 拒绝，不拿连接、不执行任何语句。
+// RunScript 运行 SQL 文件：经 dbdriver.RunScript 的编排，用 ScriptRunner 的钩子在会话的一条独立连接上
+// 逐条执行；方言不能运行 SQL 文件时以 dbdriver.ErrUnsupported 拒绝，不拿连接、不执行任何语句。
 func (s *Session) RunScript(ctx context.Context, req dbdriver.ScriptRequest) (*dbdriver.ScriptResult, error) {
-	dialect, ok := s.dialect.(ScriptDialect)
+	runner, err := s.ScriptRunner()
+	if err != nil {
+		return nil, err
+	}
+	return dbdriver.RunScript(ctx, req, runner)
+}
+
+// ScriptRunner 是会话运行 SQL 文件的两个钩子（RunScript 交给编排的就是它；扩展 SDK 经它在 ABI 上提供
+// 运行 SQL 文件，编排在宿主里）：切分按方言（scriptSplitter），执行在从连接池里拿出的一条连接上。方言
+// 既不实现 dbdriver.ScriptSplitter 也不实现 ScriptDialect 时以 dbdriver.ErrUnsupported 拒绝。
+func (s *Session) ScriptRunner() (dbdriver.ScriptRunner, error) {
+	splitter, ok := scriptSplitter(s.dialect)
 	if !ok {
 		return nil, fmt.Errorf("%w: this driver does not run SQL files", dbdriver.ErrUnsupported)
 	}
-	return dbdriver.RunScript(ctx, req, scriptRunner{session: s, syntax: dialect.ScriptSyntax()})
+	return scriptRunner{ScriptSplitter: splitter, session: s}, nil
 }
 
 // scriptRunner 是 database/sql 之上的驱动运行 SQL 文件的两个钩子。
 type scriptRunner struct {
+	dbdriver.ScriptSplitter
 	session *Session
-	syntax  ScriptSyntax
-}
-
-func (r scriptRunner) SplitScript(_ context.Context, chunk dbdriver.ScriptChunk) (*dbdriver.ScriptSplit, error) {
-	return SplitScript(r.syntax, chunk)
 }
 
 // OpenScriptExecutor 从连接池里拿出一条连接，整个文件都在它上面执行。库名写进连接串的驱动，会话的

@@ -43,9 +43,20 @@ type DumpObjectWriter interface {
 	DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error
 }
 
-// Dump 写出转储：方言实现了 DumpDialect 时经 dbdriver.Dump 的编排写，否则以 ErrUnsupported 拒绝，
-// 不拿连接、不写任何内容。
+// Dump 写出转储：经 dbdriver.Dump 的编排，用 DumpDialect 给出的写法；方言不能转储时以 ErrUnsupported
+// 拒绝，不拿连接、不写任何内容。
 func (s *Session) Dump(ctx context.Context, req dbdriver.DumpRequest) (*dbdriver.DumpResult, error) {
+	dialect, err := s.DumpDialect()
+	if err != nil {
+		return nil, err
+	}
+	return dbdriver.Dump(ctx, req, s, dialect)
+}
+
+// DumpDialect 是会话在转储里的部分（Dump 交给编排的就是它；扩展 SDK 经它在 ABI 上提供转储，编排在
+// 宿主里）：默认写法加上方言的钩子。方言没有实现 DumpDialect（或 Tables）时以 dbdriver.ErrUnsupported
+// 拒绝。
+func (s *Session) DumpDialect() (dbdriver.DumpDialect, error) {
 	dialect, ok := s.dialect.(DumpDialect)
 	if !ok {
 		return nil, fmt.Errorf("%w: this driver does not dump SQL files", dbdriver.ErrUnsupported)
@@ -54,7 +65,7 @@ func (s *Session) Dump(ctx context.Context, req dbdriver.DumpRequest) (*dbdriver
 	if err != nil {
 		return nil, err
 	}
-	return dbdriver.Dump(ctx, req, s, newDumpDialect(s, tables, dialect))
+	return newDumpDialect(s, tables, dialect), nil
 }
 
 // dumpDialect 是 database/sql 之上的驱动在转储里的部分：默认写法加上方言的钩子。

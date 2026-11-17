@@ -1,6 +1,7 @@
 package sqldb
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"strings"
@@ -9,10 +10,30 @@ import (
 )
 
 // ScriptDialect 是方言里「SQL 文件怎么切成语句」：实现它的方言才能运行 SQL 文件，切分按它给出的
-// 词法（ScriptSyntax）由 SplitScript 完成；没实现的，Session.RunScript 以 dbdriver.ErrUnsupported
-// 拒绝。驱动描述的 dbdriver.CapRunSQLFile 与它一起声明。
+// 词法（ScriptSyntax）由 SplitScript 完成。词法说不清的方言（如 Oracle：PL/SQL 块以单独一行 / 结束）
+// 改为自己实现 dbdriver.ScriptSplitter，实现了它就按它切分、不再用 ScriptSyntax。两者都没实现的，
+// Session.RunScript 以 dbdriver.ErrUnsupported 拒绝。驱动描述的 dbdriver.CapRunSQLFile 与它们一起声明。
 type ScriptDialect interface {
 	ScriptSyntax() ScriptSyntax
+}
+
+// scriptSplitter 是方言的切分：方言自己实现的 dbdriver.ScriptSplitter，否则是按它的 ScriptSyntax 的
+// SplitScript；都没有时 ok 为假。
+func scriptSplitter(dialect Dialect) (splitter dbdriver.ScriptSplitter, ok bool) {
+	if splitter, ok := dialect.(dbdriver.ScriptSplitter); ok {
+		return splitter, true
+	}
+	if syntax, ok := dialect.(ScriptDialect); ok {
+		return syntaxSplitter(syntax.ScriptSyntax()), true
+	}
+	return nil, false
+}
+
+// syntaxSplitter 按词法切分（SplitScript）。
+type syntaxSplitter ScriptSyntax
+
+func (s syntaxSplitter) SplitScript(_ context.Context, chunk dbdriver.ScriptChunk) (*dbdriver.ScriptSplit, error) {
+	return SplitScript(ScriptSyntax(s), chunk)
 }
 
 // ScriptSyntax 是方言脚本的词法：哪些记号里的结束符不结束语句。所有方言都认 -- 到行尾的注释与

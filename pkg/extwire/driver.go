@@ -65,11 +65,49 @@ const (
 	DriverOpClassifyStatements = "classifyStatements"
 )
 
+// DriverScriptHostABI is the hostABI the operations below arrived in: the hooks of
+// running a SQL file (dbdriver.ScriptRunner) and of dumping one
+// (dbdriver.DumpDialect). The host reads, orders, reports progress, stops and
+// writes the file; the guest only answers the hooks. The host sends them only to
+// a driver declaring dbdriver.CapRunSQLFile / dbdriver.CapDumpSQL, which only an
+// extension built for this hostABI or a later one may declare.
+const DriverScriptHostABI = "1.1"
+
+// Operations of DriverScriptHostABI. Each request is the dbdriver type named,
+// whole, in DriverArgs.Request, and each answer the dbdriver type named, so a field
+// either side adds to them travels without a change here.
+const (
+	// DriverOpSplitScript splits a chunk of a SQL file (session operation;
+	// dbdriver.ScriptChunk → dbdriver.ScriptSplit). The state the split carries over
+	// is the guest's own and comes back as is.
+	DriverOpSplitScript = "splitScript"
+	// DriverOpOpenScriptExecutor takes one database connection of the session for a
+	// run, on DriverArgs.Database (session operation; answers
+	// DriverScriptExecutorOpened). The host keeps the run on this instance until
+	// it closes the executor, so every statement of the file runs on that one
+	// connection.
+	DriverOpOpenScriptExecutor = "openScriptExecutor"
+	// DriverOpExecuteScriptBatch runs a batch of statements in order on executor
+	// DriverArgs.Executor (dbdriver.ScriptBatch → dbdriver.BatchResult; a failing
+	// connection answers both what ran and the error). The host checks for Stop
+	// before each batch: a batch is one call.
+	DriverOpExecuteScriptBatch = "executeScriptBatch"
+	// DriverOpCloseScriptExecutor gives executor DriverArgs.Executor's connection
+	// back. Closing the session closes its executors too.
+	DriverOpCloseScriptExecutor = "closeScriptExecutor"
+	// DriverOpDumpFile answers the parts of a dump written once per file (session
+	// operation; dbdriver.DumpScope → dbdriver.DumpFileScript).
+	DriverOpDumpFile = "dumpFile"
+	// DriverOpDumpObject answers the statements of one object of a dump (session
+	// operation; dbdriver.DumpObject → dbdriver.DumpObjectScript).
+	DriverOpDumpObject = "dumpObject"
+)
+
 // DriverCall is the input of DriverFunction.
 type DriverCall struct {
 	Op string `json:"op"`
 	// Session is the session the operation runs on (every operation but DriverOpOpen,
-	// DriverOpClassifyStatements and the cursor / writer ones).
+	// DriverOpClassifyStatements and the cursor / writer / SQL file executor ones).
 	Session uint64     `json:"session,omitempty"`
 	Args    DriverArgs `json:"args"`
 	// ReleaseWriters are row statement writers of this instance the host no longer
@@ -114,10 +152,31 @@ type DriverArgs struct {
 	// BatchRequest, RowStatementsRequest, ...).
 	Request json.RawMessage `json:"request,omitempty"`
 
-	Stream uint64 `json:"stream,omitempty"`
-	Writer uint64 `json:"writer,omitempty"`
+	Stream   uint64 `json:"stream,omitempty"`
+	Writer   uint64 `json:"writer,omitempty"`
+	Executor uint64 `json:"executor,omitempty"`
 	// Max is how many rows DriverOpStreamNext may answer.
 	Max int `json:"max,omitempty"`
+	// AcceptBytes tells DriverOpStreamNext the host reads DriverStreamPage.Bytes: only
+	// then does the guest send raw byte values as bytes. A host that does not set it
+	// gets them as before.
+	AcceptBytes bool `json:"acceptBytes,omitempty"`
+	// RowBytes are the values of the DriverOpRowStatements request's rows that are
+	// bytes ([]byte, such as a dump's binary column values). JSON carries them as
+	// base64 strings; the guest decodes each back into the bytes.
+	RowBytes []DriverRowValue `json:"rowBytes,omitempty"`
+}
+
+// DriverRowValue names the value of column Column in row Row of a request's rows.
+type DriverRowValue struct {
+	Row    int    `json:"row"`
+	Column string `json:"column"`
+}
+
+// DriverCell names the value at Rows[Row][Column] of a DriverStreamPage.
+type DriverCell struct {
+	Row    int `json:"row"`
+	Column int `json:"column"`
 }
 
 // DriverReply is the output of DriverFunction. Result and Error may both be set: a batch
@@ -153,9 +212,20 @@ type DriverStreamOpened struct {
 type DriverStreamPage struct {
 	Rows [][]any `json:"rows"`
 	Done bool    `json:"done"`
+	// Bytes are the cells holding raw bytes — a string that is not valid UTF-8,
+	// which is how the database/sql drivers read a binary column — sent as bytes
+	// (base64 in JSON) when the host asked with DriverArgs.AcceptBytes. JSON would
+	// otherwise replace their invalid bytes; the host turns each back into the
+	// string of those bytes.
+	Bytes []DriverCell `json:"bytes,omitempty"`
 }
 
 // DriverWriterPrepared answers DriverOpPrepareRowStatements.
 type DriverWriterPrepared struct {
 	Writer uint64 `json:"writer"`
+}
+
+// DriverScriptExecutorOpened answers DriverOpOpenScriptExecutor.
+type DriverScriptExecutorOpened struct {
+	Executor uint64 `json:"executor"`
 }

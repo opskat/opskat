@@ -1,7 +1,7 @@
 {
   "name": "fixture-dbdriver",
   "version": "1.0.0",
-  "hostABI": "1.0",
+  "hostABI": "1.1",
   "backend": {
     "runtime": "wasm",
     "binary": "main.wasm"

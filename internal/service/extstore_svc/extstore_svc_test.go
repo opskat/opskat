@@ -210,7 +210,7 @@ func TestRefreshVerifiedIndex(t *testing.T) {
 		require.NotNil(t, c.Unavailable)
 		assert.Equal(t, ReasonHostABI, c.Unavailable.Reason)
 		assert.Equal(t, "2.5", c.Unavailable.HostABI)
-		assert.Equal(t, []string{"1.0"}, c.Unavailable.SupportedHostABIs)
+		assert.Equal(t, []string{"1.0", "1.1"}, c.Unavailable.SupportedHostABIs)
 	})
 
 	t.Run("unknown source type: unavailable, update OpsKat", func(t *testing.T) {

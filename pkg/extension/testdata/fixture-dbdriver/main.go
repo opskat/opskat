@@ -36,7 +36,9 @@ func main() {}
 // SHOW KERBEROS TICKET probe it); its manifest grants permissions.kerberos for
 // the ticket and network.assetEndpoint / assetRoute for the reach path. It splits
 // and classifies statements itself (split.go), probing the host first when asked
-// to (classifyProbing).
+// to (classifyProbing). Built for hostABI 1.1 — the default build — it also runs
+// SQL files and dumps them (abi11.go); built with the fixture_hostabi10 tag it is
+// the same driver as an extension built for hostABI 1.0 (abi10.go).
 var descriptor = dbdriver.Descriptor{
 	ID:          "fixturedb",
 	Name:        "FixtureDB",
@@ -50,10 +52,10 @@ var descriptor = dbdriver.Descriptor{
 		}},
 		{Tab: dbdriver.TabTLS, Fields: []dbdriver.FormField{dbdriver.FieldTLSCert}},
 	},
-	Capabilities: []dbdriver.Capability{
+	Capabilities: append([]dbdriver.Capability{
 		dbdriver.CapViews, dbdriver.CapViewDDL, dbdriver.CapCreateTable, dbdriver.CapDropTable,
 		dbdriver.CapTruncateTable, dbdriver.CapExportSQL, dbdriver.CapClassifyStatements,
-	},
+	}, abiCapabilities...),
 }
 
 func init() {
@@ -183,8 +185,15 @@ func (d dialect) TableDDL(ctx context.Context, conn *sql.Conn, database, table s
 	return ddl, err
 }
 
+// Literals writes the bytes of a blob column as X'<hex>'; everything else as a
+// quoted string.
 func (dialect) Literals(context.Context, *sql.Conn) (sqldb.Literals, error) {
-	return sqldb.Literals{}, nil
+	return sqldb.Literals{
+		Binary: func(columnType string) (string, string, bool) {
+			return "X'", "'", columnType == "blob"
+		},
+		BinaryBytesOnly: true,
+	}, nil
 }
 
 func (dialect) UpdateRowSQL(tableRef, set, where string) string {

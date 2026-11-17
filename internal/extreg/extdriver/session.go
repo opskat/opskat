@@ -10,6 +10,7 @@ package extdriver
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -151,6 +152,7 @@ func (d *Drivers) OpenDriverSession(ctx context.Context, id string, req dbdriver
 	s := &driverSession{
 		drivers: d, driver: id, open: req, live: 1,
 		columns: desc.ColumnFeatures(), indexes: desc.IndexEditing,
+		runsScripts: desc.Supports(dbdriver.CapRunSQLFile), dumps: desc.Supports(dbdriver.CapDumpSQL),
 	}
 	s.scope = d.driverScope(id, &s.open)
 	inst, err := s.login(ctx)
@@ -558,6 +560,12 @@ type driverSession struct {
 	// and alter table requests (nil: it declares no index editing). Same rule: a
 	// request that changes indexes is refused here and not sent.
 	indexes *dbdriver.IndexEditing
+	// runsScripts and dumps are whether the driver declares running SQL files
+	// (dbdriver.CapRunSQLFile) and dumping them (dbdriver.CapDumpSQL). Only an
+	// extension built for extwire.DriverScriptHostABI may (the host checks it at
+	// load); for any other the host refuses both without calling into the guest,
+	// which has no operations for them.
+	runsScripts, dumps bool
 
 	mu sync.Mutex
 	// live counts the instances that exist, busy or idle, or are logging in.
@@ -959,18 +967,158 @@ func (s *driverSession) ExecuteBatch(ctx context.Context, req dbdriver.BatchRequ
 	return forwardRequest[*dbdriver.BatchResult](ctx, s, extwire.DriverOpExecuteBatch, extwire.DriverArgs{}, req)
 }
 
-// RunScript: host ABI 1.0 has no wire operations for running SQL files, and the host
-// refuses extension drivers that declare dbdriver.CapRunSQLFile, so it is refused
-// without calling into the guest.
-func (s *driverSession) RunScript(context.Context, dbdriver.ScriptRequest) (*dbdriver.ScriptResult, error) {
-	return nil, fmt.Errorf("%w: extension drivers cannot run SQL files", dbdriver.ErrUnsupported)
+// RunScript runs a SQL file the way a built-in driver's session does
+// (dbdriver.RunScript): the host checks the encoding, reads the file, numbers the
+// statements, counts and stops; the guest splits each chunk with the driver's
+// splitter and runs each batch of statements, one call per batch, on the
+// executor it opened — one database connection, on one instance the run holds
+// until it ends, so a setting a statement makes holds for the statements after
+// it. A driver that does not declare dbdriver.CapRunSQLFile is refused without a
+// call.
+func (s *driverSession) RunScript(ctx context.Context, req dbdriver.ScriptRequest) (*dbdriver.ScriptResult, error) {
+	if !s.runsScripts {
+		return nil, fmt.Errorf("%w: database driver %q of extension %q does not run SQL files", dbdriver.ErrUnsupported, s.driver, s.drivers.name())
+	}
+	return dbdriver.RunScript(ctx, req, &driverScriptRunner{session: s})
 }
 
-// Dump: host ABI 1.0 has no wire operations for a driver's dump dialect, and the
-// host refuses extension drivers that declare dbdriver.CapDumpSQL, so it is refused
-// without calling into the guest.
-func (s *driverSession) Dump(context.Context, dbdriver.DumpRequest) (*dbdriver.DumpResult, error) {
-	return nil, fmt.Errorf("%w: extension drivers cannot dump SQL files", dbdriver.ErrUnsupported)
+// driverScriptRunner is the guest's half of a SQL file run (dbdriver.ScriptRunner).
+type driverScriptRunner struct {
+	session *driverSession
+	// inst is the instance the run's executor holds, once it is open: the splits go
+	// to it too rather than taking another instance.
+	inst *driverInstance
+}
+
+func (r *driverScriptRunner) SplitScript(ctx context.Context, chunk dbdriver.ScriptChunk) (*dbdriver.ScriptSplit, error) {
+	raw, err := json.Marshal(chunk)
+	if err != nil {
+		return nil, fmt.Errorf("marshal database driver %s request: %w", extwire.DriverOpSplitScript, err)
+	}
+	var split *dbdriver.ScriptSplit
+	call := func(inst *driverInstance) error {
+		return inst.call(ctx, extwire.DriverCall{Op: extwire.DriverOpSplitScript, Session: inst.session, Args: extwire.DriverArgs{Request: raw}}, &split)
+	}
+	if r.inst != nil {
+		err = call(r.inst)
+	} else {
+		err = r.session.on(ctx, call)
+	}
+	if err == nil && split == nil {
+		err = fmt.Errorf("database driver %q of extension %q answered %s with no split", r.session.driver, r.session.drivers.name(), extwire.DriverOpSplitScript)
+	}
+	return split, err
+}
+
+// OpenScriptExecutor takes an instance of the session for the run and opens the
+// executor — the run's database connection — in it. The instance is the run's
+// until the executor is closed.
+func (r *driverScriptRunner) OpenScriptExecutor(ctx context.Context, database string) (dbdriver.ScriptExecutor, error) {
+	inst, err := r.session.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var opened extwire.DriverScriptExecutorOpened
+	err = inst.call(ctx, extwire.DriverCall{Op: extwire.DriverOpOpenScriptExecutor, Session: inst.session, Args: extwire.DriverArgs{
+		Database: database,
+	}}, &opened)
+	if err != nil {
+		r.session.release(inst)
+		return nil, err
+	}
+	r.inst = inst
+	logger.Ctx(ctx).Info("extension database driver SQL file executor opened",
+		zap.String("extension", r.session.drivers.name()), zap.String("driver", r.session.driver), zap.String("invocation", inst.inst.ID()))
+	return &driverScriptExecutor{runner: r, id: opened.Executor}, nil
+}
+
+// driverScriptExecutor is the run's executor in the guest, on the instance the
+// run holds.
+type driverScriptExecutor struct {
+	runner *driverScriptRunner
+	id     uint64
+}
+
+// ExecuteScriptBatch sends the batch as one call. Stop cannot reach into a call
+// (dbdriver.ScriptBatch.Stop is not serialized), so it is honored at the batch: a
+// batch handed over once it is closed runs nothing.
+func (e *driverScriptExecutor) ExecuteScriptBatch(ctx context.Context, batch dbdriver.ScriptBatch) (*dbdriver.BatchResult, error) {
+	select {
+	case <-batch.Stop:
+		return &dbdriver.BatchResult{Executed: []dbdriver.BatchStatement{}}, nil
+	default:
+	}
+	raw, err := json.Marshal(batch)
+	if err != nil {
+		return nil, fmt.Errorf("marshal database driver %s request: %w", extwire.DriverOpExecuteScriptBatch, err)
+	}
+	var result *dbdriver.BatchResult
+	err = e.runner.inst.call(ctx, extwire.DriverCall{Op: extwire.DriverOpExecuteScriptBatch, Args: extwire.DriverArgs{
+		Executor: e.id, Request: raw,
+	}}, &result)
+	if err == nil && result == nil {
+		err = fmt.Errorf("database driver %q of extension %q answered %s with no result",
+			e.runner.session.driver, e.runner.session.drivers.name(), extwire.DriverOpExecuteScriptBatch)
+	}
+	return result, err
+}
+
+// Close closes the executor in the guest — bounded by the driver close timeout,
+// and not by the run's ctx, which may have ended — and gives the run's instance
+// back. An instance left unusable (a canceled call, a guest fault) has nothing
+// to close in: it is discarded with its connections, the run's among them.
+func (e *driverScriptExecutor) Close() error {
+	s, inst := e.runner.session, e.runner.inst
+	defer s.release(inst)
+	if !inst.usable() {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.drivers.closeTimeout)
+	defer cancel()
+	err := inst.call(ctx, extwire.DriverCall{Op: extwire.DriverOpCloseScriptExecutor, Args: extwire.DriverArgs{Executor: e.id}}, nil)
+	if err != nil {
+		logger.Default().Warn("close extension database driver SQL file executor",
+			zap.String("extension", s.drivers.name()), zap.String("driver", s.driver), zap.String("invocation", inst.inst.ID()), zap.Error(err))
+		return err
+	}
+	logger.Default().Info("extension database driver SQL file executor closed",
+		zap.String("extension", s.drivers.name()), zap.String("driver", s.driver), zap.String("invocation", inst.inst.ID()))
+	return nil
+}
+
+// Dump writes a dump the way a built-in driver's session does (dbdriver.Dump):
+// the host lists the objects, orders them, reads the definitions and the rows
+// through the session's operations, reports progress and writes the file; the
+// guest answers the driver's dump dialect, once per file and once per object. A
+// driver that does not declare dbdriver.CapDumpSQL is refused without a call.
+func (s *driverSession) Dump(ctx context.Context, req dbdriver.DumpRequest) (*dbdriver.DumpResult, error) {
+	if !s.dumps {
+		return nil, fmt.Errorf("%w: database driver %q of extension %q does not dump SQL files", dbdriver.ErrUnsupported, s.driver, s.drivers.name())
+	}
+	return dbdriver.Dump(ctx, req, s, driverDumpDialect{session: s})
+}
+
+// driverDumpDialect is the driver's dump dialect in the guest (dbdriver.DumpDialect).
+type driverDumpDialect struct{ session *driverSession }
+
+func (d driverDumpDialect) DumpFile(ctx context.Context, scope dbdriver.DumpScope) (*dbdriver.DumpFileScript, error) {
+	script, err := forwardRequest[*dbdriver.DumpFileScript](ctx, d.session, extwire.DriverOpDumpFile, extwire.DriverArgs{}, scope)
+	if err == nil && script == nil {
+		err = d.noAnswer(extwire.DriverOpDumpFile)
+	}
+	return script, err
+}
+
+func (d driverDumpDialect) DumpObject(ctx context.Context, object dbdriver.DumpObject) (*dbdriver.DumpObjectScript, error) {
+	script, err := forwardRequest[*dbdriver.DumpObjectScript](ctx, d.session, extwire.DriverOpDumpObject, extwire.DriverArgs{}, object)
+	if err == nil && script == nil {
+		err = d.noAnswer(extwire.DriverOpDumpObject)
+	}
+	return script, err
+}
+
+func (d driverDumpDialect) noAnswer(op string) error {
+	return fmt.Errorf("database driver %q of extension %q answered %s with no script", d.session.driver, d.session.drivers.name(), op)
 }
 
 // Close closes the session: its idle instances now, side by side — the session in
@@ -1031,12 +1179,37 @@ func (r *driverStream) Next() bool {
 		}
 		var page extwire.DriverStreamPage
 		r.err = r.inst.call(r.ctx, extwire.DriverCall{Op: extwire.DriverOpStreamNext, Args: extwire.DriverArgs{
-			Stream: r.id, Max: driverStreamRows,
+			Stream: r.id, Max: driverStreamRows, AcceptBytes: true,
 		}}, &page)
+		if err := restoreBytes(&page); err != nil {
+			r.err = errors.Join(r.err, err)
+			return false
+		}
 		r.rows, r.done = page.Rows, page.Done
 	}
 	r.row, r.rows = r.rows[0], r.rows[1:]
 	return true
+}
+
+// restoreBytes turns each cell page.Bytes names back from the base64 it traveled
+// as into the string of its raw bytes, the value a built-in driver's cursor gives
+// for a binary column.
+func restoreBytes(page *extwire.DriverStreamPage) error {
+	for _, cell := range page.Bytes {
+		if cell.Row < 0 || cell.Row >= len(page.Rows) || cell.Column < 0 || cell.Column >= len(page.Rows[cell.Row]) {
+			return fmt.Errorf("database driver cursor named bytes at row %d column %d outside its page", cell.Row, cell.Column)
+		}
+		text, ok := page.Rows[cell.Row][cell.Column].(string)
+		if !ok {
+			return fmt.Errorf("database driver cursor named bytes at row %d column %d that are not base64 text", cell.Row, cell.Column)
+		}
+		raw, err := base64.StdEncoding.DecodeString(text)
+		if err != nil {
+			return fmt.Errorf("database driver cursor bytes at row %d column %d: %w", cell.Row, cell.Column, err)
+		}
+		page.Rows[cell.Row][cell.Column] = string(raw)
+	}
+	return nil
 }
 
 func (r *driverStream) Row() []any { return r.row }
@@ -1085,9 +1258,18 @@ func (w *driverRowWriter) RowStatements(req dbdriver.RowStatementsRequest) ([]st
 	if err != nil {
 		return nil, fmt.Errorf("marshal row statements request: %w", err)
 	}
+	// JSON writes bytes as base64 text: name them so the guest turns them back.
+	var rowBytes []extwire.DriverRowValue
+	for i, row := range req.Rows {
+		for column, value := range row {
+			if _, ok := value.([]byte); ok {
+				rowBytes = append(rowBytes, extwire.DriverRowValue{Row: i, Column: column})
+			}
+		}
+	}
 	var out []string
 	err = w.inst.call(w.inst.drivers.life, extwire.DriverCall{Op: extwire.DriverOpRowStatements, Args: extwire.DriverArgs{
-		Writer: w.id, Request: raw,
+		Writer: w.id, Request: raw, RowBytes: rowBytes,
 	}}, &out)
 	return out, err
 }

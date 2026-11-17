@@ -138,3 +138,23 @@ func TestDumpHooksAdjustTheDefaultsOnAConnection(t *testing.T) {
 	assert.NotNil(t, conns[0])
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// DumpDialect 是 Dump 用的方言部分，扩展 SDK 经它在 ABI 上提供转储：方言没有实现 DumpDialect 时以
+// ErrUnsupported 拒绝、不拿连接；实现了的给出 Dump 写的那些语句。
+func TestDumpDialectIsTheSessionsDumpWriting(t *testing.T) {
+	session, mock := newTablesSession(t)
+	_, err := session.DumpDialect()
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	dialect, err := NewSession(db, plainDumpDialect{}).DumpDialect()
+	require.NoError(t, err)
+	table, err := dialect.DumpObject(context.Background(), dbdriver.DumpObject{Database: "db", Kind: dbdriver.DumpTable, Name: "t", Definition: "CREATE TABLE t (id int)"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"DROP TABLE IF EXISTS <t>;"}, table.Drop)
+	assert.Equal(t, []string{"CREATE TABLE t (id int);"}, table.Definition)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

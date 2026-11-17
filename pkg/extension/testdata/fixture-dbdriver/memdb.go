@@ -74,11 +74,21 @@ var tables = map[string]map[string]*memTable{
 			row:     func(i int) []driver.Value { return []driver.Value{int64(i + 1)} },
 			ddl:     "CREATE TABLE [app].[series] ([n] int PRIMARY KEY)",
 		},
+		// blobs holds the values JSON cannot carry as they are: an integer past
+		// 2^53 and bytes that are not UTF-8.
+		"blobs": {
+			columns: []memColumn{{name: "id", typ: "bigint", primaryKey: true}, {name: "data", typ: "blob", nullable: true}},
+			size:    1,
+			row: func(int) []driver.Value {
+				return []driver.Value{int64(9007199254740993), []byte{0x00, 0xff, 0xfe, 'o', 'k'}}
+			},
+			ddl: "CREATE TABLE [app].[blobs] ([id] bigint PRIMARY KEY, [data] blob)",
+		},
 	},
 }
 
 // tableOrder is the order SHOW TABLES lists them in.
-var tableOrder = []string{"users", "series"}
+var tableOrder = []string{"users", "series", "blobs"}
 
 var views = map[string]string{"v_users": "SELECT [id] FROM [app].[users]"}
 
@@ -202,10 +212,22 @@ func (c *conn) ExecContext(_ context.Context, statement string, args []driver.Na
 	if err := c.roundTrip("EXEC " + statement); err != nil {
 		return nil, err
 	}
-	// The catalog is read-only: every statement that is not a query fails, which is
-	// also what the conformance suite's failing batch statement needs.
-	return nil, fmt.Errorf("fixturedb: syntax error near %q", statement)
+	// The catalog is read-only. A write a SQL file or a dump is made of is
+	// accepted and does nothing here — the far end saw it, which is what a test
+	// reads back; a query runs as a query; anything else fails, which is also what
+	// the conformance suite's failing statement needs.
+	if acceptedWrite.MatchString(statement) {
+		return driver.RowsAffected(0), nil
+	}
+	rows, err := c.query(strings.TrimSpace(statement))
+	if err != nil {
+		return nil, fmt.Errorf("fixturedb: syntax error near %q", statement)
+	}
+	return driver.RowsAffected(0), rows.Close()
 }
+
+// acceptedWrite are the statements memdb accepts without changing anything.
+var acceptedWrite = regexp.MustCompile(`(?i)^\s*(SET|CREATE|DROP|INSERT)\s`)
 
 type tx struct{}
 

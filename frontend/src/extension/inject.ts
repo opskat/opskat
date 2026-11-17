@@ -15,7 +15,7 @@ import type { ExtAPI } from "./types";
 // whenever hostABI changes, and keep this in sync by hand — there is no generated
 // binding for a Go string constant into the frontend bundle (pkg/extension's
 // TestHostUIVersionMirrorsHostABI fails when the two drift).
-export const HOST_UI_VERSION = "1.0";
+export const HOST_UI_VERSION = "1.1";
 
 const hostUI: HostUI = {
   version: HOST_UI_VERSION,
