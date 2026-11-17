@@ -4,15 +4,38 @@
 -- Asset: prod-mssql
 -- Database: appdb
 -- Content: structure and data
+-- Options: indexes, foreign keys, views, functions and procedures, triggers, drop statements
 -- Date: 2026-11-17 08:00:00 +00:00
 --
 -- File encoding: UTF-8
 
 -- ----------------------------
--- Table structure for dbo.orders
+-- Drop existing objects
 -- ----------------------------
+IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_orders_customer' AND parent_object_id = OBJECT_ID(N'[dbo].[orders]')) ALTER TABLE [dbo].[orders] DROP CONSTRAINT [FK_orders_customer];
+GO
+IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_customers_parent' AND parent_object_id = OBJECT_ID(N'[sales].[customers]')) ALTER TABLE [sales].[customers] DROP CONSTRAINT [FK_customers_parent];
+GO
+DROP TRIGGER IF EXISTS [tr_ddl] ON DATABASE;
+GO
+DROP TRIGGER IF EXISTS [sales].[tr_customers_upd];
+GO
+DROP PROCEDURE IF EXISTS [sales].[p_rename];
+GO
+DROP FUNCTION IF EXISTS [dbo].[f_net];
+GO
+DROP VIEW IF EXISTS [dbo].[v_named];
+GO
+DROP VIEW IF EXISTS [sales].[v_names];
+GO
+DROP TABLE IF EXISTS [sales].[customers];
+GO
 DROP TABLE IF EXISTS [dbo].[orders];
 GO
+
+-- ----------------------------
+-- Table structure for dbo.orders
+-- ----------------------------
 CREATE TABLE [dbo].[orders] (
   [id] bigint NOT NULL,
   [customer_id] int NOT NULL,
@@ -33,8 +56,6 @@ GO
 -- ----------------------------
 -- Table structure for sales.customers
 -- ----------------------------
-DROP TABLE IF EXISTS [sales].[customers];
-GO
 CREATE TABLE [sales].[customers] (
   [id] int IDENTITY(100, 5) NOT NULL,
   [parent_id] int NULL,
@@ -69,16 +90,12 @@ GO
 -- ----------------------------
 -- View structure for sales.v_names
 -- ----------------------------
-DROP VIEW IF EXISTS [sales].[v_names];
-GO
 CREATE VIEW sales.v_names AS SELECT id, name FROM sales.customers
 GO
 
 -- ----------------------------
 -- View structure for dbo.v_named
 -- ----------------------------
-DROP VIEW IF EXISTS [dbo].[v_named];
-GO
 CREATE VIEW dbo.v_named AS
 SELECT o.id, n.name FROM dbo.orders o JOIN sales.v_names n ON n.id = o.customer_id
 GO
@@ -86,8 +103,6 @@ GO
 -- ----------------------------
 -- Function structure for dbo.f_net
 -- ----------------------------
-DROP FUNCTION IF EXISTS [dbo].[f_net];
-GO
 CREATE FUNCTION dbo.f_net(@price decimal(18, 4)) RETURNS decimal(18, 4)
 AS
 BEGIN
@@ -98,8 +113,6 @@ GO
 -- ----------------------------
 -- Procedure structure for sales.p_rename
 -- ----------------------------
-DROP PROCEDURE IF EXISTS [sales].[p_rename];
-GO
 CREATE PROCEDURE sales.p_rename @id int, @name nvarchar(100) AS
 UPDATE sales.customers SET name = @name WHERE id = @id;
 GO
@@ -107,8 +120,6 @@ GO
 -- ----------------------------
 -- Trigger structure for sales.tr_customers_upd
 -- ----------------------------
-DROP TRIGGER IF EXISTS [sales].[tr_customers_upd];
-GO
 CREATE TRIGGER sales.tr_customers_upd ON sales.customers AFTER UPDATE AS SET NOCOUNT ON;
 GO
 DISABLE TRIGGER [sales].[tr_customers_upd] ON [sales].[customers];
@@ -117,8 +128,6 @@ GO
 -- ----------------------------
 -- Trigger structure for tr_ddl
 -- ----------------------------
-DROP TRIGGER IF EXISTS [tr_ddl] ON DATABASE;
-GO
 CREATE TRIGGER tr_ddl ON DATABASE FOR CREATE_TABLE AS PRINT 'ddl'
 GO
 DISABLE TRIGGER [tr_ddl] ON DATABASE;

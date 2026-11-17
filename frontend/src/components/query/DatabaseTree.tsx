@@ -1017,6 +1017,7 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
           target={dumpTarget.target}
           withData={dumpTarget.withData}
           canDumpData={canDumpData}
+          canDisableForeignKeyChecks={!!driverDescriptor?.dumpDisablesForeignKeyChecks}
         />
       )}
 

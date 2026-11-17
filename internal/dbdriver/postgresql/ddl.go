@@ -153,6 +153,11 @@ func (s ownedSequence) createSQL() string {
 }
 
 func (d dialect) TableDDL(ctx context.Context, conn *sql.Conn, _, table string) (string, error) {
+	return d.tableDDL(ctx, conn, table, true)
+}
+
+// tableDDL 是 TableDDL 的建表语句；withIndexes 为假时不含不由约束建出的索引（转储不勾「包含索引」时）。
+func (d dialect) tableDDL(ctx context.Context, conn *sql.Conn, table string, withIndexes bool) (string, error) {
 	schema, tbl := splitSchemaTable(table)
 	rel, err := queryDDLRelation(ctx, conn, schema, tbl)
 	if err != nil {
@@ -178,9 +183,11 @@ func (d dialect) TableDDL(ctx context.Context, conn *sql.Conn, _, table string) 
 	if err != nil {
 		return "", err
 	}
-	indexes, err := sqldb.QueryNames(ctx, conn, tableIndexesQuery, schema, tbl)
-	if err != nil {
-		return "", err
+	var indexes []string
+	if withIndexes {
+		if indexes, err = sqldb.QueryNames(ctx, conn, tableIndexesQuery, schema, tbl); err != nil {
+			return "", err
+		}
 	}
 
 	var statements []string

@@ -81,3 +81,29 @@ func TestHostABI11DriverMayDeclareTheScriptCapabilities(t *testing.T) {
 	assert.True(t, d.Descriptor().Supports(dbdriver.CapRunSQLFile))
 	assert.True(t, d.Descriptor().Supports(dbdriver.CapDumpSQL))
 }
+
+// A hostABI 1.1 driver that dumps may also declare that its dump files turn
+// foreign key checks off for the session: the registered descriptor carries it,
+// so the dump dialog offers the option. Declared without dumping it is refused.
+func TestHostABI11DriverMayDeclareDumpForeignKeyChecks(t *testing.T) {
+	desc := driverDescriptor("fkdumpdb")
+	desc.Capabilities = []dbdriver.Capability{dbdriver.CapViewDDL, dbdriver.CapDumpSQL}
+	desc.DumpDisablesForeignKeyChecks = true
+	m := driverOnlyManifest("fk-dump-db", desc)
+	m.HostABI = "1.1"
+
+	require.NoError(t, registerManifest(t, m, newFakeDriverPlugin()))
+	d, err := dbregistry.Lookup("fkdumpdb")
+	require.NoError(t, err)
+	assert.True(t, d.Descriptor().DumpDisablesForeignKeyChecks)
+
+	without := driverDescriptor("fknodumpdb")
+	without.DumpDisablesForeignKeyChecks = true
+	m = driverOnlyManifest("fk-no-dump-db", without)
+	m.HostABI = "1.1"
+	err = registerManifest(t, m, newFakeDriverPlugin())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "dumpDisablesForeignKeyChecks")
+	_, err = dbregistry.Lookup("fknodumpdb")
+	require.ErrorIs(t, err, dbregistry.ErrDriverUnavailable)
+}

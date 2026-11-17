@@ -64,6 +64,9 @@ type DumpSQLFileRequest struct {
 	Whole bool `json:"whole"`
 	// WithData 为真时是「结构和数据」，否则是「仅结构」。
 	WithData bool `json:"withData"`
+	// Options 是对话框里其余的导出选项。视图、函数与过程、触发器只在 Whole 时可选；关闭外键检查要驱动声明了
+	// DumpDisablesForeignKeyChecks，且包含外键。
+	Options dbdriver.DumpOptions `json:"options"`
 	// Path 是本机上要写的文件（SelectDumpFile 选出的）。
 	Path string `json:"path"`
 }
@@ -151,7 +154,7 @@ func (q *Query) StartDumpSQLFile(assetID int64, request DumpSQLFileRequest) (str
 	if !request.Whole && len(request.Tables) == 0 {
 		return "", errors.New("没有要转储的表")
 	}
-	assetName, err := checkDumpAllowed(ctx, assetID, request.WithData)
+	assetName, err := checkDumpAllowed(ctx, assetID, request)
 	if err != nil {
 		log.Warn("dump sql file refused", zap.Error(err))
 		return "", err
@@ -171,10 +174,14 @@ func (q *Query) StartDumpSQLFile(assetID int64, request DumpSQLFileRequest) (str
 
 	log = log.With(zap.String("dumpID", dumpID))
 	log.Info("dump sql file start", zap.Int("tables", len(request.Tables)), zap.Bool("whole", request.Whole),
-		zap.String("schema", request.Schema), zap.Bool("withData", request.WithData))
+		zap.String("schema", request.Schema), zap.Bool("withData", request.WithData),
+		zap.Bool("indexes", request.Options.Indexes), zap.Bool("foreignKeys", request.Options.ForeignKeys), zap.Bool("views", request.Options.Views),
+		zap.Bool("routines", request.Options.Routines), zap.Bool("triggers", request.Options.Triggers), zap.Bool("drops", request.Options.Drops),
+		zap.Bool("disableForeignKeyChecks", request.Options.DisableForeignKeyChecks))
 	go q.dumpSQLFile(runCtx, dumpID, log, panel, request.Path, dbdriver.DumpRequest{
 		Database: panel.database, Schema: request.Schema, Tables: request.Tables, WithData: request.WithData, Whole: request.Whole,
-		Header: dbdriver.DumpHeader{Version: configs.Version, Asset: assetName, Time: time.Now()},
+		Options: request.Options,
+		Header:  dbdriver.DumpHeader{Version: configs.Version, Asset: assetName, Time: time.Now()},
 	})
 	return dumpID, nil
 }
@@ -191,9 +198,12 @@ func (q *Query) CancelDumpSQLFile(dumpID string) error {
 	return nil
 }
 
-// checkDumpAllowed 检查资产能不能转储，返回资产名：驱动没有声明转储时不能，要结构和数据而驱动生成不了
-// 行语句时不能。
-func checkDumpAllowed(ctx context.Context, assetID int64, withData bool) (string, error) {
+// checkDumpAllowed 检查资产能不能这样转储，返回资产名：驱动没有声明转储时不能，要结构和数据而驱动生成不了
+// 行语句时不能，要关闭外键检查而驱动不能在会话里关闭时不能；选项彼此不合（见 checkDumpOptions）时也不能。
+func checkDumpAllowed(ctx context.Context, assetID int64, request DumpSQLFileRequest) (string, error) {
+	if err := checkDumpOptions(request); err != nil {
+		return "", err
+	}
 	asset, err := asset_svc.Asset().Get(ctx, assetID)
 	if err != nil {
 		return "", fmt.Errorf("资产不存在: %w", err)
@@ -213,10 +223,26 @@ func checkDumpAllowed(ctx context.Context, assetID int64, withData bool) (string
 	if !desc.Supports(dbdriver.CapDumpSQL) {
 		return "", fmt.Errorf("%w: driver %q does not dump SQL files", dbdriver.ErrUnsupported, cfg.Driver)
 	}
-	if withData && !desc.GeneratesRowStatements() {
+	if request.WithData && !desc.GeneratesRowStatements() {
 		return "", fmt.Errorf("%w: driver %q cannot write rows as statements", dbdriver.ErrUnsupported, cfg.Driver)
 	}
+	if request.Options.DisableForeignKeyChecks && !desc.DumpDisablesForeignKeyChecks {
+		return "", fmt.Errorf("%w: driver %q cannot turn foreign key checks off in a dump file", dbdriver.ErrUnsupported, cfg.Driver)
+	}
 	return asset.Name, nil
+}
+
+// checkDumpOptions 拒绝对话框给不出的选项组合：转储选中的表时没有视图、函数与过程、触发器这几项（选中的视图
+// 照样写），不包含外键时没有关闭外键检查。
+func checkDumpOptions(request DumpSQLFileRequest) error {
+	options := request.Options
+	if !request.Whole && (options.Views || options.Routines || options.Triggers) {
+		return errors.New("只转储选中的表时不能选视图、函数与过程或触发器")
+	}
+	if options.DisableForeignKeyChecks && !options.ForeignKeys {
+		return errors.New("不包含外键时不能选关闭外键检查")
+	}
+	return nil
 }
 
 // dumpSQLFile 是一次转储的 goroutine：写文件，发出进度与终态，释放会话。recover 是这条 goroutine 的

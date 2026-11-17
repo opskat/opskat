@@ -58,6 +58,7 @@
       "dump_sql"
     ],
     "canDisableForeignKeyChecks": true,
+    "dumpDisablesForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": false,
     "createDatabaseOptions": [
       { "key": "charset", "default": "utf8mb4" },
@@ -431,6 +432,7 @@
       "dump_sql"
     ],
     "canDisableForeignKeyChecks": true,
+    "dumpDisablesForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": true,
     "createDatabaseOptions": null,
     "alterTableAttributes": [],

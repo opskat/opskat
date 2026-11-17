@@ -5,7 +5,7 @@ import { useQueryStore } from "../stores/queryStore";
 import { useTabStore } from "../stores/tabStore";
 import { useAssetStore } from "../stores/assetStore";
 import { ListDatabaseObjects, ListTables, SelectDumpFile, StartDumpSQLFile } from "../../wailsjs/go/query/Query";
-import { query_svc } from "../../wailsjs/go/models";
+import { dbdriver, query_svc } from "../../wailsjs/go/models";
 import { BUILTIN_DRIVERS, fakeDriverWith, provideDrivers } from "./dbDriverFixtures";
 
 vi.mock("@/components/CodeEditor", () => ({
@@ -120,7 +120,7 @@ describe("DatabaseTree 的「转储 SQL 文件」", () => {
     fireEvent.click(screen.getByText("query.dumpSqlFileStructureOnlyItem"));
 
     expect(await screen.findByText("query.dumpSqlFileTitle")).toBeInTheDocument();
-    expect(screen.getByRole("combobox")).toHaveTextContent("query.dumpSqlFileStructureOnly");
+    expect(screen.getByRole("checkbox", { name: /query\.dumpSqlFileOptionData\b/ })).not.toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: /query\.exportChooseFile/ }));
     await screen.findByText("/tmp/main.sql");
     fireEvent.click(screen.getByRole("button", { name: /query\.dumpSqlFileStart/ }));
@@ -131,6 +131,15 @@ describe("DatabaseTree 的「转储 SQL 文件」", () => {
         tables: ["users", "orders"],
         whole: false,
         withData: false,
+        options: {
+          indexes: true,
+          foreignKeys: true,
+          views: false,
+          routines: false,
+          triggers: false,
+          drops: false,
+          disableForeignKeyChecks: false,
+        },
         path: "/tmp/main.sql",
       })
     );
@@ -164,6 +173,15 @@ describe("DatabaseTree 的「转储 SQL 文件」", () => {
         tables: [],
         whole: true,
         withData: true,
+        options: {
+          indexes: true,
+          foreignKeys: true,
+          views: true,
+          routines: true,
+          triggers: true,
+          drops: false,
+          disableForeignKeyChecks: false,
+        },
         path: "/tmp/main.sql",
       })
     );
@@ -189,9 +207,43 @@ describe("DatabaseTree 的「转储 SQL 文件」", () => {
         tables: [],
         whole: true,
         withData: false,
+        options: {
+          indexes: true,
+          foreignKeys: true,
+          views: true,
+          routines: true,
+          triggers: true,
+          drops: false,
+          disableForeignKeyChecks: false,
+        },
         path: "/tmp/sales.sql",
       })
     );
+  });
+
+  it("「关闭外键检查」按驱动描述的 dumpDisablesForeignKeyChecks 可选,不按驱动名判断", async () => {
+    const checkbox = () => screen.getByRole("checkbox", { name: /query\.dumpSqlFileOptionForeignKeyChecks\b/ });
+    provideDrivers([
+      new dbdriver.Descriptor({
+        ...fakeDriverWith(["view_ddl", "export_sql", "dump_sql"]),
+        dumpDisablesForeignKeyChecks: true,
+      }),
+    ]);
+    await renderTree("fakedb");
+    openSubmenu(dumpTrigger("users")!);
+    fireEvent.click(screen.getByText("query.dumpSqlFileStructureOnlyItem"));
+    expect(await screen.findByText("query.dumpSqlFileTitle")).toBeInTheDocument();
+    expect(checkbox()).toBeEnabled();
+    expect(checkbox()).toBeChecked();
+
+    cleanup();
+    provideDrivers([fakeDriverWith(["view_ddl", "export_sql", "dump_sql"])]);
+    await renderTree("fakedb");
+    openSubmenu(dumpTrigger("users")!);
+    fireEvent.click(screen.getByText("query.dumpSqlFileStructureOnlyItem"));
+    expect(await screen.findByText("query.dumpSqlFileTitle")).toBeInTheDocument();
+    expect(checkbox()).toBeDisabled();
+    expect(checkbox()).not.toBeChecked();
   });
 
   it("库节点与 schema 节点在驱动不能转储时没有这一项", async () => {
@@ -240,6 +292,6 @@ describe("DatabaseTree 的「转储 SQL 文件」", () => {
     await waitFor(() => expect(document.activeElement).toHaveTextContent("query.dumpSqlFileStructureAndDataItem"));
     fireEvent.keyDown(document.activeElement!, { key: "Enter" });
     expect(await screen.findByText("query.dumpSqlFileTitle")).toBeInTheDocument();
-    expect(screen.getByRole("combobox")).toHaveTextContent("query.dumpSqlFileStructureAndData");
+    expect(screen.getByRole("checkbox", { name: /query\.dumpSqlFileOptionData\b/ })).toBeChecked();
   });
 });

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
@@ -12,7 +13,7 @@ import (
 
 // abiCapabilities are what host ABI 1.1 lets an extension driver declare: running
 // SQL files and dumping them. The dialect implements both: its own splitting
-// (SplitScript) and the dump writing (DumpSyntax).
+// (SplitScript) and the dump writing (DumpSyntax, DumpObject).
 var abiCapabilities = []dbdriver.Capability{dbdriver.CapRunSQLFile, dbdriver.CapDumpSQL}
 
 // scriptSyntax is fixturedb's SQL file syntax: single-quoted strings, -- and /* */
@@ -47,4 +48,20 @@ func (dialect) SplitScript(_ context.Context, chunk dbdriver.ScriptChunk) (*dbdr
 // object is written the sqldb default way.
 func (dialect) DumpSyntax() sqldb.DumpSyntax {
 	return sqldb.DumpSyntax{Opening: []string{"SET FIXTURE_CHECKS = 0;"}, Closing: []string{"SET FIXTURE_CHECKS = 1;"}}
+}
+
+var _ sqldb.DumpObjectWriter = dialect{}
+
+// usersIndex is fixturedb's one secondary index, on users.name. The catalog does
+// not list it; the dump writes it after the table.
+const usersIndex = "CREATE INDEX [users_name] ON [users] ([name]);"
+
+// DumpObject writes usersIndex after the users table only when the dump includes
+// indexes (dbdriver.DumpOptions.Indexes): the export options the host was given
+// reach the guest's dump dialect with each object.
+func (dialect) DumpObject(_ context.Context, _ *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error {
+	if object.Kind == dbdriver.DumpTable && object.Name == "users" && object.Options.Indexes {
+		script.Definition = append(script.Definition, usersIndex)
+	}
+	return nil
 }

@@ -108,12 +108,20 @@ type driverEntry struct {
 //     (the definitions are what TableDDL and ObjectSource give) and, for structure
 //     and data, a capability that generates row statements (dbdriver.CapExportSQL):
 //     the dialect implements sqldb.DumpDialect, whose DumpSyntax is what every file
-//     starts and ends with; sqldb.DumpFileWriter and sqldb.DumpObjectWriter
-//     optionally change the file's and each object's statements on a connection
-//     (drop statements for a database without IF EXISTS, wrapping a definition in
-//     "/", index and foreign key statements, the columns an INSERT writes, ...). The
-//     rows are read with the session's cursor and written with its row statements,
-//     the INSERTs "copy as INSERT" makes, binary values as bytes.
+//     starts and ends with — and, when the database can turn foreign key checks off
+//     for a session, the statements doing so, declared as
+//     dbdriver.Descriptor.DumpDisablesForeignKeyChecks
+//     (sqldb.DumpDisablesForeignKeyChecks); sqldb.DumpFileWriter and
+//     sqldb.DumpObjectWriter optionally change the file's and each object's
+//     statements on a connection (drop statements for a database without IF EXISTS,
+//     wrapping a definition in "/", index and foreign key statements and the
+//     foreign key drops, the columns an INSERT writes, ...). Each object carries the
+//     user's export options (dbdriver.DumpOptions): the dialect writes indexes only
+//     with Options.Indexes and leaves foreign keys inside a definition out without
+//     Options.ForeignKeys; the host decides whether drops and the deferred foreign
+//     keys are written. The rows are read with the session's cursor and written
+//     with its row statements, the INSERTs "copy as INSERT" makes, binary values as
+//     bytes.
 func DatabaseDriver(d dbdriver.Descriptor, open DriverOpen, opts ...DriverOption) {
 	entry := &driverEntry{desc: d, open: open}
 	for _, opt := range opts {

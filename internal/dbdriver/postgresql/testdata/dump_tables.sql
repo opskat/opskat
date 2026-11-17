@@ -4,6 +4,7 @@
 -- Asset: prod-pg
 -- Database: shop
 -- Content: structure only
+-- Options: indexes, foreign keys
 -- Date: 2026-11-17 08:00:00 +00:00
 --
 -- File encoding: UTF-8
@@ -17,7 +18,6 @@ CREATE TYPE "lookup"."Mood" AS ENUM ('ok');
 -- ----------------------------
 -- Table structure for app.notes
 -- ----------------------------
-DROP TABLE IF EXISTS "app"."notes";
 CREATE TABLE "app"."notes" (
   "mood" lookup."Mood"
 );

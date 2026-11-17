@@ -15,7 +15,9 @@ import (
 )
 
 // 转储：PostgreSQL 不能在会话里关闭外键检查，所以外键不在建表语句里（见 TableDDL），在全部表与数据之后用
-// ALTER TABLE ... ADD CONSTRAINT 加上。文件开头关掉函数体检查（函数可以先于它用到的对象建出），建出转储范围里
+// ALTER TABLE ... ADD CONSTRAINT 加上（勾了「包含外键」时）；删除段先用 ALTER TABLE IF EXISTS ... DROP CONSTRAINT
+// IF EXISTS 拆掉要转储的表上的外键，被引用的表才删得掉，最后删枚举类型（都不带 CASCADE）。不勾「包含索引」时
+// 建表语句不含索引。文件开头关掉函数体检查（函数可以先于它用到的对象建出），建出转储范围里
 // public 之外的 schema，接着是枚举类型（整库 / 整个 schema 时是范围里的全部，选中表时是这些表的列用到的）；
 // 每张表的 INSERT 不写生成列，有 GENERATED ALWAYS 身份列的表加 OVERRIDING SYSTEM VALUE，列拥有的序列在
 // 全部对象之后用 setval 同步到当前值；视图给出 pg_depend 里的依赖；函数与过程按每个重载删除、建出；触发器的
@@ -109,6 +111,7 @@ func (dialect) DumpFile(ctx context.Context, conn *sql.Conn, scope dbdriver.Dump
 			return err
 		}
 		script.Types = append(script.Types, statement)
+		script.DropTypes = append(script.DropTypes, "DROP TYPE IF EXISTS "+enum.ref()+";")
 	}
 	script.Opening = append(script.Opening, "SET check_function_bodies = false;")
 	delete(schemas, "public")
@@ -125,6 +128,8 @@ type enumType struct {
 	labels       []string
 }
 
+func (e enumType) ref() string { return quoteIdent(e.schema) + "." + quoteIdent(e.name) }
+
 func (e enumType) createSQL() (string, error) {
 	labels := make([]string, len(e.labels))
 	for i, label := range e.labels {
@@ -134,7 +139,7 @@ func (e enumType) createSQL() (string, error) {
 		}
 		labels[i] = literal
 	}
-	return fmt.Sprintf("CREATE TYPE %s.%s AS ENUM (%s);", quoteIdent(e.schema), quoteIdent(e.name), strings.Join(labels, ", ")), nil
+	return fmt.Sprintf("CREATE TYPE %s AS ENUM (%s);", e.ref(), strings.Join(labels, ", ")), nil
 }
 
 func queryEnums(ctx context.Context, conn *sql.Conn, query string, arg string) ([]enumType, error) {
@@ -192,14 +197,20 @@ func (dialect) DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.D
 // routineKeywords 是删除函数与过程的关键字。
 var routineKeywords = map[string]string{dbdriver.ObjectFunction: "FUNCTION", dbdriver.ObjectProcedure: "PROCEDURE"}
 
-// dumpTable 补上表的外键（全部数据之后加上）；有数据时还有 INSERT 的列、身份列的写法与序列的同步。
+// dumpTable 补上表的外键（全部数据之后加上、删除段里先拆掉），不包含索引时换成不含索引的建表语句；有数据时
+// 还有 INSERT 的列、身份列的写法与序列的同步。
 func dumpTable(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, schema, name string, script *dbdriver.DumpObjectScript) error {
 	tableRef := quoteIdent(schema) + "." + quoteIdent(name)
-	foreignKeys, err := addForeignKeys(ctx, conn, schema, name, tableRef)
-	if err != nil {
+	if !object.Options.Indexes {
+		definition, err := dialect{}.tableDDL(ctx, conn, object.Name, false)
+		if err != nil {
+			return sqldb.Wrap("table definition", err)
+		}
+		script.Definition = []string{sqldb.TerminateStatement(definition)}
+	}
+	if err := foreignKeys(ctx, conn, schema, name, tableRef, script); err != nil {
 		return sqldb.Wrap("foreign keys", err)
 	}
-	script.ForeignKeys = foreignKeys
 	if !object.WithData {
 		return nil
 	}
@@ -214,22 +225,23 @@ func dumpTable(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, 
 	return nil
 }
 
-// addForeignKeys 是给表加上它的外键的语句（pg_get_constraintdef 的原文）。
-func addForeignKeys(ctx context.Context, conn *sql.Conn, schema, name, tableRef string) ([]string, error) {
+// foreignKeys 给出表上的外键：加上它们的语句（pg_get_constraintdef 的原文）与存在则拆掉它们的语句。
+func foreignKeys(ctx context.Context, conn *sql.Conn, schema, name, tableRef string, script *dbdriver.DumpObjectScript) error {
 	rows, err := conn.QueryContext(ctx, dumpForeignKeysQuery, schema, name)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer func() { _ = rows.Close() }()
-	var statements []string
 	for rows.Next() {
 		var constraint, definition string
 		if err := rows.Scan(&constraint, &definition); err != nil {
-			return nil, err
+			return err
 		}
-		statements = append(statements, "ALTER TABLE "+tableRef+" ADD CONSTRAINT "+quoteIdent(constraint)+" "+definition+";")
+		script.ForeignKeys = append(script.ForeignKeys, "ALTER TABLE "+tableRef+" ADD CONSTRAINT "+quoteIdent(constraint)+" "+definition+";")
+		script.DropForeignKeys = append(script.DropForeignKeys,
+			"ALTER TABLE IF EXISTS "+tableRef+" DROP CONSTRAINT IF EXISTS "+quoteIdent(constraint)+";")
 	}
-	return statements, rows.Err()
+	return rows.Err()
 }
 
 // dataColumns 是 INSERT 写入的列（不含生成列）；有 GENERATED ALWAYS 身份列时，INSERT 要 OVERRIDING SYSTEM VALUE

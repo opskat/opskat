@@ -47,12 +47,13 @@ func TestFakeSessionDumpsThroughTheOrchestration(t *testing.T) {
 	var out bytes.Buffer
 
 	result, err := session.Dump(context.Background(), dbdriver.DumpRequest{
-		Database: "app", Tables: []string{"users"}, WithData: true, Writer: &out,
+		Database: "app", Tables: []string{"users"}, WithData: true, Options: dbdriver.DumpOptions{Drops: true}, Writer: &out,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, dbdriver.DumpResult{Objects: 1, Rows: 3, Bytes: int64(out.Len())}, *result)
 	assert.Contains(t, out.String(), "FAKE DUMP BEGIN;\n")
-	assert.Contains(t, out.String(), "FAKE DROP table users;\nCREATE TABLE users (id int, name text);\n")
+	assert.Contains(t, out.String(), "-- Drop existing objects\n-- ----------------------------\nFAKE DROP table users;\n")
+	assert.Contains(t, out.String(), "-- Table structure for users\n-- ----------------------------\nCREATE TABLE users (id int, name text);\n")
 	assert.Contains(t, out.String(), "FAKE INSERT ROW 3 OF app.users\n")
 	assert.Empty(t, session.Statements())
 }

@@ -12,8 +12,8 @@ import (
 // DumpDialect 是方言里「转储写成什么样」里整份文件不变的部分。实现 Dialect 的类型同时实现它（以及
 // Tables）才提供转储（Session.Dump）；没实现的方言以 dbdriver.ErrUnsupported 拒绝。
 //
-// 什么钩子都不实现时得到的是默认写法：没有文件开头结尾与批分隔符，每个对象之前按种类写
-// DROP TABLE / VIEW / FUNCTION / PROCEDURE / TRIGGER IF EXISTS（引用是 Tables.TableRef("", 名字)：空库名给不带库名的引用，文件导入哪个库就写哪个库），定义是会话给出的
+// 什么钩子都不实现时得到的是默认写法：没有文件开头结尾与批分隔符，每个对象的删除按种类写
+// DROP TABLE / VIEW / FUNCTION / PROCEDURE / TRIGGER IF EXISTS（编排只在勾了「写入删除语句」时写进删除段）（引用是 Tables.TableRef("", 名字)：空库名给不带库名的引用，文件导入哪个库就写哪个库），定义是会话给出的
 // 原文补上分号，INSERT 写读出的全部列，外键留在定义里，视图不给依赖（按列出的次序写）。要改的方言再实现
 // DumpFileWriter / DumpObjectWriter。
 type DumpDialect interface {
@@ -22,9 +22,15 @@ type DumpDialect interface {
 
 // DumpSyntax 是整份转储里不随库变化的写法。
 type DumpSyntax struct {
-	// Opening / Closing 是文件开头 / 结尾的语句（含结束符），如关闭 / 恢复外键检查。
+	// Opening / Closing 是文件开头 / 结尾的语句（含结束符），如 SET NAMES。
 	Opening []string
 	Closing []string
+	// DisableForeignKeyChecks / EnableForeignKeyChecks 是在一个会话里关闭 / 恢复外键检查的语句：勾了「关闭
+	// 外键检查」时写在 Opening 之后 / Closing 之前。给出它们即声明驱动描述的 DumpDisablesForeignKeyChecks
+	// （DumpDisablesForeignKeyChecks）；不能在会话里关闭的库不给，外键要放在全部数据之后、删除段先删外键
+	// （DumpObjectWriter 给出 ForeignKeys 与 DropForeignKeys）。
+	DisableForeignKeyChecks []string
+	EnableForeignKeyChecks  []string
 	// BatchTerminator 非空时在每条结构语句之后、每一块数据之后单独写一行（SQL Server 的 GO）。
 	BatchTerminator string
 }
@@ -37,10 +43,19 @@ type DumpFileWriter interface {
 
 // DumpObjectWriter 是可选的钩子：在一条连接上改一个对象的默认写法（script 已填好默认的 Drop 与
 // Definition）。能改的见 dbdriver.DumpObjectScript：存在则删除的写法（没有 IF EXISTS 的库），定义的
-// 包装（DELIMITER、/）与附属定义（索引），INSERT 的列（去掉生成列），数据前后的开关（IDENTITY_INSERT），
-// 挪到全部数据之后的外键（定义里就要去掉它们），数据之后的收尾（setval），以及视图依赖的对象（DependsOn）。
+// 包装（DELIMITER、/）与附属定义（索引，只在 object.Options.Indexes 时写），INSERT 的列（去掉生成列），数据
+// 前后的开关（IDENTITY_INSERT），挪到全部数据之后的外键与删除段里先删的外键（不能在会话里关闭外键检查的
+// 库；定义里就要去掉它们），留在定义里的外键（object.Options.ForeignKeys 不勾时去掉），数据之后的收尾
+// （setval），以及视图依赖的对象（DependsOn）。删除语句与挪走的外键总是给出，写不写由编排按选项决定。
 type DumpObjectWriter interface {
 	DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error
+}
+
+// DumpDisablesForeignKeyChecks 报告方言的转储能在会话里关闭外键检查（DumpSyntax 给出了关闭的语句），即
+// 驱动描述的 DumpDisablesForeignKeyChecks。不能转储的方言没有。
+func DumpDisablesForeignKeyChecks(dialect Dialect) bool {
+	dump, ok := dialect.(DumpDialect)
+	return ok && len(dump.DumpSyntax().DisableForeignKeyChecks) > 0
 }
 
 // Dump 写出转储：经 dbdriver.Dump 的编排，用 DumpDialect 给出的写法；方言不能转储时以 ErrUnsupported
@@ -82,6 +97,7 @@ func newDumpDialect(s *Session, tables Tables, dialect DumpDialect) dumpDialect 
 func (d dumpDialect) DumpFile(ctx context.Context, scope dbdriver.DumpScope) (*dbdriver.DumpFileScript, error) {
 	script := &dbdriver.DumpFileScript{
 		Opening: d.syntax.Opening, Closing: d.syntax.Closing, BatchTerminator: d.syntax.BatchTerminator,
+		DisableForeignKeyChecks: d.syntax.DisableForeignKeyChecks, EnableForeignKeyChecks: d.syntax.EnableForeignKeyChecks,
 	}
 	hook, ok := d.session.dialect.(DumpFileWriter)
 	if !ok {

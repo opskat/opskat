@@ -5,6 +5,7 @@
 -- Database: shop
 -- Schema: app
 -- Content: structure only
+-- Options: indexes, foreign keys, views, functions and procedures, triggers
 -- Date: 2026-11-17 08:00:00 +00:00
 --
 -- File encoding: UTF-8
@@ -17,7 +18,6 @@ CREATE TYPE "app"."state" AS ENUM ();
 -- ----------------------------
 -- Table structure for app.notes
 -- ----------------------------
-DROP TABLE IF EXISTS "app"."notes";
 CREATE TABLE "app"."notes" (
   "state" app.state
 );

@@ -72,6 +72,9 @@ IF NOT UPDATE([visits])
   (9007199254740993, 100, 12.3456, 2, 0xFF00FE80C3), (1, 105, 0, 3, NULL), (2, 105, 99999999999999.9999, 1, 0x)`,
 }
 
+// structureOptions 是全部结构选项（SQL Server 不能在会话里关闭外键检查，不写删除语句）。
+var structureOptions = dbdriver.DumpOptions{Indexes: true, ForeignKeys: true, Views: true, Routines: true, Triggers: true}
+
 // 往返：把样例库整库转储（结构和数据），在另一个名字的空库（预先建好 sales schema）上运行这个文件，两边的列、
 // 约束、索引、外键、IDENTITY 的当前值、视图 / 函数 / 过程 / 触发器的原文与状态、每张表的行数与数据校验和都一样，
 // 两边再插一行得到的 IDENTITY 值也一样。
@@ -92,10 +95,11 @@ func TestIntegrationDumpRestoresIntoAnotherDatabase(t *testing.T) {
 	ctx := context.Background()
 	var file bytes.Buffer
 	dumped, err := newSession(sourceDB).Dump(ctx, dbdriver.DumpRequest{
-		Database: source, Whole: true, WithData: true, Writer: &file,
+		Database: source, Whole: true, WithData: true, Writer: &file, Options: structureOptions,
 		Header: dbdriver.DumpHeader{Version: "test", Asset: "mssql", Time: time.Now()},
 	})
 	require.NoError(t, err)
+	assert.NotContains(t, file.String(), "DROP", "without the drop option the file has no drop statement at all")
 	assert.Equal(t, 8, dumped.Objects)
 	assert.EqualValues(t, 5, dumped.Rows)
 
@@ -217,4 +221,50 @@ func queryLines(t *testing.T, db *sql.DB, query string, args ...any) []string {
 	require.NoError(t, rows.Err())
 	slices.Sort(lines)
 	return lines
+}
+
+// 覆盖还原：勾了「写入删除语句」整库转储，再把文件运行回源库本身——库里还有全部数据、外键（含自引用与 ON DELETE
+// CASCADE）、依赖另一个视图的视图、DML 与库级触发器。删除段先拆掉各表的外键（只在外键还在时），再删触发器、过程与
+// 函数、视图、表，每条语句都成功；结构、IDENTITY 当前值、模块原文与状态、每张表的数据都和转储之前一样。同一个文件
+// 运行到一个空库（预先建好 sales schema）也成功：外键与对象不存在时删除段什么也不做。
+func TestIntegrationDumpOverwritesTheOriginalDatabase(t *testing.T) {
+	master := openDDLDatabase(t, "master")
+	suffix := time.Now().UnixNano()
+	source, empty := fmt.Sprintf("opskat_dump_ovr_%d", suffix), fmt.Sprintf("opskat_dump_ovr_empty_%d", suffix)
+	createScratchDatabase(t, master, source)
+	createScratchDatabase(t, master, empty)
+	sourceDB, emptyDB := openDDLDatabase(t, source), openDDLDatabase(t, empty)
+	for _, batch := range dumpSourceBatches {
+		_, err := sourceDB.Exec(batch)
+		require.NoError(t, err, batch)
+	}
+	_, err := emptyDB.Exec("CREATE SCHEMA [sales]")
+	require.NoError(t, err)
+	want := databaseSnapshot(t, sourceDB)
+
+	ctx := context.Background()
+	var file bytes.Buffer
+	options := structureOptions
+	options.Drops = true
+	_, err = newSession(sourceDB).Dump(ctx, dbdriver.DumpRequest{
+		Database: source, Whole: true, WithData: true, Writer: &file, Options: options,
+		Header: dbdriver.DumpHeader{Version: "test", Asset: "mssql", Time: time.Now()},
+	})
+	require.NoError(t, err)
+	require.Contains(t, file.String(), "ALTER TABLE [dbo].[orders] DROP CONSTRAINT [FK_orders_customer];")
+	for _, line := range strings.Split(file.String(), "\n") {
+		if strings.HasPrefix(line, "DROP ") || strings.Contains(line, " DROP CONSTRAINT ") {
+			assert.NotContains(t, line, "CASCADE", "drops never cascade")
+		}
+	}
+
+	for name, db := range map[string]*sql.DB{source: sourceDB, empty: emptyDB} {
+		result, err := newSession(db).RunScript(ctx, dbdriver.ScriptRequest{
+			Database: name, Script: bytes.NewReader(file.Bytes()), Size: int64(file.Len()),
+		})
+		require.NoError(t, err)
+		require.Nil(t, result.Failure, "the dump must run into %s: %+v", name, result.Failure)
+		assert.Zero(t, result.Failed)
+		assert.Equal(t, want, databaseSnapshot(t, db), name)
+	}
 }

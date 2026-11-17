@@ -34,6 +34,12 @@ type Descriptor struct {
 	// （Session.ExecuteBatch 的 BatchRequest.DisableForeignKeyChecks）。没声明时导入不显示
 	// 「忽略外键」，会话以 ErrUnsupported 拒绝关闭外键检查。
 	CanDisableForeignKeyChecks bool `json:"canDisableForeignKeyChecks"`
+	// DumpDisablesForeignKeyChecks 声明转储（CapDumpSQL）的文件能在开头关闭外键检查、结尾恢复
+	// （DumpFileScript.DisableForeignKeyChecks / EnableForeignKeyChecks，如 MySQL 的 SET FOREIGN_KEY_CHECKS）。
+	// 与 CanDisableForeignKeyChecks 不同：那是导入在执行期间按表关闭，这是一个会话里全局关闭。没声明时转储
+	// 对话框的「关闭外键检查」置灰，宿主拒绝这个选项；外键要在全部数据之后加上，删除段先删外键。只与
+	// CapDumpSQL 一起声明；sqldb 的方言在 DumpSyntax 里给出这两段语句即声明（sqldb.DumpDisablesForeignKeyChecks）。
+	DumpDisablesForeignKeyChecks bool `json:"dumpDisablesForeignKeyChecks,omitempty"`
 	// LocatesRowWithoutPrimaryKey 声明表格编辑（CapGridEdit）在表没有主键时也能精确定位要改 / 删
 	// 的那一行（PostgreSQL 的 (tableoid, ctid)、SQLite 的 rowid），而不只是在原值相同的几行里取一行。声明了，
 	// 表格不显示「无主键」提示。
@@ -210,6 +216,9 @@ func (d Descriptor) Validate() error {
 		if err := d.ColumnTypes.validate(); err != nil {
 			return fmt.Errorf("driver %q: %w", d.ID, err)
 		}
+	}
+	if d.DumpDisablesForeignKeyChecks && !d.Supports(CapDumpSQL) {
+		return fmt.Errorf("driver %q: dumpDisablesForeignKeyChecks is declared without capability %q, the only feature that uses it", d.ID, CapDumpSQL)
 	}
 	if d.AutoIncrementNewTablesOnly && !d.AutoIncrement {
 		return fmt.Errorf("driver %q: auto-increment limited to new tables is declared without auto-increment", d.ID)

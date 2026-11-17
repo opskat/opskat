@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DumpSqlFileDialog, DUMP_SQL_FILE_EVENT, type DumpSqlFileEvent } from "@/components/query/DumpSqlFileDialog";
 import { CancelDumpSQLFile, SelectDumpFile, StartDumpSQLFile } from "../../wailsjs/go/query/Query";
@@ -42,10 +42,24 @@ function renderDialog(props: Partial<React.ComponentProps<typeof DumpSqlFileDial
       target={{ kind: "tables", tables: ["users", "orders"] }}
       withData
       canDumpData
+      canDisableForeignKeyChecks
       {...props}
     />
   );
 }
+
+/** 默认的导出选项(转储选中的表、驱动能关闭外键检查时)。 */
+const defaultOptions = {
+  indexes: true,
+  foreignKeys: true,
+  views: false,
+  routines: false,
+  triggers: false,
+  drops: false,
+  disableForeignKeyChecks: true,
+};
+
+const option = (key: string) => screen.getByRole("checkbox", { name: new RegExp(`query\\.${key}\\b`) });
 
 const chooseButton = () => screen.getByRole("button", { name: /query\.exportChooseFile/ });
 const startButton = () => screen.getByRole("button", { name: /query\.dumpSqlFileStart/ });
@@ -86,7 +100,7 @@ describe("DumpSqlFileDialog", () => {
   it("names the source, offers <table>.sql for one table and only starts once a location is chosen", async () => {
     renderDialog({ target: { kind: "tables", tables: ["users"] }, withData: false });
     expect(screen.getByText("query.dumpSqlFileDesc demo-sqlite / main users")).toBeInTheDocument();
-    expect(screen.getByText("query.dumpSqlFileNote")).toBeInTheDocument();
+    expect(screen.getByText("query.dumpSqlFileNoteNoDrops")).toBeInTheDocument();
     expect(startButton()).toBeDisabled();
 
     await chooseLocation("/tmp/users.sql");
@@ -100,6 +114,7 @@ describe("DumpSqlFileDialog", () => {
         tables: ["users"],
         whole: false,
         withData: false,
+        options: defaultOptions,
         path: "/tmp/users.sql",
       })
     );
@@ -127,6 +142,7 @@ describe("DumpSqlFileDialog", () => {
         tables: [],
         whole: true,
         withData: true,
+        options: { ...defaultOptions, views: true, routines: true, triggers: true },
         path: "/tmp/main.sql",
       })
     );
@@ -150,16 +166,112 @@ describe("DumpSqlFileDialog", () => {
         tables: [],
         whole: true,
         withData: false,
+        options: { ...defaultOptions, views: true, routines: true, triggers: true },
         path: "/tmp/sales.sql",
       })
     );
   });
 
-  it("starts with the content picked from the menu and leaves out structure and data when the driver can't write rows", async () => {
-    renderDialog({ withData: false, canDumpData: false });
-    expect(screen.getByRole("combobox")).toHaveTextContent("query.dumpSqlFileStructureOnly");
-    await userEvent.click(screen.getByRole("combobox"));
-    expect(screen.queryByRole("option", { name: "query.dumpSqlFileStructureAndData" })).not.toBeInTheDocument();
+  it("starts 「export data」 from the menu item and greys it out unchecked when the driver can't write rows", () => {
+    renderDialog({ withData: false });
+    expect(option("dumpSqlFileOptionData")).not.toBeChecked();
+    cleanup();
+    renderDialog({ withData: true });
+    expect(option("dumpSqlFileOptionData")).toBeChecked();
+    cleanup();
+    renderDialog({ withData: true, canDumpData: false });
+    expect(option("dumpSqlFileOptionData")).not.toBeChecked();
+    expect(option("dumpSqlFileOptionData")).toBeDisabled();
+  });
+
+  it("defaults: indexes and foreign keys checked, DROP unchecked, FK checks checked where the driver can turn them off", () => {
+    renderDialog({ target: { kind: "database" } });
+    for (const key of [
+      "dumpSqlFileOptionIndexes",
+      "dumpSqlFileOptionForeignKeys",
+      "dumpSqlFileOptionViews",
+      "dumpSqlFileOptionRoutines",
+      "dumpSqlFileOptionTriggers",
+      "dumpSqlFileOptionForeignKeyChecks",
+    ]) {
+      expect(option(key)).toBeChecked();
+      expect(option(key)).toBeEnabled();
+    }
+    expect(option("dumpSqlFileOptionDrops")).not.toBeChecked();
+    expect(screen.queryByText("query.dumpSqlFileNoForeignKeyChecksHint")).not.toBeInTheDocument();
+  });
+
+  it("selected tables: views, functions / procedures and triggers are greyed out unchecked with the reason", () => {
+    renderDialog();
+    for (const key of ["dumpSqlFileOptionViews", "dumpSqlFileOptionRoutines", "dumpSqlFileOptionTriggers"]) {
+      expect(option(key)).not.toBeChecked();
+      expect(option(key)).toBeDisabled();
+    }
+    expect(screen.getAllByText("query.dumpSqlFileOnlyWholeHint")).toHaveLength(3);
+  });
+
+  it("a driver that can't turn foreign key checks off: the option is greyed out unchecked with the reason and isn't sent", async () => {
+    renderDialog({ canDisableForeignKeyChecks: false });
+    expect(option("dumpSqlFileOptionForeignKeyChecks")).not.toBeChecked();
+    expect(option("dumpSqlFileOptionForeignKeyChecks")).toBeDisabled();
+    expect(screen.getByText("query.dumpSqlFileNoForeignKeyChecksHint")).toBeInTheDocument();
+    expect(screen.queryByText("query.dumpSqlFileForeignKeyRiskHint")).not.toBeInTheDocument();
+
+    await startDump();
+    expect(StartDumpSQLFile).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ options: { ...defaultOptions, disableForeignKeyChecks: false } })
+    );
+  });
+
+  it("without foreign keys the FK-check option is greyed out unchecked; with them but unchecked it warns", async () => {
+    renderDialog();
+    await userEvent.click(option("dumpSqlFileOptionForeignKeyChecks"));
+    expect(screen.getByText("query.dumpSqlFileForeignKeyRiskHint")).toBeInTheDocument();
+
+    await userEvent.click(option("dumpSqlFileOptionForeignKeyChecks"));
+    await userEvent.click(option("dumpSqlFileOptionForeignKeys"));
+    expect(option("dumpSqlFileOptionForeignKeyChecks")).not.toBeChecked();
+    expect(option("dumpSqlFileOptionForeignKeyChecks")).toBeDisabled();
+    expect(screen.queryByText("query.dumpSqlFileForeignKeyRiskHint")).not.toBeInTheDocument();
+
+    await startDump();
+    expect(StartDumpSQLFile).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ options: { ...defaultOptions, foreignKeys: false, disableForeignKeyChecks: false } })
+    );
+  });
+
+  it("the note switches to the warning about the drop section when DROP statements are on", async () => {
+    renderDialog();
+    expect(screen.getByText("query.dumpSqlFileNoteNoDrops")).toBeInTheDocument();
+    await userEvent.click(option("dumpSqlFileOptionDrops"));
+    expect(screen.queryByText("query.dumpSqlFileNoteNoDrops")).not.toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent("query.dumpSqlFileNoteDrops");
+    expect(screen.getByRole("note").className).toContain("warning");
+
+    await startDump();
+    expect(StartDumpSQLFile).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ options: { ...defaultOptions, drops: true } })
+    );
+  });
+
+  it("the options are reachable with Tab and toggled with Space", async () => {
+    renderDialog({ target: { kind: "database" } });
+    option("dumpSqlFileOptionData").focus();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(option("dumpSqlFileOptionIndexes"));
+    await userEvent.keyboard(" ");
+    expect(option("dumpSqlFileOptionIndexes")).not.toBeChecked();
+    await userEvent.tab();
+    expect(document.activeElement).toBe(option("dumpSqlFileOptionForeignKeys"));
+  });
+
+  it("locks every option while the dump runs", async () => {
+    renderDialog({ target: { kind: "database" } });
+    await startDump();
+    for (const checkbox of screen.getAllByRole("checkbox")) expect(checkbox).toBeDisabled();
   });
 
   it("while running: shows progress and a log line per object, can't be closed, and Cancel cancels the dump", async () => {

@@ -41,7 +41,10 @@ func (hookedDumpDialect) TableRef(database, table string) string {
 }
 
 func (hookedDumpDialect) DumpSyntax() DumpSyntax {
-	return DumpSyntax{Opening: []string{"SET FK = 0;"}, Closing: []string{"SET FK = 1;"}, BatchTerminator: "GO"}
+	return DumpSyntax{
+		Opening: []string{"SET NAMES u;"}, Closing: []string{"RESET;"}, BatchTerminator: "GO",
+		DisableForeignKeyChecks: []string{"SET FK = 0;"}, EnableForeignKeyChecks: []string{"SET FK = 1;"},
+	}
 }
 
 func (d hookedDumpDialect) DumpFile(_ context.Context, conn *sql.Conn, scope dbdriver.DumpScope, script *dbdriver.DumpFileScript) error {
@@ -123,7 +126,8 @@ func TestDumpHooksAdjustTheDefaultsOnAConnection(t *testing.T) {
 	file, err := dialect.DumpFile(ctx, dbdriver.DumpScope{Database: "db", Tables: []string{"t"}})
 	require.NoError(t, err)
 	assert.Equal(t, dbdriver.DumpFileScript{
-		Opening: []string{"SET FK = 0;"}, Types: []string{"CREATE TYPE t_kind;"}, Closing: []string{"SET FK = 1;"}, BatchTerminator: "GO",
+		Opening: []string{"SET NAMES u;"}, Types: []string{"CREATE TYPE t_kind;"}, Closing: []string{"RESET;"}, BatchTerminator: "GO",
+		DisableForeignKeyChecks: []string{"SET FK = 0;"}, EnableForeignKeyChecks: []string{"SET FK = 1;"},
 	}, *file)
 
 	table, err := dialect.DumpObject(ctx, dbdriver.DumpObject{Database: "db", Kind: dbdriver.DumpTable, Name: "t", Definition: "CREATE TABLE t (id int)", WithData: true})
@@ -157,4 +161,12 @@ func TestDumpDialectIsTheSessionsDumpWriting(t *testing.T) {
 	assert.Equal(t, []string{"DROP TABLE IF EXISTS <t>;"}, table.Drop)
 	assert.Equal(t, []string{"CREATE TABLE t (id int);"}, table.Definition)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 驱动描述的 DumpDisablesForeignKeyChecks 从方言得出：DumpSyntax 给出关闭外键检查的语句才算；不能转储的
+// 方言没有。
+func TestDumpDisablesForeignKeyChecksComesFromTheDialect(t *testing.T) {
+	assert.True(t, DumpDisablesForeignKeyChecks(hookedDumpDialect{}))
+	assert.False(t, DumpDisablesForeignKeyChecks(plainDumpDialect{}))
+	assert.False(t, DumpDisablesForeignKeyChecks(tablesDialect{}))
 }

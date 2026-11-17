@@ -12,8 +12,9 @@ import (
 	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
-// 转储：文件以 SET NAMES utf8mb4 与关闭外键检查开头、结尾恢复，外键留在建表语句里。定义都用服务器的原文
-// （SHOW CREATE，DEFINER 保留），去掉对象所在库的限定（视图里的 `库`.`表` 等），文件才能还原进另一个名字
+// 转储：文件以 SET NAMES utf8mb4 开头，勾了「关闭外键检查」时接着关闭、结尾恢复；外键留在建表语句里（能在
+// 会话里关闭外键检查，删除段也不先删外键）。定义都用服务器的原文（SHOW CREATE，DEFINER 保留；不勾「包含索引」
+// 「包含外键」时去掉建表语句里对应的行），去掉对象所在库的限定（视图里的 `库`.`表` 等），文件才能还原进另一个名字
 // 的库；过程、函数、触发器用 DELIMITER ;; 包起来；INSERT 不写生成列；视图给出它用到的对象，编排据此把被
 // 依赖的视图先写。
 var (
@@ -23,8 +24,9 @@ var (
 
 func (dialect) DumpSyntax() sqldb.DumpSyntax {
 	return sqldb.DumpSyntax{
-		Opening: []string{"SET NAMES utf8mb4;", "SET FOREIGN_KEY_CHECKS = 0;"},
-		Closing: []string{"SET FOREIGN_KEY_CHECKS = 1;"},
+		Opening:                 []string{"SET NAMES utf8mb4;"},
+		DisableForeignKeyChecks: []string{"SET FOREIGN_KEY_CHECKS = 0;"},
+		EnableForeignKeyChecks:  []string{"SET FOREIGN_KEY_CHECKS = 1;"},
 	}
 }
 
@@ -32,7 +34,7 @@ func (dialect) DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.D
 	definition, referenced := stripDatabase(object.Definition, object.Database)
 	switch object.Kind {
 	case dbdriver.DumpTable:
-		script.Definition = []string{sqldb.TerminateStatement(definition)}
+		script.Definition = []string{sqldb.TerminateStatement(withoutTableLines(definition, object.Options))}
 		if !object.WithData {
 			return nil
 		}
@@ -49,6 +51,54 @@ func (dialect) DumpObject(ctx context.Context, conn *sql.Conn, object dbdriver.D
 		script.Definition = []string{"DELIMITER ;;", strings.TrimRight(definition, " \t\r\n") + "\n;;", "DELIMITER ;"}
 		return nil
 	}
+}
+
+// withoutTableLines 从 SHOW CREATE TABLE 的原文里去掉没勾的选项对应的行：不包含索引时去掉普通、FULLTEXT、
+// SPATIAL 等索引的 KEY 行（主键与唯一约束留着），不包含外键时去掉 CONSTRAINT ... FOREIGN KEY 行。原文里列与
+// 约束各占一行（以两个空格开头，以逗号分隔），去掉的是最后一行时前一行结尾的逗号也去掉。
+func withoutTableLines(definition string, options dbdriver.DumpOptions) string {
+	if options.Indexes && options.ForeignKeys {
+		return definition
+	}
+	lines := strings.Split(definition, "\n")
+	kept := make([]string, 0, len(lines))
+	last := -1 // kept 里最后一个列或约束行的位置
+	for _, line := range lines {
+		body := strings.HasPrefix(line, "  ")
+		if body && ((!options.Indexes && isIndexLine(line)) || (!options.ForeignKeys && isForeignKeyLine(line))) {
+			continue
+		}
+		if !body && strings.HasPrefix(line, ")") && last >= 0 {
+			kept[last] = strings.TrimSuffix(kept[last], ",")
+		}
+		if body {
+			last = len(kept)
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+// isIndexLine 报告建表语句里的一行是不是索引：KEY、FULLTEXT KEY、SPATIAL KEY 等（PRIMARY KEY 与 UNIQUE KEY 不算）。
+func isIndexLine(line string) bool {
+	words := strings.Fields(line)
+	switch {
+	case len(words) >= 2 && words[0] == "KEY":
+		return true
+	case len(words) >= 3 && words[1] == "KEY":
+		return words[0] != "PRIMARY" && words[0] != "UNIQUE"
+	}
+	return false
+}
+
+// isForeignKeyLine 报告建表语句里的一行是不是外键：CONSTRAINT `名字` FOREIGN KEY (...)。
+func isForeignKeyLine(line string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimLeft(line, " "), "CONSTRAINT ")
+	if !ok || !strings.HasPrefix(rest, "`") {
+		return false
+	}
+	_, end := scanQuoted(rest, 0, '`')
+	return strings.HasPrefix(rest[end:], " FOREIGN KEY ")
 }
 
 // insertableColumns 是 INSERT 写入的列：表的列去掉生成列（VIRTUAL / STORED GENERATED，不能写入）。

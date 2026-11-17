@@ -117,8 +117,9 @@ func expectTableTrigger(mock sqlmock.Sqlmock) {
 		WillReturnRows(triggerStateRows().AddRow(int64(1), true, "sales", "customers"))
 }
 
-// 整库转储（结构和数据）写出的文件：每批之后 GO；每个对象前 DROP ... IF EXISTS（库级 DDL 触发器带 ON
-// DATABASE）；表的 INSERT 不写计算列与 rowversion，uniqueidentifier 写成 GUID、二进制写成 0x…、2^53 以上的
+// 整库转储（结构和数据，除了关闭外键检查全勾）写出的文件：每批之后 GO；删除段先拆掉各表上的外键（SQL Server
+// 不能在会话里关闭外键检查；表不存在时跳过），再按倒序 DROP ... IF EXISTS 触发器（库级 DDL 触发器带 ON
+// DATABASE）、过程、函数、视图（依赖别的视图的先删）、表；表的 INSERT 不写计算列与 rowversion，uniqueidentifier 写成 GUID、二进制写成 0x…、2^53 以上的
 // bigint 不丢位；有 IDENTITY 列的表数据前后开、关 IDENTITY_INSERT；外键（含自引用，禁用的、不受信任的保持原状）
 // 在全部数据之后；视图写服务器的原文、被依赖的在前（不在列出的次序）；函数、过程、触发器写服务器的原文、不补
 // 分号，禁用的触发器建出后再禁用；最后把 IDENTITY 的当前值设回源库的。
@@ -138,17 +139,9 @@ func TestDumpWritesRestorableSQLServerFile(t *testing.T) {
 		AddRow("FK_orders_customer", "sales", "customers", "customer_id", "id", "CASCADE", "NO_ACTION", false, false, false))
 	mock.ExpectQuery(tableIdentitySQL).WithArgs("[dbo].[orders]").WillReturnRows(names("last_value"))
 	mock.ExpectQuery(insertableColumnSQL).WithArgs("[dbo].[orders]").WillReturnRows(names("name", "id", "customer_id", "payload", "guid"))
-	expectColumns(mock, "dbo", "orders", [2]string{"id", "bigint"}, [2]string{"customer_id", "int"}, [2]string{"total", "int"},
-		[2]string{"payload", "varbinary"}, [2]string{"rv", "timestamp"}, [2]string{"guid", "uniqueidentifier"})
-	mock.ExpectQuery("SELECT * FROM [dbo].[orders]").WillReturnRows(
-		sqlmock.NewRows([]string{"id", "customer_id", "total", "payload", "rv", "guid"}).
-			AddRow(int64(9007199254740993), int64(100), int64(200), []byte("\xff\x00\xfe"), []byte("\x00\x00\x00\x00\x00\x00\x07\xd1"), []byte(guidRaw)))
 
 	expectCustomersStructure(mock)
 	mock.ExpectQuery(insertableColumnSQL).WithArgs("[sales].[customers]").WillReturnRows(names("name", "id", "parent_id", "name"))
-	expectColumns(mock, "sales", "customers", [2]string{"id", "int"}, [2]string{"parent_id", "int"}, [2]string{"name", "nvarchar"})
-	mock.ExpectQuery("SELECT * FROM [sales].[customers]").WillReturnRows(sqlmock.NewRows([]string{"id", "parent_id", "name"}).
-		AddRow(int64(100), nil, "multi\nGO\nline O'Reilly").AddRow(int64(105), int64(100), "中文"))
 
 	expectView(mock, "dbo.v_named", "[dbo].[v_named]",
 		"CREATE VIEW dbo.v_named AS\nSELECT o.id, n.name FROM dbo.orders o JOIN sales.v_names n ON n.id = o.customer_id\n",
@@ -166,9 +159,20 @@ func TestDumpWritesRestorableSQLServerFile(t *testing.T) {
 	mock.ExpectQuery(triggerStateSQL).WithArgs("tr_ddl", "[dbo].[tr_ddl]").
 		WillReturnRows(triggerStateRows().AddRow(int64(0), true, nil, nil))
 
+	// 全部定义读完才读行（删除段在文件开头，要用到每个对象的删除语句）。
+	expectColumns(mock, "dbo", "orders", [2]string{"id", "bigint"}, [2]string{"customer_id", "int"}, [2]string{"total", "int"},
+		[2]string{"payload", "varbinary"}, [2]string{"rv", "timestamp"}, [2]string{"guid", "uniqueidentifier"})
+	mock.ExpectQuery("SELECT * FROM [dbo].[orders]").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "customer_id", "total", "payload", "rv", "guid"}).
+			AddRow(int64(9007199254740993), int64(100), int64(200), []byte("\xff\x00\xfe"), []byte("\x00\x00\x00\x00\x00\x00\x07\xd1"), []byte(guidRaw)))
+	expectColumns(mock, "sales", "customers", [2]string{"id", "int"}, [2]string{"parent_id", "int"}, [2]string{"name", "nvarchar"})
+	mock.ExpectQuery("SELECT * FROM [sales].[customers]").WillReturnRows(sqlmock.NewRows([]string{"id", "parent_id", "name"}).
+		AddRow(int64(100), nil, "multi\nGO\nline O'Reilly").AddRow(int64(105), int64(100), "中文"))
+
 	var out strings.Builder
 	result, err := session.Dump(context.Background(), dbdriver.DumpRequest{
 		Database: "appdb", Whole: true, WithData: true, Header: dumpHeader(), Writer: &out,
+		Options: dbdriver.DumpOptions{Indexes: true, ForeignKeys: true, Views: true, Routines: true, Triggers: true, Drops: true},
 	})
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -192,6 +196,7 @@ func TestDumpOfASchemaKeepsToTheSchema(t *testing.T) {
 	var out strings.Builder
 	_, err := session.Dump(context.Background(), dbdriver.DumpRequest{
 		Database: "appdb", Schema: "sales", Whole: true, Header: dumpHeader(), Writer: &out,
+		Options: dbdriver.DumpOptions{Indexes: true, ForeignKeys: true, Views: true, Routines: true, Triggers: true},
 	})
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -229,4 +234,58 @@ func TestDumpStopsAtAViewWithoutADefinition(t *testing.T) {
 	assert.Equal(t, "dbo.v_secret", objectErr.Object)
 	assert.Contains(t, err.Error(), "WITH ENCRYPTION")
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// expectOrdersDDL 预期 dbo.orders 的建表语句的三次查询：主键与一个普通索引。
+func expectOrdersDDL(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(ddlColumnsQuery).WithArgs("[dbo].[orders]").WillReturnRows(ddlColumnRows().
+		AddRow("id", "int", int64(4), int64(10), int64(0), false, nil, nil, nil, nil, nil, false).
+		AddRow("customer_id", "int", int64(4), int64(10), int64(0), true, nil, nil, nil, nil, nil, false))
+	mock.ExpectQuery(ddlIndexesQuery).WithArgs("[dbo].[orders]").WillReturnRows(ddlIndexRows().
+		AddRow("PK_orders", true, false, true, int64(1), nil, "id", false, false).
+		AddRow("IX_orders_customer", false, false, false, int64(2), nil, "customer_id", false, false))
+	mock.ExpectQuery(ddlChecksQuery).WithArgs("[dbo].[orders]").WillReturnRows(ddlCheckRows())
+}
+
+// 选中一张有索引与外键的表：「包含索引」不勾时没有它的 CREATE INDEX（主键随建表语句）；「包含外键」不勾时全部
+// 数据之后没有外键；勾了「写入删除语句」而没勾「包含外键」时，删除段仍先拆它的外键（表不存在时跳过）。
+func TestDumpLeavesOutIndexesAndForeignKeysWhenExcluded(t *testing.T) {
+	dump := func(t *testing.T, options dbdriver.DumpOptions) string {
+		t.Helper()
+		session, mock := newMock(t)
+		mock.ExpectQuery(listViewsSQL).WillReturnRows(names("v"))
+		mock.ExpectQuery(listProceduresSQL).WillReturnRows(names("p"))
+		mock.ExpectQuery(listFunctionsSQL).WillReturnRows(names("f"))
+		mock.ExpectQuery(listTriggersSQL).WillReturnRows(names("t"))
+		expectOrdersDDL(mock)
+		if !options.Indexes {
+			expectOrdersDDL(mock)
+		}
+		mock.ExpectQuery(tableForeignKeysSQL).WithArgs("[dbo].[orders]").WillReturnRows(foreignKeyRows().
+			AddRow("FK_orders_customer", "sales", "customers", "customer_id", "id", "NO_ACTION", "NO_ACTION", false, false, false))
+		mock.ExpectQuery(tableIdentitySQL).WithArgs("[dbo].[orders]").WillReturnRows(names("last_value"))
+		var out strings.Builder
+		_, err := session.Dump(context.Background(), dbdriver.DumpRequest{
+			Database: "appdb", Tables: []string{"dbo.orders"}, Options: options, Header: dumpHeader(), Writer: &out,
+		})
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+		return out.String()
+	}
+	index := "CREATE NONCLUSTERED INDEX [IX_orders_customer] ON [dbo].[orders] ([customer_id]);"
+	foreignKey := "ALTER TABLE [dbo].[orders] WITH CHECK ADD CONSTRAINT [FK_orders_customer] FOREIGN KEY ([customer_id]) REFERENCES [sales].[customers] ([id]);"
+	dropForeignKey := "IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_orders_customer' AND parent_object_id = OBJECT_ID(N'[dbo].[orders]')) " +
+		"ALTER TABLE [dbo].[orders] DROP CONSTRAINT [FK_orders_customer];"
+
+	full := dump(t, dbdriver.DumpOptions{Indexes: true, ForeignKeys: true})
+	assert.Contains(t, full, "  CONSTRAINT [PK_orders] PRIMARY KEY CLUSTERED ([id])\n);\n"+index+"\nGO\n")
+	assert.Contains(t, full, foreignKey+"\nGO\n")
+	assert.NotContains(t, full, "DROP")
+
+	bare := dump(t, dbdriver.DumpOptions{Drops: true})
+	assert.Contains(t, bare, "  CONSTRAINT [PK_orders] PRIMARY KEY CLUSTERED ([id])\n);\nGO\n")
+	assert.NotContains(t, bare, "CREATE NONCLUSTERED INDEX")
+	assert.NotContains(t, bare, "ADD CONSTRAINT")
+	assert.Contains(t, bare, "-- Drop existing objects\n-- ----------------------------\n"+dropForeignKey+"\nGO\nDROP TABLE IF EXISTS [dbo].[orders];\nGO\n")
+	assert.False(t, descriptor.DumpDisablesForeignKeyChecks, "SQL Server cannot turn foreign key checks off for a session")
 }

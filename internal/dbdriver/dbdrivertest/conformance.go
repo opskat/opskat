@@ -1245,6 +1245,9 @@ func descriptorProblems(desc dbdriver.Descriptor) []string {
 	if desc.CanDisableForeignKeyChecks && !desc.Supports(dbdriver.CapImport) {
 		report("canDisableForeignKeyChecks is declared without capability %q, the only feature that uses it", dbdriver.CapImport)
 	}
+	if desc.DumpDisablesForeignKeyChecks && !desc.Supports(dbdriver.CapDumpSQL) {
+		report("dumpDisablesForeignKeyChecks is declared without capability %q, the only feature that uses it", dbdriver.CapDumpSQL)
+	}
 	if desc.LocatesRowWithoutPrimaryKey && !desc.Supports(dbdriver.CapGridEdit) {
 		report("locatesRowWithoutPrimaryKey is declared without capability %q, the only feature that uses it", dbdriver.CapGridEdit)
 	}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -166,13 +167,18 @@ func (d *dumpDialect) DumpFile(_ context.Context, scope DumpScope) (*DumpFileScr
 func (d *dumpDialect) DumpObject(_ context.Context, object DumpObject) (*DumpObjectScript, error) {
 	d.objects = append(d.objects, object)
 	script := &DumpObjectScript{
-		Drop:       []string{fmt.Sprintf("DROP %s %s;", strings.ToUpper(object.Kind), object.Name)},
+		Drop:       []string{fmt.Sprintf("DROP %s IF EXISTS %s;", strings.ToUpper(object.Kind), object.Name)},
 		Definition: []string{object.Definition + ";"},
 		DependsOn:  d.dependsOn[object.Name],
 	}
 	if d.plain || object.Kind != DumpTable {
 		return script, nil
 	}
+	// 索引由方言按对象带来的选项写或不写。
+	if object.Options.Indexes {
+		script.Definition = append(script.Definition, "CREATE INDEX ix_"+object.Name+";")
+	}
+	script.DropForeignKeys = []string{"DROP FK " + object.Name + ";"}
 	script.DataColumns = d.dataColumn[object.Name]
 	script.InsertModifier = d.insertModifier[object.Name]
 	script.DataPrologue = []string{"BEGIN DATA " + object.Name + ";"}
@@ -180,6 +186,18 @@ func (d *dumpDialect) DumpObject(_ context.Context, object DumpObject) (*DumpObj
 	script.ForeignKeys = []string{"ADD FK " + object.Name + ";"}
 	script.PostData = []string{"SYNC " + object.Name + ";"}
 	return script, nil
+}
+
+// allOptions 是全部勾上的导出选项。
+var allOptions = DumpOptions{
+	Indexes: true, ForeignKeys: true, Views: true, Routines: true, Triggers: true, Drops: true, DisableForeignKeyChecks: true,
+}
+
+// fullFile 是方言给出整份文件各部分的样子。
+var fullFile = DumpFileScript{
+	Opening: []string{"SET NAMES utf8;"}, DisableForeignKeyChecks: []string{"SET FK OFF;"},
+	Types: []string{"CREATE TYPE mood;"}, DropTypes: []string{"DROP TYPE IF EXISTS mood;"},
+	EnableForeignKeyChecks: []string{"SET FK ON;"}, Closing: []string{"RESET;"},
 }
 
 func dumpHeader() DumpHeader {
@@ -203,18 +221,17 @@ func newDumpSource() *dumpSource {
 	}
 }
 
-// 一份结构和数据的转储：注释头（版本、资产、库、内容、时间，没有主机端口账号）、驱动给的文件开头与
-// 类型、每张表依次是注释分隔行、存在则删除、定义、数据（前后有驱动的开关），之后是全部外键、视图
-// （只有定义）、数据之后的收尾、驱动给的文件结尾。视图排在表之后，不读它的数据。
+// 一份结构和数据、选项全勾的转储：注释头（版本、资产、库、内容、所选的选项、时间，没有主机端口账号）、
+// 驱动给的文件开头与关闭外键检查、删除段（先删外键，再按倒序删视图、表，最后删类型）、类型、每张表依次是
+// 注释分隔行、定义（含方言按选项写的索引）、数据（前后有驱动的开关），之后是全部外键、视图（只有定义）、
+// 数据之后的收尾、恢复外键检查与驱动给的文件结尾。视图排在表之后，不读它的数据。
 func TestDumpWritesTheFileInItsSections(t *testing.T) {
 	source := newDumpSource()
-	dialect := &dumpDialect{file: DumpFileScript{
-		Opening: []string{"SET FK OFF;"}, Types: []string{"CREATE TYPE mood;"}, Closing: []string{"SET FK ON;"},
-	}}
+	dialect := &dumpDialect{file: fullFile}
 	var out bytes.Buffer
 
 	result, err := Dump(context.Background(), DumpRequest{
-		Database: "shop", Tables: []string{"v_big", "users", "orders"}, WithData: true,
+		Database: "shop", Tables: []string{"v_big", "users", "orders"}, WithData: true, Options: allOptions,
 		Header: dumpHeader(), Writer: &out,
 	}, source, dialect)
 	require.NoError(t, err)
@@ -225,19 +242,31 @@ func TestDumpWritesTheFileInItsSections(t *testing.T) {
 -- Asset: demo-db
 -- Database: shop
 -- Content: structure and data
+-- Options: indexes, foreign keys, drop statements, disable foreign key checks
 -- Date: 2026-11-16 09:30:05 +08:00
 --
 -- File encoding: UTF-8
 
+SET NAMES utf8;
 SET FK OFF;
+
+-- ----------------------------
+-- Drop existing objects
+-- ----------------------------
+DROP FK users;
+DROP FK orders;
+DROP VIEW IF EXISTS v_big;
+DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS users;
+DROP TYPE IF EXISTS mood;
 
 CREATE TYPE mood;
 
 -- ----------------------------
 -- Table structure for users
 -- ----------------------------
-DROP TABLE users;
 CREATE TABLE users (id int, name text);
+CREATE INDEX ix_users;
 
 -- ----------------------------
 -- Records of users
@@ -250,8 +279,8 @@ END DATA users;
 -- ----------------------------
 -- Table structure for orders
 -- ----------------------------
-DROP TABLE orders;
 CREATE TABLE orders (id int, user_id int);
+CREATE INDEX ix_orders;
 
 -- ----------------------------
 -- Records of orders
@@ -269,7 +298,6 @@ ADD FK orders;
 -- ----------------------------
 -- View structure for v_big
 -- ----------------------------
-DROP VIEW v_big;
 CREATE VIEW v_big AS SELECT * FROM orders;
 
 -- ----------------------------
@@ -279,19 +307,20 @@ SYNC users;
 SYNC orders;
 
 SET FK ON;
+RESET;
 `, out.String())
 	assert.Equal(t, DumpResult{Objects: 3, Rows: 3, Bytes: int64(out.Len())}, *result)
-	assert.Equal(t, []DumpScope{{Database: "shop", Tables: []string{"v_big", "users", "orders"}, WithData: true}}, dialect.scopes)
+	assert.Equal(t, []DumpScope{{Database: "shop", Tables: []string{"v_big", "users", "orders"}, WithData: true, Options: allOptions}}, dialect.scopes)
 	assert.Equal(t, []DumpObject{
-		{Database: "shop", Kind: DumpTable, Name: "users", Definition: source.ddl["users"], WithData: true},
-		{Database: "shop", Kind: DumpTable, Name: "orders", Definition: source.ddl["orders"], WithData: true},
-		{Database: "shop", Kind: ObjectView, Name: "v_big", Definition: source.ddl["v_big"]},
+		{Database: "shop", Kind: DumpTable, Name: "users", Definition: source.ddl["users"], WithData: true, Options: allOptions},
+		{Database: "shop", Kind: DumpTable, Name: "orders", Definition: source.ddl["orders"], WithData: true, Options: allOptions},
+		{Database: "shop", Kind: ObjectView, Name: "v_big", Definition: source.ddl["v_big"], Options: allOptions},
 	}, dialect.objects)
 	assert.NotContains(t, source.calls, "stream shop.v_big")
 	assert.NotContains(t, source.calls, "prepare shop.v_big")
 }
 
-// 仅结构：不读任何行，不备 writer，也没有记录段；方言什么钩子都没实现时，只有存在则删除与定义。
+// 仅结构、什么选项都不勾：不读任何行，不备 writer，也没有记录段；没有删除语句，只有定义。
 func TestDumpStructureOnlyReadsNoRows(t *testing.T) {
 	source := newDumpSource()
 	var out bytes.Buffer
@@ -308,6 +337,7 @@ func TestDumpStructureOnlyReadsNoRows(t *testing.T) {
 -- Database: shop
 -- Schema: public
 -- Content: structure only
+-- Options: none
 -- Date: 2026-11-16 09:30:05 +08:00
 --
 -- File encoding: UTF-8
@@ -315,7 +345,6 @@ func TestDumpStructureOnlyReadsNoRows(t *testing.T) {
 -- ----------------------------
 -- Table structure for users
 -- ----------------------------
-DROP TABLE users;
 CREATE TABLE users (id int, name text);
 `, out.String())
 	assert.Equal(t, DumpResult{Objects: 1, Rows: 0, Bytes: int64(out.Len())}, *result)
@@ -402,13 +431,14 @@ func TestDumpWritesTheBatchTerminatorAfterStatementsAndDataChunks(t *testing.T) 
 	var out bytes.Buffer
 
 	_, err := Dump(context.Background(), DumpRequest{
-		Database: "shop", Tables: []string{"users"}, WithData: true, Header: dumpHeader(), Writer: &out,
+		Database: "shop", Tables: []string{"users"}, WithData: true, Options: DumpOptions{Drops: true}, Header: dumpHeader(), Writer: &out,
 	}, source, &dumpDialect{plain: true, file: DumpFileScript{Opening: []string{"SET A;"}, BatchTerminator: "GO"}})
 	require.NoError(t, err)
 
 	text := out.String()
 	assert.Contains(t, text, "SET A;\nGO\n")
-	assert.Contains(t, text, "DROP TABLE users;\nGO\nCREATE TABLE users (id int, name text);\nGO\n")
+	assert.Contains(t, text, "DROP TABLE IF EXISTS users;\nGO\n")
+	assert.Contains(t, text, "CREATE TABLE users (id int, name text);\nGO\n")
 	inserts := strings.Count(text, "INSERT INTO users")
 	assert.Equal(t, dumpChunkRows+1, inserts)
 	// 两块数据：第一块之后、第二块（一行）之后各一个 GO；结构里还有三个（开头、删除、定义）。
@@ -483,7 +513,8 @@ func TestDumpStopsAtTheObjectThatFailed(t *testing.T) {
 		assert.Equal(t, "users", objectErr.Object)
 		assert.ErrorContains(t, err, "invalid connection")
 		assert.Contains(t, source.calls, "close stream")
-		assert.NotContains(t, source.calls, "ddl shop.orders")
+		// 定义在写任何内容之前都已读出（删除段要用到），后面的表的行不再读。
+		assert.NotContains(t, source.calls, "stream shop.orders")
 	})
 }
 
@@ -563,9 +594,10 @@ func TestDumpWholeDatabaseWritesEveryObjectInItsSection(t *testing.T) {
 	source := newWholeDumpSource()
 	dialect := &dumpDialect{file: DumpFileScript{Opening: []string{"SET FK OFF;"}, Closing: []string{"SET FK ON;"}}}
 	var out bytes.Buffer
+	options := DumpOptions{ForeignKeys: true, Views: true, Routines: true, Triggers: true}
 
 	result, err := Dump(context.Background(), DumpRequest{
-		Database: "shop", Whole: true, WithData: true, Header: dumpHeader(), Writer: &out,
+		Database: "shop", Whole: true, WithData: true, Options: options, Header: dumpHeader(), Writer: &out,
 	}, source, dialect)
 	require.NoError(t, err)
 
@@ -575,6 +607,7 @@ func TestDumpWholeDatabaseWritesEveryObjectInItsSection(t *testing.T) {
 -- Asset: demo-db
 -- Database: shop
 -- Content: structure and data
+-- Options: foreign keys, views, functions and procedures, triggers
 -- Date: 2026-11-16 09:30:05 +08:00
 --
 -- File encoding: UTF-8
@@ -584,7 +617,6 @@ SET FK OFF;
 -- ----------------------------
 -- Table structure for orders
 -- ----------------------------
-DROP TABLE orders;
 CREATE TABLE orders (id int, user_id int);
 
 -- ----------------------------
@@ -597,7 +629,6 @@ END DATA orders;
 -- ----------------------------
 -- Table structure for users
 -- ----------------------------
-DROP TABLE users;
 CREATE TABLE users (id int, name text);
 
 -- ----------------------------
@@ -617,25 +648,21 @@ ADD FK users;
 -- ----------------------------
 -- View structure for v_big
 -- ----------------------------
-DROP VIEW v_big;
 CREATE VIEW v_big AS SELECT * FROM orders;
 
 -- ----------------------------
 -- Function structure for f_total
 -- ----------------------------
-DROP FUNCTION f_total;
 CREATE FUNCTION f_total() RETURNS int;
 
 -- ----------------------------
 -- Procedure structure for p_clean
 -- ----------------------------
-DROP PROCEDURE p_clean;
 CREATE PROCEDURE p_clean();
 
 -- ----------------------------
 -- Trigger structure for trg_audit
 -- ----------------------------
-DROP TRIGGER trg_audit;
 CREATE TRIGGER trg_audit AFTER INSERT ON users;
 
 -- ----------------------------
@@ -647,14 +674,14 @@ SYNC users;
 SET FK ON;
 `, out.String())
 	assert.Equal(t, DumpResult{Objects: 6, Rows: 3, Bytes: int64(out.Len())}, *result)
-	assert.Equal(t, []DumpScope{{Database: "shop", Tables: []string{"orders", "users", "v_big"}, WithData: true, Whole: true}}, dialect.scopes)
+	assert.Equal(t, []DumpScope{{Database: "shop", Tables: []string{"orders", "users", "v_big"}, WithData: true, Whole: true, Options: options}}, dialect.scopes)
 	assert.Equal(t, []DumpObject{
-		{Database: "shop", Kind: DumpTable, Name: "orders", Definition: source.ddl["orders"], WithData: true},
-		{Database: "shop", Kind: DumpTable, Name: "users", Definition: source.ddl["users"], WithData: true},
-		{Database: "shop", Kind: ObjectView, Name: "v_big", Definition: source.ddl["v_big"]},
-		{Database: "shop", Kind: ObjectFunction, Name: "f_total", Definition: source.sources["function f_total"]},
-		{Database: "shop", Kind: ObjectProcedure, Name: "p_clean", Definition: source.sources["procedure p_clean"]},
-		{Database: "shop", Kind: ObjectTrigger, Name: "trg_audit", Table: "users", Definition: source.sources["trigger trg_audit"]},
+		{Database: "shop", Kind: DumpTable, Name: "orders", Definition: source.ddl["orders"], WithData: true, Options: options},
+		{Database: "shop", Kind: DumpTable, Name: "users", Definition: source.ddl["users"], WithData: true, Options: options},
+		{Database: "shop", Kind: ObjectView, Name: "v_big", Definition: source.ddl["v_big"], Options: options},
+		{Database: "shop", Kind: ObjectFunction, Name: "f_total", Definition: source.sources["function f_total"], Options: options},
+		{Database: "shop", Kind: ObjectProcedure, Name: "p_clean", Definition: source.sources["procedure p_clean"], Options: options},
+		{Database: "shop", Kind: ObjectTrigger, Name: "trg_audit", Table: "users", Definition: source.sources["trigger trg_audit"], Options: options},
 	}, dialect.objects)
 	assert.Contains(t, source.calls, "source shop trigger trg_audit users")
 	assert.NotContains(t, source.calls, "stream shop.v_big")
@@ -682,7 +709,7 @@ func TestDumpWholeSchemaKeepsToItsSchema(t *testing.T) {
 	dialect := &dumpDialect{plain: true}
 
 	result, err := Dump(context.Background(), DumpRequest{
-		Database: "shop", Schema: "sales", Whole: true, Header: dumpHeader(), Writer: &bytes.Buffer{},
+		Database: "shop", Schema: "sales", Whole: true, Options: allOptions, Header: dumpHeader(), Writer: &bytes.Buffer{},
 	}, source, dialect)
 	require.NoError(t, err)
 
@@ -692,7 +719,7 @@ func TestDumpWholeSchemaKeepsToItsSchema(t *testing.T) {
 	}
 	assert.Equal(t, []string{"table sales.b", "view sales.v", "function sales.f", "trigger sales.t"}, names)
 	assert.Equal(t, 4, result.Objects)
-	assert.Equal(t, []DumpScope{{Database: "shop", Schema: "sales", Tables: []string{"sales.b", "sales.v"}, Whole: true}}, dialect.scopes)
+	assert.Equal(t, []DumpScope{{Database: "shop", Schema: "sales", Tables: []string{"sales.b", "sales.v"}, Whole: true, Options: allOptions}}, dialect.scopes)
 }
 
 // 转储选中的表时只有表与选中的视图：不列库里的表，不写函数、过程与触发器。
@@ -701,7 +728,7 @@ func TestDumpSelectedTablesLeavesOutRoutinesAndTriggers(t *testing.T) {
 	var out bytes.Buffer
 
 	_, err := Dump(context.Background(), DumpRequest{
-		Database: "shop", Tables: []string{"users"}, Header: dumpHeader(), Writer: &out,
+		Database: "shop", Tables: []string{"users"}, Options: allOptions, Header: dumpHeader(), Writer: &out,
 	}, source, &dumpDialect{plain: true})
 	require.NoError(t, err)
 
@@ -741,7 +768,7 @@ func TestDumpWritesViewsInDependencyOrder(t *testing.T) {
 
 	t.Run("whole database", func(t *testing.T) {
 		assert.Equal(t, []string{"c_base", "b_mid", "a_report", "d_alone"},
-			viewOrder(t, &dumpDialect{plain: true, dependsOn: dependsOn}, DumpRequest{Database: "shop", Whole: true}))
+			viewOrder(t, &dumpDialect{plain: true, dependsOn: dependsOn}, DumpRequest{Database: "shop", Whole: true, Options: allOptions}))
 	})
 	t.Run("selected views", func(t *testing.T) {
 		assert.Equal(t, []string{"d_alone", "c_base", "b_mid", "a_report"}, viewOrder(t, &dumpDialect{plain: true, dependsOn: dependsOn},
@@ -749,7 +776,7 @@ func TestDumpWritesViewsInDependencyOrder(t *testing.T) {
 	})
 	t.Run("a dialect without dependencies", func(t *testing.T) {
 		assert.Equal(t, []string{"a_report", "b_mid", "c_base", "d_alone"},
-			viewOrder(t, &dumpDialect{plain: true}, DumpRequest{Database: "shop", Whole: true}))
+			viewOrder(t, &dumpDialect{plain: true}, DumpRequest{Database: "shop", Whole: true, Options: allOptions}))
 	})
 }
 
@@ -758,7 +785,7 @@ func TestDumpStopsAtARoutineThatFailed(t *testing.T) {
 	source := newWholeDumpSource()
 	source.sourceErr = map[string]error{"p_clean": errors.New("permission denied")}
 
-	_, err := Dump(context.Background(), DumpRequest{Database: "shop", Whole: true, Header: dumpHeader(), Writer: &bytes.Buffer{}}, source, &dumpDialect{})
+	_, err := Dump(context.Background(), DumpRequest{Database: "shop", Whole: true, Options: allOptions, Header: dumpHeader(), Writer: &bytes.Buffer{}}, source, &dumpDialect{})
 	var objectErr *DumpObjectError
 	require.ErrorAs(t, err, &objectErr)
 	assert.Equal(t, "p_clean", objectErr.Object)
@@ -817,4 +844,127 @@ func assertOnlyFiles(t *testing.T, dir string, names ...string) {
 		got = append(got, entry.Name())
 	}
 	assert.ElementsMatch(t, append([]string{}, names...), got)
+}
+
+// wholeDump 是整库、结构和数据、按 options 的一份转储（方言给出文件的每一部分）。
+func wholeDump(t *testing.T, options DumpOptions) string {
+	t.Helper()
+	var out bytes.Buffer
+	_, err := Dump(context.Background(), DumpRequest{
+		Database: "shop", Whole: true, WithData: true, Options: options, Header: dumpHeader(), Writer: &out,
+	}, newWholeDumpSource(), &dumpDialect{file: fullFile})
+	require.NoError(t, err)
+	return out.String()
+}
+
+// withoutOptionsLine 去掉注释头里列出选项的那一行：比较两份选项不同的文件时只看正文。
+func withoutOptionsLine(text string) string {
+	lines := strings.Split(text, "\n")
+	return strings.Join(slices.DeleteFunc(lines, func(line string) bool { return strings.HasPrefix(line, "-- Options: ") }), "\n")
+}
+
+// 删除段：在文件开头（开头与关闭外键检查之后、类型之前），先删外键，再按倒序删触发器、过程与函数、视图、表，
+// 最后删类型；对象自己的位置上不再有删除语句。
+func TestDumpWritesTheDropSectionFirst(t *testing.T) {
+	full := wholeDump(t, allOptions)
+
+	assert.Contains(t, full, `SET NAMES utf8;
+SET FK OFF;
+
+-- ----------------------------
+-- Drop existing objects
+-- ----------------------------
+DROP FK orders;
+DROP FK users;
+DROP TRIGGER IF EXISTS trg_audit;
+DROP PROCEDURE IF EXISTS p_clean;
+DROP FUNCTION IF EXISTS f_total;
+DROP VIEW IF EXISTS v_big;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS orders;
+DROP TYPE IF EXISTS mood;
+
+CREATE TYPE mood;
+
+-- ----------------------------
+-- Table structure for orders
+-- ----------------------------
+CREATE TABLE orders (id int, user_id int);
+`)
+	assert.Equal(t, 9, strings.Count(full, "DROP "), "the drop statements are written once, all in the drop section")
+}
+
+// 视图在删除段里按依赖倒序：依赖别的视图的先删。
+func TestDumpDropsViewsInReverseDependencyOrder(t *testing.T) {
+	source := &dumpSource{
+		ddl:    map[string]string{"a_report": "CREATE VIEW a_report", "b_mid": "CREATE VIEW b_mid", "c_base": "CREATE VIEW c_base"},
+		tables: []string{"a_report", "b_mid", "c_base"},
+		views:  []string{"a_report", "b_mid", "c_base"},
+	}
+	var out bytes.Buffer
+	_, err := Dump(context.Background(), DumpRequest{
+		Database: "shop", Whole: true, Options: allOptions, Header: dumpHeader(), Writer: &out,
+	}, source, &dumpDialect{plain: true, dependsOn: map[string][]string{"a_report": {"b_mid"}, "b_mid": {"c_base"}}})
+	require.NoError(t, err)
+
+	assert.Contains(t, out.String(), "DROP VIEW IF EXISTS a_report;\nDROP VIEW IF EXISTS b_mid;\nDROP VIEW IF EXISTS c_base;\n")
+}
+
+// 每个选项不勾时，文件里正好少了它的那一部分，其余一字不差（注释头里列出的选项除外）。
+func TestDumpOptionsLeaveOutExactlyTheirPart(t *testing.T) {
+	full := wholeDump(t, allOptions)
+	section := func(title string, statements ...string) string {
+		return "\n-- ----------------------------\n-- " + title + "\n-- ----------------------------\n" + strings.Join(statements, "\n") + "\n"
+	}
+	cases := map[string]struct {
+		off   func(*DumpOptions)
+		parts []string
+	}{
+		"indexes":      {func(o *DumpOptions) { o.Indexes = false }, []string{"CREATE INDEX ix_orders;\n", "CREATE INDEX ix_users;\n"}},
+		"foreign keys": {func(o *DumpOptions) { o.ForeignKeys = false }, []string{section("Foreign keys", "ADD FK orders;", "ADD FK users;")}},
+		"views": {func(o *DumpOptions) { o.Views = false }, []string{
+			"DROP VIEW IF EXISTS v_big;\n", section("View structure for v_big", "CREATE VIEW v_big AS SELECT * FROM orders;"),
+		}},
+		"functions and procedures": {func(o *DumpOptions) { o.Routines = false }, []string{
+			"DROP PROCEDURE IF EXISTS p_clean;\n", "DROP FUNCTION IF EXISTS f_total;\n",
+			section("Function structure for f_total", "CREATE FUNCTION f_total() RETURNS int;"),
+			section("Procedure structure for p_clean", "CREATE PROCEDURE p_clean();"),
+		}},
+		"triggers": {func(o *DumpOptions) { o.Triggers = false }, []string{
+			"DROP TRIGGER IF EXISTS trg_audit;\n", section("Trigger structure for trg_audit", "CREATE TRIGGER trg_audit AFTER INSERT ON users;"),
+		}},
+		"drop statements": {func(o *DumpOptions) { o.Drops = false }, []string{section("Drop existing objects",
+			"DROP FK orders;", "DROP FK users;", "DROP TRIGGER IF EXISTS trg_audit;", "DROP PROCEDURE IF EXISTS p_clean;",
+			"DROP FUNCTION IF EXISTS f_total;", "DROP VIEW IF EXISTS v_big;", "DROP TABLE IF EXISTS users;",
+			"DROP TABLE IF EXISTS orders;", "DROP TYPE IF EXISTS mood;")}},
+		"disable foreign key checks": {func(o *DumpOptions) { o.DisableForeignKeyChecks = false }, []string{"SET FK OFF;\n", "SET FK ON;\n"}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			options := allOptions
+			tc.off(&options)
+			want := withoutOptionsLine(full)
+			for _, part := range tc.parts {
+				require.Contains(t, want, part)
+				want = strings.Replace(want, part, "", 1)
+			}
+			assert.Equal(t, want, withoutOptionsLine(wholeDump(t, options)))
+		})
+	}
+}
+
+// 「写入删除语句」不勾时文件里没有任何删除语句：方言给出的存在则删除、外键与类型的删除都不写。
+func TestDumpWithoutDropsWritesNoDropStatement(t *testing.T) {
+	options := allOptions
+	options.Drops = false
+
+	assert.NotContains(t, wholeDump(t, options), "DROP")
+}
+
+// 注释头列出所选的选项；整库时才有视图、函数与过程、触发器这几项。
+func TestDumpHeaderListsTheChosenOptions(t *testing.T) {
+	assert.Contains(t, wholeDump(t, allOptions),
+		"-- Options: indexes, foreign keys, views, functions and procedures, triggers, drop statements, disable foreign key checks\n")
+	assert.Contains(t, wholeDump(t, DumpOptions{Views: true, Drops: true}), "-- Options: views, drop statements\n")
+	assert.Contains(t, wholeDump(t, DumpOptions{}), "-- Options: none\n")
 }

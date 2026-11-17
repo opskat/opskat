@@ -57,6 +57,12 @@ type ddlIndex struct {
 }
 
 func (dialect) TableDDL(ctx context.Context, conn *sql.Conn, _, table string) (string, error) {
+	return tableDDL(ctx, conn, table, true)
+}
+
+// tableDDL 是 TableDDL 的建表语句；withIndexes 为假时不含 CREATE INDEX（主键与唯一约束照样在表内；转储不勾
+// 「包含索引」时）。
+func tableDDL(ctx context.Context, conn *sql.Conn, table string, withIndexes bool) (string, error) {
 	object := objectRef(table)
 	columns, err := queryDDLColumns(ctx, conn, object)
 	if err != nil {
@@ -86,7 +92,7 @@ func (dialect) TableDDL(ctx context.Context, conn *sql.Conn, _, table string) (s
 			defs = append(defs, constraintDefinition(index, "PRIMARY KEY"))
 		case index.uniqueConst:
 			defs = append(defs, constraintDefinition(index, "UNIQUE"))
-		default:
+		case withIndexes:
 			indexStatements = append(indexStatements, indexStatement(tableRef, index))
 		}
 	}

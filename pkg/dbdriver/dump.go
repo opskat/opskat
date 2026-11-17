@@ -34,12 +34,36 @@ type DumpRequest struct {
 	// ListObjects 给出的函数、过程与触发器。有 schema 分组的驱动给的名字是「schema.名字」（同 ListTables），
 	// 整个 schema 就是以「Schema.」开头的那些。
 	Whole bool
+	// Options 是导出选项（「导出数据」之外的，那一项是 WithData）。
+	Options DumpOptions
 	// Header 是注释头里写的来源。
 	Header DumpHeader
 	// Writer 是写出的目标。
 	Writer io.Writer
 	// Progress 在每个对象开始、写完以及读行的中途被调用（同一个 goroutine 上，按先后）；nil 表示不需要。
 	Progress func(DumpProgress)
+}
+
+// DumpOptions 是转储的导出选项：每一项勾上时文件里才有对应的部分，不勾就整个没有，其余不变。零值是全部
+// 不勾。
+type DumpOptions struct {
+	// Indexes：表的索引（主键与唯一约束不算，它们总在建表语句里）。依库而定在建表语句里或紧随其后，由方言
+	// 按 DumpObject.Options 写或不写。
+	Indexes bool `json:"indexes"`
+	// ForeignKeys：外键。留在建表语句里的（能关闭外键检查的库）由方言按 DumpObject.Options 去掉；全部数据
+	// 之后加上的（DumpObjectScript.ForeignKeys）由编排写或不写。
+	ForeignKeys bool `json:"foreignKeys"`
+	// Views、Routines、Triggers：整库或整个 schema 时的视图、函数与过程、触发器。只在 Whole 时有意义：转储
+	// 选中的表时没有函数、过程与触发器，选中的视图照样写定义。
+	Views    bool `json:"views"`
+	Routines bool `json:"routines"`
+	Triggers bool `json:"triggers"`
+	// Drops：文件开头的删除段（DumpObjectScript.DropForeignKeys 与 Drop、DumpFileScript.DropTypes）。不勾时
+	// 文件里没有任何删除语句。
+	Drops bool `json:"drops"`
+	// DisableForeignKeyChecks：文件开头关闭外键检查、结尾恢复（DumpFileScript.DisableForeignKeyChecks /
+	// EnableForeignKeyChecks）。只有声明了 Descriptor.DumpDisablesForeignKeyChecks 的驱动给出这两段语句。
+	DisableForeignKeyChecks bool `json:"disableForeignKeyChecks"`
 }
 
 // DumpHeader 是转储文件注释头里写的来源：OpsKat 版本、资产名与生成时间（库名、schema 与内容取自
@@ -98,6 +122,8 @@ type DumpScope struct {
 	WithData bool     `json:"withData"`
 	// Whole 表示转储整个库或整个 schema（同 DumpRequest.Whole）。
 	Whole bool `json:"whole,omitempty"`
+	// Options 是导出选项（同 DumpRequest.Options）。
+	Options DumpOptions `json:"options"`
 }
 
 // DumpFileScript 是方言给出的、整份文件一次的部分。每条语句都是写进文件的原文（含结束符），一条
@@ -107,8 +133,15 @@ type DumpFileScript struct {
 	Opening []string `json:"opening,omitempty"`
 	// Types 写在第一张表之前：表的列用到的类型定义（如 PostgreSQL 的枚举）。
 	Types []string `json:"types,omitempty"`
-	// Closing 写在文件末尾，如恢复外键检查。
+	// Closing 写在文件末尾。
 	Closing []string `json:"closing,omitempty"`
+	// DisableForeignKeyChecks / EnableForeignKeyChecks 在勾了 DumpOptions.DisableForeignKeyChecks 时写在
+	// Opening 之后 / Closing 之前（如 MySQL 的 SET FOREIGN_KEY_CHECKS）。只有能在会话里关闭外键检查的库
+	// （声明了 Descriptor.DumpDisablesForeignKeyChecks）给出它们。
+	DisableForeignKeyChecks []string `json:"disableForeignKeyChecks,omitempty"`
+	EnableForeignKeyChecks  []string `json:"enableForeignKeyChecks,omitempty"`
+	// DropTypes 是删除段最后的「存在则删除」Types 里的类型（勾了 DumpOptions.Drops 时）。
+	DropTypes []string `json:"dropTypes,omitempty"`
 	// BatchTerminator 非空时在每条结构语句之后、每一块数据之后单独写一行（SQL Server 的 GO）。
 	BatchTerminator string `json:"batchTerminator,omitempty"`
 }
@@ -126,12 +159,18 @@ type DumpObject struct {
 	Definition string `json:"definition"`
 	// WithData 表示它的行会接着写出（只有结构和数据时的表）。
 	WithData bool `json:"withData"`
+	// Options 是导出选项（同 DumpRequest.Options）：方言据此写不写表的索引与留在建表语句里的外键。
+	Options DumpOptions `json:"options"`
 }
 
 // DumpObjectScript 是方言为一个对象给出的语句：每条都是写进文件的原文（含结束符），一条写一行。
 type DumpObjectScript struct {
-	// Drop 是「存在则删除」，写在定义之前。
+	// Drop 是「存在则删除」。勾了 DumpOptions.Drops 时写在文件开头的删除段里：触发器、函数与过程、视图
+	// （按依赖倒序）、表（倒序）。方言总是给出它，写不写由编排决定。
 	Drop []string `json:"drop"`
+	// DropForeignKeys 是表上的外键「存在则删除」：不能关闭外键检查的库（外键挡着，被引用的表删不掉）给出，
+	// 勾了 DumpOptions.Drops 时写在删除段的最前面。不带 CASCADE。
+	DropForeignKeys []string `json:"dropForeignKeys,omitempty"`
 	// Definition 是建出它的语句，已按方言包好（如 MySQL 的 DELIMITER、Oracle 的 /），索引等附属定义
 	// 也在其中。
 	Definition []string `json:"definition"`
@@ -143,7 +182,8 @@ type DumpObjectScript struct {
 	// DataPrologue / DataEpilogue 写在它的行之前 / 之后（如 SQL Server 的 IDENTITY_INSERT 开、关）。
 	DataPrologue []string `json:"dataPrologue,omitempty"`
 	DataEpilogue []string `json:"dataEpilogue,omitempty"`
-	// ForeignKeys 写在全部表与数据之后：不能全局关闭外键检查的库在这里加外键（定义里就不带）。
+	// ForeignKeys 写在全部表与数据之后：不能全局关闭外键检查的库在这里加外键（定义里就不带）。只在勾了
+	// DumpOptions.ForeignKeys 时写出；方言总是给出它。
 	ForeignKeys []string `json:"foreignKeys,omitempty"`
 	// PostData 写在全部对象之后：序列与自增的收尾（如 PostgreSQL 的 setval）。
 	PostData []string `json:"postData,omitempty"`
@@ -172,12 +212,14 @@ type DumpSource interface {
 // dumpChunkRows 是一块数据的行数：按块生成 INSERT、报进度、写批分隔符。
 const dumpChunkRows = 500
 
-// Dump 是转储的编排，各驱动的 Session.Dump 用它：依次写出注释头、方言的文件开头与类型、每张表（注释
-// 分隔行、存在则删除、定义；结构和数据时接着是它的全部行，每行一条与「复制为 INSERT」一样的 INSERT，
-// 只写方言给出的列；表名不带库名，文件导入哪个库数据就写进哪个库）、全部表之后的外键、视图（只有定义，按依赖顺序）、整库或整个 schema 时的函数、过程
-// 与触发器（在所有数据之后，导入数据时不会触发它们）、数据之后的收尾与方言的文件结尾。行边读边写，不整表
-// 留在内存里。
+// Dump 是转储的编排，各驱动的 Session.Dump 用它：依次写出注释头（含所选的导出选项）、方言的文件开头（勾了
+// 「关闭外键检查」时接着关闭）、删除段（勾了「写入删除语句」时，见 dropSection）、类型、每张表（注释分隔行、
+// 定义；结构和数据时接着是它的全部行，每行一条与「复制为 INSERT」一样的 INSERT，只写方言给出的列；表名不带
+// 库名，文件导入哪个库数据就写进哪个库）、全部表之后的外键（勾了「包含外键」时）、视图（只有定义，按依赖
+// 顺序）、整库或整个 schema 时的函数、过程与触发器（各自勾了时；在所有数据之后，导入数据时不会触发它们）、
+// 数据之后的收尾、恢复外键检查与方言的文件结尾。行边读边写，不整表留在内存里。
 //
+// 写任何内容之前先读出全部对象的定义、得到方言的语句：删除段在文件开头，要用到每个对象的删除语句。
 // 任何一个对象出错（读定义、方言、读行）或 ctx 被取消都立即停下，返回的错误是点名那个对象的
 // *DumpObjectError（被取消时它包着 ctx 的错误）；已经写出的内容由调用方丢弃（见 DumpToFile）。
 func Dump(ctx context.Context, req DumpRequest, source DumpSource, dialect DumpDialect) (*DumpResult, error) {
@@ -189,13 +231,16 @@ func Dump(ctx context.Context, req DumpRequest, source DumpSource, dialect DumpD
 		return nil, err
 	}
 	file, err := dialect.DumpFile(ctx, DumpScope{
-		Database: req.Database, Schema: req.Schema, Tables: plan.listed, WithData: req.WithData, Whole: req.Whole,
+		Database: req.Database, Schema: req.Schema, Tables: plan.listed, WithData: req.WithData, Whole: req.Whole, Options: req.Options,
 	})
 	if err != nil {
 		return nil, err
 	}
 	d := &dump{ctx: ctx, req: req, source: source, dialect: dialect, out: &countingWriter{w: req.Writer}, terminator: file.BatchTerminator}
 	d.progress.Objects = len(plan.tables) + len(plan.views) + len(plan.routines)
+	if err := d.prepareAll(plan); err != nil {
+		return &DumpResult{Objects: d.progress.Objects}, err
+	}
 	err = d.run(file, plan)
 	return &DumpResult{Objects: d.progress.Objects, Rows: d.progress.Rows, Bytes: d.out.n}, err
 }
@@ -206,19 +251,25 @@ type dumpItem struct {
 	name string
 	// table 是触发器所在的表（ObjectMeta.Table）。
 	table string
+	// withData 表示接着写它的行（结构和数据时的表）。
+	withData bool
+	// script 是方言给出的语句（prepareAll 填上）。
+	script *DumpObjectScript
 }
 
 // dumpPlan 是一次转储要写的对象，按段分开。
 type dumpPlan struct {
 	// listed 是转储的表与视图（交给方言的范围）。
 	listed []string
-	tables []dumpItem
-	views  []dumpItem
+	tables []*dumpItem
+	// views 在 prepareAll 之后是依赖顺序（被依赖的在前）。
+	views []*dumpItem
 	// routines 是整库或整个 schema 时的函数、过程与触发器，按写出的次序。
-	routines []dumpItem
+	routines []*dumpItem
 }
 
-// planDump 列出要写的对象：选中的表与视图，或 Whole 时库里（schema 里）的全部对象。
+// planDump 列出要写的对象：选中的表与视图，或 Whole 时库里（schema 里）的全部对象——视图、函数与过程、
+// 触发器各自只在勾了它们的选项时。
 func planDump(ctx context.Context, req DumpRequest, source DumpSource) (*dumpPlan, error) {
 	objects, err := source.ListObjects(ctx, req.Database)
 	if err != nil {
@@ -233,19 +284,27 @@ func planDump(ctx context.Context, req DumpRequest, source DumpSource) (*dumpPla
 		plan.listed = slices.DeleteFunc(all, func(name string) bool { return !inDumpSchema(req.Schema, name) })
 	}
 	for _, name := range plan.listed {
-		if slices.ContainsFunc(objects.Views, func(view ObjectMeta) bool { return view.Name == name }) {
-			plan.views = append(plan.views, dumpItem{kind: ObjectView, name: name})
-		} else {
-			plan.tables = append(plan.tables, dumpItem{kind: DumpTable, name: name})
+		if !slices.ContainsFunc(objects.Views, func(view ObjectMeta) bool { return view.Name == name }) {
+			plan.tables = append(plan.tables, &dumpItem{kind: DumpTable, name: name, withData: req.WithData})
+		} else if !req.Whole || req.Options.Views {
+			plan.views = append(plan.views, &dumpItem{kind: ObjectView, name: name})
 		}
 	}
 	if !req.Whole {
 		return plan, nil
 	}
-	for _, group := range [][]ObjectMeta{objects.Functions, objects.Procedures, objects.Triggers} {
-		for _, object := range group {
+	for _, group := range []struct {
+		objects  []ObjectMeta
+		included bool
+	}{
+		{objects.Functions, req.Options.Routines}, {objects.Procedures, req.Options.Routines}, {objects.Triggers, req.Options.Triggers},
+	} {
+		if !group.included {
+			continue
+		}
+		for _, object := range group.objects {
 			if inDumpSchema(req.Schema, object.Name) {
-				plan.routines = append(plan.routines, dumpItem{kind: object.Type, name: object.Name, table: object.Table})
+				plan.routines = append(plan.routines, &dumpItem{kind: object.Type, name: object.Name, table: object.Table})
 			}
 		}
 	}
@@ -266,38 +325,107 @@ type dump struct {
 	out        *countingWriter
 	terminator string
 	progress   DumpProgress
-	// foreignKeys / postData 是各表攒到全部表之后、全部对象之后才写的语句。
-	foreignKeys []string
-	postData    []string
+}
+
+// prepareAll 读出全部对象的定义、得到方言的语句，并把视图排成依赖顺序。
+func (d *dump) prepareAll(plan *dumpPlan) error {
+	for _, group := range [][]*dumpItem{plan.tables, plan.views, plan.routines} {
+		for _, item := range group {
+			if err := d.prepare(item); err != nil {
+				return &DumpObjectError{Object: item.name, Err: err}
+			}
+		}
+	}
+	plan.views = dependencyOrder(plan.views)
+	return nil
 }
 
 func (d *dump) run(file *DumpFileScript, plan *dumpPlan) error {
+	options := d.req.Options
 	d.header()
-	d.section("", file.Opening)
+	opening, closing := file.Opening, file.Closing
+	if options.DisableForeignKeyChecks {
+		opening = slices.Concat(opening, file.DisableForeignKeyChecks)
+		closing = slices.Concat(file.EnableForeignKeyChecks, closing)
+	}
+	d.section("", opening)
+	if options.Drops {
+		d.section("Drop existing objects", dropSection(file, plan))
+	}
 	d.section("", file.Types)
 	for _, table := range plan.tables {
-		if err := d.object(table, d.req.WithData); err != nil {
+		if err := d.write(table); err != nil {
 			return err
 		}
 	}
-	d.section("Foreign keys", d.foreignKeys)
-	if err := d.views(plan.views); err != nil {
-		return err
+	if options.ForeignKeys {
+		d.section("Foreign keys", collect(plan.tables, func(s *DumpObjectScript) []string { return s.ForeignKeys }))
 	}
-	for _, routine := range plan.routines {
-		if err := d.object(routine, false); err != nil {
+	for _, item := range slices.Concat(plan.views, plan.routines) {
+		if err := d.write(item); err != nil {
 			return err
 		}
 	}
-	d.section("Sequence and auto-increment values", d.postData)
-	d.section("", file.Closing)
+	d.section("Sequence and auto-increment values",
+		collect(slices.Concat(plan.tables, plan.views, plan.routines), func(s *DumpObjectScript) []string { return s.PostData }))
+	d.section("", closing)
 	return d.out.err
+}
+
+// dropSection 是删除段：先删表上的外键（不能关闭外键检查的方言才给出），再按依赖倒序删除要转储的对象——
+// 触发器、函数与过程、视图（依赖别的视图的先删）、表（与写出的次序相反），最后删类型。
+func dropSection(file *DumpFileScript, plan *dumpPlan) []string {
+	drops := collect(plan.tables, func(s *DumpObjectScript) []string { return s.DropForeignKeys })
+	for _, group := range [][]*dumpItem{plan.routines, plan.views, plan.tables} {
+		drops = append(drops, collect(reversed(group), func(s *DumpObjectScript) []string { return s.Drop })...)
+	}
+	return append(drops, file.DropTypes...)
+}
+
+// collect 依次取出各对象语句里的一部分。
+func collect(items []*dumpItem, part func(*DumpObjectScript) []string) []string {
+	statements := make([]string, 0, len(items))
+	for _, item := range items {
+		statements = append(statements, part(item.script)...)
+	}
+	return statements
+}
+
+func reversed(items []*dumpItem) []*dumpItem {
+	out := slices.Clone(items)
+	slices.Reverse(out)
+	return out
+}
+
+// optionNames 是注释头里列出的选项，按对话框里的次序；视图、函数与过程、触发器只在整库或整个 schema 时有。
+var optionNames = []struct {
+	name      string
+	chosen    func(DumpOptions) bool
+	wholeOnly bool
+}{
+	{"indexes", func(o DumpOptions) bool { return o.Indexes }, false},
+	{"foreign keys", func(o DumpOptions) bool { return o.ForeignKeys }, false},
+	{"views", func(o DumpOptions) bool { return o.Views }, true},
+	{"functions and procedures", func(o DumpOptions) bool { return o.Routines }, true},
+	{"triggers", func(o DumpOptions) bool { return o.Triggers }, true},
+	{"drop statements", func(o DumpOptions) bool { return o.Drops }, false},
+	{"disable foreign key checks", func(o DumpOptions) bool { return o.DisableForeignKeyChecks }, false},
 }
 
 func (d *dump) header() {
 	content := "structure only"
 	if d.req.WithData {
 		content = "structure and data"
+	}
+	var chosen []string
+	for _, option := range optionNames {
+		if option.chosen(d.req.Options) && (d.req.Whole || !option.wholeOnly) {
+			chosen = append(chosen, option.name)
+		}
+	}
+	options := "none"
+	if len(chosen) > 0 {
+		options = strings.Join(chosen, ", ")
 	}
 	lines := []string{
 		"OpsKat SQL Dump",
@@ -311,6 +439,7 @@ func (d *dump) header() {
 	}
 	lines = append(lines,
 		"Content: "+content,
+		"Options: "+options,
 		"Date: "+d.req.Header.Time.Format("2006-01-02 15:04:05 -07:00"),
 		"",
 		"File encoding: UTF-8",
@@ -365,51 +494,22 @@ func (d *dump) batchEnd() {
 	}
 }
 
-// object 写一个对象：注释分隔行、存在则删除、定义，withData 时接着是它的行。
-func (d *dump) object(item dumpItem, withData bool) error {
-	d.begin(item)
-	script, err := d.prepare(item, withData)
-	if err != nil {
-		return &DumpObjectError{Object: item.name, Err: err}
-	}
-	return d.write(item, script, withData)
-}
-
-// views 写视图：先读出全部视图的定义、得到方言的语句，再按依赖顺序写出。
-func (d *dump) views(views []dumpItem) error {
-	scripts := make(map[string]*DumpObjectScript, len(views))
-	for _, view := range views {
-		script, err := d.prepare(view, false)
-		if err != nil {
-			return &DumpObjectError{Object: view.name, Err: err}
-		}
-		scripts[view.name] = script
-	}
-	for _, view := range dependencyOrder(views, scripts) {
-		d.begin(view)
-		if err := d.write(view, scripts[view.name], false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // dependencyOrder 把视图排成被依赖的在前：每个视图之前先放它 DependsOn 里属于这批视图的那些，其余保持
 // 列出的次序。每个视图只放一次，所以依赖成环时也会停下。
-func dependencyOrder(views []dumpItem, scripts map[string]*DumpObjectScript) []dumpItem {
-	byName := make(map[string]dumpItem, len(views))
+func dependencyOrder(views []*dumpItem) []*dumpItem {
+	byName := make(map[string]*dumpItem, len(views))
 	for _, view := range views {
 		byName[view.name] = view
 	}
 	placed := make(map[string]bool, len(views))
-	ordered := make([]dumpItem, 0, len(views))
-	var place func(view dumpItem)
-	place = func(view dumpItem) {
+	ordered := make([]*dumpItem, 0, len(views))
+	var place func(view *dumpItem)
+	place = func(view *dumpItem) {
 		if placed[view.name] {
 			return
 		}
 		placed[view.name] = true
-		for _, name := range scripts[view.name].DependsOn {
+		for _, name := range view.script.DependsOn {
 			if dependency, ok := byName[name]; ok {
 				place(dependency)
 			}
@@ -423,24 +523,26 @@ func dependencyOrder(views []dumpItem, scripts map[string]*DumpObjectScript) []d
 }
 
 // prepare 读出一个对象的定义，交给方言得到它的语句。
-func (d *dump) prepare(item dumpItem, withData bool) (*DumpObjectScript, error) {
+func (d *dump) prepare(item *dumpItem) error {
 	if err := d.ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
 	definition, err := d.definition(item)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if strings.TrimSpace(definition) == "" {
-		return nil, errors.New("the database gave no definition for it")
+		return errors.New("the database gave no definition for it")
 	}
-	return d.dialect.DumpObject(d.ctx, DumpObject{
-		Database: d.req.Database, Kind: item.kind, Name: item.name, Table: item.table, Definition: definition, WithData: withData,
+	item.script, err = d.dialect.DumpObject(d.ctx, DumpObject{
+		Database: d.req.Database, Kind: item.kind, Name: item.name, Table: item.table, Definition: definition,
+		WithData: item.withData, Options: d.req.Options,
 	})
+	return err
 }
 
 // definition 是一个对象的定义原文：表与视图的来自 TableDDL，函数、过程与触发器的来自 ObjectSource。
-func (d *dump) definition(item dumpItem) (string, error) {
+func (d *dump) definition(item *dumpItem) (string, error) {
 	if item.kind == DumpTable || item.kind == ObjectView {
 		return d.source.TableDDL(d.ctx, d.req.Database, item.name)
 	}
@@ -456,22 +558,19 @@ var structureTitles = map[string]string{
 	ObjectTrigger:   "Trigger structure for ",
 }
 
-// begin 报告开始写一个对象。
-func (d *dump) begin(item dumpItem) {
+// write 写出一个对象的定义，withData 时接着是它的行；开始与写完时报告进度。
+func (d *dump) write(item *dumpItem) error {
+	if err := d.ctx.Err(); err != nil {
+		return &DumpObjectError{Object: item.name, Err: err}
+	}
 	d.progress.Object++
 	d.progress.Name = item.name
 	d.report(nil)
-}
-
-// write 写出一个对象的语句，withData 时接着是它的行，写完时报告它写了什么。
-func (d *dump) write(item dumpItem, script *DumpObjectScript, withData bool) error {
+	script := item.script
 	d.banner(structureTitles[item.kind] + item.name)
-	d.statements(script.Drop)
 	d.statements(script.Definition)
-	d.foreignKeys = append(d.foreignKeys, script.ForeignKeys...)
-	d.postData = append(d.postData, script.PostData...)
 	var written int64
-	if withData {
+	if item.withData {
 		d.banner("Records of " + item.name)
 		d.statements(script.DataPrologue)
 		var err error
@@ -483,7 +582,7 @@ func (d *dump) write(item dumpItem, script *DumpObjectScript, withData bool) err
 	if d.out.err != nil {
 		return &DumpObjectError{Object: item.name, Err: d.out.err}
 	}
-	d.report(&DumpedObject{Name: item.name, Kind: item.kind, Data: withData, Rows: written})
+	d.report(&DumpedObject{Name: item.name, Kind: item.kind, Data: item.withData, Rows: written})
 	return nil
 }
 

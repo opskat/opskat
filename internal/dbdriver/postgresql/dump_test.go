@@ -56,7 +56,9 @@ func dumpColumnRows(columns ...string) *sqlmock.Rows {
 	return rows
 }
 
-// 整库转储（结构和数据）写出的文件：开头关掉函数体检查、建出 public 之外的 schema，枚举类型在所有表之前；
+// 整库转储（结构和数据，除了关闭外键检查全勾）写出的文件：开头关掉函数体检查、建出 public 之外的 schema；删除段
+// 先删各表上的外键（PostgreSQL 不能关闭外键检查，被引用的表要先拆外键才删得掉），再删触发器（带上它的表）、过程、
+// 函数（每个重载带完整的参数）、视图（依赖别的视图的先删）、表，最后删枚举类型，都不带 CASCADE；枚举类型在所有表之前；
 // 表之后是它的行（不写生成列，有 GENERATED ALWAYS 身份列的表用 OVERRIDING SYSTEM VALUE），外键（含自引用）
 // 在全部数据之后用 ALTER TABLE 加上；视图按 pg_depend 的依赖排序；函数每个重载都写出，删除带完整的参数；
 // 过程同样；触发器在所有数据之后，删除带上它的表；序列在最后同步到当前值；结尾恢复函数体检查。
@@ -82,9 +84,6 @@ func TestDumpWritesRestorablePostgreSQLFile(t *testing.T) {
 		WillReturnRows(constraintRows([2]string{"notes_item_fk", "FOREIGN KEY (item_id) REFERENCES items(id) ON DELETE CASCADE"}))
 	mock.ExpectQuery(dumpColumnsQuery).WithArgs("app", "notes").WillReturnRows(dumpColumnRows("id", "item_id"))
 	mock.ExpectQuery(dumpSequencesQuery).WithArgs("app", "notes").WillReturnRows(sqlmock.NewRows([]string{"attname", "last_value"}).AddRow("id", 3))
-	expectColumns(mock, "app", "notes", [2]string{"id", "integer"}, [2]string{"item_id", "integer"})
-	mock.ExpectQuery(`SELECT * FROM "app"."notes"`).WillReturnRows(sqlmock.NewRows([]string{"id", "item_id"}).
-		AddRow(int64(1), int64(7)).AddRow(int64(3), nil))
 
 	// public.items：GENERATED ALWAYS 身份列、枚举列、生成列、自引用的外键。
 	mock.ExpectQuery(ddlColumnsQuery).WithArgs("public", "items").WillReturnRows(ddlColumnRows("r", nil,
@@ -99,10 +98,6 @@ func TestDumpWritesRestorablePostgreSQLFile(t *testing.T) {
 		WillReturnRows(constraintRows([2]string{"items_parent_fk", "FOREIGN KEY (parent_id) REFERENCES items(id)"}))
 	mock.ExpectQuery(dumpColumnsQuery).WithArgs("public", "items").WillReturnRows(dumpColumnRows("id always", "kind", "parent_id"))
 	mock.ExpectQuery(dumpSequencesQuery).WithArgs("public", "items").WillReturnRows(sqlmock.NewRows([]string{"attname", "last_value"}).AddRow("id", 9007199254740993))
-	expectColumns(mock, "public", "items", [2]string{"id", "integer"}, [2]string{"kind", "USER-DEFINED"},
-		[2]string{"doubled", "integer"}, [2]string{"parent_id", "integer"})
-	mock.ExpectQuery(`SELECT * FROM "public"."items"`).WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "doubled", "parent_id"}).
-		AddRow(int64(7), "it's", int64(14), nil).AddRow(int64(9007199254740993), "new", int64(0), int64(7)))
 
 	// 视图：列出的次序是 v_a、v_b，v_a 用到 v_b。
 	mock.ExpectQuery(ddlColumnsQuery).WithArgs("public", "v_a").WillReturnRows(ddlColumnRows("v", nil, ddlCol{name: "id", dataType: "integer", nullable: true}))
@@ -129,9 +124,19 @@ func TestDumpWritesRestorablePostgreSQLFile(t *testing.T) {
 	mock.ExpectQuery(triggerDefSQL).WithArgs("public", "items", "items_touch").
 		WillReturnRows(names("def", "CREATE TRIGGER items_touch BEFORE INSERT ON items FOR EACH ROW EXECUTE FUNCTION touch_items()"))
 
+	// 全部定义读完才读行（删除段在文件开头，要用到每个对象的删除语句）。
+	expectColumns(mock, "app", "notes", [2]string{"id", "integer"}, [2]string{"item_id", "integer"})
+	mock.ExpectQuery(`SELECT * FROM "app"."notes"`).WillReturnRows(sqlmock.NewRows([]string{"id", "item_id"}).
+		AddRow(int64(1), int64(7)).AddRow(int64(3), nil))
+	expectColumns(mock, "public", "items", [2]string{"id", "integer"}, [2]string{"kind", "USER-DEFINED"},
+		[2]string{"doubled", "integer"}, [2]string{"parent_id", "integer"})
+	mock.ExpectQuery(`SELECT * FROM "public"."items"`).WillReturnRows(sqlmock.NewRows([]string{"id", "kind", "doubled", "parent_id"}).
+		AddRow(int64(7), "it's", int64(14), nil).AddRow(int64(9007199254740993), "new", int64(0), int64(7)))
+
 	var out strings.Builder
 	_, err := session.Dump(context.Background(), dbdriver.DumpRequest{
 		Database: "shop", Whole: true, WithData: true, Header: dumpHeader(), Writer: &out,
+		Options: dbdriver.DumpOptions{Indexes: true, ForeignKeys: true, Views: true, Routines: true, Triggers: true, Drops: true},
 	})
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -157,6 +162,7 @@ func TestDumpSelectedTablesWritesOnlyTheEnumsTheyUse(t *testing.T) {
 	var out strings.Builder
 	_, err := session.Dump(context.Background(), dbdriver.DumpRequest{
 		Database: "shop", Tables: []string{"app.notes"}, Header: dumpHeader(), Writer: &out,
+		Options: dbdriver.DumpOptions{Indexes: true, ForeignKeys: true},
 	})
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -182,8 +188,62 @@ func TestDumpWholeSchemaKeepsToItsSchema(t *testing.T) {
 	var out strings.Builder
 	_, err := session.Dump(context.Background(), dbdriver.DumpRequest{
 		Database: "shop", Schema: "app", Whole: true, Header: dumpHeader(), Writer: &out,
+		Options: dbdriver.DumpOptions{Indexes: true, ForeignKeys: true, Views: true, Routines: true, Triggers: true},
 	})
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 	assert.Equal(t, readGolden(t, "dump_schema.sql"), out.String())
+}
+
+// expectNotesDDL 预期 app.notes 的建表语句的查询（有一个不由约束建出的索引）；indexes 为假时没有索引的查询。
+func expectNotesDDL(mock sqlmock.Sqlmock, indexes bool) {
+	mock.ExpectQuery(ddlColumnsQuery).WithArgs("app", "notes").WillReturnRows(ddlColumnRows("r", nil,
+		ddlCol{name: "id", dataType: "integer"}, ddlCol{name: "item_id", dataType: "integer", nullable: true}))
+	mock.ExpectQuery(ownedSequencesQuery).WithArgs("app", "notes").WillReturnRows(ownedSequenceRows())
+	mock.ExpectQuery(tableConstraintsQuery).WithArgs("app", "notes").WillReturnRows(constraintRows([2]string{"notes_pkey", "PRIMARY KEY (id)"}))
+	if indexes {
+		mock.ExpectQuery(tableIndexesQuery).WithArgs("app", "notes").
+			WillReturnRows(names("def", `CREATE INDEX notes_item ON app.notes USING btree (item_id)`))
+	}
+}
+
+// 选中一张有索引与外键的表：「包含索引」不勾时建表语句之后没有它的索引（主键随建表语句）；「包含外键」不勾时
+// 全部数据之后没有外键；勾了「写入删除语句」而没勾「包含外键」时，删除段仍先删它的外键（目标库里的外键挡着删表）。
+func TestDumpLeavesOutIndexesAndForeignKeysWhenExcluded(t *testing.T) {
+	dump := func(t *testing.T, options dbdriver.DumpOptions) string {
+		t.Helper()
+		session, mock := newMock(t)
+		mock.ExpectQuery(viewsSQL).WillReturnRows(names("v"))
+		mock.ExpectQuery(proceduresSQL).WillReturnRows(names("r"))
+		mock.ExpectQuery(functionsSQL).WillReturnRows(names("r"))
+		mock.ExpectQuery(triggersSQL).WillReturnRows(sqlmock.NewRows([]string{"s", "n", "t"}))
+		mock.ExpectQuery(usedEnumsQuery).WithArgs(`["app.notes"]`).WillReturnRows(enumRows())
+		expectNotesDDL(mock, true)
+		if !options.Indexes {
+			expectNotesDDL(mock, false)
+		}
+		mock.ExpectQuery(dumpForeignKeysQuery).WithArgs("app", "notes").
+			WillReturnRows(constraintRows([2]string{"notes_item_fk", "FOREIGN KEY (item_id) REFERENCES items(id)"}))
+		var out strings.Builder
+		_, err := session.Dump(context.Background(), dbdriver.DumpRequest{
+			Database: "shop", Tables: []string{"app.notes"}, Options: options, Header: dumpHeader(), Writer: &out,
+		})
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+		return out.String()
+	}
+	index := "\n\nCREATE INDEX notes_item ON app.notes USING btree (item_id);"
+	foreignKey := `ALTER TABLE "app"."notes" ADD CONSTRAINT "notes_item_fk" FOREIGN KEY (item_id) REFERENCES items(id);`
+	dropForeignKey := `ALTER TABLE IF EXISTS "app"."notes" DROP CONSTRAINT IF EXISTS "notes_item_fk";`
+
+	full := dump(t, dbdriver.DumpOptions{Indexes: true, ForeignKeys: true})
+	assert.Contains(t, full, "  CONSTRAINT \"notes_pkey\" PRIMARY KEY (id)\n);"+index+"\n")
+	assert.Contains(t, full, foreignKey)
+	assert.NotContains(t, full, "DROP")
+
+	bare := dump(t, dbdriver.DumpOptions{Drops: true})
+	assert.Contains(t, bare, "  CONSTRAINT \"notes_pkey\" PRIMARY KEY (id)\n);\n")
+	assert.NotContains(t, bare, "CREATE INDEX")
+	assert.NotContains(t, bare, "ADD CONSTRAINT")
+	assert.Contains(t, bare, "-- Drop existing objects\n-- ----------------------------\n"+dropForeignKey+"\nDROP TABLE IF EXISTS \"app\".\"notes\";\n")
 }

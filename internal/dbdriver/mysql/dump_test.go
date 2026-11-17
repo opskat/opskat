@@ -41,9 +41,15 @@ func noViewTableUsage() error {
 	return &gomysql.MySQLError{Number: 1146, Message: "Table 'information_schema.VIEW_TABLE_USAGE' doesn't exist"}
 }
 
-// 整库转储（仅结构）写出的文件：开头 SET NAMES 与关外键检查，每个对象前 DROP ... IF EXISTS（不带库名），
-// 定义是服务器的原文（DEFINER 保留）但不带库名，视图按依赖排序，过程、函数、触发器用 DELIMITER ;; 包起来
-// 且在视图之后，结尾恢复外键检查。
+// allOptions 是全部勾上的导出选项。
+var allOptions = dbdriver.DumpOptions{
+	Indexes: true, ForeignKeys: true, Views: true, Routines: true, Triggers: true, Drops: true, DisableForeignKeyChecks: true,
+}
+
+// 整库转储（仅结构，选项全勾）写出的文件：开头 SET NAMES 与关外键检查，删除段按倒序删触发器、函数与过程、
+// 视图（依赖别的视图的先删）、表（DROP ... IF EXISTS，不带库名，MySQL 能关外键检查，不先删外键），定义是
+// 服务器的原文（DEFINER 保留）但不带库名，视图按依赖排序，过程、函数、触发器用 DELIMITER ;; 包起来且在视图
+// 之后，结尾恢复外键检查。
 func TestDumpWritesRestorableMySQLFile(t *testing.T) {
 	session, mock := newMock(t)
 	mock.ExpectQuery(viewsSQL).WillReturnRows(names("TABLE_NAME", "v_a", "v_b"))
@@ -68,19 +74,29 @@ func TestDumpWritesRestorableMySQLFile(t *testing.T) {
 
 	var out strings.Builder
 	_, err := session.Dump(context.Background(), dbdriver.DumpRequest{
-		Database: "app", Whole: true, Header: dumpHeader(), Writer: &out,
+		Database: "app", Whole: true, Options: allOptions, Header: dumpHeader(), Writer: &out,
 	})
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
 	assert.Equal(t, "-- OpsKat SQL Dump\n--\n-- OpsKat version: 1.16.0\n-- Asset: prod-mysql\n-- Database: app\n-- Content: structure only\n"+
+		"-- Options: indexes, foreign keys, views, functions and procedures, triggers, drop statements, disable foreign key checks\n"+
 		"-- Date: 2026-11-17 08:00:00 +00:00\n--\n-- File encoding: UTF-8\n"+`
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
 -- ----------------------------
+-- Drop existing objects
+-- ----------------------------
+DROP TRIGGER IF EXISTS `+"`t_bi`"+`;
+DROP PROCEDURE IF EXISTS `+"`p_touch`"+`;
+DROP FUNCTION IF EXISTS `+"`f_one`"+`;
+DROP VIEW IF EXISTS `+"`v_a`"+`;
+DROP VIEW IF EXISTS `+"`v_b`"+`;
+DROP TABLE IF EXISTS `+"`items`"+`;
+
+-- ----------------------------
 -- Table structure for items
 -- ----------------------------
-DROP TABLE IF EXISTS `+"`items`"+`;
 CREATE TABLE `+"`items`"+` (
   `+"`id`"+` int NOT NULL AUTO_INCREMENT,
   PRIMARY KEY (`+"`id`"+`)
@@ -89,19 +105,16 @@ CREATE TABLE `+"`items`"+` (
 -- ----------------------------
 -- View structure for v_b
 -- ----------------------------
-DROP VIEW IF EXISTS `+"`v_b`"+`;
 CREATE ALGORITHM=UNDEFINED DEFINER=`+"`root`@`%`"+` SQL SECURITY DEFINER VIEW `+"`v_b`"+` AS select `+"`items`.`id`"+` AS `+"`id`"+` from `+"`items`"+`;
 
 -- ----------------------------
 -- View structure for v_a
 -- ----------------------------
-DROP VIEW IF EXISTS `+"`v_a`"+`;
 CREATE ALGORITHM=UNDEFINED DEFINER=`+"`root`@`%`"+` SQL SECURITY DEFINER VIEW `+"`v_a`"+` AS select `+"`v_b`.`id`"+` AS `+"`id`"+` from `+"`v_b`"+`;
 
 -- ----------------------------
 -- Function structure for f_one
 -- ----------------------------
-DROP FUNCTION IF EXISTS `+"`f_one`"+`;
 DELIMITER ;;
 CREATE DEFINER=`+"`root`@`%`"+` FUNCTION `+"`f_one`"+`() RETURNS int
 RETURN 1
@@ -111,7 +124,6 @@ DELIMITER ;
 -- ----------------------------
 -- Procedure structure for p_touch
 -- ----------------------------
-DROP PROCEDURE IF EXISTS `+"`p_touch`"+`;
 DELIMITER ;;
 CREATE DEFINER=`+"`root`@`%`"+` PROCEDURE `+"`p_touch`"+`()
 BEGIN
@@ -123,7 +135,6 @@ DELIMITER ;
 -- ----------------------------
 -- Trigger structure for t_bi
 -- ----------------------------
-DROP TRIGGER IF EXISTS `+"`t_bi`"+`;
 DELIMITER ;;
 CREATE DEFINER=`+"`root`@`%`"+` TRIGGER `+"`t_bi`"+` BEFORE INSERT ON `+"`items`"+` FOR EACH ROW SET NEW.id = NEW.id
 ;;
@@ -206,4 +217,80 @@ func TestStripDatabaseQualifier(t *testing.T) {
 func TestTableRefWithoutADatabaseHasNoQualifier(t *testing.T) {
 	assert.Equal(t, "`t`", dialect{}.TableRef("", "t"))
 	assert.Equal(t, "`app`.`t`", dialect{}.TableRef("app", "t"))
+}
+
+// fullItemsDDL 是一张有各种索引、外键与 CHECK 的表在 SHOW CREATE TABLE 里的原文。
+const fullItemsDDL = "CREATE TABLE `items` (\n" +
+	"  `id` int NOT NULL AUTO_INCREMENT,\n" +
+	"  `owner_id` int DEFAULT NULL,\n" +
+	"  `sku` varchar(20) DEFAULT NULL COMMENT 'KEY `x`',\n" +
+	"  `body` text,\n" +
+	"  PRIMARY KEY (`id`),\n" +
+	"  UNIQUE KEY `uk_sku` (`sku`),\n" +
+	"  KEY `idx_owner` (`owner_id`),\n" +
+	"  FULLTEXT KEY `ft_body` (`body`),\n" +
+	"  CONSTRAINT `chk_id` CHECK ((`id` > 0)),\n" +
+	"  CONSTRAINT `fk_owner` FOREIGN KEY (`owner_id`) REFERENCES `owners` (`id`) ON DELETE CASCADE\n" +
+	") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+
+// 「包含索引」「包含外键」不勾时，从建表语句的原文里去掉对应的行（主键、唯一约束、CHECK 与列都留着），
+// 去掉的是最后一行时前一行的逗号也去掉。
+func TestDumpTableLeavesOutIndexesAndForeignKeysWhenExcluded(t *testing.T) {
+	definition := func(t *testing.T, options dbdriver.DumpOptions) string {
+		t.Helper()
+		script := &dbdriver.DumpObjectScript{}
+		require.NoError(t, dialect{}.DumpObject(context.Background(), nil, dbdriver.DumpObject{
+			Database: "app", Kind: dbdriver.DumpTable, Name: "items", Definition: fullItemsDDL, Options: options,
+		}, script))
+		require.Len(t, script.Definition, 1)
+		return script.Definition[0]
+	}
+
+	assert.Equal(t, fullItemsDDL+";", definition(t, dbdriver.DumpOptions{Indexes: true, ForeignKeys: true}))
+	assert.Equal(t, "CREATE TABLE `items` (\n"+
+		"  `id` int NOT NULL AUTO_INCREMENT,\n"+
+		"  `owner_id` int DEFAULT NULL,\n"+
+		"  `sku` varchar(20) DEFAULT NULL COMMENT 'KEY `x`',\n"+
+		"  `body` text,\n"+
+		"  PRIMARY KEY (`id`),\n"+
+		"  UNIQUE KEY `uk_sku` (`sku`),\n"+
+		"  CONSTRAINT `chk_id` CHECK ((`id` > 0)),\n"+
+		"  CONSTRAINT `fk_owner` FOREIGN KEY (`owner_id`) REFERENCES `owners` (`id`) ON DELETE CASCADE\n"+
+		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;", definition(t, dbdriver.DumpOptions{ForeignKeys: true}), "without indexes")
+	assert.Equal(t, "CREATE TABLE `items` (\n"+
+		"  `id` int NOT NULL AUTO_INCREMENT,\n"+
+		"  `owner_id` int DEFAULT NULL,\n"+
+		"  `sku` varchar(20) DEFAULT NULL COMMENT 'KEY `x`',\n"+
+		"  `body` text,\n"+
+		"  PRIMARY KEY (`id`),\n"+
+		"  UNIQUE KEY `uk_sku` (`sku`),\n"+
+		"  KEY `idx_owner` (`owner_id`),\n"+
+		"  FULLTEXT KEY `ft_body` (`body`),\n"+
+		"  CONSTRAINT `chk_id` CHECK ((`id` > 0))\n"+
+		") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;", definition(t, dbdriver.DumpOptions{Indexes: true}), "without foreign keys")
+}
+
+// 关闭外键检查只在勾了它时写：MySQL 声明了能在会话里关闭（驱动描述由方言得出）。
+func TestDumpWritesForeignKeyChecksOnlyWhenChosen(t *testing.T) {
+	assert.True(t, descriptor.DumpDisablesForeignKeyChecks)
+	dump := func(t *testing.T, options dbdriver.DumpOptions) string {
+		t.Helper()
+		session, mock := newMock(t)
+		expectObjects(mock)
+		mock.ExpectQuery("SHOW CREATE TABLE `items`").WillReturnRows(sqlmock.NewRows([]string{"Table", "Create Table"}).
+			AddRow("items", "CREATE TABLE `items` (`id` int)"))
+		var out strings.Builder
+		_, err := session.Dump(context.Background(), dbdriver.DumpRequest{
+			Database: "app", Tables: []string{"items"}, Options: options, Header: dumpHeader(), Writer: &out,
+		})
+		require.NoError(t, err)
+		return out.String()
+	}
+
+	assert.Contains(t, dump(t, dbdriver.DumpOptions{DisableForeignKeyChecks: true}), "\nSET NAMES utf8mb4;\nSET FOREIGN_KEY_CHECKS = 0;\n")
+	assert.True(t, strings.HasSuffix(dump(t, dbdriver.DumpOptions{DisableForeignKeyChecks: true}), "\nSET FOREIGN_KEY_CHECKS = 1;\n"))
+	plain := dump(t, dbdriver.DumpOptions{})
+	assert.Contains(t, plain, "\nSET NAMES utf8mb4;\n")
+	assert.NotContains(t, plain, "FOREIGN_KEY_CHECKS")
+	assert.NotContains(t, plain, "DROP")
 }

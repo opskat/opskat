@@ -271,7 +271,7 @@ func TestExtensionDriverDumps(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "app.sql")
 
 		dumped, err := dbdriver.DumpToFile(ctx, s, dbdriver.DumpRequest{
-			Database: "app", Whole: true, WithData: true,
+			Database: "app", Whole: true, WithData: true, Options: dbdriver.DumpOptions{Indexes: true, ForeignKeys: true, Drops: true},
 			Header: dbdriver.DumpHeader{Version: "test", Asset: "fixture", Time: time.Unix(0, 0).UTC()},
 		}, path)
 		require.NoError(t, err)
@@ -311,6 +311,24 @@ func TestExtensionDriverDumps(t *testing.T) {
 		}
 		assert.Contains(t, ran, "EXEC INSERT INTO [blobs] ([id], [data]) VALUES ('9007199254740993', X'00fffe6f6b')",
 			"the big integer and the binary value survive the dump")
+	})
+
+	t.Run("the export options reach the guest", func(t *testing.T) {
+		d := newDriver()
+		s := d.open(t)
+		defer func() { _ = s.Close() }()
+		dump := func(options dbdriver.DumpOptions) string {
+			var out strings.Builder
+			_, err := s.Dump(ctx, dbdriver.DumpRequest{Database: "app", Tables: []string{"users"}, Options: options, Writer: &out})
+			require.NoError(t, err)
+			return out.String()
+		}
+
+		withIndexes := dump(dbdriver.DumpOptions{Indexes: true})
+		assert.Contains(t, withIndexes, "\nCREATE INDEX [users_name] ON [users] ([name]);\n", "the guest writes the index it was asked for")
+		assert.NotContains(t, withIndexes, "DROP")
+		assert.NotContains(t, dump(dbdriver.DumpOptions{}), "CREATE INDEX", "the guest leaves the index out")
+		assert.Contains(t, dump(dbdriver.DumpOptions{Drops: true}), "\nDROP TABLE IF EXISTS [users];\n")
 	})
 
 	t.Run("a canceled dump leaves the target as it was", func(t *testing.T) {

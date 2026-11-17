@@ -13,8 +13,9 @@ import (
 
 // 转储：每条结构语句与每一块数据之后单独一行 GO，CREATE VIEW / FUNCTION / PROCEDURE / TRIGGER 因此都在
 // 一批的开头。存在则删除用 SQL Server 2016 起的 DROP ... IF EXISTS（库级 DDL 触发器带 ON DATABASE）。
-// 表的定义是 TableDDL（不含外键）；外键在全部数据之后用 ALTER TABLE ... ADD CONSTRAINT 加上，禁用的、
-// 不受信任的保持原状。INSERT 不写计算列与 rowversion；有 IDENTITY 列的表，数据前后开、关
+// 表的定义是 TableDDL（不含外键；不勾「包含索引」时也不含索引）；外键在全部数据之后用 ALTER TABLE ... ADD
+// CONSTRAINT 加上（勾了「包含外键」时），禁用的、不受信任的保持原状；SQL Server 不能在会话里关闭外键检查，删除段
+// 先拆掉要转储的表上的外键（表或外键不存在时跳过），被引用的表才删得掉。INSERT 不写计算列与 rowversion；有 IDENTITY 列的表，数据前后开、关
 // IDENTITY_INSERT，全部数据之后用 DBCC CHECKIDENT 把当前值设回源库的。视图、函数、过程与触发器写服务器
 // 保存的原文（OBJECT_DEFINITION），不补分号：GO 切分去掉批末尾的空白，原文才与源库一样；视图的依赖取自
 // sys.sql_expression_dependencies；禁用的触发器建出后再禁用。扩展属性、权限与 schema 的创建不写（导入前
@@ -71,11 +72,16 @@ const dumpForeignKeysQuery = "SELECT fk.name, OBJECT_SCHEMA_NAME(fk.referenced_o
 func dumpTable(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error {
 	tableRef := sqldb.QuoteSchemaTable(object.Name, quoteIdent)
 	id := objectRef(object.Name)
-	foreignKeys, err := foreignKeyStatements(ctx, conn, tableRef, id)
-	if err != nil {
+	if !object.Options.Indexes {
+		definition, err := tableDDL(ctx, conn, object.Name, false)
+		if err != nil {
+			return sqldb.Wrap("table definition", err)
+		}
+		script.Definition = []string{sqldb.TerminateStatement(definition)}
+	}
+	if err := foreignKeyStatements(ctx, conn, tableRef, id, script); err != nil {
 		return sqldb.Wrap("foreign keys", err)
 	}
-	script.ForeignKeys = foreignKeys
 	identity, err := queryIdentity(ctx, conn, id)
 	if err != nil {
 		return sqldb.Wrap("identity", err)
@@ -124,14 +130,18 @@ type dumpForeignKey struct {
 }
 
 // foreignKeyStatements 写出表上的外键：ALTER TABLE ... ADD CONSTRAINT，不受信任的用 WITH NOCHECK（不检查已有
-// 的行），禁用的加上之后再 NOCHECK CONSTRAINT。
-func foreignKeyStatements(ctx context.Context, conn *sql.Conn, tableRef, id string) ([]string, error) {
+// 的行），禁用的加上之后再 NOCHECK CONSTRAINT；以及删除段里拆掉它们的语句（只在这张表上有这个外键时才拆，
+// 表不存在时也不报错）。
+func foreignKeyStatements(ctx context.Context, conn *sql.Conn, tableRef, id string, script *dbdriver.DumpObjectScript) error {
 	foreignKeys, err := queryForeignKeys(ctx, conn, id)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	var statements []string
 	for _, fk := range foreignKeys {
+		script.DropForeignKeys = append(script.DropForeignKeys, fmt.Sprintf(
+			"IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = %s AND parent_object_id = OBJECT_ID(%s)) ALTER TABLE %s DROP CONSTRAINT %s;",
+			unicodeString(fk.name), unicodeString(id), tableRef, quoteIdent(fk.name)))
 		check := "WITH CHECK"
 		if fk.untrusted {
 			check = "WITH NOCHECK"
@@ -147,7 +157,8 @@ func foreignKeyStatements(ctx context.Context, conn *sql.Conn, tableRef, id stri
 			statements = append(statements, fmt.Sprintf("ALTER TABLE %s NOCHECK CONSTRAINT %s;", tableRef, quoteIdent(fk.name)))
 		}
 	}
-	return statements, nil
+	script.ForeignKeys = statements
+	return nil
 }
 
 // referentialAction 写 ON DELETE / ON UPDATE 的动作（*_referential_action_desc：NO_ACTION、CASCADE、SET_NULL、

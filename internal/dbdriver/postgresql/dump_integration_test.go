@@ -71,6 +71,9 @@ END
 $$;
 CREATE TRIGGER events_stamp BEFORE INSERT ON app.events FOR EACH ROW EXECUTE FUNCTION app.stamp();`
 
+// structureOptions 是全部结构选项（PostgreSQL 不能关闭外键检查，不写删除语句）。
+var structureOptions = dbdriver.DumpOptions{Indexes: true, ForeignKeys: true, Views: true, Routines: true, Triggers: true}
+
 // userSchemas 是比对时看的 schema。
 const userSchemas = "NOT IN ('pg_catalog', 'information_schema', 'pg_toast')"
 
@@ -158,11 +161,12 @@ func TestIntegrationDumpRestoresAWholeDatabaseOnAnEmptyOne(t *testing.T) {
 	ctx := context.Background()
 	var out strings.Builder
 	dumped, err := newSession(sourceDB).Dump(ctx, dbdriver.DumpRequest{
-		Database: source, Whole: true, WithData: true, Writer: &out,
+		Database: source, Whole: true, WithData: true, Writer: &out, Options: structureOptions,
 		Header: dbdriver.DumpHeader{Version: "test", Asset: "pg", Time: time.Now()},
 	})
 	require.NoError(t, err)
 	script := out.String()
+	assert.NotContains(t, script, "DROP", "without the drop option the file has no drop statement at all")
 	t.Log(script)
 	// 表 3 张、视图 2 个、函数 describe 与 stamp、过程 purge、触发器 events_stamp。
 	assert.Equal(t, 9, dumped.Objects)
@@ -184,4 +188,43 @@ func TestIntegrationDumpRestoresAWholeDatabaseOnAnEmptyOne(t *testing.T) {
 	var described string
 	require.NoError(t, targetDB.QueryRow("SELECT public.describe(1) || ' / ' || public.describe('x'::text)").Scan(&described))
 	assert.Equal(t, "int 1 / text x", described)
+}
+
+// 覆盖还原：勾了「写入删除语句」整库转储，再把文件运行回源库本身——库里还有全部数据、外键（含互相引用成环的）、
+// 依赖另一个视图的视图与触发器。删除段先拆掉各表的外键，再删触发器、过程与函数、视图、表、枚举类型（不带
+// CASCADE），每条语句都成功；结构（含序列当前值）与每张表的数据都和转储之前一样。
+func TestIntegrationDumpOverwritesTheOriginalDatabase(t *testing.T) {
+	admin := openDDLDatabase(t, os.Getenv("E2E_POSTGRES_DATABASE"))
+	source := fmt.Sprintf("opskat_dump_ovr_%d", time.Now().UnixNano())
+	createScratchDatabase(t, admin, source)
+	sourceDB := openDDLDatabase(t, source)
+	_, err := sourceDB.Exec(dumpSourceSQL)
+	require.NoError(t, err)
+	structure, data := queryLines(t, sourceDB, structureQuery), tableData(t, sourceDB)
+
+	ctx := context.Background()
+	var out strings.Builder
+	options := structureOptions
+	options.Drops = true
+	_, err = newSession(sourceDB).Dump(ctx, dbdriver.DumpRequest{
+		Database: source, Whole: true, WithData: true, Writer: &out, Options: options,
+		Header: dbdriver.DumpHeader{Version: "test", Asset: "pg", Time: time.Now()},
+	})
+	require.NoError(t, err)
+	script := out.String()
+	require.Contains(t, script, `ALTER TABLE IF EXISTS "public"."owners" DROP CONSTRAINT IF EXISTS "owners_best_pet_fk";`)
+	for _, line := range strings.Split(script, "\n") {
+		if strings.HasPrefix(line, "DROP ") || strings.Contains(line, " DROP CONSTRAINT ") {
+			assert.NotContains(t, line, "CASCADE", "drops never cascade")
+		}
+	}
+
+	result, err := newSession(sourceDB).RunScript(ctx, dbdriver.ScriptRequest{
+		Database: source, Script: strings.NewReader(script), Size: int64(len(script)),
+	})
+	require.NoError(t, err)
+	require.Nil(t, result.Failure, "the dump must run back into the database it came from: %+v", result.Failure)
+	assert.Zero(t, result.Failed)
+	assert.Equal(t, structure, queryLines(t, sourceDB, structureQuery))
+	assert.Equal(t, data, tableData(t, sourceDB))
 }

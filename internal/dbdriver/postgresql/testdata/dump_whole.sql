@@ -4,6 +4,7 @@
 -- Asset: prod-pg
 -- Database: shop
 -- Content: structure and data
+-- Options: indexes, foreign keys, views, functions and procedures, triggers, drop statements
 -- Date: 2026-11-17 08:00:00 +00:00
 --
 -- File encoding: UTF-8
@@ -11,12 +12,26 @@
 SET check_function_bodies = false;
 CREATE SCHEMA IF NOT EXISTS "app";
 
+-- ----------------------------
+-- Drop existing objects
+-- ----------------------------
+ALTER TABLE IF EXISTS "app"."notes" DROP CONSTRAINT IF EXISTS "notes_item_fk";
+ALTER TABLE IF EXISTS "public"."items" DROP CONSTRAINT IF EXISTS "items_parent_fk";
+DROP TRIGGER IF EXISTS "items_touch" ON "public"."items";
+DROP PROCEDURE IF EXISTS "app"."cleanup"();
+DROP FUNCTION IF EXISTS "public"."touch"(n integer);
+DROP FUNCTION IF EXISTS "public"."touch"(t text);
+DROP VIEW IF EXISTS "public"."v_a";
+DROP VIEW IF EXISTS "public"."v_b";
+DROP TABLE IF EXISTS "public"."items";
+DROP TABLE IF EXISTS "app"."notes";
+DROP TYPE IF EXISTS "public"."kind";
+
 CREATE TYPE "public"."kind" AS ENUM ('new', 'it''s');
 
 -- ----------------------------
 -- Table structure for app.notes
 -- ----------------------------
-DROP TABLE IF EXISTS "app"."notes";
 CREATE SEQUENCE "app"."notes_id_seq" AS integer START WITH 1 INCREMENT BY 1 MINVALUE 1 MAXVALUE 2147483647;
 
 CREATE TABLE "app"."notes" (
@@ -36,7 +51,6 @@ INSERT INTO "app"."notes" ("id", "item_id") VALUES ('3', NULL);
 -- ----------------------------
 -- Table structure for public.items
 -- ----------------------------
-DROP TABLE IF EXISTS "public"."items";
 CREATE TABLE "public"."items" (
   "id" integer NOT NULL GENERATED ALWAYS AS IDENTITY (START WITH 1 INCREMENT BY 1 MINVALUE 1 MAXVALUE 2147483647),
   "kind" public.kind,
@@ -60,22 +74,18 @@ ALTER TABLE "public"."items" ADD CONSTRAINT "items_parent_fk" FOREIGN KEY (paren
 -- ----------------------------
 -- View structure for public.v_b
 -- ----------------------------
-DROP VIEW IF EXISTS "public"."v_b";
 CREATE VIEW "public"."v_b" AS SELECT id
    FROM items;
 
 -- ----------------------------
 -- View structure for public.v_a
 -- ----------------------------
-DROP VIEW IF EXISTS "public"."v_a";
 CREATE VIEW "public"."v_a" AS SELECT id
    FROM v_b;
 
 -- ----------------------------
 -- Function structure for public.touch
 -- ----------------------------
-DROP FUNCTION IF EXISTS "public"."touch"(n integer);
-DROP FUNCTION IF EXISTS "public"."touch"(t text);
 CREATE OR REPLACE FUNCTION public.touch(n integer)
  RETURNS integer
  LANGUAGE sql
@@ -88,7 +98,6 @@ AS $function$SELECT t$function$;
 -- ----------------------------
 -- Procedure structure for app.cleanup
 -- ----------------------------
-DROP PROCEDURE IF EXISTS "app"."cleanup"();
 CREATE OR REPLACE PROCEDURE app.cleanup()
  LANGUAGE sql
 AS $procedure$DELETE FROM app.notes$procedure$;
@@ -96,7 +105,6 @@ AS $procedure$DELETE FROM app.notes$procedure$;
 -- ----------------------------
 -- Trigger structure for public.items_touch
 -- ----------------------------
-DROP TRIGGER IF EXISTS "items_touch" ON "public"."items";
 CREATE TRIGGER items_touch BEFORE INSERT ON items FOR EACH ROW EXECUTE FUNCTION touch_items();
 
 -- ----------------------------

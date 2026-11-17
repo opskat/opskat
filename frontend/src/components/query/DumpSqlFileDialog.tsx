@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronDown, Download, ExternalLink, FolderOpen, Loader2 } from "lucide-react";
+import { AlertTriangle, ChevronDown, Download, ExternalLink, FolderOpen, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   Button,
+  Checkbox,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -15,14 +16,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   Label,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
 } from "@opskat/ui";
 import { CancelDumpSQLFile, SelectDumpFile, StartDumpSQLFile } from "../../../wailsjs/go/query/Query";
 import { OpenDirectory } from "../../../wailsjs/go/system/System";
+import { query } from "../../../wailsjs/go/models";
 import { EventsOn } from "../../../wailsjs/runtime/runtime";
 import { errorMessage } from "@/lib/errorMessage";
 import { formatBytes } from "@/lib/formatBytes";
@@ -60,14 +57,51 @@ interface DumpSqlFileDialogProps {
   assetName: string;
   database: string;
   target: DumpTarget;
-  /** 「转储内容」的初始值:取自所选的子菜单项。 */
+  /** 「导出数据」的初始值:取自所选的子菜单项。 */
   withData: boolean;
-  /** 驱动能生成行语句时才有「结构和数据」。 */
+  /** 驱动能生成行语句时才能「导出数据」。 */
   canDumpData: boolean;
+  /** 驱动能在转储文件里关闭外键检查(驱动描述的 dumpDisablesForeignKeyChecks)。 */
+  canDisableForeignKeyChecks: boolean;
 }
 
 type Phase = "idle" | "starting" | "running" | "finished";
-type Content = "data" | "structure";
+
+/** 用户在对话框里勾的选项(「导出数据」之外);置灰的选项实际取值见 effectiveOptions。 */
+interface DumpChoices {
+  indexes: boolean;
+  foreignKeys: boolean;
+  views: boolean;
+  routines: boolean;
+  triggers: boolean;
+  drops: boolean;
+  disableForeignKeyChecks: boolean;
+}
+
+/** 默认:结构全勾,「写入删除语句」不勾,「关闭外键检查」勾(能关时)。 */
+const DEFAULT_CHOICES: DumpChoices = {
+  indexes: true,
+  foreignKeys: true,
+  views: true,
+  routines: true,
+  triggers: true,
+  drops: false,
+  disableForeignKeyChecks: true,
+};
+
+/**
+ * 交给转储的选项:置灰的选项都不勾——只转储选中的表时没有视图、函数 / 过程与触发器;驱动不能关闭外键检查
+ * 或不包含外键时不关闭外键检查。
+ */
+function effectiveOptions(choices: DumpChoices, whole: boolean, canDisableForeignKeyChecks: boolean): DumpChoices {
+  return {
+    ...choices,
+    views: whole && choices.views,
+    routines: whole && choices.routines,
+    triggers: whole && choices.triggers,
+    disableForeignKeyChecks: canDisableForeignKeyChecks && choices.foreignKeys && choices.disableForeignKeyChecks,
+  };
+}
 
 /** 默认文件名:单张表是 <表名>.sql,其余是 <库名或 schema 名>_<YYYYMMDD>.sql。 */
 function defaultFileName(database: string, target: DumpTarget): string {
@@ -121,9 +155,11 @@ export function DumpSqlFileDialog({
   target: dumpTarget,
   withData,
   canDumpData,
+  canDisableForeignKeyChecks,
 }: DumpSqlFileDialogProps) {
   const { t } = useTranslation();
-  const [content, setContent] = useState<Content>(withData && canDumpData ? "data" : "structure");
+  const [dumpData, setDumpData] = useState(withData && canDumpData);
+  const [choices, setChoices] = useState<DumpChoices>(DEFAULT_CHOICES);
   const [path, setPath] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [latest, setLatest] = useState<DumpSqlFileEvent | null>(null);
@@ -152,6 +188,11 @@ export function DumpSqlFileDialog({
 
   const busy = phase === "starting" || phase === "running";
   const target = `${assetName} / ${database}`;
+  const whole = dumpTarget.kind !== "tables";
+  const options = useMemo(
+    () => effectiveOptions(choices, whole, canDisableForeignKeyChecks),
+    [choices, whole, canDisableForeignKeyChecks]
+  );
 
   const apply = useCallback(
     (event: DumpSqlFileEvent) => {
@@ -198,7 +239,6 @@ export function DumpSqlFileDialog({
 
   const handleStart = useCallback(async () => {
     if (!path) return;
-    const dumpData = content === "data";
     setPhase("starting");
     setStartError("");
     setCancelling(false);
@@ -218,14 +258,18 @@ export function DumpSqlFileDialog({
       else if (event.dumpId === dumpId) apply(event);
     });
     try {
-      dumpId = await StartDumpSQLFile(assetId, {
-        database,
-        schema: dumpTarget.kind === "schema" ? dumpTarget.schema : "",
-        tables: dumpTarget.kind === "tables" ? dumpTarget.tables : [],
-        whole: dumpTarget.kind !== "tables",
-        withData: dumpData,
-        path,
-      });
+      dumpId = await StartDumpSQLFile(
+        assetId,
+        new query.DumpSQLFileRequest({
+          database,
+          schema: dumpTarget.kind === "schema" ? dumpTarget.schema : "",
+          tables: dumpTarget.kind === "tables" ? dumpTarget.tables : [],
+          whole,
+          withData: dumpData,
+          options,
+          path,
+        })
+      );
     } catch (e) {
       stopListening();
       setStartError(errorMessage(e));
@@ -242,7 +286,7 @@ export function DumpSqlFileDialog({
     for (const event of early) {
       if (event.dumpId === dumpId) apply(event);
     }
-  }, [apply, assetId, content, database, dumpTarget, path, stopListening, t, target]);
+  }, [apply, assetId, database, dumpData, dumpTarget, options, path, stopListening, t, target, whole]);
 
   const handleCancel = useCallback(() => {
     if (!activeDumpRef.current) return;
@@ -277,25 +321,6 @@ export function DumpSqlFileDialog({
         </DialogHeader>
 
         <div className="grid gap-4">
-          <div className="grid gap-1.5">
-            <Label className="text-xs">{t("query.dumpSqlFileContent")}</Label>
-            <Select value={content} disabled={phase !== "idle"} onValueChange={(value) => setContent(value as Content)}>
-              <SelectTrigger size="sm" className="h-8 w-48 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {canDumpData && (
-                  <SelectItem value="data" className="text-xs">
-                    {t("query.dumpSqlFileStructureAndData")}
-                  </SelectItem>
-                )}
-                <SelectItem value="structure" className="text-xs">
-                  {t("query.dumpSqlFileStructureOnly")}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
           <div className="grid gap-2">
             <div className="flex items-center justify-between gap-2">
               <Label className="text-xs">{t("query.exportFile")}</Label>
@@ -315,11 +340,35 @@ export function DumpSqlFileDialog({
             </div>
           </div>
 
-          {phase === "idle" && (
-            <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-              {t("query.dumpSqlFileNote")}
-            </div>
-          )}
+          <DumpOptionsPanel
+            locked={phase !== "idle"}
+            dumpData={dumpData}
+            canDumpData={canDumpData}
+            onDumpDataChange={setDumpData}
+            choices={choices}
+            options={options}
+            whole={whole}
+            canDisableForeignKeyChecks={canDisableForeignKeyChecks}
+            onChoicesChange={setChoices}
+          />
+
+          {phase === "idle" &&
+            (options.drops ? (
+              <div
+                role="note"
+                className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+              >
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>{t("query.dumpSqlFileNoteDrops")}</span>
+              </div>
+            ) : (
+              <div
+                role="note"
+                className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"
+              >
+                {t("query.dumpSqlFileNoteNoDrops")}
+              </div>
+            ))}
 
           {startError && (
             <div
@@ -463,4 +512,144 @@ function progressLabel(
         rows: (event?.progress.rows ?? 0).toLocaleString(),
       });
   }
+}
+
+interface DumpOptionsPanelProps {
+  /** 转储开始后全部不可改。 */
+  locked: boolean;
+  dumpData: boolean;
+  canDumpData: boolean;
+  onDumpDataChange: (value: boolean) => void;
+  choices: DumpChoices;
+  /** 实际交给转储的选项:置灰的显示为不勾。 */
+  options: DumpChoices;
+  whole: boolean;
+  canDisableForeignKeyChecks: boolean;
+  onChoicesChange: (choices: DumpChoices) => void;
+}
+
+/** 导出选项:内容、结构、删除、导入时四组勾选框,置灰的写明原因。 */
+function DumpOptionsPanel({
+  locked,
+  dumpData,
+  canDumpData,
+  onDumpDataChange,
+  choices,
+  options,
+  whole,
+  canDisableForeignKeyChecks,
+  onChoicesChange,
+}: DumpOptionsPanelProps) {
+  const { t } = useTranslation();
+  const onlyWhole = whole ? undefined : t("query.dumpSqlFileOnlyWholeHint");
+  const option = (key: keyof DumpChoices, label: string, hint?: string, unavailable = false) => (
+    <DumpOption
+      id={`dump-sql-file-${key}`}
+      label={label}
+      hint={hint}
+      checked={options[key]}
+      disabled={locked || unavailable}
+      onChange={(value) => onChoicesChange({ ...choices, [key]: value })}
+    />
+  );
+  const foreignKeyChecksHint = canDisableForeignKeyChecks
+    ? t("query.dumpSqlFileOptionForeignKeyChecksHint")
+    : t("query.dumpSqlFileNoForeignKeyChecksHint");
+  // 能关闭外键检查的库,包含外键却不关时,表之间的外键可能挡住导入。
+  const foreignKeyRisk = canDisableForeignKeyChecks && options.foreignKeys && !options.disableForeignKeyChecks;
+
+  return (
+    <div className="grid gap-2 rounded-md border border-border px-3 py-2.5" aria-label={t("query.dumpSqlFileOptions")}>
+      <DumpOptionGroup label={t("query.dumpSqlFileGroupContent")}>
+        <DumpOption
+          id="dump-sql-file-data"
+          label={t("query.dumpSqlFileOptionData")}
+          hint={t("query.dumpSqlFileOptionDataHint")}
+          checked={dumpData}
+          disabled={locked || !canDumpData}
+          onChange={onDumpDataChange}
+        />
+      </DumpOptionGroup>
+      <DumpOptionGroup label={t("query.dumpSqlFileGroupStructure")} columns>
+        {option("indexes", t("query.dumpSqlFileOptionIndexes"))}
+        {option("foreignKeys", t("query.dumpSqlFileOptionForeignKeys"))}
+        {option("views", t("query.dumpSqlFileOptionViews"), onlyWhole, !whole)}
+        {option("routines", t("query.dumpSqlFileOptionRoutines"), onlyWhole, !whole)}
+        {option("triggers", t("query.dumpSqlFileOptionTriggers"), onlyWhole, !whole)}
+      </DumpOptionGroup>
+      <DumpOptionGroup label={t("query.dumpSqlFileGroupDrop")}>
+        {option("drops", t("query.dumpSqlFileOptionDrops"), t("query.dumpSqlFileOptionDropsHint"))}
+      </DumpOptionGroup>
+      <DumpOptionGroup label={t("query.dumpSqlFileGroupImport")}>
+        {option(
+          "disableForeignKeyChecks",
+          t("query.dumpSqlFileOptionForeignKeyChecks"),
+          foreignKeyChecksHint,
+          !canDisableForeignKeyChecks || !options.foreignKeys
+        )}
+      </DumpOptionGroup>
+      {foreignKeyRisk && (
+        <div className="flex items-start gap-1.5 text-xs text-warning">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{t("query.dumpSqlFileForeignKeyRiskHint")}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DumpOptionGroup({
+  label,
+  columns = false,
+  children,
+}: {
+  label: string;
+  /** 项多时排成两列。 */
+  columns?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div role="group" aria-label={label} className="grid grid-cols-[4.5rem_1fr] gap-x-3">
+      <span className="pt-px text-xs text-muted-foreground">{label}</span>
+      <div className={columns ? "grid grid-cols-2 gap-x-4 gap-y-2" : "grid gap-2"}>{children}</div>
+    </div>
+  );
+}
+
+function DumpOption({
+  id,
+  label,
+  hint,
+  checked,
+  disabled,
+  onChange,
+}: {
+  id: string;
+  label: string;
+  hint?: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <div className="flex items-start gap-2">
+      <Checkbox
+        id={id}
+        checked={checked}
+        disabled={disabled}
+        onCheckedChange={(value) => onChange(value === true)}
+        aria-describedby={hint ? `${id}-hint` : undefined}
+      />
+      <div className="grid gap-0.5">
+        <Label htmlFor={id} className={`text-xs font-medium ${disabled ? "text-muted-foreground" : ""}`}>
+          {label}
+        </Label>
+        {hint && (
+          <span id={`${id}-hint`} className="text-xs text-muted-foreground">
+            {hint}
+          </span>
+        )}
+      </div>
+    </div>
+  );
 }

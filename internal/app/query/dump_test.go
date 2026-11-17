@@ -144,7 +144,8 @@ func TestDumpSQLFileWritesAWholeDatabase(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "main.sql")
 
-	_, err := q.StartDumpSQLFile(1, DumpSQLFileRequest{Database: "main", Whole: true, WithData: true, Path: path})
+	_, err := q.StartDumpSQLFile(1, DumpSQLFileRequest{Database: "main", Whole: true, WithData: true, Path: path,
+		Options: dbdriver.DumpOptions{Views: true, Triggers: true}})
 	require.NoError(t, err)
 	final := events.wait(t)
 
@@ -216,8 +217,9 @@ func TestDumpSQLFileFailureLeavesTheTargetAsItWas(t *testing.T) {
 func TestDumpSQLFileIsRefusedBeforeStarting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.sql")
 	for name, tc := range map[string]struct {
-		capabilities []dbdriver.Capability
-		request      DumpSQLFileRequest
+		capabilities     []dbdriver.Capability
+		disablesFKChecks bool
+		request          DumpSQLFileRequest
 	}{
 		"a driver without the feature": {
 			capabilities: []dbdriver.Capability{dbdriver.CapViewDDL, dbdriver.CapExportSQL},
@@ -239,10 +241,33 @@ func TestDumpSQLFileIsRefusedBeforeStarting(t *testing.T) {
 			capabilities: []dbdriver.Capability{dbdriver.CapViewDDL, dbdriver.CapExportSQL, dbdriver.CapDumpSQL},
 			request:      DumpSQLFileRequest{Whole: true, Tables: []string{"users"}, Path: path},
 		},
+		"foreign key checks off on a driver that cannot turn them off": {
+			capabilities: []dbdriver.Capability{dbdriver.CapViewDDL, dbdriver.CapExportSQL, dbdriver.CapDumpSQL},
+			request: DumpSQLFileRequest{Tables: []string{"users"}, Path: path,
+				Options: dbdriver.DumpOptions{ForeignKeys: true, DisableForeignKeyChecks: true}},
+		},
+		"foreign key checks off without foreign keys": {
+			capabilities:     []dbdriver.Capability{dbdriver.CapViewDDL, dbdriver.CapExportSQL, dbdriver.CapDumpSQL},
+			disablesFKChecks: true,
+			request:          DumpSQLFileRequest{Tables: []string{"users"}, Path: path, Options: dbdriver.DumpOptions{DisableForeignKeyChecks: true}},
+		},
+		"views of selected tables": {
+			capabilities: []dbdriver.Capability{dbdriver.CapViewDDL, dbdriver.CapExportSQL, dbdriver.CapDumpSQL},
+			request:      DumpSQLFileRequest{Tables: []string{"users"}, Path: path, Options: dbdriver.DumpOptions{Views: true}},
+		},
+		"routines of selected tables": {
+			capabilities: []dbdriver.Capability{dbdriver.CapViewDDL, dbdriver.CapExportSQL, dbdriver.CapDumpSQL},
+			request:      DumpSQLFileRequest{Tables: []string{"users"}, Path: path, Options: dbdriver.DumpOptions{Routines: true}},
+		},
+		"triggers of selected tables": {
+			capabilities: []dbdriver.Capability{dbdriver.CapViewDDL, dbdriver.CapExportSQL, dbdriver.CapDumpSQL},
+			request:      DumpSQLFileRequest{Tables: []string{"users"}, Path: path, Options: dbdriver.DumpOptions{Triggers: true}},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake := dbdrivertest.NewFake()
 			fake.Desc.Capabilities = append(fake.Desc.Capabilities, tc.capabilities...)
+			fake.Desc.DumpDisablesForeignKeyChecks = tc.disablesFKChecks
 			dbdrivertest.Register(t, fake)
 			q := newNamedPanelQuery(t, "db", &asset_entity.DatabaseConfig{Driver: "fakedb", Host: "h", Port: 7777})
 
@@ -345,4 +370,26 @@ func TestDumpFileNameStaysAFileName(t *testing.T) {
 	assert.Equal(t, "public.users.sql", dumpFileName("public.users.sql"))
 	assert.Equal(t, "a_b_c.sql", dumpFileName("a/b\\c.sql"))
 	assert.False(t, strings.ContainsAny(dumpFileName("../../etc/passwd"), `/\`))
+}
+
+// 导出选项原样交给转储：注释头列出它们，SQLite 在开头关闭外键检查、勾了「写入删除语句」时文件开头是删除段。
+func TestDumpSQLFilePassesTheOptions(t *testing.T) {
+	events := captureDumpEvents(t)
+	q := newNamedPanelQuery(t, "local-sqlite", &asset_entity.DatabaseConfig{
+		Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "panel.db"),
+	})
+	_, err := q.ExecuteSQL(1, "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)", "main")
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "t.sql")
+
+	_, err = q.StartDumpSQLFile(1, DumpSQLFileRequest{Database: "main", Tables: []string{"t"}, Path: path,
+		Options: dbdriver.DumpOptions{Indexes: true, ForeignKeys: true, Drops: true, DisableForeignKeyChecks: true}})
+	require.NoError(t, err)
+	require.Equal(t, DumpSQLFileDone, events.wait(t).Status)
+
+	content, err := os.ReadFile(filepath.Clean(path))
+	require.NoError(t, err)
+	text := string(content)
+	assert.Contains(t, text, "-- Options: indexes, foreign keys, drop statements, disable foreign key checks\n")
+	assert.Contains(t, text, "\nPRAGMA foreign_keys = false;\n\n-- ----------------------------\n-- Drop existing objects\n")
 }

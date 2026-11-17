@@ -110,11 +110,14 @@ func TestDumpRoundTripsAWholeDatabaseOnARealMySQL(t *testing.T) {
 	exec(t, sourceDB, sourceSchema...)
 
 	var file strings.Builder
+	withoutDrops := allOptions
+	withoutDrops.Drops = false
 	result, err := newSession(sourceDB).Dump(ctx, dbdriver.DumpRequest{
-		Database: source, Whole: true, WithData: true, Header: dumpHeader(), Writer: &file,
+		Database: source, Whole: true, WithData: true, Options: withoutDrops, Header: dumpHeader(), Writer: &file,
 	})
 	require.NoError(t, err)
 	content := file.String()
+	assert.NotContains(t, content, "DROP", "without the drop option the file has no drop statement at all")
 	assert.Equal(t, 7, result.Objects, "2 tables, 2 views, 1 procedure, 1 function and 1 trigger")
 	assert.NotContains(t, content, quoteIdent(source)+".", "the file must not refer to the source database")
 
@@ -180,4 +183,56 @@ func TestDumpRoundTripsAWholeDatabaseOnARealMySQL(t *testing.T) {
 		assert.Equal(t, query(t, sourceDB, statement), query(t, targetDB, statement), statement)
 	}
 	assert.Equal(t, []string{"7|after|filled by trigger; ok"}, query(t, targetDB, "SELECT id, code, note FROM parent WHERE code = 'after'"))
+}
+
+// snapshot 是一个库的结构（SHOW CREATE TABLE 含自增当前值，视图、过程、函数、触发器的定义）与每张表逐行的数据。
+func snapshot(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	lines := make([]string, 0, 7)
+	for _, table := range []string{"parent", "child"} {
+		lines = append(lines, query(t, db, "SHOW CREATE TABLE "+quoteIdent(table))...)
+	}
+	for _, statement := range []string{
+		"SELECT TABLE_NAME, VIEW_DEFINITION, DEFINER, SECURITY_TYPE FROM information_schema.VIEWS WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME",
+		"SELECT ROUTINE_NAME, ROUTINE_TYPE, DTD_IDENTIFIER, ROUTINE_DEFINITION, IS_DETERMINISTIC, DEFINER FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() ORDER BY ROUTINE_NAME",
+		"SELECT TRIGGER_NAME, EVENT_MANIPULATION, EVENT_OBJECT_TABLE, ACTION_TIMING, ACTION_STATEMENT, DEFINER FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = DATABASE() ORDER BY TRIGGER_NAME",
+		"SELECT id, HEX(code), IFNULL(HEX(note), '<NULL>') FROM parent ORDER BY id",
+		"SELECT id, parent_id, IFNULL(HEX(label), '<NULL>'), IFNULL(HEX(payload), '<NULL>'), label_chars, IFNULL(label_bytes, '<NULL>') FROM child ORDER BY id",
+	} {
+		lines = append(lines, query(t, db, statement)...)
+	}
+	return lines
+}
+
+// 覆盖还原：选项全勾（含「写入删除语句」）整库转储，再把文件运行回源库本身——库里还有全部数据、外键、视图与
+// 触发器。文件开头的删除段先删触发器、过程与函数、视图、表（外键检查已关，被引用的表也删得掉），每条语句都
+// 成功，结构、自增当前值、视图、过程、函数、触发器与每张表的数据都和转储之前一样。
+func TestDumpOverwritesTheOriginalDatabaseOnARealMySQL(t *testing.T) {
+	admin := openScriptDatabase(t, "")
+	ctx := context.Background()
+	source := createScratchDatabase(t, admin, "ovr")
+	sourceDB := openScriptDatabase(t, source)
+	exec(t, sourceDB, sourceSchema...)
+	before := snapshot(t, sourceDB)
+
+	var file strings.Builder
+	_, err := newSession(sourceDB).Dump(ctx, dbdriver.DumpRequest{
+		Database: source, Whole: true, WithData: true, Options: allOptions, Header: dumpHeader(), Writer: &file,
+	})
+	require.NoError(t, err)
+	content := file.String()
+	require.Contains(t, content, "\nSET FOREIGN_KEY_CHECKS = 0;\n\n-- ----------------------------\n-- Drop existing objects\n")
+	for _, line := range strings.Split(content, "\n") {
+		if strings.HasPrefix(line, "DROP ") || strings.Contains(line, " DROP CONSTRAINT ") {
+			assert.NotContains(t, line, "CASCADE", "drops never cascade")
+		}
+	}
+
+	run, err := newSession(sourceDB).RunScript(ctx, dbdriver.ScriptRequest{
+		Database: source, Script: strings.NewReader(content), Size: int64(len(content)),
+	})
+	require.NoError(t, err)
+	require.Nil(t, run.Failure, "%+v", run.Failure)
+	assert.Zero(t, run.Failed)
+	assert.Equal(t, before, snapshot(t, sourceDB))
 }
