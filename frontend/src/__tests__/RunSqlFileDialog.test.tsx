@@ -1,3 +1,4 @@
+import { Fragment, StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -31,16 +32,19 @@ function emit(event: Partial<RunSqlFileEvent>) {
 const onOpenChange = vi.fn();
 const onFinished = vi.fn();
 
-function renderDialog() {
+function renderDialog(strict = false) {
+  const Root = strict ? StrictMode : Fragment;
   return render(
-    <RunSqlFileDialog
-      open
-      onOpenChange={onOpenChange}
-      assetId={7}
-      assetName="demo-sqlite"
-      database="main"
-      onFinished={onFinished}
-    />
+    <Root>
+      <RunSqlFileDialog
+        open
+        onOpenChange={onOpenChange}
+        assetId={7}
+        assetName="demo-sqlite"
+        database="main"
+        onFinished={onFinished}
+      />
+    </Root>
   );
 }
 
@@ -231,5 +235,40 @@ describe("RunSqlFileDialog", () => {
     expect(screen.getByText("[ERR] query.runSqlFileFailedAt 3 3 boom b")).toBeInTheDocument();
     expect(screen.getAllByText("[ERR] query.runSqlFileFailuresOmitted")).toHaveLength(1);
     expect(screen.getByText("query.runSqlFileDoneSummary 3 150 2.0")).toBeInTheDocument();
+  });
+
+  // main.tsx 用 <React.StrictMode> 包着:开发环境里 effect 会挂载、清理、再挂载,
+  // 清理不能把「已挂载」永久置假,否则开始运行后马上被自己停止。
+  it("under StrictMode, Start does not stop the run and the done event reaches the finished state", async () => {
+    renderDialog(true);
+    await chooseFile();
+    await userEvent.click(startButton());
+    await waitFor(() => expect(screen.getByRole("button", { name: /query\.runSqlFileStop/ })).toBeEnabled());
+    expect(StopRunSQLFile).not.toHaveBeenCalled();
+
+    emit({ status: "done", progress: { succeeded: 1, failed: 0, bytesRead: 2048, totalBytes: 2048 } });
+    expect(onFinished).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /query\.runSqlFileStop/ })).not.toBeInTheDocument();
+    expect(StopRunSQLFile).not.toHaveBeenCalled();
+  });
+
+  it("under StrictMode, unmounting while running still stops, also when Start resolves after unmount", async () => {
+    const running = renderDialog(true);
+    await chooseFile();
+    await userEvent.click(startButton());
+    await waitFor(() => expect(screen.getByRole("button", { name: /query\.runSqlFileStop/ })).toBeEnabled());
+    running.unmount();
+    expect(StopRunSQLFile).toHaveBeenCalledWith("run-1");
+
+    vi.mocked(StopRunSQLFile).mockClear();
+    let resolveStart: (id: string) => void = () => {};
+    vi.mocked(StartRunSQLFile).mockReturnValue(new Promise<string>((resolve) => (resolveStart = resolve)));
+    const starting = renderDialog(true);
+    await chooseFile();
+    await userEvent.click(startButton());
+    await waitFor(() => expect(StartRunSQLFile).toHaveBeenCalledTimes(2));
+    starting.unmount();
+    await act(async () => resolveStart("run-2"));
+    expect(StopRunSQLFile).toHaveBeenCalledWith("run-2");
   });
 });

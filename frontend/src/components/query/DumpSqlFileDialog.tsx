@@ -177,14 +177,15 @@ export function DumpSqlFileDialog({
     unsubscribeRef.current?.();
     unsubscribeRef.current = null;
   }, []);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // StrictMode 开发期会先清理再重跑 effect,重跑时要把「已挂载」恢复。
+    mountedRef.current = true;
+    return () => {
       mountedRef.current = false;
       stopListening();
       if (activeDumpRef.current) void requestCancel(activeDumpRef.current);
-    },
-    [stopListening]
-  );
+    };
+  }, [stopListening]);
 
   const busy = phase === "starting" || phase === "running";
   const target = `${assetName} / ${database}`;

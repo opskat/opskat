@@ -1,3 +1,4 @@
+import { Fragment, StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -31,20 +32,23 @@ function emit(event: Partial<DumpSqlFileEvent>) {
 
 const onOpenChange = vi.fn();
 
-function renderDialog(props: Partial<React.ComponentProps<typeof DumpSqlFileDialog>> = {}) {
+function renderDialog(props: Partial<React.ComponentProps<typeof DumpSqlFileDialog>> = {}, strict = false) {
+  const Root = strict ? StrictMode : Fragment;
   return render(
-    <DumpSqlFileDialog
-      open
-      onOpenChange={onOpenChange}
-      assetId={7}
-      assetName="demo-sqlite"
-      database="main"
-      target={{ kind: "tables", tables: ["users", "orders"] }}
-      withData
-      canDumpData
-      canDisableForeignKeyChecks
-      {...props}
-    />
+    <Root>
+      <DumpSqlFileDialog
+        open
+        onOpenChange={onOpenChange}
+        assetId={7}
+        assetName="demo-sqlite"
+        database="main"
+        target={{ kind: "tables", tables: ["users", "orders"] }}
+        withData
+        canDumpData
+        canDisableForeignKeyChecks
+        {...props}
+      />
+    </Root>
   );
 }
 
@@ -372,5 +376,40 @@ describe("DumpSqlFileDialog", () => {
 
     unmount();
     expect(CancelDumpSQLFile).toHaveBeenCalledWith("dump-1");
+  });
+
+  // main.tsx 用 <React.StrictMode> 包着:开发环境里 effect 会挂载、清理、再挂载,
+  // 清理不能把「已挂载」永久置假,否则开始转储后马上被自己取消。
+  it("under StrictMode, Start does not cancel the dump and the done event reaches the summary", async () => {
+    renderDialog({}, true);
+    await startDump();
+    await waitFor(() => expect(screen.getByRole("button", { name: /action\.cancel/ })).toBeEnabled());
+    expect(CancelDumpSQLFile).not.toHaveBeenCalled();
+
+    emit({
+      status: "done",
+      progress: { objects: 2, object: 2, name: "orders", rows: 5 },
+      result: { objects: 2, rows: 5, bytes: 2048 },
+    });
+    expect(screen.getByText("2.0 KB")).toBeInTheDocument();
+    expect(CancelDumpSQLFile).not.toHaveBeenCalled();
+  });
+
+  it("under StrictMode, unmounting while running still cancels, also when Start resolves after unmount", async () => {
+    const running = renderDialog({}, true);
+    await startDump();
+    running.unmount();
+    expect(CancelDumpSQLFile).toHaveBeenCalledWith("dump-1");
+
+    vi.mocked(CancelDumpSQLFile).mockClear();
+    let resolveStart: (id: string) => void = () => {};
+    vi.mocked(StartDumpSQLFile).mockReturnValue(new Promise<string>((resolve) => (resolveStart = resolve)));
+    const starting = renderDialog({}, true);
+    await chooseLocation();
+    await userEvent.click(startButton());
+    await waitFor(() => expect(StartDumpSQLFile).toHaveBeenCalledTimes(2));
+    starting.unmount();
+    await act(async () => resolveStart("dump-2"));
+    expect(CancelDumpSQLFile).toHaveBeenCalledWith("dump-2");
   });
 });
