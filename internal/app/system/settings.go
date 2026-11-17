@@ -50,11 +50,8 @@ func (s *System) SaveGitHubToken(token, user string) error {
 
 // GetGitHubToken 获取解密后的 GitHub token
 func (s *System) GetGitHubToken() (string, error) {
-	cfg := bootstrap.GetConfig()
-	if cfg.GitHubToken == "" {
-		return "", nil
-	}
-	return credential_svc.Default().Decrypt(cfg.GitHubToken)
+	token, _, err := backup_svc.StoredGitHubToken(credential_svc.Default())
+	return token, err
 }
 
 // GetStoredGitHubUser 获取保存的 GitHub 用户名
@@ -992,36 +989,7 @@ func (s *System) webDAVBackupContent(name string) ([]byte, error) {
 }
 
 func (s *System) webDAVConfigFromStorage() (backup_svc.WebDAVConfig, error) {
-	cfg := bootstrap.GetConfig()
-	if cfg == nil || strings.TrimSpace(cfg.WebDAVURL) == "" {
-		return backup_svc.WebDAVConfig{}, fmt.Errorf("WebDAV 未配置")
-	}
-
-	authType := backup_svc.WebDAVAuthType(cfg.WebDAVAuthType)
-	if authType == "" {
-		authType = backup_svc.WebDAVAuthNone
-	}
-
-	out := backup_svc.WebDAVConfig{
-		URL:      cfg.WebDAVURL,
-		AuthType: authType,
-		Username: cfg.WebDAVUsername,
-	}
-	if cfg.WebDAVPassword != "" {
-		decrypted, err := credential_svc.Default().Decrypt(cfg.WebDAVPassword)
-		if err != nil {
-			return backup_svc.WebDAVConfig{}, fmt.Errorf("解密 WebDAV 密码失败: %w", err)
-		}
-		out.Password = decrypted
-	}
-	if cfg.WebDAVToken != "" {
-		decrypted, err := credential_svc.Default().Decrypt(cfg.WebDAVToken)
-		if err != nil {
-			return backup_svc.WebDAVConfig{}, fmt.Errorf("解密 WebDAV token 失败: %w", err)
-		}
-		out.Token = decrypted
-	}
-	return out, nil
+	return backup_svc.StoredWebDAVConfig(credential_svc.Default())
 }
 
 // GetDataDir 返回应用数据目录

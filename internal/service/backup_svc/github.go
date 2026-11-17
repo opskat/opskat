@@ -3,6 +3,7 @@ package backup_svc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -243,11 +244,24 @@ func GetGitHubUser(token string) (*GitHubUser, error) {
 	return &GitHubUser{Login: user.Login, AvatarURL: user.AvatarURL}, nil
 }
 
+// ErrGistNotFound 表示要更新的 Gist 已不存在（GitHub 返回 404）。
+var ErrGistNotFound = errors.New("gist not found")
+
 // CreateOrUpdateGist 创建或更新 Gist
 // gistID 为空时创建新 Gist，否则更新已有 Gist
 func CreateOrUpdateGist(token, gistID string, content []byte) (*GistInfo, error) {
+	return createOrUpdateGist(token, gistID, "OpsKat Backup", content)
+}
+
+// CreateOrUpdateAutoGist 创建或更新自动备份专用的私密 Gist；描述以「OpsKat Auto Backup」开头，
+// 文件名与手动 Gist 备份相同，因此会出现在现有的 Gist 恢复列表里。
+func CreateOrUpdateAutoGist(token, gistID string, content []byte) (*GistInfo, error) {
+	return createOrUpdateGist(token, gistID, "OpsKat Auto Backup", content)
+}
+
+func createOrUpdateGist(token, gistID, descriptionPrefix string, content []byte) (*GistInfo, error) {
 	body := map[string]interface{}{
-		"description": fmt.Sprintf("OpsKat Backup - %s", time.Now().Format("2006-01-02 15:04")),
+		"description": fmt.Sprintf("%s - %s", descriptionPrefix, time.Now().Format("2006-01-02 15:04")),
 		"public":      false,
 		"files": map[string]interface{}{
 			gistBackupFilename: map[string]string{
@@ -291,6 +305,12 @@ func CreateOrUpdateGist(token, gistID string, content []byte) (*GistInfo, error)
 		respBody, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
 			logger.Default().Warn("read GitHub error response body", zap.Error(readErr))
+		}
+		switch {
+		case resp.StatusCode == http.StatusUnauthorized:
+			return nil, fmt.Errorf("%s GitHub API 错误 %d: %s", githubTokenInvalidMarker, resp.StatusCode, string(respBody))
+		case resp.StatusCode == http.StatusNotFound && gistID != "":
+			return nil, fmt.Errorf("%w: %s", ErrGistNotFound, gistID)
 		}
 		return nil, fmt.Errorf("GitHub API 错误 %d: %s", resp.StatusCode, string(respBody))
 	}

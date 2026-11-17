@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -88,6 +89,9 @@ type WebDAVBackupInfo struct {
 	Path      string `json:"path"`
 	UpdatedAt string `json:"updatedAt"`
 	Size      int64  `json:"size"`
+	// Auto 表示自动备份文件；CreatedAt 是从文件名解析出的写入时间（RFC3339 UTC）。
+	Auto      bool   `json:"auto"`
+	CreatedAt string `json:"createdAt,omitempty"`
 }
 
 // CreateOrUpdateWebDAVBackup uploads the canonical encrypted backup file to WebDAV.
@@ -117,6 +121,85 @@ func CreateOrUpdateWebDAVBackup(cfg WebDAVConfig, content []byte) (*WebDAVBackup
 		UpdatedAt: time.Now().Format(time.RFC3339),
 		Size:      int64(len(content)),
 	}, nil
+}
+
+// UploadWebDAVAutoBackup 把一份自动备份写成 at 时刻命名的新文件：先 PUT 到临时文件，成功后
+// MOVE 成正式文件名；MOVE 失败时删掉临时文件，目录里已有的版本不受影响。
+func UploadWebDAVAutoBackup(cfg WebDAVConfig, content []byte, at time.Time) (*WebDAVBackupInfo, error) {
+	dirURL, err := webDAVDirectoryURL(cfg.URL)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensureWebDAVDirectory(cfg, dirURL); err != nil {
+		return nil, err
+	}
+	name := AutoBackupName(at)
+	fileURL, err := webDAVFileURL(cfg.URL, name)
+	if err != nil {
+		return nil, err
+	}
+	tempURL, err := webDAVFileURL(cfg.URL, AutoBackupTempName(name))
+	if err != nil {
+		return nil, err
+	}
+
+	status, body, err := webDAVRequest(cfg, http.MethodPut, tempURL, content, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status != http.StatusOK && status != http.StatusCreated && status != http.StatusNoContent {
+		return nil, fmt.Errorf("WebDAV upload failed: HTTP %d: %s", status, string(body))
+	}
+
+	status, body, err = webDAVRequest(cfg, "MOVE", tempURL, nil, map[string]string{
+		"Destination": fileURL,
+		"Overwrite":   "T",
+	})
+	if err == nil && status != http.StatusCreated && status != http.StatusNoContent && status != http.StatusOK {
+		err = fmt.Errorf("WebDAV rename failed: HTTP %d: %s", status, string(body))
+	}
+	if err != nil {
+		if delStatus, _, delErr := webDAVRequest(cfg, http.MethodDelete, tempURL, nil, nil); delErr != nil {
+			return nil, fmt.Errorf("%w (cleanup temp file: %v)", err, delErr)
+		} else if delStatus >= 300 && delStatus != http.StatusNotFound {
+			return nil, fmt.Errorf("%w (cleanup temp file: HTTP %d)", err, delStatus)
+		}
+		return nil, err
+	}
+	return &WebDAVBackupInfo{
+		Name:      name,
+		Path:      fileURL,
+		UpdatedAt: time.Now().Format(time.RFC3339),
+		Size:      int64(len(content)),
+		Auto:      true,
+		CreatedAt: at.UTC().Format(time.RFC3339),
+	}, nil
+}
+
+// PruneWebDAVAutoBackups 只在自动备份命名范围内保留最新 keep 份，删除更早的。
+func PruneWebDAVAutoBackups(cfg WebDAVConfig, keep int) error {
+	list, err := ListWebDAVBackups(cfg)
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(list))
+	for _, b := range list {
+		names = append(names, b.Name)
+	}
+	for _, name := range AutoBackupsToPrune(names, keep) {
+		fileURL, err := webDAVFileURL(cfg.URL, name)
+		if err != nil {
+			return err
+		}
+		status, body, err := webDAVRequest(cfg, http.MethodDelete, fileURL, nil, nil)
+		if err != nil {
+			return err
+		}
+		if status >= 300 && status != http.StatusNotFound {
+			return fmt.Errorf("WebDAV delete %s failed: HTTP %d: %s", name, status, string(body))
+		}
+	}
+	return nil
 }
 
 // ListWebDAVBackups lists OpsKat backup files from the configured WebDAV directory.
@@ -369,13 +452,25 @@ func parseWebDAVBackupList(data []byte) ([]*WebDAVBackupInfo, error) {
 			continue
 		}
 		size, _ := strconv.ParseInt(strings.TrimSpace(prop.GetContentLength), 10, 64)
-		result = append(result, &WebDAVBackupInfo{
+		info := &WebDAVBackupInfo{
 			Name:      name,
 			Path:      response.Href,
 			UpdatedAt: strings.TrimSpace(prop.GetLastModified),
 			Size:      size,
-		})
+		}
+		if at, ok := ParseAutoBackupName(name); ok {
+			info.Auto = true
+			info.CreatedAt = at.Format(time.RFC3339)
+		}
+		result = append(result, info)
 	}
+	// 手动备份在前（保持服务器返回的顺序），自动备份按时间倒序在后。
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Auto != result[j].Auto {
+			return !result[i].Auto
+		}
+		return result[i].Auto && result[i].CreatedAt > result[j].CreatedAt
+	})
 	return result, nil
 }
 
