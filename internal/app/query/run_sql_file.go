@@ -313,7 +313,7 @@ func (q *Query) runSQLFile(runID string, log *zap.Logger, panel *panelSession, f
 	case errors.As(err, &unsupportedErr):
 		event.Status, event.Unsupported = RunSQLFileError, unsupportedErr
 		log.Warn("run sql file stopped at an unsupported construct", append(fields,
-			zap.String("construct", unsupportedErr.Construct), zap.Int("line", unsupportedErr.Line))...)
+			zap.String("construct", unsupportedErr.Construct), zap.Int("line", unsupportedErr.Line), zap.Error(err))...)
 	case err != nil:
 		event.Status, event.Error = RunSQLFileError, err.Error()
 		log.Error("run sql file failed", append(fields, zap.Error(err))...)

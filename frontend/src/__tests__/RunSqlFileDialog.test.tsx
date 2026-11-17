@@ -130,7 +130,7 @@ describe("RunSqlFileDialog", () => {
     expect(unsubscribe).toHaveBeenCalled();
   });
 
-  it("explains a non-UTF-8 file", async () => {
+  it("explains a non-UTF-8 file in the UI language, in the alert and in the log", async () => {
     renderDialog();
     await chooseFile();
     await userEvent.click(startButton());
@@ -139,6 +139,8 @@ describe("RunSqlFileDialog", () => {
     emit({ status: "error", invalidUtf8Line: 42, error: "script is not UTF-8 encoded" });
 
     expect(screen.getByText("query.runSqlFileNotUtf8 42")).toBeInTheDocument();
+    expect(screen.getByText("[ERR] query.runSqlFileNotUtf8 42")).toBeInTheDocument();
+    expect(screen.queryByText(/script is not UTF-8 encoded/)).not.toBeInTheDocument();
   });
 
   it("explains an unsupported construct from its fields, not from the backend's text", async () => {
@@ -154,6 +156,7 @@ describe("RunSqlFileDialog", () => {
     });
 
     expect(screen.getByText("query.runSqlFileUnsupported COPY ... FROM stdin psql 3")).toBeInTheDocument();
+    expect(screen.getByText("[ERR] query.runSqlFileUnsupported COPY ... FROM stdin psql 3")).toBeInTheDocument();
     expect(screen.queryByText(/第 3 行/)).not.toBeInTheDocument();
   });
 

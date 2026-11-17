@@ -39,10 +39,19 @@ export interface RunSqlFileEvent {
   error?: string;
 }
 
-/** 不支持的写法的提示:按界面语言用字段写出写法、行号与该改用的工具。 */
-function unsupportedMessage(unsupported: NonNullable<RunSqlFileEvent["unsupported"]>, t: TFunction): string {
-  const { construct, tool, line } = unsupported;
-  return t("query.runSqlFileUnsupported", { construct, tool, line: line.toLocaleString() });
+/**
+ * error 终态的提示(错误框与日志共用):文件不是 UTF-8、停在不支持的写法上时按界面语言用字段写出,
+ * 不用后端的文字;其余是运行本身出错的原文。
+ */
+function runErrorMessage(event: RunSqlFileEvent, t: TFunction): string {
+  if (event.invalidUtf8Line) {
+    return t("query.runSqlFileNotUtf8", { line: event.invalidUtf8Line.toLocaleString() });
+  }
+  if (event.unsupported) {
+    const { construct, tool, line } = event.unsupported;
+    return t("query.runSqlFileUnsupported", { construct, tool, line: line.toLocaleString() });
+  }
+  return t("query.runSqlFileErrorSummary", { error: event.error ?? "" });
 }
 
 /** 各终态在日志里的最后一行。 */
@@ -122,7 +131,7 @@ export function RunSqlFileDialog({
           `[ERR] ${t("query.runSqlFileFailedAt", { number: event.failure.number.toLocaleString(), line: event.failure.line.toLocaleString() })} ${event.failure.error}`
         );
       } else if (event.status === "error") {
-        lines.push(`[ERR] ${event.unsupported ? unsupportedMessage(event.unsupported, t) : (event.error ?? "")}`);
+        lines.push(`[ERR] ${runErrorMessage(event, t)}`);
       }
       lines.push(`[RUN] ${t(FINISHED_LOG[event.status])}`);
       setLogLines((prev) => [...prev, ...lines]);
@@ -284,11 +293,7 @@ export function RunSqlFileDialog({
               role="alert"
               className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
             >
-              {latest.invalidUtf8Line
-                ? t("query.runSqlFileNotUtf8", { line: latest.invalidUtf8Line.toLocaleString() })
-                : latest.unsupported
-                  ? unsupportedMessage(latest.unsupported, t)
-                  : t("query.runSqlFileErrorSummary", { error: latest.error ?? "" })}
+              {runErrorMessage(latest, t)}
             </div>
           )}
 

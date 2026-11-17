@@ -173,7 +173,9 @@ type unsupportedSession struct{ dbdriver.Session }
 
 func (unsupportedSession) RunScript(context.Context, dbdriver.ScriptRequest) (*dbdriver.ScriptResult, error) {
 	result := &dbdriver.ScriptResult{ScriptProgress: dbdriver.ScriptProgress{Succeeded: 2}}
-	return result, fmt.Errorf("run: %w", &dbdriver.ScriptUnsupportedError{Construct: "COPY ... FROM stdin", Tool: "psql", Line: 3})
+	// 编排停下后关执行器也失败了：两者一起返回（dbdriver.RunScript 就是这样合并的）。
+	return result, errors.Join(fmt.Errorf("run: %w", &dbdriver.ScriptUnsupportedError{Construct: "COPY ... FROM stdin", Tool: "psql", Line: 3}),
+		errors.New("close script executor: connection reset"))
 }
 
 // 运行停在不支持的写法上：终态事件带着写法、行号与该改用的工具这些结构化字段，由对话框按界面语言写
@@ -200,6 +202,9 @@ func TestRunSQLFileReportsAnUnsupportedConstructAsFields(t *testing.T) {
 	for _, entry := range logs.All() {
 		assert.NotContains(t, entry.Message, "第 3 行")
 	}
+	stopped := logs.FilterMessage("run sql file stopped at an unsupported construct").All()
+	require.Len(t, stopped, 1)
+	assert.Contains(t, stopped[0].ContextMap()["error"], "connection reset", "an error joined to the stop is not swallowed")
 }
 
 // 只读连接的资产与没有声明运行 SQL 文件的驱动：在开始之前就拒绝，不打开会话。
