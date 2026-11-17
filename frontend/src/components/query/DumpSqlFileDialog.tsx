@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, ChevronDown, Download, ExternalLink, FolderOpen, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -20,9 +20,9 @@ import {
 import { CancelDumpSQLFile, SelectDumpFile, StartDumpSQLFile } from "../../../wailsjs/go/query/Query";
 import { OpenDirectory } from "../../../wailsjs/go/system/System";
 import { query } from "../../../wailsjs/go/models";
-import { EventsOn } from "../../../wailsjs/runtime/runtime";
 import { errorMessage } from "@/lib/errorMessage";
 import { formatBytes } from "@/lib/formatBytes";
+import { useBackendJob, type BackendJobSpec } from "./useBackendJob";
 
 /** 后端发出转储事件的事件名(Go 侧 query.DumpSQLFileEventName)。 */
 export const DUMP_SQL_FILE_EVENT = "query:dump-sql-file";
@@ -137,14 +137,13 @@ async function openPath(path: string) {
   }
 }
 
-/** 取消一次转储;取消不了是用户该知道的事。 */
-async function requestCancel(dumpId: string) {
-  try {
-    await CancelDumpSQLFile(dumpId);
-  } catch (e) {
-    toast.error(errorMessage(e));
-  }
-}
+/** 转储任务:对话框消失(关闭资产标签页)时取消进行中的转储。 */
+const DUMP_JOB: BackendJobSpec<DumpSqlFileEvent> = {
+  eventName: DUMP_SQL_FILE_EVENT,
+  jobId: (event) => event.dumpId,
+  isFinal: (event) => event.status !== "running",
+  stop: CancelDumpSQLFile,
+};
 
 export function DumpSqlFileDialog({
   open,
@@ -168,25 +167,6 @@ export function DumpSqlFileDialog({
   const [cancelling, setCancelling] = useState(false);
   /** 已经写完的对象数:进度条按它走。 */
   const [finishedObjects, setFinishedObjects] = useState(0);
-  const unsubscribeRef = useRef<(() => void) | null>(null);
-  /** 进行中的转储 id(未开始或已结束时为 null);对话框消失(关闭资产标签页)时据此取消它。 */
-  const activeDumpRef = useRef<string | null>(null);
-  const mountedRef = useRef(true);
-
-  const stopListening = useCallback(() => {
-    unsubscribeRef.current?.();
-    unsubscribeRef.current = null;
-  }, []);
-  useEffect(() => {
-    // StrictMode 开发期会先清理再重跑 effect,重跑时要把「已挂载」恢复。
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      stopListening();
-      if (activeDumpRef.current) void requestCancel(activeDumpRef.current);
-    };
-  }, [stopListening]);
-
   const busy = phase === "starting" || phase === "running";
   const target = `${assetName} / ${database}`;
   const whole = dumpTarget.kind !== "tables";
@@ -212,7 +192,6 @@ export function DumpSqlFileDialog({
         if (lines.length) setLogLines((prev) => [...prev, ...lines]);
         return;
       }
-      activeDumpRef.current = null;
       if (event.status === "done") {
         lines.push(`[DMP] ${t("query.dumpSqlFileLogDone", { seconds: (event.elapsedMs / 1000).toFixed(1) })}`);
       } else if (event.status === "failed") {
@@ -221,12 +200,12 @@ export function DumpSqlFileDialog({
         lines.push(`[DMP] ${t("query.dumpSqlFileLogCanceled")}`);
       }
       setLogLines((prev) => [...prev, ...lines]);
-      stopListening();
       setCancelling(false);
       setPhase("finished");
     },
-    [stopListening, t]
+    [t]
   );
+  const { start: startJob, stopActive } = useBackendJob(DUMP_JOB, apply);
 
   const handleChooseLocation = useCallback(async () => {
     try {
@@ -250,49 +229,32 @@ export function DumpSqlFileDialog({
         content: t(dumpData ? "query.dumpSqlFileStructureAndData" : "query.dumpSqlFileStructureOnly"),
       })}`,
     ]);
-    // 先订阅再开始:转储 id 回来之前到达的事件先攒着,拿到 id 后只认自己的。
-    let dumpId: string | null = null;
-    const early: DumpSqlFileEvent[] = [];
-    unsubscribeRef.current = EventsOn(DUMP_SQL_FILE_EVENT, (event: DumpSqlFileEvent) => {
-      if (dumpId === null) early.push(event);
-      else if (event.dumpId === dumpId) apply(event);
-    });
     try {
-      dumpId = await StartDumpSQLFile(
-        assetId,
-        new query.DumpSQLFileRequest({
-          database,
-          schema: dumpTarget.kind === "schema" ? dumpTarget.schema : "",
-          tables: dumpTarget.kind === "tables" ? dumpTarget.tables : [],
-          whole,
-          withData: dumpData,
-          options,
-          path,
-        })
+      await startJob(
+        () =>
+          StartDumpSQLFile(
+            assetId,
+            new query.DumpSQLFileRequest({
+              database,
+              schema: dumpTarget.kind === "schema" ? dumpTarget.schema : "",
+              tables: dumpTarget.kind === "tables" ? dumpTarget.tables : [],
+              whole,
+              withData: dumpData,
+              options,
+              path,
+            })
+          ),
+        () => setPhase("running")
       );
     } catch (e) {
-      stopListening();
       setStartError(errorMessage(e));
       setPhase("idle");
-      return;
     }
-    if (!mountedRef.current) {
-      // 等转储 id 的时候对话框已经消失(资产标签页关了):刚开始的转储不留着。
-      void requestCancel(dumpId);
-      return;
-    }
-    activeDumpRef.current = dumpId;
-    setPhase("running");
-    for (const event of early) {
-      if (event.dumpId === dumpId) apply(event);
-    }
-  }, [apply, assetId, database, dumpData, dumpTarget, options, path, stopListening, t, target, whole]);
+  }, [assetId, database, dumpData, dumpTarget, options, path, startJob, t, target, whole]);
 
   const handleCancel = useCallback(() => {
-    if (!activeDumpRef.current) return;
-    setCancelling(true);
-    void requestCancel(activeDumpRef.current);
-  }, []);
+    if (stopActive()) setCancelling(true);
+  }, [stopActive]);
 
   // 整库或整个 schema 有几个对象要等第一个事件才知道。
   const objects = latest?.progress.objects || (dumpTarget.kind === "tables" ? dumpTarget.tables.length : 0);

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, FolderOpen, Loader2, Square } from "lucide-react";
 import { toast } from "sonner";
@@ -14,9 +14,9 @@ import {
   Label,
 } from "@opskat/ui";
 import { SelectSQLFile, StartRunSQLFile, StopRunSQLFile } from "../../../wailsjs/go/query/Query";
-import { EventsOn } from "../../../wailsjs/runtime/runtime";
 import { errorMessage } from "@/lib/errorMessage";
 import { formatBytes } from "@/lib/formatBytes";
+import { useBackendJob, type BackendJobSpec } from "./useBackendJob";
 
 /** 后端发出运行事件的事件名(Go 侧 query.RunSQLFileEventName)。 */
 export const RUN_SQL_FILE_EVENT = "query:run-sql-file";
@@ -59,14 +59,13 @@ interface RunSqlFileDialogProps {
 
 type Phase = "idle" | "starting" | "running" | "finished";
 
-/** 要求一次运行在当前语句之后停下。失败要让用户看到:停不下来是用户该知道的事。 */
-async function requestStop(runId: string) {
-  try {
-    await StopRunSQLFile(runId);
-  } catch (e) {
-    toast.error(errorMessage(e));
-  }
-}
+/** 运行任务:停下是要求它在当前语句之后停下;对话框消失(关闭资产标签页)时停下进行中的运行。 */
+const RUN_JOB: BackendJobSpec<RunSqlFileEvent> = {
+  eventName: RUN_SQL_FILE_EVENT,
+  jobId: (event) => event.runId,
+  isFinal: (event) => event.status !== "running",
+  stop: StopRunSQLFile,
+};
 
 export function RunSqlFileDialog({
   open,
@@ -83,26 +82,8 @@ export function RunSqlFileDialog({
   const [latest, setLatest] = useState<RunSqlFileEvent | null>(null);
   const [startError, setStartError] = useState("");
   const [logLines, setLogLines] = useState<string[]>([]);
-  const unsubscribeRef = useRef<(() => void) | null>(null);
   const loggedRef = useRef(0);
   const [stopping, setStopping] = useState(false);
-  /** 进行中的运行 id(未开始或已结束时为 null);对话框消失(关闭资产标签页)时据此停下它。 */
-  const activeRunRef = useRef<string | null>(null);
-  const mountedRef = useRef(true);
-
-  const stopListening = useCallback(() => {
-    unsubscribeRef.current?.();
-    unsubscribeRef.current = null;
-  }, []);
-  useEffect(() => {
-    // StrictMode 开发期会先清理再重跑 effect,重跑时要把「已挂载」恢复。
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      stopListening();
-      if (activeRunRef.current) void requestStop(activeRunRef.current);
-    };
-  }, [stopListening]);
 
   const busy = phase === "starting" || phase === "running";
 
@@ -127,7 +108,6 @@ export function RunSqlFileDialog({
         if (lines.length) setLogLines((prev) => [...prev, ...lines]);
         return;
       }
-      activeRunRef.current = null;
       if (event.failure) {
         lines.push(
           `[ERR] ${t("query.runSqlFileFailedAt", { number: event.failure.number.toLocaleString(), line: event.failure.line.toLocaleString() })} ${event.failure.error}`
@@ -137,12 +117,12 @@ export function RunSqlFileDialog({
       }
       lines.push(`[RUN] ${t(FINISHED_LOG[event.status])}`);
       setLogLines((prev) => [...prev, ...lines]);
-      stopListening();
       setPhase("finished");
       onFinished();
     },
-    [onFinished, stopListening, t]
+    [onFinished, t]
   );
+  const { start: startJob, stopActive } = useBackendJob(RUN_JOB, apply);
 
   const handleChooseFile = useCallback(async () => {
     try {
@@ -161,38 +141,20 @@ export function RunSqlFileDialog({
     setLatest(null);
     loggedRef.current = 0;
     setLogLines([`[RUN] ${t("query.runSqlFileLogStart", { file: file.path, target: `${assetName} / ${database}` })}`]);
-    // 先订阅再开始:运行 id 回来之前到达的事件先攒着,拿到 id 后只认自己的。
-    let runId: string | null = null;
-    const early: RunSqlFileEvent[] = [];
-    unsubscribeRef.current = EventsOn(RUN_SQL_FILE_EVENT, (event: RunSqlFileEvent) => {
-      if (runId === null) early.push(event);
-      else if (event.runId === runId) apply(event);
-    });
     try {
-      runId = await StartRunSQLFile(assetId, database, { path: file.path, continueOnError });
+      await startJob(
+        () => StartRunSQLFile(assetId, database, { path: file.path, continueOnError }),
+        () => setPhase("running")
+      );
     } catch (e) {
-      stopListening();
       setStartError(errorMessage(e));
       setPhase("idle");
-      return;
     }
-    if (!mountedRef.current) {
-      // 等运行 id 的时候对话框已经消失(资产标签页关了):刚开始的运行不留着。
-      void requestStop(runId);
-      return;
-    }
-    activeRunRef.current = runId;
-    setPhase("running");
-    for (const event of early) {
-      if (event.runId === runId) apply(event);
-    }
-  }, [apply, assetId, assetName, continueOnError, database, file, stopListening, t]);
+  }, [assetId, assetName, continueOnError, database, file, startJob, t]);
 
   const handleStop = useCallback(() => {
-    if (!activeRunRef.current) return;
-    setStopping(true);
-    void requestStop(activeRunRef.current);
-  }, []);
+    if (stopActive()) setStopping(true);
+  }, [stopActive]);
 
   const progress = latest?.progress;
   const totalBytes = progress?.totalBytes || file?.size || 0;
