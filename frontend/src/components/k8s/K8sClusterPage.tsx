@@ -48,8 +48,9 @@ export function K8sClusterPage({ asset }: Props) {
     initCluster(assetId, defaultNamespace);
   }, [assetId, defaultNamespace, initCluster]);
 
+  // Only the first version read gates the page; a failed re-read shows its reason in the sidebar instead.
   const version = cluster?.version;
-  if (!cluster || version?.status !== "ready" || !version.data) {
+  if (!cluster || !version?.data) {
     return (
       <AsyncState
         status={version?.status === "error" ? "error" : "loading"}
@@ -70,6 +71,7 @@ export function K8sClusterPage({ asset }: Props) {
           <K8sNamespaceSelect
             value={cluster.namespace}
             namespaces={cluster.namespaces}
+            configured={defaultNamespace}
             onChange={(ns) => setNamespace(assetId, ns)}
           />
         }

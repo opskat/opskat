@@ -2,18 +2,9 @@ import { useTranslation } from "react-i18next";
 import { Copy, Pencil } from "lucide-react";
 import { Button } from "@opskat/ui";
 import { notifyCopied } from "@/lib/notify";
-import type { K8sActionContext } from "../actions";
 
-/** Read-only YAML (the cluster read already omits managedFields); 「编辑」 only exists once an edit handler is registered. */
-export function K8sYamlTab({
-  yaml,
-  context,
-  onEdit,
-}: {
-  yaml: string;
-  context: K8sActionContext;
-  onEdit: ((ctx: K8sActionContext) => void) | null;
-}) {
+/** Read-only YAML (the cluster read already omits managedFields); 「编辑」 only when the type's 编辑 YAML action applies. */
+export function K8sYamlTab({ yaml, onEdit }: { yaml: string; onEdit: (() => void) | undefined }) {
   const { t } = useTranslation();
   const copy = async () => {
     await navigator.clipboard.writeText(yaml);
@@ -27,7 +18,7 @@ export function K8sYamlTab({
           {t("action.copy")}
         </Button>
         {onEdit && (
-          <Button variant="outline" size="sm" onClick={() => onEdit(context)}>
+          <Button variant="outline" size="sm" onClick={onEdit}>
             <Pencil className="h-3 w-3" />
             {t("asset.k8sEditYaml")}
           </Button>

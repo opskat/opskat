@@ -133,6 +133,30 @@ export interface K8sListEntry {
   reloading: boolean;
   /** The cluster's reason for rejecting the label selector; the previous rows stay on screen. */
   filterError: string | null;
+  /** The label selector the rows were read with ('' = none). */
+  labelSelector: string;
+}
+
+/** A list read with the full objects (a workload's Pods, HPAs, a CronJob's Jobs); cached like the table lists. */
+export interface K8sObjectsRequest {
+  group: string;
+  version: string;
+  resource: string;
+  namespace: string;
+  labelSelector: string;
+}
+
+export interface K8sListedObject {
+  name: string;
+  object: Record<string, unknown>;
+}
+
+export interface K8sObjectsEntry extends Loadable<K8sListedObject[]> {
+  request: K8sObjectsRequest;
+}
+
+export function objectsKey(req: K8sObjectsRequest) {
+  return `${req.group}/${req.resource}|${req.namespace}|${req.labelSelector}`;
 }
 
 export interface K8sListSort {
@@ -168,7 +192,8 @@ export interface K8sInnerTab {
 
 /** How a Pod terminal session ended (`k8s:exec:end` payload), or why it couldn't start. */
 export interface K8sTerminalEnd {
-  reason: "exited" | "closed" | "error";
+  /** exited: the command exited; failed: the cluster couldn't run it (reason in `error`); error: the connection broke. */
+  reason: "exited" | "closed" | "failed" | "error";
   exitCode?: number;
   error?: string;
   /** Why the container terminated (e.g. OOMKilled), read from the Pod status. */
@@ -204,8 +229,6 @@ export interface K8sClusterState {
   namespaces: Loadable<string[]>;
   tabs: K8sInnerTab[];
   activeTabId: string;
-  /** Collapsed sidebar category keys. */
-  collapsed: string[];
   refreshing: boolean;
 }
 
@@ -260,20 +283,22 @@ const COUNT_CONCURRENCY = 6;
 
 let terminalSeq = 0;
 
-type Refresher = () => Promise<unknown>;
-
 /** The YAML dialog open on a cluster: editing one resource, or applying pasted documents. */
 export type K8sYamlDialogState = { mode: "edit"; ctx: K8sActionContext } | { mode: "apply" };
 
-/** The scale / restart / delete / run-now / cordon dialog open on a cluster, for the resource the action was started from. */
+/** The scale / restart / delete / run-now / suspend / cordon dialog open on a cluster, for the resource the action was started from. */
 export interface K8sOpDialogState {
-  kind: "scale" | "restart" | "delete" | "trigger" | "cordon";
+  kind: "scale" | "restart" | "delete" | "trigger" | "suspend" | "cordon";
   ctx: K8sActionContext;
 }
 
 interface K8sStoreState {
   clusters: Record<number, K8sClusterState>;
+  /** Collapsed sidebar category keys per asset; kept for the app session, also after the cluster tab closes. */
+  collapsedCategories: Record<number, string[]>;
   lists: Record<number, Record<string, K8sListEntry>>;
+  /** Full-object lists keyed by `objectsKey`. */
+  objectLists: Record<number, Record<string, K8sObjectsEntry>>;
   /** Log panel state of a detail's Logs sub-tab, keyed by the detail's `res:` tab id. */
   logTabs: Record<number, Record<string, LogTabState>>;
   /** The sub-tab a detail shows (absent = overview), keyed by its `res:` tab id. */
@@ -304,6 +329,8 @@ interface K8sStoreState {
   toggleCategory: (assetId: number, key: string) => void;
   /** Reads a list unless it is cached (or `force`); pass namespace '' for cluster-scoped types and all namespaces. */
   loadList: (assetId: number, typeKey: string, namespace: string, opts?: { force?: boolean }) => Promise<void>;
+  /** Reads a full-object list unless it is cached (or `force`). */
+  loadObjects: (assetId: number, req: K8sObjectsRequest, opts?: { force?: boolean }) => Promise<void>;
   /** Updates one list tab's filter / sort / auto-refresh (the rest is kept). */
   setListView: (assetId: number, typeKey: string, patch: Partial<K8sListView>) => void;
   /** Reads a resource detail and its events unless cached (or `force`); only the manual / action paths force. */
@@ -327,10 +354,8 @@ interface K8sStoreState {
   closeOp: (assetId: number) => void;
   /** Closes everything open for one resource: its detail tab (with its log sub-tab) and, for a Pod, its terminal tabs. */
   closeResourceTabs: (assetId: number, typeKey: string, namespace: string, name: string) => void;
-  /** Re-reads version, types, namespaces, every loaded list / detail and every registered view. */
+  /** Re-reads version, types, namespaces and every loaded list, object list, detail, count, health and event list. */
   refreshAll: (assetId: number) => Promise<void>;
-  /** Lets a view take part in `refreshAll`; returns the unregister function. */
-  registerRefresher: (assetId: number, key: string, fn: Refresher) => () => void;
   /** Selects a detail's sub-tab (e.g. 'logs'); the detail keeps it while its tab is open. */
   setDetailSubTab: (assetId: number, tabId: string, subTab: string) => void;
   /** Creates the log panel state of a detail's Logs sub-tab unless it exists. */
@@ -366,8 +391,6 @@ function forgetTokens(assetId: number) {
   }
 }
 
-const refreshers = new Map<number, Map<string, Refresher>>();
-
 /**
  * State of a value being (re)read: a value already shown stays as is while it reloads (the refresh control
  * spins instead); anything else — never read, or failed — shows as loading.
@@ -384,7 +407,6 @@ function newCluster(namespace: string): K8sClusterState {
     namespaces: { status: "loading", error: null },
     tabs: [{ id: OVERVIEW_TAB_ID, label: "" }],
     activeTabId: OVERVIEW_TAB_ID,
-    collapsed: [],
     refreshing: false,
   };
 }
@@ -425,7 +447,9 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
 
   return {
     clusters: {},
+    collapsedCategories: {},
     lists: {},
+    objectLists: {},
     logTabs: {},
     detailSubTabs: {},
     details: {},
@@ -470,16 +494,20 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
     setNamespace: (assetId, namespace) => patchCluster(assetId, () => ({ namespace })),
 
     toggleCategory: (assetId, key) =>
-      patchCluster(assetId, (c) => ({
-        collapsed: c.collapsed.includes(key) ? c.collapsed.filter((k) => k !== key) : [...c.collapsed, key],
-      })),
+      set((s) => {
+        const collapsed = s.collapsedCategories[assetId] ?? [];
+        const next = collapsed.includes(key) ? collapsed.filter((k) => k !== key) : [...collapsed, key];
+        return { collapsedCategories: { ...s.collapsedCategories, [assetId]: next } };
+      }),
 
     loadList: async (assetId, typeKey, namespace, opts) => {
       const cluster = get().clusters[assetId];
       if (!cluster) return;
       const key = listKey(typeKey, namespace);
       const prev = get().lists[assetId]?.[key];
-      if (prev && !opts?.force) return;
+      const labelSelector = labelSelectorOf((get().listViews[assetId]?.[typeKey] ?? DEFAULT_LIST_VIEW).filter);
+      // A cached list read under another selector (set while another namespace was shown) is read again.
+      if (prev && prev.labelSelector === labelSelector && !opts?.force) return;
 
       const setEntry = (entry: K8sListEntry) =>
         set((s) => {
@@ -492,9 +520,16 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
       setEntry(
         prev?.status === "ready"
           ? { ...prev, reloading: true }
-          : { status: "loading", columns: [], rows: [], error: null, reloading: false, filterError: null }
+          : {
+              status: "loading",
+              columns: [],
+              rows: [],
+              error: null,
+              reloading: false,
+              filterError: null,
+              labelSelector,
+            }
       );
-      const labelSelector = labelSelectorOf((get().listViews[assetId]?.[typeKey] ?? DEFAULT_LIST_VIEW).filter);
       const version = apiVersionOf(cluster, typeKey);
       const [group, resource] = typeKey.split("/");
       try {
@@ -520,11 +555,13 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
           error: null,
           reloading: false,
           filterError: null,
+          labelSelector,
         });
       } catch (e) {
         if (!isCurrent(assetId, slot, token)) return;
-        // A rejected selector isn't a failed list: the rows already shown stay, the reason goes under the filter.
-        if (labelSelector && prev?.status === "ready") {
+        // A newly typed selector the cluster rejects isn't a failed list: the rows already shown stay, the reason
+        // goes under the filter. Re-reading under the selector already shown failing is a failed list.
+        if (labelSelector && prev?.status === "ready" && prev.labelSelector !== labelSelector) {
           setEntry({ ...prev, reloading: false, filterError: errorMessage(e) });
           return;
         }
@@ -535,7 +572,47 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
           error: errorMessage(e),
           reloading: false,
           filterError: null,
+          labelSelector,
         });
+      }
+    },
+
+    loadObjects: async (assetId, req, opts) => {
+      if (!get().clusters[assetId]) return;
+      const key = objectsKey(req);
+      const prev = get().objectLists[assetId]?.[key];
+      if (prev && !opts?.force) return;
+      const setEntry = (entry: Loadable<K8sListedObject[]>) =>
+        set((s) => {
+          if (!s.clusters[assetId]) return s;
+          return {
+            objectLists: {
+              ...s.objectLists,
+              [assetId]: { ...s.objectLists[assetId], [key]: { ...entry, request: req } },
+            },
+          };
+        });
+      const slot = `objects:${key}`;
+      const token = begin(assetId, slot);
+      setEntry(pending(prev));
+      try {
+        const result = await ListK8sResources({
+          assetId,
+          ...req,
+          fieldSelector: "",
+          includeObject: true,
+          withPhase: false,
+        });
+        if (!isCurrent(assetId, slot, token)) return;
+        const rows = (JSON.parse(result) as { rows: { name: string; object?: Record<string, unknown> }[] }).rows;
+        setEntry({
+          status: "ready",
+          data: rows.flatMap((r) => (r.object ? [{ name: r.name, object: r.object }] : [])),
+          error: null,
+        });
+      } catch (e) {
+        if (!isCurrent(assetId, slot, token)) return;
+        setEntry({ ...prev, status: "error", error: errorMessage(e) });
       }
     },
 
@@ -592,10 +669,17 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
       patchEntry(() => ({ resource: { status: "ready", data: detail, error: null } }));
       if (detail.notFound || !detail.object) return;
 
-      const uid = (detail.object.metadata as { uid?: string } | undefined)?.uid ?? "";
+      // By kind + name like `kubectl events --for`: kubelet records a Node's events under the node name, not its UID.
+      const kind = String(detail.object.kind ?? "");
       try {
         const result = JSON.parse(
-          await ListK8sEvents({ assetId, namespace: ref.namespace, involvedUid: uid, warningOnly: false } as never)
+          await ListK8sEvents({
+            assetId,
+            namespace: ref.namespace,
+            involvedKind: kind,
+            involvedName: ref.name,
+            warningOnly: false,
+          })
         ) as { events: K8sEvent[] };
         if (!isCurrent(assetId, slot, token)) return;
         patchEntry(() => ({ events: { status: "ready", data: result.events, error: null } }));
@@ -706,7 +790,9 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         });
       setEntry(pending(prev));
       try {
-        const result = JSON.parse(await ListK8sEvents({ assetId, namespace, involvedUid: "", warningOnly })) as {
+        const result = JSON.parse(
+          await ListK8sEvents({ assetId, namespace, involvedKind: "", involvedName: "", warningOnly })
+        ) as {
           events: K8sEvent[];
         };
         if (!isCurrent(assetId, slot, token)) return;
@@ -776,6 +862,9 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         const sep = key.lastIndexOf("|");
         reads.push(state.loadList(assetId, key.slice(0, sep), key.slice(sep + 1), { force: true }));
       }
+      for (const entry of Object.values(state.objectLists[assetId] ?? {})) {
+        reads.push(state.loadObjects(assetId, entry.request, { force: true }));
+      }
       for (const tabId of Object.keys(state.details[assetId] ?? {})) {
         reads.push(state.loadDetail(assetId, tabId, { force: true }));
       }
@@ -800,7 +889,6 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         const sep = key.lastIndexOf("|");
         reads.push(state.loadEvents(assetId, key.slice(0, sep), key.slice(sep + 1) === "w", { force: true }));
       }
-      for (const fn of refreshers.get(assetId)?.values() ?? []) reads.push(fn());
       await Promise.allSettled(reads);
       patchCluster(assetId, () => ({ refreshing: false }));
     },
@@ -835,18 +923,6 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         }
       }
       get().closeTabs(assetId, ids);
-    },
-
-    registerRefresher: (assetId, key, fn) => {
-      let byKey = refreshers.get(assetId);
-      if (!byKey) {
-        byKey = new Map();
-        refreshers.set(assetId, byKey);
-      }
-      byKey.set(key, fn);
-      return () => {
-        if (refreshers.get(assetId)?.get(key) === fn) refreshers.get(assetId)?.delete(key);
-      };
     },
 
     setDetailSubTab: (assetId, tabId, subTab) =>
@@ -916,7 +992,6 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
 
     clearCluster: (assetId) => {
       forgetTokens(assetId);
-      refreshers.delete(assetId);
       set((s) => {
         const without = <T>(map: Record<number, T>) => {
           const next = { ...map };
@@ -926,6 +1001,7 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         return {
           clusters: without(s.clusters),
           lists: without(s.lists),
+          objectLists: without(s.objectLists),
           logTabs: without(s.logTabs),
           detailSubTabs: without(s.detailSubTabs),
           details: without(s.details),

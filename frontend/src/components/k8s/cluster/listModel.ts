@@ -23,10 +23,12 @@ export function visibleRows(
   const needle = labelSelectorOf(filter) ? "" : filter.trim().toLowerCase();
   const filtered = needle ? rows.filter((r) => r.name.toLowerCase().includes(needle)) : rows;
 
-  const index = sort ? columns.findIndex((c) => c.name === sort.column) : 0;
-  if (index < 0 || columns.length === 0) return filtered;
+  if (columns.length === 0) return filtered;
+  // A sort on a column that is no longer listed (the Namespace column after picking one namespace) is name ascending.
+  const sorted = sort ? columns.findIndex((c) => c.name === sort.column) : -1;
+  const index = Math.max(sorted, 0);
   const byTime = isAgeColumn(columns[index]);
-  const sign = sort?.dir === "desc" ? -1 : 1;
+  const sign = sorted >= 0 && sort?.dir === "desc" ? -1 : 1;
   return [...filtered].sort((a, b) => {
     if (byTime) return sign * (Date.parse(a.creationTimestamp) - Date.parse(b.creationTimestamp));
     return (

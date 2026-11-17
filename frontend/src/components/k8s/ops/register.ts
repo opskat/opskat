@@ -1,8 +1,7 @@
 import { CirclePause, CircleSlash, Play, RefreshCw, Scaling, Trash2 } from "lucide-react";
 import { useK8sStore } from "@/stores/k8sStore";
 import { registerK8sAction } from "../actions";
-import { setCronJobSuspend } from "./cronOps";
-import { isCronJobSuspended, isNodeUnschedulable, targetOf } from "./schedulingState";
+import { isCronJobSuspended, isNodeUnschedulable } from "./schedulingState";
 
 const SCALABLE = new Set(["apps/deployments", "apps/statefulsets", "apps/replicasets"]);
 const RESTARTABLE = new Set(["apps/deployments", "apps/statefulsets", "apps/daemonsets"]);
@@ -53,10 +52,7 @@ registerK8sAction({
     isCronJobSuspended(target, columns) ? "asset.k8sCronResume" : "asset.k8sCronSuspend",
   icon: CirclePause,
   appliesTo: (typeKey) => typeKey === CRONJOBS,
-  run: async (ctx) => {
-    const found = targetOf(ctx);
-    await setCronJobSuspend(ctx, found ? !isCronJobSuspended(found.target, found.columns) : true);
-  },
+  run: (ctx) => useK8sStore.getState().openOp("suspend", ctx),
 });
 
 registerK8sAction({

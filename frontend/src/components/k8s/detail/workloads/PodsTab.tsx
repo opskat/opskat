@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { ScrollText } from "lucide-react";
 import { Button } from "@opskat/ui";
-import { AsyncState } from "@/components/common/AsyncState";
+import { K8sAsyncState } from "../../K8sAsyncState";
 import { useK8sStore, resourceTabId } from "@/stores/k8sStore";
 import { getK8sActions } from "../../actions";
 import { K8sSectionCard } from "../../K8sSectionCard";
@@ -21,8 +21,9 @@ export function PodsTab(props: K8sDetailProps) {
   const pods = useWorkloadPods(props);
 
   return (
-    <AsyncState
+    <K8sAsyncState
       status={pods.status}
+      hasData={pods.hasData}
       error={pods.error}
       onRetry={pods.reload}
       empty={pods.status === "ready" && pods.items.length === 0 ? t("asset.k8sNoPods") : undefined}
@@ -108,6 +109,6 @@ export function PodsTab(props: K8sDetailProps) {
           </tbody>
         </table>
       </K8sSectionCard>
-    </AsyncState>
+    </K8sAsyncState>
   );
 }

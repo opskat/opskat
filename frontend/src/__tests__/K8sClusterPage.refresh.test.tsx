@@ -126,4 +126,20 @@ describe("K8sClusterPage refresh (#212)", () => {
     expect(await screen.findByText("example/api:new")).toBeInTheDocument();
     expect(screen.queryByText("example/api:old")).not.toBeInTheDocument();
   });
+
+  it("keeps the page and the loaded list when re-reading the version fails, with the reason in the sidebar", async () => {
+    const user = userEvent.setup();
+    mockCluster(() => podTable(["api"]));
+    render(<K8sClusterPage asset={asset(99003)} />);
+    await openPods(user);
+    await screen.findByText("api");
+
+    vi.mocked(GetK8sClusterVersion).mockRejectedValue(new Error("dial tcp 10.0.0.1:6443: i/o timeout"));
+    await user.click(within(screen.getByTestId("k8s-sidebar")).getByRole("button", { name: "query.refreshTree" }));
+
+    await waitFor(() => expect(GetK8sClusterVersion).toHaveBeenCalledTimes(2));
+    const sidebar = screen.getByTestId("k8s-sidebar");
+    expect(await within(sidebar).findByText("dial tcp 10.0.0.1:6443: i/o timeout")).toBeInTheDocument();
+    expect(screen.getByText("api")).toBeInTheDocument();
+  });
 });

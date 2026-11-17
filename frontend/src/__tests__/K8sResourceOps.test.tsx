@@ -43,11 +43,19 @@ function seed() {
         type("", "nodes", "Node"),
         type("", "namespaces", "Namespace"),
         type("", "events", "Event", ["list"]),
+        type("autoscaling", "horizontalpodautoscalers", "HorizontalPodAutoscaler", ["list"]),
       ],
       failedGroups: [],
     }),
   } as unknown as K8sClusterState;
-  useK8sStore.setState({ clusters: { [ASSET]: cluster }, opDialogs: {}, terminals: {}, details: {}, lists: {} });
+  useK8sStore.setState({
+    clusters: { [ASSET]: cluster },
+    opDialogs: {},
+    terminals: {},
+    details: {},
+    lists: {},
+    objectLists: {},
+  });
 }
 
 const deployCtx = { assetId: ASSET, typeKey: "apps/deployments", namespace: "default", name: "web" };

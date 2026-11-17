@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertTriangle, ChevronRight, Clock, Server } from "lucide-react";
+import { AlertTriangle, ChevronRight, Clock, RotateCw, Server } from "lucide-react";
+import { Button } from "@opskat/ui";
 import { AsyncState } from "@/components/common/AsyncState";
 import {
   eventsKey,
@@ -14,6 +15,7 @@ import {
   type K8sResourceRow,
   type K8sTableColumn,
 } from "@/stores/k8sStore";
+import { K8sAsyncState } from "../K8sAsyncState";
 import { K8sSectionCard } from "../K8sSectionCard";
 import { getK8sStatusColor, statusVariantToClass } from "../utils";
 import { K8sEventsTable } from "./K8sEventsTable";
@@ -88,8 +90,13 @@ export function K8sOverview({
 
   const retryHealth = () => void loadHealth(assetId, namespace, { force: true });
   const data = health?.data;
-  const healthStatus = health?.status === "error" && !data ? "error" : data ? "ready" : "loading";
+  const healthStatus = health?.status ?? "loading";
   const sectionError = (section: "nodes" | "pods") => (data ? data[section].error : undefined);
+  /** A stat card: its section's own failure, else the health read's state (old numbers stay through a failed re-read). */
+  const statState = (section: "nodes" | "pods") =>
+    sectionError(section)
+      ? { status: "error" as const, error: sectionError(section), hasData: false }
+      : { status: healthStatus, error: health?.error, hasData: !!data };
 
   const attentionErrors = data ? ATTENTION_SECTIONS.filter((s) => data.errors[s]) : [];
   const attentionMessage = attentionErrors.map((s) => `${s}: ${data?.errors[s]}`).join("\n");
@@ -106,12 +113,7 @@ export function K8sOverview({
           <p className="mt-0.5 text-[11px] text-muted-foreground">{version.platform}</p>
         </Stat>
         <Stat testId="k8s-stat-nodes" label={t("asset.k8sNodes")}>
-          <AsyncState
-            status={sectionError("nodes") ? "error" : healthStatus}
-            error={sectionError("nodes") ?? health?.error}
-            onRetry={retryHealth}
-            className="py-2"
-          >
+          <K8sAsyncState {...statState("nodes")} onRetry={retryHealth} className="py-2">
             {data && (
               <>
                 <p className="mt-1 font-mono text-lg font-semibold">
@@ -126,15 +128,10 @@ export function K8sOverview({
                 </p>
               </>
             )}
-          </AsyncState>
+          </K8sAsyncState>
         </Stat>
         <Stat testId="k8s-stat-pods" label="Pod">
-          <AsyncState
-            status={sectionError("pods") ? "error" : healthStatus}
-            error={sectionError("pods") ?? health?.error}
-            onRetry={retryHealth}
-            className="py-2"
-          >
+          <K8sAsyncState {...statState("pods")} onRetry={retryHealth} className="py-2">
             {data && (
               <>
                 <p className="mt-1 font-mono text-lg font-semibold">
@@ -149,23 +146,29 @@ export function K8sOverview({
                 </p>
               </>
             )}
-          </AsyncState>
+          </K8sAsyncState>
         </Stat>
       </div>
 
       <div data-testid="k8s-attention">
         <K8sSectionCard title={t("asset.k8sAttention")} icon={AlertTriangle}>
-          <AsyncState
-            status={data && data.attention.length === 0 && attentionErrors.length > 0 ? "error" : healthStatus}
-            error={health?.error ?? attentionMessage}
+          <K8sAsyncState
+            status={healthStatus}
+            error={health?.error}
+            hasData={!!data}
             onRetry={retryHealth}
-            empty={
-              data && data.attention.length === 0 && attentionErrors.length === 0 ? t("asset.k8sAllHealthy") : undefined
-            }
             className="py-4"
           >
             {data && (
-              <>
+              <AsyncState
+                status={data.attention.length === 0 && attentionErrors.length > 0 ? "error" : "ready"}
+                error={attentionMessage}
+                onRetry={retryHealth}
+                empty={
+                  data.attention.length === 0 && attentionErrors.length === 0 ? t("asset.k8sAllHealthy") : undefined
+                }
+                className="py-4"
+              >
                 <div className="divide-y">
                   {data.attention.map((a) => (
                     <button
@@ -190,25 +193,30 @@ export function K8sOverview({
                   ))}
                 </div>
                 {attentionErrors.length > 0 && (
-                  <p className="mt-2 flex items-start gap-1 whitespace-pre-wrap break-words text-xs text-warning">
+                  <div className="mt-2 flex items-start gap-1 whitespace-pre-wrap break-words text-xs text-warning">
                     <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    <span>
+                    <span className="min-w-0 flex-1">
                       {t("asset.k8sAttentionPartial")}
                       {"\n"}
                       {attentionMessage}
                     </span>
-                  </p>
+                    <Button variant="outline" size="sm" className="h-6 shrink-0 px-2 text-xs" onClick={retryHealth}>
+                      <RotateCw className="size-3" />
+                      {t("action.retry")}
+                    </Button>
+                  </div>
                 )}
-              </>
+              </AsyncState>
             )}
-          </AsyncState>
+          </K8sAsyncState>
         </K8sSectionCard>
       </div>
 
       <div data-testid="k8s-recent-events">
         <K8sSectionCard title={t("asset.k8sRecentWarnings")} icon={Clock}>
-          <AsyncState
-            status={events?.status === "error" && !events.data ? "error" : events?.data ? "ready" : "loading"}
+          <K8sAsyncState
+            status={events?.status ?? "loading"}
+            hasData={!!events?.data}
             error={events?.error}
             onRetry={() => void loadEvents(assetId, namespace, true, { force: true })}
             empty={events?.data && events.data.length === 0 ? t("asset.k8sNoWarningEvents") : undefined}
@@ -221,7 +229,7 @@ export function K8sOverview({
             >
               {t("asset.k8sViewAllEvents")}
             </button>
-          </AsyncState>
+          </K8sAsyncState>
         </K8sSectionCard>
       </div>
 

@@ -118,11 +118,13 @@ type ResourceObject struct {
 	YAML     string         `json:"yaml"`
 }
 
-// EventQuery：Namespace 为空表示全部命名空间；InvolvedUID 非空时只取该对象的事件。
+// EventQuery：Namespace 为空表示全部命名空间；InvolvedKind / InvolvedName 非空时只取该对象的事件。
+// 按类型 + 名称而不是 UID 匹配（同 `kubectl events --for kind/name`）：kubelet 记录节点事件时 UID 填的是节点名。
 type EventQuery struct {
-	Namespace   string
-	InvolvedUID string
-	WarningOnly bool
+	Namespace    string
+	InvolvedKind string
+	InvolvedName string
+	WarningOnly  bool
 }
 
 type EventObject struct {
@@ -512,15 +514,18 @@ func decodeObject(raw []byte) (map[string]any, error) {
 	return obj, nil
 }
 
-// ListEvents 分批列出 core/v1 事件，可按对象 UID 与告警过滤，按最近发生时间倒序。
+// ListEvents 分批列出 core/v1 事件，可按对象（类型 + 名称）与告警过滤，按最近发生时间倒序。
 func ListEvents(ctx context.Context, kubeconfig string, q EventQuery, opts ...ClientOption) (*EventList, error) {
 	c, err := newAPIClient(kubeconfig, opts...)
 	if err != nil {
 		return nil, err
 	}
 	var selectors []string
-	if q.InvolvedUID != "" {
-		selectors = append(selectors, "involvedObject.uid="+q.InvolvedUID)
+	if q.InvolvedKind != "" {
+		selectors = append(selectors, "involvedObject.kind="+q.InvolvedKind)
+	}
+	if q.InvolvedName != "" {
+		selectors = append(selectors, "involvedObject.name="+q.InvolvedName)
 	}
 	if q.WarningOnly {
 		selectors = append(selectors, "type="+corev1.EventTypeWarning)

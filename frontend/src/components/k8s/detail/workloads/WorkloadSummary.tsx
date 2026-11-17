@@ -4,23 +4,18 @@ import { K8sSectionCard } from "../../K8sSectionCard";
 import { K8sMetadataGrid } from "../../K8sMetadataGrid";
 import { K8sTableSection } from "../../K8sTableSection";
 import { K8sMetaSections } from "../K8sMetaSections";
-import type { SummaryItem } from "./summaryItems";
+import { cpuMem, portsText, type ContainerPort, type ContainerResources, type SummaryItem } from "./summaryItems";
 
 interface ContainerSpec {
   name: string;
   image?: string;
-  ports?: { containerPort: number; name?: string; protocol?: string }[];
-  resources?: { requests?: Record<string, string>; limits?: Record<string, string> };
+  ports?: ContainerPort[];
+  resources?: ContainerResources;
 }
 
 export interface PodTemplate {
   spec?: { containers?: ContainerSpec[]; nodeSelector?: Record<string, string> };
 }
-
-const portText = (p: { containerPort: number; name?: string; protocol?: string }) =>
-  `${p.containerPort}/${p.name ?? p.protocol ?? "TCP"}`;
-const cpuMem = (r: Record<string, string> | undefined) =>
-  r?.cpu || r?.memory ? `${r.cpu ?? "-"} / ${r.memory ?? "-"}` : "-";
 
 /** Summary card + the pod template's containers (image / ports / requests / limits) + conditions, labels, annotations. */
 export function WorkloadSummary({
@@ -66,7 +61,7 @@ export function WorkloadSummary({
           <tr key={c.name} className="border-b last:border-0">
             <td className="py-2 pr-4 font-mono text-sm">{c.name}</td>
             <td className="py-2 pr-4 font-mono text-xs text-muted-foreground">{c.image}</td>
-            <td className="py-2 pr-4 font-mono text-xs">{c.ports?.map(portText).join(", ") || "-"}</td>
+            <td className="py-2 pr-4 font-mono text-xs">{portsText(c.ports)}</td>
             <td className="py-2 pr-4 font-mono text-xs">{cpuMem(c.resources?.requests)}</td>
             <td className="py-2 pr-4 font-mono text-xs">{cpuMem(c.resources?.limits)}</td>
           </tr>

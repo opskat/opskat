@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { FilePlus2, RefreshCw, Search } from "lucide-react";
 import { Button, Input, Switch, cn } from "@opskat/ui";
@@ -86,15 +86,11 @@ function LoadedTypeList({
     void loadList(assetId, typeKey, ns);
   }, [assetId, typeKey, ns, loadList]);
 
-  // The label selector goes to the cluster, so a changed one re-reads the list — once typing pauses.
+  // The label selector goes to the cluster, so a changed one re-reads the list — once typing pauses (the store
+  // re-reads a list whose rows came from another selector).
   const selector = labelSelectorOf(view.filter);
-  const appliedSelector = useRef(selector);
   useEffect(() => {
-    if (selector === appliedSelector.current) return;
-    const timer = setTimeout(() => {
-      appliedSelector.current = selector;
-      void loadList(assetId, typeKey, ns, { force: true });
-    }, SELECTOR_DEBOUNCE_MS);
+    const timer = setTimeout(() => void loadList(assetId, typeKey, ns), SELECTOR_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [selector, assetId, typeKey, ns, loadList]);
 
@@ -118,7 +114,11 @@ function LoadedTypeList({
     () => (entry ? visibleRows(entry.columns, entry.rows, view.filter, view.sort) : []),
     [entry, view.filter, view.sort]
   );
-  const sort = view.sort ?? { column: entry?.columns[0]?.name ?? "", dir: "asc" as const };
+  // Same fallback as visibleRows: a sort on a column no longer listed shows as name ascending.
+  const sort =
+    view.sort && entry?.columns.some((c) => c.name === view.sort?.column)
+      ? view.sort
+      : { column: entry?.columns[0]?.name ?? "", dir: "asc" as const };
   const sortBy = (column: string) =>
     setListView(assetId, typeKey, {
       sort: sort.column === column ? { column, dir: sort.dir === "asc" ? "desc" : "asc" } : { column, dir: "asc" },
@@ -126,7 +126,7 @@ function LoadedTypeList({
 
   const empty =
     entry?.status === "ready" && rows.length === 0
-      ? entry.rows.length > 0
+      ? entry.rows.length > 0 || entry.labelSelector
         ? t("asset.k8sNoMatch")
         : ns
           ? t("asset.k8sEmptyInNamespace", { namespace: ns, kind: label })

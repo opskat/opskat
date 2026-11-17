@@ -29,7 +29,9 @@ const ERROR_WORDS = new Set([
 
 /** Maps a status word as `kubectl get` prints it (`Running`, `Init:0/1`, `Ready,SchedulingDisabled`) to a colour. */
 export function getK8sStatusColor(status: string): StatusVariant {
-  const s = status.toLowerCase().split(",")[0].trim();
+  const word = status.toLowerCase().split(",")[0].trim();
+  // An init container's state is printed as `Init:<reason>`; the reason decides unless it is a progress count.
+  const s = word.startsWith("init:") && !/^init:\d+\/\d+$/.test(word) ? word.slice("init:".length) : word;
   if (SUCCESS_WORDS.has(s)) return "success";
   if (ERROR_WORDS.has(s) || s.endsWith("error")) return "error";
   if (WARNING_WORDS.has(s) || s.startsWith("init:")) return "warning";

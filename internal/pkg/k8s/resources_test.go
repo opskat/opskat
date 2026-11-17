@@ -514,12 +514,12 @@ func TestListEventsFiltersByObjectAndSortsNewestFirst(t *testing.T) {
 		]}`))
 	})
 
-	got, err := ListEvents(context.Background(), f.kubeconfig(), EventQuery{Namespace: "default", InvolvedUID: "u1", WarningOnly: true})
+	got, err := ListEvents(context.Background(), f.kubeconfig(), EventQuery{Namespace: "default", InvolvedKind: "Pod", InvolvedName: "api-1", WarningOnly: true})
 	require.NoError(t, err)
 
 	reqs := f.requests(path)
 	require.Len(t, reqs, 2, "event pages are merged")
-	assert.Equal(t, "involvedObject.uid=u1,type=Warning", reqs[0].URL.Query().Get("fieldSelector"))
+	assert.Equal(t, "involvedObject.kind=Pod,involvedObject.name=api-1,type=Warning", reqs[0].URL.Query().Get("fieldSelector"))
 	assert.Equal(t, "e1", reqs[1].URL.Query().Get("continue"))
 
 	require.Len(t, got.Events, 3)

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GetK8sClusterVersion, GetK8sResourceTypes, ListK8sResources } from "../../../wailsjs/go/k8s/K8s";
 import type { k8s } from "../../../wailsjs/go/models";
-import { useK8sStore } from "../k8sStore";
+import { objectsKey, useK8sStore } from "../k8sStore";
 import { useTabStore } from "../tabStore";
 
 const TYPES = {
@@ -190,7 +190,7 @@ describe("k8sStore", () => {
     });
   });
 
-  it("refresh re-reads only loaded lists and registered views, replacing their content (#212)", async () => {
+  it("refresh re-reads only loaded lists, replacing their content (#212)", async () => {
     let generation = "old";
     mockCluster(async (req) => {
       if (req.resource === "namespaces") return table(["default", "prod"]);
@@ -200,10 +200,6 @@ describe("k8sStore", () => {
     store.initCluster(assetId, "prod");
     await flush();
     await store.loadList(assetId, "/pods", "prod");
-    const refresher = vi.fn().mockResolvedValue(undefined);
-    const removed = vi.fn().mockResolvedValue(undefined);
-    store.registerRefresher(assetId, "overview", refresher);
-    store.registerRefresher(assetId, "gone", removed)();
 
     generation = "new";
     await store.refreshAll(assetId);
@@ -214,9 +210,90 @@ describe("k8sStore", () => {
     expect(GetK8sClusterVersion).toHaveBeenCalledTimes(2);
     expect(GetK8sResourceTypes).toHaveBeenCalledTimes(2);
     expect(listCalls("namespaces")).toHaveLength(2);
-    expect(refresher).toHaveBeenCalledTimes(1);
-    expect(removed).not.toHaveBeenCalled();
     expect(useK8sStore.getState().clusters[assetId].refreshing).toBe(false);
+  });
+
+  it("re-reads a cached list when the label selector differs from the one it was read with", async () => {
+    mockCluster(namespacesOK);
+    const store = useK8sStore.getState();
+    store.initCluster(assetId, "prod");
+    await flush();
+    await store.loadList(assetId, "/pods", "prod");
+    store.setNamespace(assetId, "dev");
+    store.setListView(assetId, "/pods", { filter: "app=api" });
+    await store.loadList(assetId, "/pods", "dev");
+
+    store.setNamespace(assetId, "prod");
+    await store.loadList(assetId, "/pods", "prod");
+    // A name filter is applied locally, so it never re-reads.
+    store.setListView(assetId, "/pods", { filter: "api" });
+    await store.loadList(assetId, "/pods", "dev");
+    await store.loadList(assetId, "/pods", "dev");
+
+    expect(listCalls("pods").map((r) => [r.namespace, r.labelSelector])).toEqual([
+      ["prod", ""],
+      ["dev", "app=api"],
+      ["prod", "app=api"],
+      ["dev", ""],
+    ]);
+  });
+
+  it("shows a failed re-read under an applied selector as a list error; only a newly rejected selector goes under the filter", async () => {
+    let fail = false;
+    mockCluster(async (req) => {
+      if (req.resource !== "pods") return namespacesOK(req);
+      if (req.labelSelector === "app=api,=bad")
+        throw new Error("unable to parse requirement: found '=', expected: identifier");
+      if (fail) throw new Error("dial tcp 10.0.0.1:6443: connect: connection refused");
+      return table(["api"], req.namespace);
+    });
+    const store = useK8sStore.getState();
+    store.initCluster(assetId, "prod");
+    await flush();
+    store.setListView(assetId, "/pods", { filter: "app=api" });
+    await store.loadList(assetId, "/pods", "prod");
+
+    store.setListView(assetId, "/pods", { filter: "app=api,=bad" });
+    await store.loadList(assetId, "/pods", "prod", { force: true });
+    expect(useK8sStore.getState().lists[assetId]["/pods|prod"]).toMatchObject({
+      status: "ready",
+      filterError: "unable to parse requirement: found '=', expected: identifier",
+    });
+    expect(useK8sStore.getState().lists[assetId]["/pods|prod"].rows.map((r) => r.name)).toEqual(["api"]);
+
+    store.setListView(assetId, "/pods", { filter: "app=api" });
+    fail = true;
+    await store.loadList(assetId, "/pods", "prod", { force: true });
+    expect(useK8sStore.getState().lists[assetId]["/pods|prod"]).toMatchObject({
+      status: "error",
+      error: "dial tcp 10.0.0.1:6443: connect: connection refused",
+      filterError: null,
+    });
+  });
+
+  it("caches full-object lists per request and re-reads the loaded ones on refresh", async () => {
+    let image = "old";
+    mockCluster(async (req) => {
+      if (req.resource !== "pods") return namespacesOK(req);
+      const rows = [{ name: "api-1", object: { metadata: { name: "api-1" }, spec: { image } } }];
+      return JSON.stringify({ columns: [], rows });
+    });
+    const store = useK8sStore.getState();
+    store.initCluster(assetId, "prod");
+    await flush();
+    const req = { group: "", version: "v1", resource: "pods", namespace: "prod", labelSelector: "app=api" };
+
+    await store.loadObjects(assetId, req);
+    await store.loadObjects(assetId, req);
+    expect(listCalls("pods")).toHaveLength(1);
+    expect(listCalls("pods")[0]).toMatchObject({ includeObject: true, labelSelector: "app=api" });
+
+    image = "new";
+    await store.refreshAll(assetId);
+    expect(listCalls("pods")).toHaveLength(2);
+    expect(useK8sStore.getState().objectLists[assetId][objectsKey(req)].data).toEqual([
+      { name: "api-1", object: { metadata: { name: "api-1" }, spec: { image: "new" } } },
+    ]);
   });
 
   it("keeps the overview tab when closing tabs and activates a neighbour of the closed active tab", () => {
@@ -249,6 +326,20 @@ describe("k8sStore", () => {
 
     expect(useK8sStore.getState().detailSubTabs[assetId][tab.id]).toBeUndefined();
     expect(useK8sStore.getState().logTabs[assetId][tab.id]).toBeUndefined();
+  });
+
+  it("keeps collapsed sidebar categories for the app session, across closing and reopening the cluster tab", () => {
+    mockCluster(namespacesOK);
+    const store = useK8sStore.getState();
+    store.initCluster(assetId, "prod");
+    store.toggleCategory(assetId, "rbac");
+    store.toggleCategory(assetId, "storage");
+    store.toggleCategory(assetId, "storage");
+
+    store.clearCluster(assetId);
+    store.initCluster(assetId, "prod");
+
+    expect(useK8sStore.getState().collapsedCategories[assetId]).toEqual(["rbac"]);
   });
 
   it("clears a cluster's state when its cluster tab closes", async () => {

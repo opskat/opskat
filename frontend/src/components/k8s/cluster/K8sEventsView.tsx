@@ -2,7 +2,7 @@ import { useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Clock, RefreshCw, Search } from "lucide-react";
 import { Button, Input, Tabs, TabsList, TabsTrigger, cn } from "@opskat/ui";
-import { AsyncState } from "@/components/common/AsyncState";
+import { K8sAsyncState } from "../K8sAsyncState";
 import { DEFAULT_LIST_VIEW, eventsKey, useK8sStore, type K8sClusterState } from "@/stores/k8sStore";
 import { K8sEventsTable } from "./K8sEventsTable";
 
@@ -33,7 +33,6 @@ export function K8sEventsView({ assetId, cluster }: { assetId: number; cluster: 
     [entry?.data, needle]
   );
   const reload = () => void loadEvents(assetId, namespace, warningOnly, { force: true });
-  const status = entry?.status === "error" && !entry.data ? "error" : entry?.data ? "ready" : "loading";
   const reloading = entry?.status === "loading" && !!entry.data;
 
   return (
@@ -83,8 +82,9 @@ export function K8sEventsView({ assetId, cluster }: { assetId: number; cluster: 
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-auto px-4">
-        <AsyncState
-          status={status}
+        <K8sAsyncState
+          status={entry?.status ?? "loading"}
+          hasData={!!entry?.data}
           error={entry?.error}
           onRetry={reload}
           empty={
@@ -97,7 +97,7 @@ export function K8sEventsView({ assetId, cluster }: { assetId: number; cluster: 
           className="h-full"
         >
           <K8sEventsTable assetId={assetId} types={cluster.types.data?.types ?? []} events={shown} />
-        </AsyncState>
+        </K8sAsyncState>
       </div>
     </div>
   );

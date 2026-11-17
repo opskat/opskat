@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -75,6 +76,10 @@ func (r *eventRecorder) waitEnd(t *testing.T, sessionID string) K8sExecEnd {
 
 // execTestBinder 返回一个经计数拨号器连到 srv 的 binder 与调用上下文（kubeconfig 指向不可解析的主机）。
 func execTestBinder(t *testing.T, target string) (*K8s, *eventRecorder, *k8sCallContext) {
+	// 读不到终止状态时的重读放快放短，免得「终止状态一直不出现」的用例各等满几秒。
+	oldInterval, oldWindow := execEndPollInterval, execEndPollWindow
+	execEndPollInterval, execEndPollWindow = 20*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() { execEndPollInterval, execEndPollWindow = oldInterval, oldWindow })
 	rec := &eventRecorder{}
 	k := &K8s{ctx: context.Background(), emit: rec.emit}
 	dial := func(ctx context.Context, network, _ string) (net.Conn, error) {
@@ -221,9 +226,22 @@ func TestK8sExecConnectFailureReturnsClusterReason(t *testing.T) {
 	assertSessionFields(t, failed[0], "web-0")
 }
 
-// 请求校验发生在加载资产之前：零值 binder 即可断言，非法请求不会触达集群。
+// 校验被拒也是一次失败的会话开始，按日志规范记录（带资产 / 命名空间 / Pod / 容器）。
+func TestStartK8sExecLogsRejectedRequest(t *testing.T) {
+	logs := observeLogs(t)
+	k := &K8s{ctx: context.Background()}
+	req := execReq("../secrets")
+	_, err := k.StartK8sExec(req)
+	require.Error(t, err)
+	failed := logs.FilterMessage("k8s exec failed").All()
+	require.Len(t, failed, 1)
+	assert.Equal(t, "../secrets", failed[0].ContextMap()["pod"])
+	assert.Equal(t, int64(7), failed[0].ContextMap()["assetID"])
+}
+
+// 请求校验发生在加载资产之前：没有资产服务的 binder 即可断言，非法请求不会触达集群。
 func TestStartK8sExecRejectsInvalidRequests(t *testing.T) {
-	k := &K8s{}
+	k := &K8s{ctx: context.Background()}
 	cases := map[string]struct {
 		mutate func(*K8sExecRequest)
 		want   string
@@ -399,7 +417,7 @@ func TestK8sExecMissingCustomCommandIsPassedThrough(t *testing.T) {
 	id, err := k.startExec(c, req)
 	require.NoError(t, err)
 	end := rec.waitEnd(t, id)
-	assert.Equal(t, ExecEndError, end.Reason)
+	assert.Equal(t, ExecEndFailed, end.Reason, "the cluster refused the command; the connection was fine")
 	assert.Contains(t, end.Error, reason)
 	assert.Len(t, srv.Requests(), 1, "an explicit command never falls back")
 }
@@ -481,6 +499,59 @@ func TestK8sExecEndEnrichedWithContainerTerminationReason(t *testing.T) {
 			assert.Equal(t, want, rec.waitEnd(t, id))
 		})
 	}
+}
+
+// kubelet 写入容器终止状态晚于 exec 流结束：首次读 Pod 还没有终止信息时要再读几次。
+func TestK8sExecEndWaitsForTerminationThatLandsLate(t *testing.T) {
+	var reads atomic.Int32
+	srv := k8stest.NewExecServer(t, false, func(*k8stest.ExecSession) int { return 137 })
+	srv.Other = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		statuses := runningPod
+		if reads.Add(1) >= 2 {
+			statuses = `[{"name":"app","state":{"terminated":{"reason":"OOMKilled","exitCode":137,"finishedAt":"` +
+				time.Now().UTC().Format(time.RFC3339) + `"}}}]`
+		}
+		_, _ = w.Write([]byte(`{"kind":"Pod","apiVersion":"v1","metadata":{"name":"web-0","namespace":"ns1"},"status":{"phase":"Running","containerStatuses":` + statuses + `}}`))
+	})
+	k, rec, c := execTestBinder(t, srv.Host())
+	id, err := k.startExec(c, execReq("web-0"))
+	require.NoError(t, err)
+	code := 137
+	assert.Equal(t, K8sExecEnd{Reason: ExecEndExited, ExitCode: &code, ContainerReason: "OOMKilled"}, rec.waitEnd(t, id))
+	assert.GreaterOrEqual(t, reads.Load(), int32(2))
+}
+
+// 用户在 shell 里 `exit 1` 这类普通的非 0 退出，容器没有被杀：只读一次 Pod，不为等终止状态拖延结束提示。
+func TestK8sExecEndReadsPodOnceForPlainNonZeroExit(t *testing.T) {
+	var reads atomic.Int32
+	srv := k8stest.NewExecServer(t, false, func(*k8stest.ExecSession) int { return 1 })
+	srv.Other = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reads.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"Pod","apiVersion":"v1","metadata":{"name":"web-0","namespace":"ns1"},"status":{"phase":"Running","containerStatuses":` + runningPod + `}}`))
+	})
+	k, rec, c := execTestBinder(t, srv.Host())
+	id, err := k.startExec(c, execReq("web-0"))
+	require.NoError(t, err)
+	code := 1
+	assert.Equal(t, K8sExecEnd{Reason: ExecEndExited, ExitCode: &code}, rec.waitEnd(t, id))
+	assert.Equal(t, int32(1), reads.Load())
+}
+
+// 正常删除时 Pod 先进入 Terminating（带 deletionTimestamp），exec 流结束时它还在：这也算 Pod 被删除。
+func TestK8sExecEndReportsPodBeingDeleted(t *testing.T) {
+	srv := k8stest.NewExecServer(t, false, func(*k8stest.ExecSession) int { return 137 })
+	srv.Other = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"Pod","apiVersion":"v1","metadata":{"name":"web-0","namespace":"ns1","deletionTimestamp":"` +
+			time.Now().UTC().Format(time.RFC3339) + `"},"status":{"phase":"Running","containerStatuses":` + runningPod + `}}`))
+	})
+	k, rec, c := execTestBinder(t, srv.Host())
+	id, err := k.startExec(c, execReq("web-0"))
+	require.NoError(t, err)
+	code := 137
+	assert.Equal(t, K8sExecEnd{Reason: ExecEndExited, ExitCode: &code, PodGone: true}, rec.waitEnd(t, id))
 }
 
 // 网络断开：关掉底层连接，会话以「连接已断开」结束；Pod 已被删除时一并告知。

@@ -265,6 +265,57 @@ describe("K8s cluster overview", () => {
     expect(within(block).queryByTestId("async-state-empty")).toBeNull();
   });
 
+  it("keeps a block's last numbers and adds the reason and a retry when its refresh fails", async () => {
+    let fail = false;
+    mockCluster({
+      health: async () => {
+        if (fail) throw new Error("dial tcp 10.0.0.1:6443: i/o timeout");
+        return JSON.stringify(HEALTH);
+      },
+      events: async () => {
+        if (fail) throw new Error("events: i/o timeout");
+        return JSON.stringify({ events: [event(1)] });
+      },
+    });
+    const user = userEvent.setup();
+    const id = nextId++;
+    render(<K8sClusterPage asset={asset(id)} />);
+    const pods = await screen.findByTestId("k8s-stat-pods");
+    await waitFor(() => expect(within(pods).getByTestId("k8s-stat-pods-total").textContent).toBe("23"));
+    const recent = screen.getByTestId("k8s-recent-events");
+    await waitFor(() => expect(within(recent).getAllByTestId("k8s-event-row")).toHaveLength(1));
+
+    fail = true;
+    await useK8sStore.getState().refreshAll(id);
+
+    await waitFor(() =>
+      expect(within(pods).getByTestId("k8s-stale-error").textContent).toContain("dial tcp 10.0.0.1:6443: i/o timeout")
+    );
+    expect(within(pods).getByTestId("k8s-stat-pods-total").textContent).toBe("23");
+    expect(within(screen.getByTestId("k8s-attention")).getByTestId("k8s-stale-error")).toBeTruthy();
+    expect(within(recent).getByTestId("k8s-stale-error").textContent).toContain("events: i/o timeout");
+    expect(within(recent).getAllByTestId("k8s-event-row")).toHaveLength(1);
+
+    fail = false;
+    const calls = vi.mocked(GetK8sClusterHealth).mock.calls.length;
+    await user.click(within(pods).getByTestId("k8s-stale-retry"));
+    await waitFor(() => expect(within(pods).queryByTestId("k8s-stale-error")).toBeNull());
+    expect(vi.mocked(GetK8sClusterHealth).mock.calls.length).toBe(calls + 1);
+  });
+
+  it("offers a retry when only some 需要关注 sections failed", async () => {
+    mockCluster({
+      health: async () => JSON.stringify({ ...HEALTH, errors: { statefulsets: "statefulsets.apps is forbidden" } }),
+    });
+    render(<K8sClusterPage asset={asset(nextId++)} />);
+    const block = await screen.findByTestId("k8s-attention");
+    await waitFor(() => expect(within(block).getAllByTestId("k8s-attention-row")).toHaveLength(1));
+    expect(block.textContent).toContain("statefulsets.apps is forbidden");
+    const calls = vi.mocked(GetK8sClusterHealth).mock.calls.length;
+    await userEvent.setup().click(within(block).getByRole("button", { name: "action.retry" }));
+    await waitFor(() => expect(vi.mocked(GetK8sClusterHealth).mock.calls.length).toBe(calls + 1));
+  });
+
   it("each block fails and retries on its own", async () => {
     let nodesFail = true;
     let eventsFail = true;

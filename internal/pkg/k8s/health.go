@@ -293,7 +293,7 @@ func summarizePods(pods []corev1.Pod) (PodHealth, []AttentionItem) {
 }
 
 // podProblem 判定 Pod 是否异常：容器处于等待且原因不是 ContainerCreating / PodInitializing，
-// 或上次以非 0 退出且仍未就绪（仍在重启）；否则看阶段是否为 Failed / Unknown / Pending。
+// 或上次以非 0 退出、当前未终止且仍未就绪（仍在重启）；否则看阶段是否为 Failed / Unknown / Pending。
 func podProblem(pod corev1.Pod) (status, reason string, abnormal bool) {
 	statuses := append(append([]corev1.ContainerStatus{}, pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...)
 	for _, cs := range statuses {
@@ -306,7 +306,8 @@ func podProblem(pod corev1.Pod) (status, reason string, abnormal bool) {
 		}
 	}
 	for _, cs := range statuses {
-		if t := cs.LastTerminationState.Terminated; t != nil && t.ExitCode != 0 && !cs.Ready {
+		// 已终止的容器不再重启（如失败过一次、重试后跑完的 Pod），不算。
+		if t := cs.LastTerminationState.Terminated; t != nil && t.ExitCode != 0 && !cs.Ready && cs.State.Terminated == nil {
 			return "Restarting", fmt.Sprintf("%s: exit %d, restarts %d", cs.Name, t.ExitCode, cs.RestartCount), true
 		}
 	}

@@ -4,8 +4,8 @@ import { useK8sStore } from "@/stores/k8sStore";
 import { SetK8sNodeUnschedulable } from "../../../../wailsjs/go/k8s/K8s";
 import type { K8sActionContext } from "../actions";
 import { runK8sOp } from "./opTarget";
-import { triggerCronJob } from "./cronOps";
-import { isNodeUnschedulable, targetOf } from "./schedulingState";
+import { setCronJobSuspend, triggerCronJob } from "./cronOps";
+import { isCronJobSuspended, isNodeUnschedulable, targetOf } from "./schedulingState";
 
 const NODES = "/nodes";
 
@@ -24,6 +24,29 @@ export function K8sTriggerDialog({ ctx }: { ctx: K8sActionContext }) {
       onConfirm={() => {
         closeOp(ctx.assetId);
         void triggerCronJob(ctx);
+      }}
+    />
+  );
+}
+
+/** Pause / resume confirmation: which one follows the CronJob's current state. */
+export function K8sSuspendDialog({ ctx }: { ctx: K8sActionContext }) {
+  const { t } = useTranslation();
+  const closeOp = useK8sStore((s) => s.closeOp);
+  const found = targetOf(ctx);
+  const resume = found ? isCronJobSuspended(found.target, found.columns) : false;
+  return (
+    <ConfirmDialog
+      open
+      onOpenChange={(open) => !open && closeOp(ctx.assetId)}
+      variant="default"
+      title={t(resume ? "asset.k8sCronResumeTitle" : "asset.k8sCronSuspendTitle", { name: ctx.name })}
+      description={<p className="text-sm">{t(resume ? "asset.k8sCronResumeDesc" : "asset.k8sCronSuspendDesc")}</p>}
+      cancelText={t("action.cancel")}
+      confirmText={t(resume ? "asset.k8sCronResumeConfirm" : "asset.k8sCronSuspendConfirm")}
+      onConfirm={() => {
+        closeOp(ctx.assetId);
+        void setCronJobSuspend(ctx, !resume);
       }}
     />
   );

@@ -157,6 +157,18 @@ describe("K8s resource list", () => {
     await waitFor(() => expect(rowNames()).toEqual(["api-1"]));
   });
 
+  it("says nothing matches when the label selector matches no resource", async () => {
+    const user = userEvent.setup();
+    mockPods((req) => podTable(req.labelSelector ? [] : [{ name: "api-1" }]));
+    render(<K8sClusterPage asset={asset(nextId++)} />);
+    await openPods(user);
+    await screen.findByText("api-1");
+
+    await user.type(screen.getByPlaceholderText("asset.k8sFilterPlaceholder"), "app=nope");
+    expect(await screen.findByText("asset.k8sNoMatch")).toBeInTheDocument();
+    expect(screen.queryByText("asset.k8sEmptyInNamespace")).not.toBeInTheDocument();
+  });
+
   it("shows the cluster's selector error under the box and keeps the previous rows", async () => {
     const user = userEvent.setup();
     mockPods((req) => {

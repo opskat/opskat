@@ -161,10 +161,10 @@ const pod = (name: string, extra: Record<string, unknown> = {}) => ({
   },
   ...extra,
 });
-const hpa = (name: string, target: string) => ({
+const hpa = (name: string, target: string, kind = "Deployment") => ({
   kind: "HorizontalPodAutoscaler",
   metadata: meta(name),
-  spec: { scaleTargetRef: { apiVersion: "apps/v1", kind: "Deployment", name: target }, minReplicas: 2, maxReplicas: 8 },
+  spec: { scaleTargetRef: { apiVersion: "apps/v1", kind, name: target }, minReplicas: 2, maxReplicas: 8 },
 });
 const ownedJob = (name: string, owner: string) => ({
   kind: "Job",
@@ -205,7 +205,8 @@ function mockCluster(extra: { jobs?: unknown[] } = {}) {
   vi.mocked(ListK8sResources).mockImplementation((async (req: k8s.K8sListRequest) => {
     let items: { metadata: { name: string } }[] = [];
     if (req.resource === "pods") items = [objects["web-1"], objects["web-2"]] as never;
-    if (req.resource === "horizontalpodautoscalers") items = [hpa("other-hpa", "other"), hpa("web-hpa", "web")];
+    if (req.resource === "horizontalpodautoscalers")
+      items = [hpa("other-hpa", "other"), hpa("web-hpa", "web"), hpa("rs-hpa", "web-abc", "ReplicaSet")];
     if (req.resource === "jobs") items = (extra.jobs ?? []) as never;
     return JSON.stringify({ columns: [], rows: items.map(row) });
   }) as never);
@@ -285,11 +286,51 @@ describe("workload overviews", () => {
     expect(ov.getByText("disk=ssd")).toBeInTheDocument();
   });
 
-  it("ReplicaSet: replicas and selector", async () => {
+  it("ReplicaSet: replicas, selector and the HPA scaling it", async () => {
     await openDetail("apps/replicasets", "web-abc");
     const ov = within(await screen.findByTestId("k8s-overview"));
     expect(await ov.findByText("3/3")).toBeInTheDocument();
     expect(ov.getByText("app=web,tier in (a,b)")).toBeInTheDocument();
+    expect(await ov.findByText("rs-hpa · 2–8")).toBeInTheDocument();
+  });
+
+  it("reads HPAs at the version the cluster serves", async () => {
+    const id = nextId++;
+    mockCluster();
+    vi.mocked(GetK8sResourceTypes).mockResolvedValue(
+      JSON.stringify({
+        ...types,
+        types: types.types.map((t) => (t.resource === "horizontalpodautoscalers" ? { ...t, version: "v1" } : t)),
+      }) as never
+    );
+    render(<K8sClusterPage asset={asset(id)} />);
+    await screen.findByTestId("k8s-sidebar");
+    useK8sStore.getState().openTab(id, { id: "res:apps/deployments:default:web", label: "web" });
+    expect(await screen.findByText("web-hpa · 2–8")).toBeInTheDocument();
+    const hpaCalls = vi.mocked(ListK8sResources).mock.calls.filter(([r]) => r.resource === "horizontalpodautoscalers");
+    expect(hpaCalls.map(([r]) => r.version)).toEqual(["v1"]);
+  });
+
+  it.each([
+    ["/pods", "web-1", "CrashLoopBackOff"],
+    ["batch/jobs", "migrate", "Running"],
+    ["apps/daemonsets", "agent", "3/4"],
+    ["batch/cronjobs", "nightly", "Suspended"],
+  ])("%s header shows the status kubectl would (%s → %s)", async (typeKey, name, status) => {
+    await openDetail(typeKey, name);
+    const header = await screen.findByTestId("k8s-detail-header");
+    expect(await within(header).findByText(status)).toBeInTheDocument();
+  });
+
+  it("a failed Job shows Failed in its header", async () => {
+    objects.broken = {
+      ...job,
+      metadata: meta("broken"),
+      status: { failed: 6, conditions: [{ type: "Failed", status: "True", reason: "BackoffLimitExceeded" }] },
+    };
+    await openDetail("batch/jobs", "broken");
+    const header = await screen.findByTestId("k8s-detail-header");
+    expect(await within(header).findByText("Failed")).toBeInTheDocument();
   });
 
   it("Job: completions, parallelism, backoff limit and pod counts", async () => {
@@ -326,6 +367,9 @@ describe("workload overviews", () => {
     expect(ov.getByText("Burstable")).toBeInTheDocument();
     expect(ov.getByText("Waiting: CrashLoopBackOff")).toBeInTheDocument();
     expect(ov.getByText("3")).toBeInTheDocument();
+    expect(ov.getAllByText("8080/http").length).toBe(2);
+    expect(ov.getAllByText("100m / 128Mi").length).toBe(2);
+    expect(ov.getAllByText("1 / 512Mi").length).toBe(2);
     await user.click(ov.getByRole("button", { name: /asset\.k8sPodConditions/ }));
     expect(ov.getByText("AllReady")).toBeInTheDocument();
 
@@ -399,6 +443,21 @@ describe("Pods sub-tab", () => {
     }
   });
 
+  it("reads the matched pods once across inner-tab switches", async () => {
+    const user = userEvent.setup();
+    const id = await openDetail("apps/deployments", "web");
+    await user.click(await screen.findByRole("tab", { name: /asset\.k8sPodsTab/ }));
+    await screen.findByRole("link", { name: "web-1" });
+
+    useK8sStore.getState().setActiveTab(id, "overview");
+    await screen.findByTestId("k8s-stat-version");
+    useK8sStore.getState().setActiveTab(id, "res:apps/deployments:default:web");
+    await screen.findByRole("link", { name: "web-1" });
+
+    const podReads = vi.mocked(ListK8sResources).mock.calls.filter(([r]) => r.resource === "pods" && r.includeObject);
+    expect(podReads).toHaveLength(1);
+  });
+
   it("opens the Pod detail from the pod name", async () => {
     const user = userEvent.setup();
     const id = await openDetail("apps/deployments", "web");
@@ -430,6 +489,23 @@ describe("Logs sub-tab", () => {
     await waitFor(() =>
       expect(StartK8sPodLogs).toHaveBeenCalledWith(expect.any(Number), "default", "web-2", "sidecar", 200)
     );
+  });
+
+  it("workload: a failed refresh of its pods keeps the log panel (and its stream) with the reason", async () => {
+    const user = userEvent.setup();
+    const id = await openDetail("apps/deployments", "web");
+    await user.click(await screen.findByRole("tab", { name: /asset\.k8sLogs/ }));
+    await screen.findByTestId("k8s-log-terminal");
+
+    const ok = vi.mocked(ListK8sResources).getMockImplementation()!;
+    vi.mocked(ListK8sResources).mockImplementation((async (req: k8s.K8sListRequest) => {
+      if (req.resource === "pods") throw new Error("pods: i/o timeout");
+      return ok(req);
+    }) as never);
+    await useK8sStore.getState().refreshAll(id);
+
+    expect((await screen.findByTestId("k8s-stale-error")).textContent).toContain("pods: i/o timeout");
+    expect(screen.getByTestId("k8s-log-terminal")).toBeInTheDocument();
   });
 
   it("pod: streams its own logs with a container switch but no pod switch", async () => {

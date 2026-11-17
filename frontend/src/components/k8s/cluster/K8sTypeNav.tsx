@@ -20,6 +20,8 @@ interface Props {
   cluster: K8sClusterState;
 }
 
+const NO_COLLAPSED: string[] = [];
+
 const itemClass = (selected: boolean) =>
   cn(
     "flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs",
@@ -37,7 +39,8 @@ export function K8sTypeNav({ assetId, cluster }: Props) {
   const loadHealth = useK8sStore((s) => s.loadHealth);
   const counts = useK8sStore((s) => s.counts[assetId]);
   const health = useK8sStore((s) => s.health[assetId]?.[cluster.namespace]?.data);
-  const { version, types, activeTabId, collapsed, namespace } = cluster;
+  const collapsed = useK8sStore((s) => s.collapsedCategories[assetId]) ?? NO_COLLAPSED;
+  const { version, types, activeTabId, namespace } = cluster;
   const failedGroups = types.data?.failedGroups ?? [];
   const shown = types.data ? visibleTypes(types.data.types) : [];
 
@@ -92,6 +95,16 @@ export function K8sTypeNav({ assetId, cluster }: Props) {
       {version.data && (
         <p className="truncate px-2 pb-1 text-[11px] text-muted-foreground">
           {version.data.version} · {version.data.platform}
+        </p>
+      )}
+      {version.status === "error" && (
+        <p
+          role="alert"
+          className="flex items-start gap-1 px-2 pb-1 text-[11px] text-destructive"
+          title={version.error ?? undefined}
+        >
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          <span className="line-clamp-2 select-text break-all font-mono">{version.error}</span>
         </p>
       )}
       <button

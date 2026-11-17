@@ -81,11 +81,25 @@ func Exec(ctx context.Context, kubeconfig string, req ExecRequest, opts ...Clien
 	if err == nil && !statusSeen.Load() {
 		return ErrConnectionClosed
 	}
+	// error 流上收到的非退出码失败是集群对命令本身的回答（如可执行文件不存在），不是连接问题。
+	if _, isExit := ExitCode(err); err != nil && !isExit && statusSeen.Load() {
+		return &CommandError{Err: err}
+	}
 	return err
 }
 
 // ErrConnectionClosed 表示连接在命令结束前被对端或网络断开（没有收到命令的退出状态）。
 var ErrConnectionClosed = errors.New("connection closed before the command finished")
+
+// CommandError 是集群在 exec 的 error 流上报告的命令失败（命令没能运行，例如可执行文件不存在），
+// 区别于连接错误；Error() 是集群原样给出的原因。
+type CommandError struct {
+	Err error
+}
+
+func (e *CommandError) Error() string { return e.Err.Error() }
+
+func (e *CommandError) Unwrap() error { return e.Err }
 
 // spdyTransport 构造 exec 用的 SPDY 传输（等同 client-go 的 spdy.RoundTripperFor，另加两点）：
 //   - 配置了拨号器（SSH 隧道 / 代理链 / .local）时，升级连接经它拨出。client-go 默认的 SPDY 升级连接自己拨号、

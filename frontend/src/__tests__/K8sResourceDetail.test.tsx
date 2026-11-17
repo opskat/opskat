@@ -18,20 +18,21 @@ import type { asset_entity } from "../../wailsjs/go/models";
 const copied = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", () => ({ notifyCopied: copied, notifySuccess: vi.fn() }));
 
-const type = (group: string, version: string, resource: string, kind: string, category: string) => ({
+const type = (group: string, version: string, resource: string, kind: string, category: string, verbs = ["list"]) => ({
   group,
   version,
   resource,
   kind,
   namespaced: true,
-  verbs: ["list"],
+  verbs,
   category,
 });
 const types = {
   types: [
-    type("apps", "v1", "deployments", "Deployment", "workloads"),
+    type("apps", "v1", "deployments", "Deployment", "workloads", ["list", "update"]),
     type("apps", "v1", "replicasets", "ReplicaSet", "workloads"),
     type("", "v1", "configmaps", "ConfigMap", "config"),
+    type("batch.volcano.sh", "v1alpha1", "jobs", "Job", "custom"),
   ],
   failedGroups: [],
 };
@@ -166,7 +167,7 @@ describe("K8s generic resource detail", () => {
     const reasons = (await screen.findAllByTestId("k8s-event-reason")).map((e) => e.textContent);
     expect(reasons).toEqual(["NewestWarn", "MiddleNormal", "OldestWarn"]);
     expect(vi.mocked(ListK8sEvents)).toHaveBeenCalledWith(
-      expect.objectContaining({ namespace: "default", involvedUid: "uid-web" })
+      expect.objectContaining({ namespace: "default", involvedKind: "Deployment", involvedName: "web" })
     );
   });
 
@@ -184,7 +185,7 @@ describe("K8s generic resource detail", () => {
     expect(await navigator.clipboard.readText()).toBe(YAML);
     expect(copied).toHaveBeenCalled();
 
-    // the edit dialog registers itself as the handler, so the YAML tab offers 「编辑」
+    // the cluster lets Deployments be updated, so the YAML tab offers 「编辑」
     await user.click(await screen.findByRole("button", { name: /asset\.k8sEditYaml$/ }));
     expect(useK8sStore.getState().yamlDialogs[id]).toEqual({
       mode: "edit",
@@ -278,11 +279,55 @@ describe("K8s generic resource detail", () => {
     expect(screen.getByTestId("async-state-retry")).toBeInTheDocument();
   });
 
-  it("lets a kind plug in its own overview and extra sub-tabs", async () => {
+  it("offers no 编辑 on the YAML tab of a type the cluster doesn't let update", async () => {
+    const user = userEvent.setup();
+    mockCluster({ cfg: { apiVersion: "v1", kind: "ConfigMap", metadata: { name: "cfg", namespace: "default" } } });
+    await openDetail(nextId++, "/configmaps", "cfg");
+    await user.click(await screen.findByRole("tab", { name: /YAML/ }));
+    expect(await screen.findByTestId("k8s-yaml")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /asset\.k8sEditYaml$/ })).not.toBeInTheDocument();
+  });
+
+  it("gives a custom resource whose Kind matches a built-in the generic overview, not the built-in one", async () => {
+    mockCluster({
+      train: {
+        apiVersion: "batch.volcano.sh/v1alpha1",
+        kind: "Job",
+        metadata: { name: "train", namespace: "default", uid: "uid-train" },
+        spec: { minAvailable: 2 },
+        status: { conditions: [{ type: "Running", status: "True", reason: "VolcanoRunning" }] },
+      },
+    });
+    await openDetail(nextId++, "batch.volcano.sh/jobs", "train");
+    expect(await screen.findByText("VolcanoRunning")).toBeInTheDocument();
+    expect(screen.queryByText("asset.k8sCompletions")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /asset\.k8sPodsTab/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /asset\.k8sLogs/ })).not.toBeInTheDocument();
+  });
+
+  it("keeps the last read detail with the reason and a retry when a refresh fails", async () => {
+    mockCluster({ web: deployment });
+    const id = nextId++;
+    await openDetail(id, "apps/deployments", "web");
+    await screen.findByTestId("k8s-detail-header");
+
+    vi.mocked(GetK8sResource).mockRejectedValue(new Error("dial tcp 10.0.0.1:6443: i/o timeout"));
+    await useK8sStore.getState().refreshAll(id);
+
+    expect((await screen.findByTestId("k8s-stale-error")).textContent).toContain("dial tcp 10.0.0.1:6443: i/o timeout");
+    expect(screen.getByTestId("k8s-detail-header")).toBeInTheDocument();
+    expect(screen.getByTestId("k8s-stale-retry")).toBeInTheDocument();
+  });
+
+  it("lets a type plug in its own overview and extra sub-tabs", async () => {
     mockCluster({ web: deployment });
     const offs = [
-      registerDetailOverview("Deployment", ({ name }) => <div>custom overview of {name}</div>),
-      registerDetailSubTab("Deployment", { id: "pods", labelKey: "t.podsTab", Component: () => <div>pods body</div> }),
+      registerDetailOverview("apps/deployments", ({ name }) => <div>custom overview of {name}</div>),
+      registerDetailSubTab("apps/deployments", {
+        id: "pods",
+        labelKey: "t.podsTab",
+        Component: () => <div>pods body</div>,
+      }),
     ];
     try {
       const user = userEvent.setup();

@@ -50,6 +50,7 @@ const listEntry = (columns: K8sTableColumn[], rows: K8sResourceRow[]) => ({
   error: null,
   reloading: false,
   filterError: null,
+  labelSelector: "",
 });
 
 function seed(cronRow: K8sResourceRow = cron(false), nodeRow: K8sResourceRow = node("Ready")) {
@@ -163,37 +164,50 @@ describe("run now", () => {
 });
 
 describe("pause / resume", () => {
-  it("suspends an active CronJob, resumes a suspended one, then refreshes the list", async () => {
-    const run = (r: K8sResourceRow) => {
-      seed(r);
-      return getK8sActions("batch/cronjobs", r, ASSET)
-        .find((x) => x.id === "cron-suspend")!
-        .run(cronCtx);
-    };
-    await run(cron(false));
-    expect(SetK8sCronJobSuspend).toHaveBeenLastCalledWith({
-      assetId: ASSET,
-      namespace: "default",
-      name: "nightly",
-      suspend: true,
-    });
+  const confirm = async (r: K8sResourceRow, confirmName: RegExp, desc: string) => {
+    seed(r);
+    const user = userEvent.setup();
+    const view = render(<K8sOpDialogs assetId={ASSET} />);
+    await getK8sActions("batch/cronjobs", r, ASSET)
+      .find((x) => x.id === "cron-suspend")!
+      .run(cronCtx);
+    // asks first, without touching the cluster
+    expect(SetK8sCronJobSuspend).not.toHaveBeenCalled();
+    expect(await screen.findByText(desc)).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: confirmName }));
+    return view;
+  };
+
+  it("asks first, then suspends an active CronJob, resumes a suspended one and refreshes the list", async () => {
+    const first = await confirm(cron(false), /^asset\.k8sCronSuspendConfirm$/, "asset.k8sCronSuspendDesc");
+    await waitFor(() =>
+      expect(SetK8sCronJobSuspend).toHaveBeenLastCalledWith({
+        assetId: ASSET,
+        namespace: "default",
+        name: "nightly",
+        suspend: true,
+      })
+    );
     await waitFor(() => expect(refreshType).toHaveBeenCalledWith(ASSET, "batch/cronjobs"));
-    await run(cron(true));
-    expect(SetK8sCronJobSuspend).toHaveBeenLastCalledWith({
-      assetId: ASSET,
-      namespace: "default",
-      name: "nightly",
-      suspend: false,
-    });
+    first.unmount();
+    vi.mocked(SetK8sCronJobSuspend).mockClear();
+
+    await confirm(cron(true), /^asset\.k8sCronResumeConfirm$/, "asset.k8sCronResumeDesc");
+    await waitFor(() =>
+      expect(SetK8sCronJobSuspend).toHaveBeenLastCalledWith({
+        assetId: ASSET,
+        namespace: "default",
+        name: "nightly",
+        suspend: false,
+      })
+    );
     expect(h.notifySuccess).toHaveBeenCalledTimes(2);
   });
 
   it("keeps state and reports the cluster's reason on failure", async () => {
     vi.mocked(SetK8sCronJobSuspend).mockRejectedValue(new Error("forbidden: cannot patch cronjobs"));
-    await getK8sActions("batch/cronjobs", cron(false), ASSET)
-      .find((x) => x.id === "cron-suspend")!
-      .run(cronCtx);
-    expect(h.toastError).toHaveBeenCalledWith("forbidden: cannot patch cronjobs");
+    await confirm(cron(false), /^asset\.k8sCronSuspendConfirm$/, "asset.k8sCronSuspendDesc");
+    await waitFor(() => expect(h.toastError).toHaveBeenCalledWith("forbidden: cannot patch cronjobs"));
     expect(refreshType).not.toHaveBeenCalled();
     expect(h.notifySuccess).not.toHaveBeenCalled();
   });

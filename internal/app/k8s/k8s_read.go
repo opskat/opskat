@@ -33,12 +33,13 @@ type K8sResourceRef struct {
 	Name      string `json:"name"`
 }
 
-// K8sEventsRequest 是 ListK8sEvents 的请求；Namespace 为空表示全部命名空间，InvolvedUID 非空时只取该对象的事件。
+// K8sEventsRequest 是 ListK8sEvents 的请求；Namespace 为空表示全部命名空间，InvolvedKind / InvolvedName 非空时只取该对象的事件。
 type K8sEventsRequest struct {
-	AssetID     int64  `json:"assetId"`
-	Namespace   string `json:"namespace"`
-	InvolvedUID string `json:"involvedUid"`
-	WarningOnly bool   `json:"warningOnly"`
+	AssetID      int64  `json:"assetId"`
+	Namespace    string `json:"namespace"`
+	InvolvedKind string `json:"involvedKind"`
+	InvolvedName string `json:"involvedName"`
+	WarningOnly  bool   `json:"warningOnly"`
 }
 
 func (r K8sListRequest) validate() error {
@@ -145,7 +146,7 @@ func (k *K8s) ListK8sEvents(req K8sEventsRequest) (string, error) {
 	}
 	return k.runK8sCall(req.AssetID, "list K8S events", func(ctx context.Context, c *k8sCallContext) (any, error) {
 		return k8spkg.ListEvents(ctx, c.kubeconfig, k8spkg.EventQuery{
-			Namespace: req.Namespace, InvolvedUID: req.InvolvedUID, WarningOnly: req.WarningOnly,
+			Namespace: req.Namespace, InvolvedKind: req.InvolvedKind, InvolvedName: req.InvolvedName, WarningOnly: req.WarningOnly,
 		}, c.opts...)
 	})
 }

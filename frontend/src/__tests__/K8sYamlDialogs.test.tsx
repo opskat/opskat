@@ -4,7 +4,6 @@ import userEvent from "@testing-library/user-event";
 import yaml from "js-yaml";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getK8sActions } from "@/components/k8s/actions";
-import { getYamlEditHandler } from "@/components/k8s/detail/registry";
 import { K8sYamlDialogs } from "@/components/k8s/yaml/K8sYamlDialogs";
 import "@/components/k8s/yaml/register";
 import { useK8sStore, type K8sClusterState, type K8sResourceRow } from "@/stores/k8sStore";
@@ -127,14 +126,30 @@ describe("K8s edit YAML dialog", () => {
     );
   });
 
-  it("compares the edit against the cluster's current version", async () => {
+  it("compares the edit against the cluster's current version, read again when comparing", async () => {
     const user = userEvent.setup();
     await openEdit();
     fireEvent.change(editor(), { target: { value: editor().value.replace("replicas: 3", "replicas: 5") } });
+    // someone else scaled it to 4 since the dialog opened
+    vi.mocked(GetK8sResource).mockResolvedValue(read("101", 4) as never);
+    const reads = vi.mocked(GetK8sResource).mock.calls.length;
 
     await user.click(screen.getByRole("tab", { name: /asset\.k8sYamlCompare/ }));
-    expect(screen.getByTestId("diff-original").textContent).toContain("replicas: 3");
+    await waitFor(() => expect(screen.getByTestId("diff-original").textContent).toContain("replicas: 4"));
     expect(screen.getByTestId("diff-modified").textContent).toContain("replicas: 5");
+    expect(vi.mocked(GetK8sResource).mock.calls.length).toBe(reads + 1);
+  });
+
+  it("still saves against the version read when the dialog opened after comparing", async () => {
+    const user = userEvent.setup();
+    vi.mocked(UpdateK8sResource).mockResolvedValue(JSON.stringify({ conflict: false, message: "" }) as never);
+    await openEdit();
+    vi.mocked(GetK8sResource).mockResolvedValue(read("101", 4) as never);
+    await user.click(screen.getByRole("tab", { name: /asset\.k8sYamlCompare/ }));
+    await waitFor(() => expect(screen.getByTestId("diff-original").textContent).toContain("replicas: 4"));
+    await user.click(screen.getByRole("button", { name: /asset\.k8sYamlSave/ }));
+    await waitFor(() => expect(vi.mocked(UpdateK8sResource)).toHaveBeenCalledTimes(1));
+    expect(sentYaml().metadata.resourceVersion).toBe("100");
   });
 
   it("marks a syntax error in the editor and does not submit", async () => {
@@ -338,16 +353,12 @@ describe("K8s edit YAML entry points", () => {
     expect(getK8sActions("/events", row, ASSET).some((a) => a.id === "edit-yaml")).toBe(false);
   });
 
-  it("opens the edit dialog from the action and from the detail YAML tab's handler", () => {
+  it("opens the edit dialog from the action", () => {
     const edit = getK8sActions("apps/deployments", row, ASSET).find((a) => a.id === "edit-yaml")!;
     void edit.run({ assetId: ASSET, typeKey: "apps/deployments", namespace: "default", name: "web" });
     expect(useK8sStore.getState().yamlDialogs[ASSET]).toEqual({
       mode: "edit",
       ctx: expect.objectContaining({ name: "web" }),
     });
-
-    useK8sStore.getState().closeYamlDialog(ASSET);
-    getYamlEditHandler()?.({ assetId: ASSET, typeKey: "apps/deployments", namespace: "default", name: "web" });
-    expect(useK8sStore.getState().yamlDialogs[ASSET]?.mode).toBe("edit");
   });
 });

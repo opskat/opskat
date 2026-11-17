@@ -8,9 +8,9 @@ import {
   ServiceOverview,
 } from "./overviews";
 
-registerDetailOverview("Service", ServiceOverview);
-registerDetailOverview("Ingress", IngressOverview);
-registerDetailOverview("ConfigMap", ConfigMapOverview);
-registerDetailOverview("Secret", SecretOverview);
-registerDetailOverview("Node", NodeOverview);
-registerDetailOverview("PersistentVolumeClaim", PvcOverview);
+registerDetailOverview("/services", ServiceOverview);
+registerDetailOverview("networking.k8s.io/ingresses", IngressOverview);
+registerDetailOverview("/configmaps", ConfigMapOverview);
+registerDetailOverview("/secrets", SecretOverview);
+registerDetailOverview("/nodes", NodeOverview);
+registerDetailOverview("/persistentvolumeclaims", PvcOverview);

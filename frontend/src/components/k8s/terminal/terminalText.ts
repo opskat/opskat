@@ -10,6 +10,7 @@ export function endText(end: K8sTerminalEnd): string {
   if (end.podGone) return i18n.t("asset.k8sTerminalEndPodGone");
   if (end.reason === "exited") return i18n.t("asset.k8sTerminalEndExited", { code: end.exitCode ?? 0 });
   if (end.reason === "error") return i18n.t("asset.k8sTerminalEndLost", { error: end.error ?? "" });
+  if (end.reason === "failed") return i18n.t("asset.k8sTerminalEndFailed", { error: end.error ?? "" });
   return i18n.t("asset.k8sTerminalDisconnected");
 }
 

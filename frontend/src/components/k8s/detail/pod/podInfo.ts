@@ -1,4 +1,5 @@
 import type { StatusVariant } from "../../utils";
+import type { ContainerPort, ContainerResources } from "../workloads/summaryItems";
 import { getContainerStateColor, getK8sStatusColor } from "../../utils";
 
 interface ContainerState {
@@ -12,9 +13,15 @@ interface ContainerStatus {
   restartCount?: number;
   state?: ContainerState;
 }
+interface ContainerSpec {
+  name: string;
+  image?: string;
+  ports?: ContainerPort[];
+  resources?: ContainerResources;
+}
 interface PodShape {
   metadata?: { deletionTimestamp?: string; annotations?: Record<string, string> };
-  spec?: { containers?: { name: string; image?: string }[]; initContainers?: { name: string; image?: string }[] };
+  spec?: { containers?: ContainerSpec[]; initContainers?: ContainerSpec[] };
   status?: {
     phase?: string;
     reason?: string;
@@ -30,6 +37,8 @@ export interface PodContainerRow {
   stateVariant: StatusVariant;
   ready: boolean;
   restarts: number;
+  ports?: ContainerPort[];
+  resources?: ContainerResources;
   /** An init container: no terminal / logs entry points. */
   init: boolean;
 }
@@ -46,7 +55,7 @@ function stateText(status: ContainerStatus | undefined): string {
 /** The containers of a Pod object with the state of each (init containers last). */
 export function podContainers(pod: Record<string, unknown>): PodContainerRow[] {
   const { spec, status } = pod as PodShape;
-  const row = (c: { name: string; image?: string }, statuses: ContainerStatus[], init: boolean): PodContainerRow => {
+  const row = (c: ContainerSpec, statuses: ContainerStatus[], init: boolean): PodContainerRow => {
     const st = statuses.find((s) => s.name === c.name);
     const state = stateText(st);
     return {
@@ -56,6 +65,8 @@ export function podContainers(pod: Record<string, unknown>): PodContainerRow[] {
       stateVariant: getContainerStateColor(state),
       ready: !!st?.ready,
       restarts: st?.restartCount ?? 0,
+      ports: c.ports,
+      resources: c.resources,
       init,
     };
   };

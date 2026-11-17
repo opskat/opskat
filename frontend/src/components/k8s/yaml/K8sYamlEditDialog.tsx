@@ -53,7 +53,10 @@ export function K8sYamlEditDialog({ assetId, ctx }: { assetId: number; ctx: K8sA
   });
   const closeDialog = useK8sStore((s) => s.closeYamlDialog);
 
+  /** The version saving is based on (read when the dialog opened, or reloaded after a conflict). */
   const [read, setRead] = useState<ClusterRead | null>(null);
+  /** The cluster's version as last read for 「与集群对比」; null until compared. */
+  const [clusterNow, setClusterNow] = useState<string | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [mode, setMode] = useState<"edit" | "diff">("edit");
@@ -124,13 +127,28 @@ export function K8sYamlEditDialog({ assetId, ctx }: { assetId: number; ctx: K8sA
 
   const reloadAndCompare = async () => {
     try {
-      setRead(await readCluster());
+      const fresh = await readCluster();
+      setRead(fresh);
+      setClusterNow(fresh.yaml);
       setConflict(null);
       setMode("diff");
     } catch (e) {
       toast.error(errorMessage(e));
     }
   };
+
+  // Switching to the diff reads the cluster's current version again; saving stays based on `read`.
+  useEffect(() => {
+    if (mode !== "diff") return;
+    let cancelled = false;
+    readCluster().then(
+      (r) => !cancelled && setClusterNow(r.yaml),
+      (e) => !cancelled && toast.error(errorMessage(e))
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, readCluster]);
 
   return (
     <Dialog open onOpenChange={(open) => !open && closeDialog(assetId)}>
@@ -193,7 +211,7 @@ export function K8sYamlEditDialog({ assetId, ctx }: { assetId: number; ctx: K8sA
             <div className="min-h-0 flex-1 overflow-hidden rounded-md border">
               {mode === "diff" ? (
                 <CodeDiffViewer
-                  original={read.yaml}
+                  original={clusterNow ?? read.yaml}
                   modified={text}
                   language="yaml"
                   originalTitle={t("asset.k8sYamlClusterVersion")}

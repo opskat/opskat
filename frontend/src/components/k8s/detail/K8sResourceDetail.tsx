@@ -16,8 +16,8 @@ import { statusVariantToClass } from "../utils";
 import { K8sEventsTab } from "./K8sEventsTab";
 import { K8sGenericOverview } from "./K8sGenericOverview";
 import { K8sYamlTab } from "./K8sYamlTab";
-import { renderDetailOverview, getDetailSubTabs, getYamlEditHandler, type K8sDetailProps } from "./registry";
-import { deriveStatus } from "./status";
+import { detailStatusOf, renderDetailOverview, getDetailSubTabs, type K8sDetailProps } from "./registry";
+import { K8sStaleError } from "../K8sAsyncState";
 
 interface OwnerRef {
   apiVersion: string;
@@ -91,19 +91,21 @@ export function K8sResourceDetail({
   }
 
   const kind = (object.kind as string | undefined) ?? types?.find((x) => typeKeyOf(x) === typeKey)?.kind ?? "";
-  const status = deriveStatus(object);
+  const status = detailStatusOf(typeKey, object);
   const created = (object.metadata as { creationTimestamp?: string } | undefined)?.creationTimestamp;
   const owner = primaryOwner(object);
   const ownerKey = owner && ownerType(owner, types);
   const ctx: K8sActionContext = { assetId, typeKey, namespace, name, object };
   const actions = getK8sActions(typeKey, object, assetId);
   const props: K8sDetailProps = { assetId, typeKey, namespace, name, object };
-  const extraTabs = getDetailSubTabs(kind);
+  const extraTabs = getDetailSubTabs(typeKey);
+  const editYaml = actions.find((a) => a.id === "edit-yaml");
   const triggerClass =
     "h-full flex-none gap-1.5 rounded-none px-2.5 text-xs font-normal after:bg-primary group-data-[orientation=horizontal]/tabs:after:bottom-0";
 
   return (
     <div className="flex h-full flex-col">
+      {resource.status === "error" && <K8sStaleError error={resource.error} onRetry={reload} className="m-2 mb-0" />}
       <div data-testid="k8s-detail-header" className="flex shrink-0 items-start justify-between gap-4 border-b p-4">
         <div className="flex min-w-0 items-start gap-3">
           <KindIcon typeKey={typeKey} className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
@@ -193,7 +195,7 @@ export function K8sResourceDetail({
           </TabsList>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
-          <TabsContent value="overview">{renderDetailOverview(kind, props, K8sGenericOverview)}</TabsContent>
+          <TabsContent value="overview">{renderDetailOverview(typeKey, props, K8sGenericOverview)}</TabsContent>
           {extraTabs.map((x) => (
             <TabsContent key={x.id} value={x.id}>
               {createElement(x.Component, props)}
@@ -203,7 +205,7 @@ export function K8sResourceDetail({
             <K8sEventsTab events={entry.events} onRetry={reload} />
           </TabsContent>
           <TabsContent value="yaml">
-            <K8sYamlTab yaml={detail.yaml} context={ctx} onEdit={getYamlEditHandler()} />
+            <K8sYamlTab yaml={detail.yaml} onEdit={editYaml && (() => void editYaml.run(ctx))} />
           </TabsContent>
         </div>
       </Tabs>

@@ -1,81 +1,44 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { errorMessage } from "@/lib/errorMessage";
-import { useK8sStore } from "@/stores/k8sStore";
-import { ListK8sResources } from "../../../../../wailsjs/go/k8s/K8s";
+import { useCallback, useEffect } from "react";
+import { objectsKey, useK8sStore, type K8sListedObject, type K8sObjectsRequest } from "@/stores/k8sStore";
 
-export interface ListedObject {
-  name: string;
-  object: Record<string, unknown>;
-}
+export type ListedObject = K8sListedObject;
 
 export interface Listed {
   status: "loading" | "ready" | "error";
   items: ListedObject[];
   error: string | null;
+  /** Some items were read before (a failed re-read keeps them). */
+  hasData: boolean;
   reload: () => void;
 }
 
-interface Request {
-  group: string;
-  version: string;
-  resource: string;
-  namespace: string;
-  labelSelector: string;
-}
+const NONE: ListedObject[] = [];
 
 /**
- * Objects of one resource type with their full bodies, read when mounted and re-read with the page's refresh.
- * `request` null = nothing to ask for (an empty list). `refreshKey` identifies the view to the refresh button.
+ * Objects of one resource type with their full bodies, cached in the K8s store: read on first use, then only by
+ * the page's refresh or `reload`. `request` null = nothing to ask for (an empty list).
  */
-export function useListed(assetId: number, refreshKey: string, request: Request | null): Listed {
-  const [state, setState] = useState<Omit<Listed, "reload">>({ status: "loading", items: [], error: null });
-  const registerRefresher = useK8sStore((s) => s.registerRefresher);
-  const group = request?.group;
-  const version = request?.version;
-  const resource = request?.resource;
-  const namespace = request?.namespace;
-  const labelSelector = request?.labelSelector;
-  const seq = useRef(0);
+export function useListed(assetId: number, request: K8sObjectsRequest | null): Listed {
+  const key = request ? objectsKey(request) : null;
+  const entry = useK8sStore((s) => (key ? s.objectLists[assetId]?.[key] : undefined));
+  const loadObjects = useK8sStore((s) => s.loadObjects);
+  // The caller rebuilds the request object on every render, so it is passed on by its fields.
+  const { group = "", version = "", resource = "", namespace = "", labelSelector = "" } = request ?? {};
+  const load = useCallback(
+    (force: boolean) => {
+      if (key) void loadObjects(assetId, { group, version, resource, namespace, labelSelector }, { force });
+    },
+    [key, assetId, group, version, resource, namespace, labelSelector, loadObjects]
+  );
 
-  const read = useCallback(async () => {
-    if (group === undefined || version === undefined || resource === undefined || namespace === undefined) {
-      setState({ status: "ready", items: [], error: null });
-      return;
-    }
-    const mine = ++seq.current;
-    try {
-      const result = await ListK8sResources({
-        assetId,
-        group,
-        version,
-        resource,
-        namespace,
-        labelSelector: labelSelector ?? "",
-        fieldSelector: "",
-        includeObject: true,
-        withPhase: false,
-      });
-      if (mine !== seq.current) return;
-      const rows = (JSON.parse(result) as { rows: { name: string; object?: Record<string, unknown> }[] }).rows;
-      setState({
-        status: "ready",
-        items: rows.flatMap((r) => (r.object ? [{ name: r.name, object: r.object }] : [])),
-        error: null,
-      });
-    } catch (e) {
-      if (mine !== seq.current) return;
-      setState((prev) => ({ ...prev, status: "error", error: errorMessage(e) }));
-    }
-  }, [assetId, group, version, resource, namespace, labelSelector]);
+  useEffect(() => load(false), [load]);
 
-  useEffect(() => {
-    const counter = seq;
-    void read();
-    return () => {
-      counter.current++; // a read still in flight must not land after unmount / a new request
-    };
-  }, [read]);
-  useEffect(() => registerRefresher(assetId, refreshKey, read), [registerRefresher, assetId, refreshKey, read]);
-
-  return { ...state, reload: () => void read() };
+  if (!key) return { status: "ready", items: NONE, error: null, hasData: false, reload: () => {} };
+  return {
+    status: entry?.status ?? "loading",
+    items: entry?.data ?? NONE,
+    error: entry?.error ?? null,
+    hasData: entry?.data !== undefined,
+    reload: () => load(true),
+  };
 }

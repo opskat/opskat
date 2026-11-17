@@ -8,6 +8,7 @@ import { useK8sStore, type K8sResourceRow } from "@/stores/k8sStore";
 import { useTabStore } from "@/stores/tabStore";
 import { toXtermTheme, useTerminalThemeStore } from "@/stores/terminalThemeStore";
 import { defaultLightTheme } from "@/data/terminalThemes";
+import i18n from "@/i18n";
 import {
   GetK8sClusterVersion,
   GetK8sResource,
@@ -419,6 +420,15 @@ describe("Pod terminal", () => {
       expect(useK8sStore.getState().terminals[id][tabId].status).toBe("ended");
       expect(screen.getByText("asset.k8sTerminalDisconnected")).toBeInTheDocument();
       expect(term.dispose).not.toHaveBeenCalled();
+    });
+
+    it("labels a command the cluster refused to run as such, not as a lost connection", async () => {
+      await openedPage();
+      const error = 'OCI runtime exec failed: exec: "nope": executable file not found in $PATH: unknown';
+      await emit(`k8s:exec:end:${sessionOf(0)}`, { reason: "failed", error });
+      const banner = await screen.findByTestId("k8s-pod-terminal-ended");
+      expect(banner).toHaveTextContent(i18n.t("asset.k8sTerminalEndFailed", { error }));
+      expect(banner).not.toHaveTextContent(i18n.t("asset.k8sTerminalEndLost", { error: "" }).trim());
     });
 
     it("keeps the output on end, shows the reason with a reconnect that starts a new session in the same tab", async () => {

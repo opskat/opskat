@@ -93,18 +93,20 @@ export function DaemonSetOverview({ object }: K8sDetailProps) {
   );
 }
 
-export function ReplicaSetOverview({ object }: K8sDetailProps) {
+export function ReplicaSetOverview(props: K8sDetailProps) {
   const { t } = useTranslation();
-  const spec = specOf(object);
-  const status = statusOf(object);
+  const spec = specOf(props.object);
+  const status = statusOf(props.object);
+  const hpa = useRelatedHpa(props);
   return (
     <WorkloadSummary
-      object={object}
+      object={props.object}
       template={spec.template as PodTemplate}
       items={[
         { label: t("asset.k8sReplicas"), value: ratio(status.readyReplicas, spec.replicas), mono: true },
         { label: t("asset.k8sAvailable"), value: num(status.availableReplicas), mono: true },
         ...selectorItem(t("asset.k8sSelector"), spec.selector as LabelSelector),
+        ...(hpa ? [hpa] : []),
       ]}
     />
   );
@@ -134,7 +136,7 @@ export function JobOverview({ object }: K8sDetailProps) {
 function CronJobJobs({ assetId, typeKey, namespace, name }: K8sDetailProps) {
   const { t } = useTranslation();
   const openTab = useK8sStore((s) => s.openTab);
-  const listed = useListed(assetId, `cronjob-jobs:${namespace}:${name}`, {
+  const listed = useListed(assetId, {
     group: "batch",
     version: "v1",
     resource: "jobs",

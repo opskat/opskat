@@ -29,6 +29,14 @@ const (
 	ExecEndExited = "exited" // 命令退出（含退出码）
 	ExecEndClosed = "closed" // 前端关闭会话或应用退出
 	ExecEndError  = "error"  // 会话建立后连接出错
+	ExecEndFailed = "failed" // 集群报告命令无法运行（如自定义命令不存在），原因在 Error 里
+)
+
+// 会话非正常结束后读 Pod 补结束原因：kubelet 写入容器终止状态晚于 exec 流结束，读不到时每隔
+// execEndPollInterval 再读，最多 execEndPollWindow。
+var (
+	execEndPollInterval = 500 * time.Millisecond
+	execEndPollWindow   = 5 * time.Second
 )
 
 // execConnectTimeout 限定 exec 从拨号到 SPDY 升级完成的时间；升级后的会话不设超时。
@@ -252,6 +260,7 @@ func (o *execOutput) Write(p []byte) (int, error) {
 // 实际运行的 shell 经 k8s:exec:started:<id> 告知，会话结束时发 k8s:exec:end:<id>。
 func (k *K8s) StartK8sExec(req K8sExecRequest) (string, error) {
 	if err := req.validate(); err != nil {
+		logger.Ctx(k.ctx).Error("k8s exec failed", execLogFields(req, zap.Error(err))...)
 		return "", fmt.Errorf("start K8S exec: %w", err)
 	}
 	loadCtx, cancel := context.WithTimeout(k.ctx, 30*time.Second)
@@ -325,7 +334,8 @@ func (k *K8s) startExec(c *k8sCallContext, req K8sExecRequest) (string, error) {
 		closed := ctx.Err() != nil
 		cancel()
 		end := execEnd(closed, err)
-		if !closed && (end.ExitCode == nil || *end.ExitCode != 0) {
+		// 命令退出码非 0 或连接出错时容器可能已终止 / Pod 已删除；集群拒绝运行命令（failed）时容器无恙，不必读。
+		if end.Reason == ExecEndError || (end.Reason == ExecEndExited && *end.ExitCode != 0) {
 			k.enrichEnd(c, req, started, &end, log)
 		}
 		fields := []zap.Field{zap.String("reason", end.Reason), zap.Duration("elapsed", time.Since(started))}
@@ -338,7 +348,7 @@ func (k *K8s) startExec(c *k8sCallContext, req K8sExecRequest) (string, error) {
 		if end.PodGone {
 			fields = append(fields, zap.Bool("podGone", true))
 		}
-		if end.Reason == ExecEndError {
+		if end.Reason == ExecEndError || end.Reason == ExecEndFailed {
 			log.Error("k8s exec failed", append(fields, zap.Error(err))...)
 		}
 		log.Info("k8s exec ended", fields...)
@@ -399,38 +409,62 @@ func (k *K8s) runAttempts(ctx context.Context, c *k8sCallContext, req K8sExecReq
 }
 
 // enrichEnd 在会话非正常结束（非 0 退出或连接出错）后读 Pod 状态补充结束原因：容器终止原因（如 OOMKilled）、
-// Pod 是否已被删除。读不到（多半是连接已断）时保留原结束信息。
+// Pod 是否已被删除（已不存在，或正在删除）。kubelet 写入终止状态晚于 exec 流结束，所以结束方式像容器被终止
+// 而两者都读不到时隔一会儿再读，直到 execEndPollWindow 用完；读失败（多半是连接已断）时保留原结束信息。
 func (k *K8s) enrichEnd(c *k8sCallContext, req K8sExecRequest, since time.Time, end *K8sExecEnd, log *zap.Logger) {
-	ctx, cancel := context.WithTimeout(k.ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(k.ctx, execEndPollWindow)
 	defer cancel()
-	pod, err := k8spkg.GetResource(ctx, c.kubeconfig, k8spkg.ResourceRef{
-		Version: "v1", Resource: "pods", Namespace: req.Namespace, Name: req.Pod,
-	}, c.opts...)
-	if err != nil {
-		log.Warn("k8s exec end: read pod status failed", zap.Error(err))
-		return
-	}
-	if pod.NotFound {
-		end.PodGone = true
-		return
-	}
-	raw, err := json.Marshal(pod.Object)
-	if err != nil {
-		log.Warn("k8s exec end: encode pod failed", zap.Error(err))
-		return
-	}
-	var typed corev1.Pod
-	if err := json.Unmarshal(raw, &typed); err != nil {
-		log.Warn("k8s exec end: decode pod failed", zap.Error(err))
-		return
-	}
-	if term := containerTermination(typed, req.Container, since); term != nil {
-		end.ContainerReason = term.Reason
-		if end.ExitCode == nil {
-			code := int(term.ExitCode)
-			end.ExitCode = &code
+	for {
+		pod, err := k8spkg.GetResource(ctx, c.kubeconfig, k8spkg.ResourceRef{
+			Version: "v1", Resource: "pods", Namespace: req.Namespace, Name: req.Pod,
+		}, c.opts...)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Warn("k8s exec end: read pod status failed", zap.Error(err))
+			}
+			return
+		}
+		if pod.NotFound {
+			end.PodGone = true
+			return
+		}
+		raw, err := json.Marshal(pod.Object)
+		if err != nil {
+			log.Warn("k8s exec end: encode pod failed", zap.Error(err))
+			return
+		}
+		var typed corev1.Pod
+		if err := json.Unmarshal(raw, &typed); err != nil {
+			log.Warn("k8s exec end: decode pod failed", zap.Error(err))
+			return
+		}
+		if term := containerTermination(typed, req.Container, since); term != nil {
+			end.ContainerReason = term.Reason
+			if end.ExitCode == nil {
+				code := int(term.ExitCode)
+				end.ExitCode = &code
+			}
+			return
+		}
+		if typed.DeletionTimestamp != nil {
+			end.PodGone = true
+			return
+		}
+		if !containerMayHaveDied(*end) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(execEndPollInterval):
 		}
 	}
+}
+
+// containerMayHaveDied 判断结束方式是否像容器被终止：连接出错，或以信号退出（128+n，如 OOMKilled 的 137）。
+// 普通的非 0 退出（如在 shell 里 exit 1）只读一次 Pod，不为等终止状态拖延结束提示。
+func containerMayHaveDied(end K8sExecEnd) bool {
+	return end.Reason == ExecEndError || (end.ExitCode != nil && *end.ExitCode >= 128)
 }
 
 // containerTermination 取容器在 since 之后的终止信息（当前终止状态优先，其次重启前的上一次终止）；
@@ -461,6 +495,10 @@ func execEnd(closed bool, err error) K8sExecEnd {
 	}
 	if code, ok := k8spkg.ExitCode(err); ok {
 		return K8sExecEnd{Reason: ExecEndExited, ExitCode: &code}
+	}
+	var cmdErr *k8spkg.CommandError
+	if errors.As(err, &cmdErr) {
+		return K8sExecEnd{Reason: ExecEndFailed, Error: err.Error()}
 	}
 	return K8sExecEnd{Reason: ExecEndError, Error: err.Error()}
 }

@@ -56,12 +56,14 @@ func TestGetClusterHealthClassifiesPods(t *testing.T) {
 		podJSON("restarting", "Running", `{"name":"c","ready":false,"restartCount":2,"state":{"running":{}},"lastState":{"terminated":{"exitCode":137}}}`),
 		podJSON("recovered", "Running", `{"name":"c","ready":true,"restartCount":2,"state":{"running":{}},"lastState":{"terminated":{"exitCode":137}}}`),
 		podJSON("cleanexit", "Running", `{"name":"c","ready":false,"restartCount":1,"state":{"running":{}},"lastState":{"terminated":{"exitCode":0}}}`),
+		// 失败过一次、重试后跑完的 Pod：上次退出码非 0，但容器已终止，不再重启。
+		podJSON("completed", "Succeeded", `{"name":"c","ready":false,"restartCount":1,"state":{"terminated":{"exitCode":0,"reason":"Completed"}},"lastState":{"terminated":{"exitCode":1}}}`),
 	))
 
 	got, err := GetClusterHealth(context.Background(), f.kubeconfig(), "")
 	require.NoError(t, err)
 
-	assert.Equal(t, 12, got.Pods.Total)
+	assert.Equal(t, 13, got.Pods.Total)
 	assert.Equal(t, 8, got.Pods.Running)
 	assert.Equal(t, 1, got.Pods.Pending)
 	names := make([]string, 0, len(got.Attention))

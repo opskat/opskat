@@ -29,7 +29,7 @@ export function triggerCronJob(ctx: K8sActionContext) {
   );
 }
 
-/** Toggles a CronJob's suspend flag straight away (reversible, so no confirmation). */
+/** Sets a CronJob's suspend flag (after the user confirmed it). */
 export function setCronJobSuspend(ctx: K8sActionContext, suspend: boolean) {
   return runK8sOp(
     () => SetK8sCronJobSuspend({ assetId: ctx.assetId, namespace: ctx.namespace, name: ctx.name, suspend }),

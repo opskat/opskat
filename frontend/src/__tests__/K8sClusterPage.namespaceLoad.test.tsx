@@ -196,7 +196,7 @@ describe("K8sClusterPage loading, namespaces and failures", () => {
     expect(podListNamespaces()).toEqual([""]);
   });
 
-  it("lets the user type a namespace when namespaces can't be listed", async () => {
+  it("offers the configured namespace plus manual input when namespaces can't be listed", async () => {
     const user = userEvent.setup();
     mockCluster(async (req) => {
       if (req.resource === "namespaces") throw new Error('namespaces is forbidden: User "ro" cannot list');
@@ -206,13 +206,40 @@ describe("K8sClusterPage loading, namespaces and failures", () => {
     await openPods(user);
     await screen.findByText("pods-in-prod");
 
-    const input = await screen.findByRole("textbox", { name: "asset.k8sNamespace" });
-    expect(input).toHaveValue("prod");
-    await user.clear(input);
+    const select = screen.getByRole("combobox", { name: "asset.k8sNamespace" });
+    expect(select).toHaveTextContent("prod");
+    const input = screen.getByRole("textbox", { name: "asset.k8sNamespaceInputPlaceholder" });
+    expect(input).toHaveValue("");
     await user.type(input, "team-a{Enter}");
 
     expect(await screen.findByText("pods-in-team-a")).toBeInTheDocument();
     expect(podListNamespaces()).toEqual(["prod", "team-a"]);
+    expect(screen.getByRole("combobox", { name: "asset.k8sNamespace" })).toHaveTextContent("team-a");
+
+    // the configured namespace stays one pick away
+    await user.click(screen.getByRole("combobox", { name: "asset.k8sNamespace" }));
+    await user.click(await screen.findByRole("option", { name: "prod" }));
+    expect(await screen.findByText("pods-in-prod")).toBeInTheDocument();
+  });
+
+  it("keeps the namespace dropdown when a refresh of the namespaces fails", async () => {
+    const user = userEvent.setup();
+    let fail = false;
+    mockCluster(async (req) => {
+      if (req.resource === "namespaces" && fail) throw new Error("namespaces: i/o timeout");
+      return listOK(req);
+    });
+    render(<K8sClusterPage asset={asset(99120)} />);
+    await openPods(user);
+    await screen.findByText("pods-in-prod");
+
+    fail = true;
+    await user.click(within(screen.getByTestId("k8s-sidebar")).getByRole("button", { name: "query.refreshTree" }));
+    await waitFor(() =>
+      expect(vi.mocked(ListK8sResources).mock.calls.filter(([r]) => r.resource === "namespaces")).toHaveLength(2)
+    );
+    expect(screen.getByRole("combobox", { name: "asset.k8sNamespace" })).toHaveTextContent("prod");
+    expect(screen.queryByRole("textbox", { name: "asset.k8sNamespaceInputPlaceholder" })).not.toBeInTheDocument();
   });
 
   it("shows a failed list's reason with a retry instead of the empty state", async () => {

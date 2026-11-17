@@ -9,6 +9,7 @@ import { statusVariantToClass } from "../../utils";
 import { K8sMetaSections } from "../K8sMetaSections";
 import type { K8sDetailProps } from "../registry";
 import { openResourceSubTab } from "../workloads/openSubTab";
+import { cpuMem, portsText } from "../workloads/summaryItems";
 import { podContainers, podReady } from "./podInfo";
 
 interface PodShape {
@@ -48,6 +49,9 @@ export function PodOverview({ assetId, typeKey, namespace, name, object }: K8sDe
           { key: "state", label: t("asset.k8sPodStatus") },
           { key: "ready", label: t("asset.k8sPodReady") },
           { key: "restarts", label: t("asset.k8sPodRestarts") },
+          { key: "ports", label: t("asset.k8sPorts") },
+          { key: "requests", label: "Requests" },
+          { key: "limits", label: "Limits" },
           { key: "actions", label: "" },
         ]}
         data={containers}
@@ -65,6 +69,9 @@ export function PodOverview({ assetId, typeKey, namespace, name, object }: K8sDe
               <span className={c.ready ? "text-success" : "text-destructive"}>{c.ready ? "✓" : "✗"}</span>
             </td>
             <td className="py-2 pr-4 font-mono text-sm">{c.restarts}</td>
+            <td className="py-2 pr-4 font-mono text-xs">{portsText(c.ports)}</td>
+            <td className="py-2 pr-4 font-mono text-xs">{cpuMem(c.resources?.requests)}</td>
+            <td className="py-2 pr-4 font-mono text-xs">{cpuMem(c.resources?.limits)}</td>
             <td className="py-1 text-right">
               {!c.init && (
                 <>

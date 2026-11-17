@@ -1,7 +1,8 @@
 import { ScrollText } from "lucide-react";
 import { registerK8sAction } from "../../actions";
 import { PodOverview } from "../pod/PodOverview";
-import { registerDetailOverview, registerDetailSubTab } from "../registry";
+import { podStatus } from "../pod/podInfo";
+import { registerDetailOverview, registerDetailStatus, registerDetailSubTab } from "../registry";
 import { PodLogsTab, WorkloadLogsTab } from "./LogsTab";
 import { openResourceSubTab } from "./openSubTab";
 import {
@@ -13,6 +14,7 @@ import {
   StatefulSetOverview,
 } from "./overviews";
 import { PodsTab } from "./PodsTab";
+import { cronJobStatus, daemonSetStatus, jobStatus } from "./statuses";
 
 /** Type keys (`<group>/<resource>`) whose detail has a Logs sub-tab and a 「日志」 action. */
 const LOGGABLE = new Set([
@@ -27,21 +29,25 @@ const LOGGABLE = new Set([
 const PODS_TAB = { id: "pods", labelKey: "asset.k8sPodsTab", Component: PodsTab };
 const LOGS_TAB = { id: "logs", labelKey: "asset.k8sLogs", Component: WorkloadLogsTab };
 
-registerDetailOverview("Pod", PodOverview);
-registerDetailSubTab("Pod", { id: "logs", labelKey: "asset.k8sLogs", Component: PodLogsTab });
+registerDetailOverview("/pods", PodOverview);
+registerDetailSubTab("/pods", { id: "logs", labelKey: "asset.k8sLogs", Component: PodLogsTab });
+registerDetailStatus("/pods", podStatus);
 
-for (const [kind, overview] of [
-  ["Deployment", DeploymentOverview],
-  ["StatefulSet", StatefulSetOverview],
-  ["DaemonSet", DaemonSetOverview],
-  ["ReplicaSet", ReplicaSetOverview],
-  ["Job", JobOverview],
+for (const [typeKey, overview] of [
+  ["apps/deployments", DeploymentOverview],
+  ["apps/statefulsets", StatefulSetOverview],
+  ["apps/daemonsets", DaemonSetOverview],
+  ["apps/replicasets", ReplicaSetOverview],
+  ["batch/jobs", JobOverview],
 ] as const) {
-  registerDetailOverview(kind, overview);
-  registerDetailSubTab(kind, PODS_TAB);
-  registerDetailSubTab(kind, LOGS_TAB);
+  registerDetailOverview(typeKey, overview);
+  registerDetailSubTab(typeKey, PODS_TAB);
+  registerDetailSubTab(typeKey, LOGS_TAB);
 }
-registerDetailOverview("CronJob", CronJobOverview);
+registerDetailOverview("batch/cronjobs", CronJobOverview);
+registerDetailStatus("batch/jobs", jobStatus);
+registerDetailStatus("apps/daemonsets", daemonSetStatus);
+registerDetailStatus("batch/cronjobs", cronJobStatus);
 
 registerK8sAction({
   id: "logs",

@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { AsyncState } from "@/components/common/AsyncState";
+import { K8sAsyncState } from "../../K8sAsyncState";
 import { resourceTabId, useK8sStore } from "@/stores/k8sStore";
 import { K8sLogsPanel } from "../../K8sLogsPanel";
 import { podContainerNames } from "../pod/podInfo";
@@ -55,13 +55,14 @@ export function WorkloadLogsTab(props: K8sDetailProps) {
   const chosen = useK8sStore((s) => s.logTabs[assetId]?.[resourceTabId(typeKey, namespace, name)]?.currentPod);
   const pod = pods.items.find((p) => p.name === chosen) ?? pods.items[0];
   return (
-    <AsyncState
+    <K8sAsyncState
       status={pods.status}
+      hasData={pods.hasData}
       error={pods.error}
       onRetry={pods.reload}
       empty={pods.status === "ready" && !pod ? t("asset.k8sNoPods") : undefined}
     >
       {pod && <PodLogs props={props} pods={pods.items} podName={pod.name} container={pod.object} />}
-    </AsyncState>
+    </K8sAsyncState>
   );
 }
