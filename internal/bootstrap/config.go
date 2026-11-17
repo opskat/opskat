@@ -32,10 +32,19 @@ type AppConfig struct {
 	WebDAVExportIncludePolicyGroups bool   `json:"webdav_export_include_policy_groups,omitempty"`
 	WebDAVExportIncludeShortcuts    bool   `json:"webdav_export_include_shortcuts,omitempty"`
 	WebDAVExportIncludeThemes       bool   `json:"webdav_export_include_themes,omitempty"`
-	LastUpdateCheck                 int64  `json:"last_update_check,omitempty"` // 上次自动检查更新的 Unix 时间戳
-	DebugMode                       bool   `json:"debug_mode,omitempty"`        // 开启后日志级别降为 debug
-	WindowWidth                     int    `json:"window_width,omitempty"`      // 上次正常窗口宽度
-	WindowHeight                    int    `json:"window_height,omitempty"`     // 上次正常窗口高度
+
+	// 自动备份设置（docs/specs/2026-11-17-auto-backup-targets.md）；运行状态在 auto_backup_state.json。
+	AutoBackupEnabled         bool     `json:"auto_backup_enabled,omitempty"`
+	AutoBackupPassword        string   `json:"auto_backup_password,omitempty"`         // 加密后的自动备份密码
+	AutoBackupIntervalMinutes int      `json:"auto_backup_interval_minutes,omitempty"` // 0 = 默认（30）
+	AutoBackupKeep            int      `json:"auto_backup_keep,omitempty"`             // 0 = 默认（10）
+	AutoBackupTargets         []string `json:"auto_backup_targets,omitempty"`          // 勾选的备份位置 ID
+	AutoBackupLocalDir        string   `json:"auto_backup_local_dir,omitempty"`        // 本地文件夹位置的路径
+
+	LastUpdateCheck int64 `json:"last_update_check,omitempty"` // 上次自动检查更新的 Unix 时间戳
+	DebugMode       bool  `json:"debug_mode,omitempty"`        // 开启后日志级别降为 debug
+	WindowWidth     int   `json:"window_width,omitempty"`      // 上次正常窗口宽度
+	WindowHeight    int   `json:"window_height,omitempty"`     // 上次正常窗口高度
 
 	// SSH 空闲保活心跳的全局默认间隔（秒），作用于所有出站 SSH 连接（终端会话 +
 	// 连接池）。<=0 = 采用内置默认（30s）。单个资产可在其 SSH 配置里覆盖此值。
@@ -168,6 +177,9 @@ func cloneConfig(c *AppConfig) *AppConfig {
 	if c.NetworkProxy != nil {
 		proxy := *c.NetworkProxy
 		clone.NetworkProxy = &proxy
+	}
+	if c.AutoBackupTargets != nil {
+		clone.AutoBackupTargets = append([]string(nil), c.AutoBackupTargets...)
 	}
 	if c.ExternalEditCustomEditors != nil {
 		editors := make([]ExternalEditorConfig, len(c.ExternalEditCustomEditors))

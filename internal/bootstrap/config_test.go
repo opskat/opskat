@@ -44,12 +44,17 @@ func TestGetConfigReturnsIsolatedCopy(t *testing.T) {
 		WebDAVURL:                 "https://example.com/dav/",
 		ExternalEditCustomEditors: []ExternalEditorConfig{{ID: "a", Args: []string{"--wait"}}},
 		NetworkProxy:              &NetworkProxyConfig{Mode: "custom", Host: "proxy.example.com"},
+		AutoBackupTargets:         []string{"webdav"},
 	}
 
 	snap := GetConfig()
 	snap.NetworkProxy.Host = "mutated"
 	if cur := GetConfig(); cur.NetworkProxy.Host != "proxy.example.com" {
 		t.Fatalf("pointer field aliased: %q", cur.NetworkProxy.Host)
+	}
+	snap.AutoBackupTargets[0] = "mutated"
+	if cur := GetConfig(); cur.AutoBackupTargets[0] != "webdav" {
+		t.Fatalf("targets slice aliased: %v", cur.AutoBackupTargets)
 	}
 	snap.WebDAVURL = "mutated"
 	snap.ExternalEditCustomEditors[0].ID = "mutated"
