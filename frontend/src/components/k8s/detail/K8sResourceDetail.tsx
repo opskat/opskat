@@ -10,7 +10,7 @@ import {
   type K8sClusterState,
   type K8sResourceType,
 } from "@/stores/k8sStore";
-import { getK8sActions, type K8sActionContext } from "../actions";
+import { actionLabelKey, getK8sActions, type K8sActionContext } from "../actions";
 import { KindIcon } from "../cluster/kindMeta";
 import { statusVariantToClass } from "../utils";
 import { K8sEventsTab } from "./K8sEventsTab";
@@ -162,7 +162,7 @@ export function K8sResourceDetail({
                   onClick={() => void a.run(ctx)}
                 >
                   <a.icon className="h-3 w-3" />
-                  {t(a.labelKey)}
+                  {t(actionLabelKey(a, object))}
                 </Button>
               </span>
             );

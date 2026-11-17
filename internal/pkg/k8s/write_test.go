@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -353,4 +354,136 @@ func TestRestartWorkloadPassesThroughClusterError(t *testing.T) {
 		writeStatus(w, http.StatusForbidden, "Forbidden", `deployments.apps "web" is forbidden: cannot patch resource`)
 	})
 	require.ErrorContains(t, RestartWorkload(context.Background(), f.kubeconfig(), deployRef), "cannot patch resource")
+}
+
+const cronPath = "/apis/batch/v1/namespaces/default/cronjobs/nightly"
+const jobsPath = "/apis/batch/v1/namespaces/default/jobs"
+
+const cronJSON = `{"apiVersion":"batch/v1","kind":"CronJob","metadata":{"name":"nightly","namespace":"default","uid":"cron-uid"},
+ "spec":{"schedule":"0 2 * * *","suspend":true,"jobTemplate":{
+  "metadata":{"labels":{"app":"report"},"annotations":{"team":"data"}},
+  "spec":{"backoffLimit":2,"template":{"spec":{"restartPolicy":"Never","containers":[{"name":"c","image":"busybox"}]}}}}}}`
+
+func serveCron(f *fakeAPIServer, path, body string) {
+	f.json(path, body)
+}
+
+func TestTriggerCronJobCreatesJobFromTemplateWithOwnerReference(t *testing.T) {
+	f := newFakeAPIServer(t)
+	serveCron(f, cronPath, cronJSON)
+	var posted map[string]any
+	f.handle(jobsPath, func(w http.ResponseWriter, r *http.Request) {
+		posted = readBody(t, r)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(posted)
+	})
+
+	name, err := TriggerCronJob(context.Background(), f.kubeconfig(), "default", "nightly")
+	require.NoError(t, err)
+
+	assert.Regexp(t, `^nightly-manual-[a-z0-9]{5}$`, name)
+	meta := posted["metadata"].(map[string]any)
+	assert.Equal(t, name, meta["name"])
+	assert.Equal(t, "default", meta["namespace"])
+	assert.Equal(t, "report", meta["labels"].(map[string]any)["app"])
+	annotations := meta["annotations"].(map[string]any)
+	assert.Equal(t, "data", annotations["team"])
+	assert.Equal(t, "manual", annotations["cronjob.kubernetes.io/instantiate"])
+	owners := meta["ownerReferences"].([]any)
+	require.Len(t, owners, 1)
+	owner := owners[0].(map[string]any)
+	assert.Equal(t, "CronJob", owner["kind"])
+	assert.Equal(t, "nightly", owner["name"])
+	assert.Equal(t, "cron-uid", owner["uid"])
+	assert.Equal(t, "batch/v1", owner["apiVersion"])
+	assert.Equal(t, true, owner["controller"])
+	spec := posted["spec"].(map[string]any)
+	assert.Equal(t, float64(2), spec["backoffLimit"])
+	assert.Contains(t, spec, "template")
+	assert.Equal(t, "Job", posted["kind"])
+	assert.Equal(t, "batch/v1", posted["apiVersion"])
+	assert.Empty(t, f.requests(cronPath)[1:], "the CronJob itself is only read, so its schedule is untouched")
+	assert.Equal(t, http.MethodGet, f.requests(cronPath)[0].Method)
+}
+
+func TestTriggerCronJobTruncatesLongNamesToALegalJobName(t *testing.T) {
+	long := strings.Repeat("a", 49) + "-" + strings.Repeat("b", 10) // cut lands right after a '-'
+	path := "/apis/batch/v1/namespaces/default/cronjobs/" + long
+	f := newFakeAPIServer(t)
+	serveCron(f, path, strings.Replace(cronJSON, `"name":"nightly"`, `"name":"`+long+`"`, 1))
+	f.handle(jobsPath, echoObject(t))
+
+	name, err := TriggerCronJob(context.Background(), f.kubeconfig(), "default", long)
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(name), 63)
+	assert.Regexp(t, `^a{49}-manual-[a-z0-9]{5}$`, name, "no dangling '-' before the suffix")
+}
+
+func TestTriggerCronJobPassesThroughClusterErrors(t *testing.T) {
+	f := newFakeAPIServer(t)
+	serveCron(f, cronPath, cronJSON)
+	f.handle(jobsPath, func(w http.ResponseWriter, _ *http.Request) {
+		writeStatus(w, http.StatusForbidden, "Forbidden", `jobs.batch is forbidden: cannot create resource "jobs"`)
+	})
+	_, err := TriggerCronJob(context.Background(), f.kubeconfig(), "default", "nightly")
+	require.ErrorContains(t, err, `cannot create resource "jobs"`)
+
+	g := newFakeAPIServer(t)
+	_, err = TriggerCronJob(context.Background(), g.kubeconfig(), "default", "nightly")
+	require.Error(t, err)
+	assert.True(t, apierrors.IsNotFound(err))
+}
+
+func TestSetCronJobSuspendMergePatchesOnlySuspend(t *testing.T) {
+	for _, suspend := range []bool{true, false} {
+		f := newFakeAPIServer(t)
+		var body map[string]any
+		var contentType string
+		f.handle(cronPath, func(w http.ResponseWriter, r *http.Request) {
+			body, contentType = readBody(t, r), r.Header.Get("Content-Type")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(cronJSON))
+		})
+		require.NoError(t, SetCronJobSuspend(context.Background(), f.kubeconfig(), "default", "nightly", suspend))
+		reqs := f.requests(cronPath)
+		require.Len(t, reqs, 1)
+		assert.Equal(t, http.MethodPatch, reqs[0].Method)
+		assert.Equal(t, "application/merge-patch+json", contentType)
+		assert.Equal(t, map[string]any{"spec": map[string]any{"suspend": suspend}}, body)
+	}
+}
+
+func TestSetCronJobSuspendPassesThroughClusterError(t *testing.T) {
+	f := newFakeAPIServer(t)
+	f.handle(cronPath, func(w http.ResponseWriter, _ *http.Request) {
+		writeStatus(w, http.StatusForbidden, "Forbidden", `cronjobs.batch "nightly" is forbidden: cannot patch resource`)
+	})
+	require.ErrorContains(t, SetCronJobSuspend(context.Background(), f.kubeconfig(), "default", "nightly", true), "cannot patch resource")
+}
+
+func TestSetNodeUnschedulableMergePatchesOnlyThatField(t *testing.T) {
+	for _, unschedulable := range []bool{true, false} {
+		f := newFakeAPIServer(t)
+		var body map[string]any
+		var contentType string
+		f.handle("/api/v1/nodes/n1", func(w http.ResponseWriter, r *http.Request) {
+			body, contentType = readBody(t, r), r.Header.Get("Content-Type")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"kind":"Node","apiVersion":"v1","metadata":{"name":"n1"}}`))
+		})
+		require.NoError(t, SetNodeUnschedulable(context.Background(), f.kubeconfig(), "n1", unschedulable))
+		reqs := f.requests("/api/v1/nodes/n1")
+		require.Len(t, reqs, 1, "no eviction / pod calls")
+		assert.Equal(t, http.MethodPatch, reqs[0].Method)
+		assert.Equal(t, "application/merge-patch+json", contentType)
+		assert.Equal(t, map[string]any{"spec": map[string]any{"unschedulable": unschedulable}}, body)
+	}
+}
+
+func TestSetNodeUnschedulablePassesThroughClusterError(t *testing.T) {
+	f := newFakeAPIServer(t)
+	f.handle("/api/v1/nodes/n1", func(w http.ResponseWriter, _ *http.Request) {
+		writeStatus(w, http.StatusForbidden, "Forbidden", `nodes "n1" is forbidden: cannot patch resource "nodes"`)
+	})
+	require.ErrorContains(t, SetNodeUnschedulable(context.Background(), f.kubeconfig(), "n1", true), `cannot patch resource "nodes"`)
 }

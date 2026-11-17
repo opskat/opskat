@@ -45,18 +45,34 @@ export function controllerOf(ctx: K8sActionContext): string | null {
   return owner ? `${owner.kind}/${owner.name}` : null;
 }
 
+export interface K8sOpSuccess {
+  message: string;
+  /** A clickable follow-up on the toast (e.g. open the Job that was created). */
+  action?: { label: string; onClick: () => void };
+}
+
 /**
  * Runs one write against the cluster. Success: a toast, then the follow-up (close tabs, refresh). Failure: the
- * cluster's reason verbatim in a toast and nothing else changes. Returns whether it succeeded.
+ * cluster's reason verbatim in a toast and nothing else changes. Returns whether it succeeded. The success toast
+ * may depend on what the call returned.
  */
-export async function runK8sOp(call: () => Promise<unknown>, successMessage: string, after: () => void) {
+export async function runK8sOp<T = unknown>(
+  call: () => Promise<T>,
+  success: string | ((result: T) => K8sOpSuccess),
+  after: (result: T) => void
+) {
+  let result: T;
   try {
-    await call();
+    result = await call();
   } catch (e) {
     toast.error(errorMessage(e));
     return false;
   }
-  notifySuccess(successMessage);
-  after();
+  if (typeof success === "string") notifySuccess(success);
+  else {
+    const { message, action } = success(result);
+    notifySuccess(message, action && { action });
+  }
+  after(result);
   return true;
 }

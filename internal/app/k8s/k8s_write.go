@@ -106,3 +106,82 @@ func (k *K8s) RestartK8sWorkload(ref K8sResourceRef) (string, error) {
 		return struct{}{}, k8spkg.RestartWorkload(ctx, c.kubeconfig, ref.pkgRef(), c.opts...)
 	})
 }
+
+// K8sCronJobRequest 指向一个 CronJob。
+type K8sCronJobRequest struct {
+	AssetID   int64  `json:"assetId"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// K8sCronJobSuspendRequest 是 SetK8sCronJobSuspend 的请求。
+type K8sCronJobSuspendRequest struct {
+	AssetID   int64  `json:"assetId"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Suspend   bool   `json:"suspend"`
+}
+
+// K8sNodeUnschedulableRequest 是 SetK8sNodeUnschedulable 的请求。
+type K8sNodeUnschedulableRequest struct {
+	AssetID       int64  `json:"assetId"`
+	Name          string `json:"name"`
+	Unschedulable bool   `json:"unschedulable"`
+}
+
+// K8sTriggerResult 是立即运行 CronJob 的结果：新建的 Job 名称。
+type K8sTriggerResult struct {
+	JobName string `json:"jobName"`
+}
+
+func validateNamed(namespace, name string, needNamespace bool) error {
+	if needNamespace {
+		if namespace == "" {
+			return fmt.Errorf("namespace is required")
+		}
+		if err := validateSegment("namespace", namespace); err != nil {
+			return err
+		}
+	}
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	return validateSegment("name", name)
+}
+
+// TriggerK8sCronJob 按 CronJob 模板立即新建一个 Job（kubectl create job --from=cronjob/...），返回 {jobName}。
+func (k *K8s) TriggerK8sCronJob(req K8sCronJobRequest) (string, error) {
+	if err := validateNamed(req.Namespace, req.Name, true); err != nil {
+		return "", fmt.Errorf("trigger K8S CronJob: %w", err)
+	}
+	target := []zap.Field{zap.String("namespace", req.Namespace), zap.String("name", req.Name)}
+	return k.runK8sWrite(req.AssetID, "trigger K8S CronJob", target, func(ctx context.Context, c *k8sCallContext) (any, error) {
+		jobName, err := k8spkg.TriggerCronJob(ctx, c.kubeconfig, req.Namespace, req.Name, c.opts...)
+		if err != nil {
+			return nil, err
+		}
+		return K8sTriggerResult{JobName: jobName}, nil
+	})
+}
+
+// SetK8sCronJobSuspend 暂停 / 恢复 CronJob 的调度（spec.suspend）。
+func (k *K8s) SetK8sCronJobSuspend(req K8sCronJobSuspendRequest) (string, error) {
+	if err := validateNamed(req.Namespace, req.Name, true); err != nil {
+		return "", fmt.Errorf("set K8S CronJob suspend: %w", err)
+	}
+	target := []zap.Field{zap.String("namespace", req.Namespace), zap.String("name", req.Name), zap.Bool("suspend", req.Suspend)}
+	return k.runK8sWrite(req.AssetID, "set K8S CronJob suspend", target, func(ctx context.Context, c *k8sCallContext) (any, error) {
+		return struct{}{}, k8spkg.SetCronJobSuspend(ctx, c.kubeconfig, req.Namespace, req.Name, req.Suspend, c.opts...)
+	})
+}
+
+// SetK8sNodeUnschedulable 停止 / 恢复节点调度（spec.unschedulable），不驱逐 Pod。
+func (k *K8s) SetK8sNodeUnschedulable(req K8sNodeUnschedulableRequest) (string, error) {
+	if err := validateNamed("", req.Name, false); err != nil {
+		return "", fmt.Errorf("set K8S node unschedulable: %w", err)
+	}
+	target := []zap.Field{zap.String("name", req.Name), zap.Bool("unschedulable", req.Unschedulable)}
+	return k.runK8sWrite(req.AssetID, "set K8S node unschedulable", target, func(ctx context.Context, c *k8sCallContext) (any, error) {
+		return struct{}{}, k8spkg.SetNodeUnschedulable(ctx, c.kubeconfig, req.Name, req.Unschedulable, c.opts...)
+	})
+}

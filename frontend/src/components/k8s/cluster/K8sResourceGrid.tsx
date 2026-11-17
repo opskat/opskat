@@ -22,7 +22,7 @@ import {
 } from "@opskat/ui";
 import { notifyCopied } from "@/lib/notify";
 import type { K8sListSort, K8sResourceRow, K8sTableColumn } from "@/stores/k8sStore";
-import { getK8sActions, type K8sAction, type K8sActionContext } from "../actions";
+import { actionLabelKey, getK8sActions, type K8sAction, type K8sActionContext } from "../actions";
 import { getK8sStatusColor, isStatusColumn, statusVariantToClass } from "../utils";
 import { cellText } from "./listModel";
 
@@ -128,7 +128,7 @@ export function K8sResourceGrid({ assetId, typeKey, columns, rows, sort, onSort,
                         {actions
                           .filter((a) => a.primary)
                           .map((a) => {
-                            const label = t(a.labelKey);
+                            const label = t(actionLabelKey(a, row, columns));
                             const reason = a.disabledReason?.(row, columns);
                             return (
                               <Tooltip key={a.id}>
@@ -253,7 +253,7 @@ function ActionItems({
               onClick={() => run(a)}
             >
               <a.icon className="h-3.5 w-3.5" />
-              {t(a.labelKey)}
+              {t(actionLabelKey(a, target, columns))}
             </Item>
           </Fragment>
         );

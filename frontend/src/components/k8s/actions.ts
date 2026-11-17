@@ -18,6 +18,8 @@ export type K8sActionTarget = K8sResourceRow | Record<string, unknown>;
 export interface K8sAction {
   id: string;
   labelKey: string;
+  /** Overrides `labelKey` when the label depends on the target's state (pause vs resume). */
+  labelKeyFor?: (target: K8sActionTarget, columns?: K8sTableColumn[]) => string;
   icon: LucideIcon;
   /** Shown as an icon on the row (list) / header (detail) in addition to the menu. */
   primary?: boolean;
@@ -48,4 +50,9 @@ export function registerK8sAction(action: K8sAction): () => void {
 export function getK8sActions(typeKey: string, target: K8sActionTarget, assetId?: number): K8sAction[] {
   const applicable = actions.filter((a) => a.appliesTo(typeKey, target, assetId));
   return [...applicable.filter((a) => !a.destructive), ...applicable.filter((a) => a.destructive)];
+}
+
+/** The i18n key of the action's label for this target. */
+export function actionLabelKey(action: K8sAction, target: K8sActionTarget, columns?: K8sTableColumn[]): string {
+  return action.labelKeyFor?.(target, columns) ?? action.labelKey;
 }

@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/discovery/cached/memory"
@@ -283,4 +284,97 @@ func RestartWorkload(ctx context.Context, kubeconfig string, ref ResourceRef, op
 	}
 	_, err = resourceClient(dyn, gvrOf(ref), ref.Namespace).Patch(ctx, ref.Name, types.StrategicMergePatchType, raw, metav1.PatchOptions{FieldManager: fieldManager})
 	return err
+}
+
+var (
+	cronJobGVR = schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"}
+	jobGVR     = schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
+	nodeGVR    = schema.GroupVersionResource{Version: "v1", Resource: "nodes"}
+)
+
+const (
+	// instantiateAnnotation 与 kubectl create job --from=cronjob/... 一致，标记 Job 由人工触发。
+	instantiateAnnotation = "cronjob.kubernetes.io/instantiate"
+	manualJobInfix        = "-manual-"
+	manualSuffixLen       = 5
+	maxJobNameLen         = 63
+)
+
+// manualJobName 生成 <cronjob>-manual-<随机后缀>：cronjob 名按需截断，使整体不超过 63 个字符且截断处不留 '-' / '.'。
+func manualJobName(cronJob string) string {
+	keep := maxJobNameLen - len(manualJobInfix) - manualSuffixLen
+	if len(cronJob) > keep {
+		cronJob = strings.TrimRight(cronJob[:keep], "-.")
+	}
+	return cronJob + manualJobInfix + utilrand.String(manualSuffixLen)
+}
+
+// TriggerCronJob 与 kubectl create job --from=cronjob/<name> 一样，按 CronJob 的 jobTemplate 新建一个 Job
+// （注解 instantiate=manual，属主为该 CronJob），不改动 CronJob 本身，返回新 Job 的名称。
+func TriggerCronJob(ctx context.Context, kubeconfig, namespace, name string, opts ...ClientOption) (string, error) {
+	dyn, err := dynamicFor(kubeconfig, opts...)
+	if err != nil {
+		return "", err
+	}
+	cron, err := dyn.Resource(cronJobGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+	template, _, err := unstructured.NestedMap(cron.Object, "spec", "jobTemplate")
+	if err != nil {
+		return "", fmt.Errorf("read CronJob jobTemplate: %w", err)
+	}
+	jobSpec, _ := template["spec"].(map[string]any)
+	if jobSpec == nil {
+		return "", errors.New("CronJob has no spec.jobTemplate.spec")
+	}
+	job := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "batch/v1", "kind": "Job", "spec": jobSpec}}
+	job.SetName(manualJobName(name))
+	job.SetNamespace(namespace)
+	tm, _ := template["metadata"].(map[string]any)
+	if labels, _, _ := unstructured.NestedStringMap(tm, "labels"); len(labels) > 0 {
+		job.SetLabels(labels)
+	}
+	annotations, _, _ := unstructured.NestedStringMap(tm, "annotations")
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[instantiateAnnotation] = "manual"
+	job.SetAnnotations(annotations)
+	controller := true
+	job.SetOwnerReferences([]metav1.OwnerReference{{
+		APIVersion: "batch/v1", Kind: "CronJob", Name: cron.GetName(), UID: cron.GetUID(), Controller: &controller,
+	}})
+	created, err := dyn.Resource(jobGVR).Namespace(namespace).Create(ctx, job, metav1.CreateOptions{FieldManager: fieldManager})
+	if err != nil {
+		return "", err
+	}
+	return created.GetName(), nil
+}
+
+func mergePatch(ctx context.Context, dyn dynamic.Interface, gvr schema.GroupVersionResource, namespace, name string, patch map[string]any) error {
+	raw, err := json.Marshal(patch)
+	if err != nil {
+		return fmt.Errorf("marshal patch: %w", err)
+	}
+	_, err = resourceClient(dyn, gvr, namespace).Patch(ctx, name, types.MergePatchType, raw, metav1.PatchOptions{FieldManager: fieldManager})
+	return err
+}
+
+// SetCronJobSuspend 切换 CronJob 的 spec.suspend。
+func SetCronJobSuspend(ctx context.Context, kubeconfig, namespace, name string, suspend bool, opts ...ClientOption) error {
+	dyn, err := dynamicFor(kubeconfig, opts...)
+	if err != nil {
+		return err
+	}
+	return mergePatch(ctx, dyn, cronJobGVR, namespace, name, map[string]any{"spec": map[string]any{"suspend": suspend}})
+}
+
+// SetNodeUnschedulable 只切换节点的 spec.unschedulable（cordon / uncordon），不驱逐任何 Pod。
+func SetNodeUnschedulable(ctx context.Context, kubeconfig, name string, unschedulable bool, opts ...ClientOption) error {
+	dyn, err := dynamicFor(kubeconfig, opts...)
+	if err != nil {
+		return err
+	}
+	return mergePatch(ctx, dyn, nodeGVR, "", name, map[string]any{"spec": map[string]any{"unschedulable": unschedulable}})
 }

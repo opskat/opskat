@@ -11,7 +11,7 @@ export function notifyCopied(message: string) {
   toast.success(message, { position: SUCCESS_POSITION, duration: 1000 });
 }
 
-// 操作成功确认：顶部居中，沿用 sonner 默认停留时长。
-export function notifySuccess(message: string) {
-  toast.success(message, { position: SUCCESS_POSITION });
+// 操作成功确认：顶部居中，沿用 sonner 默认停留时长；action 给出可点击的后续入口（如打开新建的资源）。
+export function notifySuccess(message: string, options?: { action?: { label: string; onClick: () => void } }) {
+  toast.success(message, { position: SUCCESS_POSITION, ...(options?.action && { action: options.action }) });
 }

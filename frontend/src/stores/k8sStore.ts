@@ -265,9 +265,9 @@ type Refresher = () => Promise<unknown>;
 /** The YAML dialog open on a cluster: editing one resource, or applying pasted documents. */
 export type K8sYamlDialogState = { mode: "edit"; ctx: K8sActionContext } | { mode: "apply" };
 
-/** The scale / restart / delete dialog open on a cluster, for the resource the action was started from. */
+/** The scale / restart / delete / run-now / cordon dialog open on a cluster, for the resource the action was started from. */
 export interface K8sOpDialogState {
-  kind: "scale" | "restart" | "delete";
+  kind: "scale" | "restart" | "delete" | "trigger" | "cordon";
   ctx: K8sActionContext;
 }
 
