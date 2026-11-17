@@ -128,7 +128,11 @@ func (w rowSQL) statement(req dbdriver.RowStatementsRequest, row map[string]any)
 			}
 			names[i], values[i] = w.quote(column), value
 		}
-		return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);", tableRef, strings.Join(names, ", "), strings.Join(values, ", ")), nil
+		modifier := ""
+		if req.InsertModifier != "" {
+			modifier = " " + req.InsertModifier
+		}
+		return fmt.Sprintf("INSERT INTO %s (%s)%s VALUES (%s);", tableRef, strings.Join(names, ", "), modifier, strings.Join(values, ", ")), nil
 	}
 
 	set := make([]string, len(req.Columns))

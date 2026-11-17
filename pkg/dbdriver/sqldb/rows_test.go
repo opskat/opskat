@@ -96,6 +96,19 @@ func TestRowStatementsOmitDatabaseDropsTheQualifier(t *testing.T) {
 	assert.Equal(t, []string{"INSERT INTO <db>.<t> (<id>) VALUES ('1');"}, statements)
 }
 
+// InsertModifier 写在 INSERT 的列与 VALUES 之间（PostgreSQL 往 GENERATED ALWAYS 身份列写值的
+// OVERRIDING SYSTEM VALUE）；不设时没有。
+func TestRowStatementsWritesTheInsertModifierBeforeValues(t *testing.T) {
+	session, mock := newRowsSession(t)
+	expectColumnTypes(mock)
+	statements, err := dbdrivertest.RowStatements(context.Background(), session, "db", "t", dbdriver.RowStatementsRequest{
+		Kind: dbdriver.RowInsert, Columns: []string{"id", "memo"}, Rows: []map[string]any{{"id": float64(1), "memo": "x"}},
+		OmitDatabase: true, InsertModifier: "OVERRIDING SYSTEM VALUE",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"INSERT INTO <t> (<id>, <memo>) OVERRIDING SYSTEM VALUE VALUES ('1', 'x');"}, statements)
+}
+
 // UPDATE 按主键定位那一行（定位的值同样按列类型写），没有主键时按全部列定位，NULL 用 IS NULL；
 // 只改一行的写法是方言的。
 func TestRowStatementsUpdatesLocateTheRowByPrimaryKeyOrEveryColumn(t *testing.T) {

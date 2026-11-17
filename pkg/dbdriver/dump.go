@@ -2,6 +2,7 @@ package dbdriver
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -136,6 +137,9 @@ type DumpObjectScript struct {
 	Definition []string `json:"definition"`
 	// DataColumns 是 INSERT 写入的列，按次序（生成列 / 计算列不在其中）；nil 表示读出的全部列。
 	DataColumns []string `json:"dataColumns"`
+	// InsertModifier 非空时写在它的每条 INSERT 的列与 VALUES 之间（见 RowStatementsRequest.InsertModifier），
+	// 如 PostgreSQL 往 GENERATED ALWAYS 身份列写值的 OVERRIDING SYSTEM VALUE。
+	InsertModifier string `json:"insertModifier,omitempty"`
 	// DataPrologue / DataEpilogue 写在它的行之前 / 之后（如 SQL Server 的 IDENTITY_INSERT 开、关）。
 	DataPrologue []string `json:"dataPrologue,omitempty"`
 	DataEpilogue []string `json:"dataEpilogue,omitempty"`
@@ -471,7 +475,7 @@ func (d *dump) write(item dumpItem, script *DumpObjectScript, withData bool) err
 		d.banner("Records of " + item.name)
 		d.statements(script.DataPrologue)
 		var err error
-		if written, err = d.rows(item.name, script.DataColumns); err != nil {
+		if written, err = d.rows(item.name, script); err != nil {
 			return &DumpObjectError{Object: item.name, Err: err}
 		}
 		d.statements(script.DataEpilogue)
@@ -485,7 +489,7 @@ func (d *dump) write(item dumpItem, script *DumpObjectScript, withData bool) err
 
 // rows 读出一张表的全部行，按块生成 INSERT 写出。writer 在游标打开之前备好：游标占着连接时（远端
 // SQLite 只有一条）不能再去查列类型。
-func (d *dump) rows(table string, columns []string) (written int64, err error) {
+func (d *dump) rows(table string, script *DumpObjectScript) (written int64, err error) {
 	writer, err := d.source.PrepareRowStatements(d.ctx, d.req.Database, table)
 	if err != nil {
 		return 0, err
@@ -500,6 +504,7 @@ func (d *dump) rows(table string, columns []string) (written int64, err error) {
 		}
 	}()
 	streamColumns := stream.Columns()
+	columns := script.DataColumns
 	if columns == nil {
 		columns = streamColumns
 	}
@@ -508,7 +513,9 @@ func (d *dump) rows(table string, columns []string) (written int64, err error) {
 		if len(chunk) == 0 {
 			return nil
 		}
-		statements, err := insertStatements(writer, columns, chunk)
+		statements, err := insertStatements(writer, RowStatementsRequest{
+			Kind: RowInsert, Columns: columns, OmitDatabase: true, InsertModifier: script.InsertModifier,
+		}, chunk)
 		if err != nil {
 			return err
 		}
@@ -544,25 +551,54 @@ func (d *dump) rows(table string, columns []string) (written int64, err error) {
 	return written, flush()
 }
 
-// insertStatements 生成一块行的 INSERT。行先转成前端拿到再带回来的样子（经 JSON：nil、字符串、数字、
-// 布尔），语句才与「复制为 INSERT」对这些行给出的一字不差；二进制的值除外（见 binaryValue）。
-func insertStatements(writer RowStatementWriter, columns []string, rows []map[string]any) ([]string, error) {
+// insertStatements 生成一块行的 INSERT（req 是除了行之外的请求）。行先转成前端拿到再带回来的样子（经
+// JSON：nil、字符串、数字、布尔），语句才与「复制为 INSERT」对这些行给出的一字不差；二进制的值（见
+// binaryValue）与整数（见 exactNumbers）除外。
+func insertStatements(writer RowStatementWriter, req RowStatementsRequest, rows []map[string]any) ([]string, error) {
 	data, err := json.Marshal(rows)
 	if err != nil {
 		return nil, fmt.Errorf("encode rows: %w", err)
 	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
 	var sent []map[string]any
-	if err := json.Unmarshal(data, &sent); err != nil {
+	if err := decoder.Decode(&sent); err != nil {
 		return nil, fmt.Errorf("decode rows: %w", err)
 	}
 	for i, row := range rows {
 		for column, value := range row {
 			if raw, ok := binaryValue(value); ok {
 				sent[i][column] = raw
+				continue
+			}
+			if sent[i][column], err = exactNumbers(sent[i][column]); err != nil {
+				return nil, fmt.Errorf("decode rows: %w", err)
 			}
 		}
 	}
-	return writer.RowStatements(RowStatementsRequest{Kind: RowInsert, Columns: columns, Rows: sent, OmitDatabase: true})
+	req.Rows = sent
+	return writer.RowStatements(req)
+}
+
+// exactNumbers 把经 JSON 解出的数字（json.Number，列表里的也是）换回 writer 认得的值：整数是 int64，不丢
+// 2^53 以上的位（前端拿到的 float64 会丢，那是「复制为 INSERT」的事，转储要原值）；其余是 float64，写法与
+// 「复制为 INSERT」一样。
+func exactNumbers(value any) (any, error) {
+	switch v := value.(type) {
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return n, nil
+		}
+		return v.Float64()
+	case []any:
+		for i, element := range v {
+			var err error
+			if v[i], err = exactNumbers(element); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return value, nil
 }
 
 // binaryValue 认出不能经 JSON 往返的值：[]byte（JSON 把它变成 base64）与不是合法 UTF-8 的字符串（驱动把

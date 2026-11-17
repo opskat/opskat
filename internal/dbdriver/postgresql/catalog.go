@@ -98,18 +98,19 @@ func (dialect) foreignKeys(ctx context.Context, conn *sql.Conn, schema, table st
 
 func (dialect) ListObjects(ctx context.Context, conn *sql.Conn, _ string) (*dbdriver.DatabaseObjects, error) {
 	out := &dbdriver.DatabaseObjects{}
+	// 同名重载的过程 / 函数在 information_schema.routines 里各占一行，树上是一个对象（源码给出全部重载）。
 	if err := sqldb.CollectObjects(ctx, conn,
 		"SELECT table_schema || '.' || table_name FROM information_schema.views WHERE table_schema NOT IN "+systemSchemas+" ORDER BY 1",
 		dbdriver.ObjectView, &out.Views); err != nil {
 		return nil, err
 	}
 	if err := sqldb.CollectObjects(ctx, conn,
-		"SELECT routine_schema || '.' || routine_name FROM information_schema.routines WHERE routine_schema NOT IN "+systemSchemas+" AND routine_type = 'PROCEDURE' ORDER BY 1",
+		"SELECT DISTINCT routine_schema || '.' || routine_name FROM information_schema.routines WHERE routine_schema NOT IN "+systemSchemas+" AND routine_type = 'PROCEDURE' ORDER BY 1",
 		dbdriver.ObjectProcedure, &out.Procedures); err != nil {
 		return nil, err
 	}
 	if err := sqldb.CollectObjects(ctx, conn,
-		"SELECT routine_schema || '.' || routine_name FROM information_schema.routines WHERE routine_schema NOT IN "+systemSchemas+" AND routine_type = 'FUNCTION' ORDER BY 1",
+		"SELECT DISTINCT routine_schema || '.' || routine_name FROM information_schema.routines WHERE routine_schema NOT IN "+systemSchemas+" AND routine_type = 'FUNCTION' ORDER BY 1",
 		dbdriver.ObjectFunction, &out.Functions); err != nil {
 		return nil, err
 	}
@@ -136,6 +137,12 @@ func (dialect) ListObjects(ctx context.Context, conn *sql.Conn, _ string) (*dbdr
 	return out, nil
 }
 
+// routinesQuery 读一个函数（$3 为 'f'）或过程（'p'）的全部重载：标识参数（pg_get_function_identity_arguments，
+// 删除时用它定位）与完整定义。prokind（11 起）经 to_jsonb 取，没有这一列的版本都是函数。
+const routinesQuery = "SELECT pg_get_function_identity_arguments(p.oid), pg_get_functiondef(p.oid) " +
+	"FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace " +
+	"WHERE n.nspname = $1 AND p.proname = $2 AND COALESCE(to_jsonb(p) ->> 'prokind', 'f') = $3 ORDER BY 1"
+
 func (dialect) ObjectSource(ctx context.Context, conn *sql.Conn, _, objType, name, table string) (string, error) {
 	schema, obj := splitSchemaTable(name)
 	var src sql.NullString
@@ -154,12 +161,50 @@ func (dialect) ObjectSource(ctx context.Context, conn *sql.Conn, _, objType, nam
 				"WHERE n.nspname = $1 AND c.relname = $2 AND tg.tgname = $3 AND NOT tg.tgisinternal "+
 				"LIMIT 1", schema, table, obj).Scan(&src)
 	default: // 存储过程 / 函数
-		err = conn.QueryRowContext(ctx,
-			"SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "+
-				"WHERE n.nspname = $1 AND p.proname = $2 LIMIT 1", schema, obj).Scan(&src)
+		return routineSource(ctx, conn, objType, schema, obj)
 	}
 	if err != nil {
 		return "", err
 	}
 	return src.String, nil
+}
+
+// routineSource 是函数或过程的源码：同名的每个重载都给出，各自以分号结束。
+func routineSource(ctx context.Context, conn *sql.Conn, objType, schema, name string) (string, error) {
+	overloads, err := queryRoutines(ctx, conn, objType, schema, name)
+	if err != nil {
+		return "", err
+	}
+	definitions := make([]string, len(overloads))
+	for i, overload := range overloads {
+		definitions[i] = sqldb.TerminateStatement(overload.definition)
+	}
+	return strings.Join(definitions, "\n\n"), nil
+}
+
+// routineKinds 是 pg_proc.prokind 里函数与过程的取值。
+var routineKinds = map[string]string{dbdriver.ObjectFunction: "f", dbdriver.ObjectProcedure: "p"}
+
+// routine 是函数或过程的一个重载。
+type routine struct {
+	// arguments 是标识参数（pg_get_function_identity_arguments），名字加上它才定位到这个重载。
+	arguments, definition string
+}
+
+// queryRoutines 读 schema 里叫 name 的函数或过程（objType）的全部重载，按标识参数排序。
+func queryRoutines(ctx context.Context, conn *sql.Conn, objType, schema, name string) ([]routine, error) {
+	rows, err := conn.QueryContext(ctx, routinesQuery, schema, name, routineKinds[strings.ToLower(objType)])
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var routines []routine
+	for rows.Next() {
+		var r routine
+		if err := rows.Scan(&r.arguments, &r.definition); err != nil {
+			return nil, err
+		}
+		routines = append(routines, r)
+	}
+	return routines, rows.Err()
 }

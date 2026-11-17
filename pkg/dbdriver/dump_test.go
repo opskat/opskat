@@ -149,6 +149,8 @@ type dumpDialect struct {
 	scopes     []DumpScope
 	objects    []DumpObject
 	dataColumn map[string][]string
+	// insertModifier 是各表的 InsertModifier。
+	insertModifier map[string]string
 	// dependsOn 是各对象依赖的对象（方言给出的 DependsOn）。
 	dependsOn map[string][]string
 	// plain 为真时对象只给出存在则删除与定义（像什么钩子都没实现的方言）。
@@ -172,6 +174,7 @@ func (d *dumpDialect) DumpObject(_ context.Context, object DumpObject) (*DumpObj
 		return script, nil
 	}
 	script.DataColumns = d.dataColumn[object.Name]
+	script.InsertModifier = d.insertModifier[object.Name]
 	script.DataPrologue = []string{"BEGIN DATA " + object.Name + ";"}
 	script.DataEpilogue = []string{"END DATA " + object.Name + ";"}
 	script.ForeignKeys = []string{"ADD FK " + object.Name + ";"}
@@ -319,8 +322,8 @@ CREATE TABLE users (id int, name text);
 	assert.Equal(t, []string{"objects shop", "ddl shop.users"}, source.calls)
 }
 
-// 行的写法与「复制为 INSERT」一样：行先变成前端拿到再带回的样子（经 JSON：时间成了字符串、
-// 整数成了数字），INSERT 只写方言给出的列（生成列不在其中）。
+// 行的写法与「复制为 INSERT」一样：行先变成前端拿到再带回的样子（经 JSON：时间成了字符串；整数
+// 保持整数，见 TestDumpKeepsBigIntegersExact），INSERT 只写方言给出的列（生成列不在其中）。
 func TestDumpWritesRowsLikeCopyAsInsertWithTheDialectsColumns(t *testing.T) {
 	source := newDumpSource()
 	source.columns["users"] = []string{"id", "name", "upper_name", "created"}
@@ -336,7 +339,7 @@ func TestDumpWritesRowsLikeCopyAsInsertWithTheDialectsColumns(t *testing.T) {
 	require.Len(t, source.written, 1)
 	assert.Equal(t, RowStatementsRequest{
 		Kind: RowInsert, Columns: []string{"id", "name", "created"}, OmitDatabase: true,
-		Rows: []map[string]any{{"id": float64(1), "name": "alice", "upper_name": "ALICE", "created": "2026-01-02T03:04:05Z"}},
+		Rows: []map[string]any{{"id": int64(1), "name": "alice", "upper_name": "ALICE", "created": "2026-01-02T03:04:05Z"}},
 	}, source.written[0])
 	// writer 在游标打开之前备好（远端 SQLite 只有一条连接，游标占着它时不能再查列类型）。
 	assert.Equal(t, []string{"objects shop", "ddl shop.users", "prepare shop.users", "stream shop.users", "close stream"}, source.calls)
@@ -356,7 +359,36 @@ func TestDumpKeepsBinaryValuesAsBytes(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, source.written, 1)
-	assert.Equal(t, []map[string]any{{"id": float64(1), "raw": []byte{0x00, 0xff, 0x10}, "text": "plain", "bytes": []byte{0xfe, 0x01}}}, source.written[0].Rows)
+	assert.Equal(t, []map[string]any{{"id": int64(1), "raw": []byte{0x00, 0xff, 0x10}, "text": "plain", "bytes": []byte{0xfe, 0x01}}}, source.written[0].Rows)
+}
+
+// 超过 2^53 的整数照原值交给 writer：经 JSON 往返成 float64 会丢精度，转储出的数据就不是原来的了。
+func TestDumpKeepsBigIntegersExact(t *testing.T) {
+	source := newDumpSource()
+	source.rows["users"] = [][]any{{int64(9007199254740993), "big"}}
+
+	_, err := Dump(context.Background(), DumpRequest{
+		Database: "shop", Tables: []string{"users"}, WithData: true, Header: dumpHeader(), Writer: &bytes.Buffer{},
+	}, source, &dumpDialect{})
+	require.NoError(t, err)
+
+	require.Len(t, source.written, 1)
+	assert.Equal(t, []map[string]any{{"id": int64(9007199254740993), "name": "big"}}, source.written[0].Rows)
+}
+
+// 方言给出的 InsertModifier（PostgreSQL 的 OVERRIDING SYSTEM VALUE）随行的请求交给 writer。
+func TestDumpPassesTheInsertModifierToTheWriter(t *testing.T) {
+	source := newDumpSource()
+	dialect := &dumpDialect{insertModifier: map[string]string{"users": "OVERRIDING SYSTEM VALUE"}}
+
+	_, err := Dump(context.Background(), DumpRequest{
+		Database: "shop", Tables: []string{"users", "orders"}, WithData: true, Header: dumpHeader(), Writer: &bytes.Buffer{},
+	}, source, dialect)
+	require.NoError(t, err)
+
+	require.Len(t, source.written, 2)
+	assert.Equal(t, "OVERRIDING SYSTEM VALUE", source.written[0].InsertModifier)
+	assert.Empty(t, source.written[1].InsertModifier)
 }
 
 // 方言有批分隔符（SQL Server 的 GO）时：每条结构语句之后、每一块数据之后都写一行分隔符。

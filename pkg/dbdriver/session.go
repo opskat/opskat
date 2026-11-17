@@ -319,6 +319,9 @@ type RowStatementsRequest struct {
 	// OmitDatabase 为真时语句里的表引用不带库名（Tables.TableRef 给空库名的写法）：转储文件里用，
 	// 这样文件导入哪个库，数据就写进哪个库。「复制为 INSERT」不设，仍带库名。
 	OmitDatabase bool `json:"omitDatabase,omitempty"`
+	// InsertModifier 非空时写在 INSERT 的列与 VALUES 之间（PostgreSQL 往 GENERATED ALWAYS 身份列写值的
+	// OVERRIDING SYSTEM VALUE）：转储取自方言的 DumpObjectScript.InsertModifier。UPDATE 不用它。
+	InsertModifier string `json:"insertModifier,omitempty"`
 }
 
 // GridEditRequest 是 Session.GridEditStatements 要生成的语句：表格里新增、改动与删除的行。
