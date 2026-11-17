@@ -253,11 +253,11 @@ export function resourceTabId(typeKey: string, namespace: string, name: string) 
   return `res:${typeKey}:${namespace}:${name}`;
 }
 
-/** Splits a `res:<typeKey>:<ns>:<name>` tab id. */
+/** Splits a `res:<typeKey>:<ns>:<name>` tab id; the name is the rest, as it may contain ':' (system:node). */
 export function parseResourceTabId(id: string): { typeKey: string; namespace: string; name: string } | null {
   if (!id.startsWith("res:")) return null;
-  const [, typeKey, namespace, name] = id.split(":");
-  return name === undefined ? null : { typeKey, namespace, name };
+  const [, typeKey, namespace, ...name] = id.split(":");
+  return name.length === 0 ? null : { typeKey, namespace, name: name.join(":") };
 }
 
 /** Events cache key: `<namespace>|w` (warnings only) or `<namespace>|a` (all). */
@@ -345,7 +345,7 @@ interface K8sStoreState {
   setActiveTab: (assetId: number, id: string) => void;
   /** Closes tabs (the overview tab never closes); `activate` picks the tab to show afterwards. */
   closeTabs: (assetId: number, ids: string[], activate?: string) => void;
-  /** Re-reads the loaded lists and details of one type (after a write to one of its resources). */
+  /** Re-reads the loaded lists, full-object lists and details of one type (after a write to one of its resources). */
   refreshType: (assetId: number, typeKey: string) => Promise<void>;
   openYamlEdit: (ctx: K8sActionContext) => void;
   openYamlApply: (assetId: number) => void;
@@ -411,11 +411,17 @@ function newCluster(namespace: string): K8sClusterState {
   };
 }
 
-function apiVersionOf(cluster: K8sClusterState, typeKey: string): string | undefined {
+/** The discovered type behind a typeKey; undefined until discovery lists it. */
+export function k8sTypeOf(cluster: K8sClusterState | undefined, typeKey: string): K8sResourceType | undefined {
+  return cluster?.types.data?.types.find((t) => typeKeyOf(t) === typeKey);
+}
+
+/** The API version a typeKey is read at; undefined when discovery doesn't (yet) list it. */
+export function apiVersionOf(cluster: K8sClusterState | undefined, typeKey: string): string | undefined {
   const [group] = typeKey.split("/");
   // The core group is served only as /api/v1, so it doesn't depend on discovery having loaded.
   if (group === "") return "v1";
-  return cluster.types.data?.types.find((t) => typeKeyOf(t) === typeKey)?.version;
+  return k8sTypeOf(cluster, typeKey)?.version;
 }
 
 export const useK8sStore = create<K8sStoreState>((set, get) => {
@@ -900,6 +906,10 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
         const sep = key.lastIndexOf("|");
         if (key.slice(0, sep) === typeKey)
           reads.push(state.loadList(assetId, typeKey, key.slice(sep + 1), { force: true }));
+      }
+      for (const entry of Object.values(state.objectLists[assetId] ?? {})) {
+        if (typeKeyOf(entry.request) === typeKey)
+          reads.push(state.loadObjects(assetId, entry.request, { force: true }));
       }
       for (const tabId of Object.keys(state.details[assetId] ?? {})) {
         if (parseResourceTabId(tabId)?.typeKey === typeKey)

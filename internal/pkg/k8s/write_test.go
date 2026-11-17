@@ -116,6 +116,24 @@ func TestUpdateResourceRejectsBadInput(t *testing.T) {
 	assert.Empty(t, f.requests("/api/v1/namespaces/default/configmaps/cm1"), "nothing is sent for invalid input")
 }
 
+// 编辑的是 ref 指向的资源：YAML 里改了名称或命名空间时不能把请求发到另一个资源上。
+func TestUpdateResourceRejectsYAMLForAnotherResource(t *testing.T) {
+	f := newFakeAPIServer(t)
+	f.handle("/api/v1/namespaces/default/configmaps/cm2", echoObject(t))
+	f.handle("/api/v1/namespaces/other/configmaps/cm1", echoObject(t))
+
+	renamed := strings.Replace(cmYAML, "name: cm1", "name: cm2", 1)
+	_, err := UpdateResource(context.Background(), f.kubeconfig(), cmRef, renamed)
+	require.ErrorContains(t, err, "cm2")
+
+	moved := strings.Replace(cmYAML, "namespace: default", "namespace: other", 1)
+	_, err = UpdateResource(context.Background(), f.kubeconfig(), cmRef, moved)
+	require.ErrorContains(t, err, "other")
+
+	assert.Empty(t, f.requests("/api/v1/namespaces/default/configmaps/cm2"))
+	assert.Empty(t, f.requests("/api/v1/namespaces/other/configmaps/cm1"))
+}
+
 func TestApplyYAMLIndependentPerDocumentResults(t *testing.T) {
 	f := newFakeAPIServer(t)
 	serveWriteDiscovery(f)

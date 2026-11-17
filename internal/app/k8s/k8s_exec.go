@@ -221,6 +221,9 @@ func (s *execSession) writeStdin(data []byte) error {
 	s.mu.Lock()
 	w := s.stdin
 	s.mu.Unlock()
+	if w == nil {
+		return errors.New("K8S exec session is not connected yet")
+	}
 	_, err := w.Write(data)
 	return err
 }
@@ -295,6 +298,13 @@ func (k *K8s) startExec(c *k8sCallContext, req K8sExecRequest) (string, error) {
 
 	ctx, cancel := context.WithCancel(k.ctx)
 	sess := &execSession{cancel: cancel, size: k8spkg.TerminalSize{Width: uint16(req.Cols), Height: uint16(req.Rows)}}
+	// 连接期间就登记：重复的 ID 不能顶掉仍在运行的会话，连接中的会话也能被 StopK8sExec / Cleanup 停掉。
+	if _, loaded := k.execSessions.LoadOrStore(sessionID, sess); loaded {
+		cancel()
+		err := fmt.Errorf("session id %s is already in use", sessionID)
+		log.Error("k8s exec failed", zap.Error(err))
+		return "", fmt.Errorf("start K8S exec: %w", err)
+	}
 
 	connected := make(chan struct{})
 	var connectedOnce sync.Once
@@ -322,11 +332,11 @@ func (k *K8s) startExec(c *k8sCallContext, req K8sExecRequest) (string, error) {
 	}
 	if connectErr != nil {
 		cancel()
+		k.execSessions.Delete(sessionID)
 		log.Error("k8s exec failed", zap.Duration("elapsed", time.Since(started)), zap.Error(connectErr))
 		return "", fmt.Errorf("start K8S exec: %w", connectErr)
 	}
 
-	k.execSessions.Store(sessionID, sess)
 	log.Info("k8s exec connected", zap.Duration("elapsed", time.Since(started)))
 	go func() {
 		err := <-result
@@ -543,7 +553,7 @@ func (k *K8s) ResizeK8sExec(sessionID string, cols, rows int) error {
 	return nil
 }
 
-// StopK8sExec 结束会话并释放连接；会话随后发出 reason 为 closed 的 k8s:exec:end。
+// StopK8sExec 结束会话并释放连接；已建立的会话随后发出 reason 为 closed 的 k8s:exec:end，连接中的会话则让 StartK8sExec 返回错误。
 func (k *K8s) StopK8sExec(sessionID string) {
 	if v, ok := k.execSessions.Load(sessionID); ok {
 		v.(*execSession).cancel()

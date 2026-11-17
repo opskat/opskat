@@ -71,6 +71,13 @@ func UpdateResource(ctx context.Context, kubeconfig string, ref ResourceRef, yam
 	if obj.GetResourceVersion() == "" {
 		return nil, errors.New("metadata.resourceVersion is required to update a resource")
 	}
+	// 请求路径取自对象本身的名称：YAML 里改了名称 / 命名空间会写到另一个资源上，所以必须与 ref 一致。
+	if obj.GetName() != ref.Name {
+		return nil, fmt.Errorf("metadata.name %q does not match the resource being edited (%q)", obj.GetName(), ref.Name)
+	}
+	if ns := obj.GetNamespace(); ns != "" && ns != ref.Namespace {
+		return nil, fmt.Errorf("metadata.namespace %q does not match the resource being edited (%q)", ns, ref.Namespace)
+	}
 	config, err := restConfig(kubeconfig, opts...)
 	if err != nil {
 		return nil, err

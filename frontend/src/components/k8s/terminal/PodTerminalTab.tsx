@@ -17,10 +17,15 @@ import { notifyCopied } from "@/lib/notify";
 import { useK8sStore, type K8sTerminalState } from "@/stores/k8sStore";
 import { formatBinding, useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalThemeStore, useXtermTheme } from "@/stores/terminalThemeStore";
-import { withTerminalFontFallback, withTerminalFontIsolation } from "@/data/terminalFonts";
 import { TerminalSearchBar } from "@/components/terminal/TerminalSearchBar";
 import { getTerminalContextMenuAction } from "@/components/terminal/terminalContextMenuPolicy";
-import { disconnectPodTerminal, fitPodTerminal, getPodTerminal, restartPodTerminal } from "./podTerminalRegistry";
+import {
+  disconnectPodTerminal,
+  fitPodTerminal,
+  getPodTerminal,
+  podTerminalFontFamily,
+  restartPodTerminal,
+} from "./podTerminalRegistry";
 import { endText } from "./terminalText";
 
 const PRESET_SHELLS = ["auto", "/bin/bash", "/bin/sh"];
@@ -125,7 +130,7 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
     if (!pt) return;
     pt.term.options.theme = xtermTheme;
     pt.term.options.fontSize = fontSize;
-    pt.term.options.fontFamily = withTerminalFontIsolation(`${assetId}|${tabId}`, withTerminalFontFallback(fontFamily));
+    pt.term.options.fontFamily = podTerminalFontFamily(assetId, tabId, fontFamily);
     pt.term.options.scrollback = scrollback;
     fitPodTerminal(assetId, tabId);
   }, [assetId, tabId, xtermTheme, fontSize, fontFamily, scrollback]);

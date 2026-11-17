@@ -271,6 +271,25 @@ describe("K8s generic resource detail", () => {
     expect(screen.getByTestId("k8s-detail-header")).toBeInTheDocument();
   });
 
+  it("keeps the events shown under the reason when re-reading them fails", async () => {
+    const user = userEvent.setup();
+    mockCluster({ web: deployment });
+    const id = nextId++;
+    await openDetail(id, "apps/deployments", "web");
+    await user.click(await screen.findByRole("tab", { name: /asset\.k8sEvents/ }));
+    await screen.findByText("NewestWarn");
+
+    vi.mocked(ListK8sEvents).mockRejectedValue(new Error("events: i/o timeout"));
+    await useK8sStore.getState().refreshAll(id);
+
+    expect((await screen.findByTestId("k8s-stale-error")).textContent).toContain("events: i/o timeout");
+    expect(screen.getAllByTestId("k8s-event-reason").map((e) => e.textContent)).toEqual([
+      "NewestWarn",
+      "MiddleNormal",
+      "OldestWarn",
+    ]);
+  });
+
   it("shows the cluster's reason with retry when the resource itself can't be read", async () => {
     mockCluster({ web: deployment });
     vi.mocked(GetK8sResource).mockRejectedValue(new Error("deployments is forbidden"));

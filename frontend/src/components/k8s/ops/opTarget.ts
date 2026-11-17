@@ -1,23 +1,23 @@
 import { toast } from "sonner";
 import { errorMessage } from "@/lib/errorMessage";
 import { notifySuccess } from "@/lib/notify";
-import { useK8sStore, type K8sResourceType } from "@/stores/k8sStore";
+import { apiVersionOf, k8sTypeOf, useK8sStore, type K8sResourceType } from "@/stores/k8sStore";
 import type { K8sActionContext } from "../actions";
 
 export function typeOf(assetId: number, typeKey: string): K8sResourceType | undefined {
-  return useK8sStore
-    .getState()
-    .clusters[assetId]?.types.data?.types.find((t) => `${t.group}/${t.resource}` === typeKey);
+  return k8sTypeOf(useK8sStore.getState().clusters[assetId], typeKey);
 }
 
-/** The IPC reference of the resource an action was started from. */
+/**
+ * The IPC reference of the resource an action was started from. A type discovery doesn't list has no version;
+ * the backend then rejects the request instead of it going to a guessed path.
+ */
 export function refOf(ctx: K8sActionContext) {
-  const type = typeOf(ctx.assetId, ctx.typeKey);
-  const [group, resource] = [type?.group ?? "", type?.resource ?? ctx.typeKey.slice(ctx.typeKey.indexOf("/") + 1)];
+  const [group, resource] = ctx.typeKey.split("/");
   return {
     assetId: ctx.assetId,
     group,
-    version: type?.version ?? "v1",
+    version: apiVersionOf(useK8sStore.getState().clusters[ctx.assetId], ctx.typeKey) ?? "",
     resource,
     namespace: ctx.namespace,
     name: ctx.name,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Clock, RefreshCw, Search } from "lucide-react";
 import { Button, Input, Tabs, TabsList, TabsTrigger, cn } from "@opskat/ui";
@@ -32,8 +32,13 @@ export function K8sEventsView({ assetId, cluster }: { assetId: number; cluster: 
       ),
     [entry?.data, needle]
   );
-  const reload = () => void loadEvents(assetId, namespace, warningOnly, { force: true });
-  const reloading = entry?.status === "loading" && !!entry.data;
+  // A forced re-read keeps the shown events at "ready", so the button tracks its own read.
+  const [busy, setBusy] = useState(false);
+  const reload = () => {
+    setBusy(true);
+    void loadEvents(assetId, namespace, warningOnly, { force: true }).finally(() => setBusy(false));
+  };
+  const reloading = busy || (entry?.status === "loading" && !!entry.data);
 
   return (
     <div className="flex h-full flex-col" data-testid="k8s-events-view">

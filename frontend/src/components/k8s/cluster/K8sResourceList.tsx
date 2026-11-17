@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { FilePlus2, RefreshCw, Search } from "lucide-react";
 import { Button, Input, Switch, cn } from "@opskat/ui";
 import { AsyncState } from "@/components/common/AsyncState";
+import { K8sAsyncState } from "../K8sAsyncState";
 import {
   DEFAULT_LIST_VIEW,
   labelSelectorOf,
@@ -193,8 +194,10 @@ function LoadedTypeList({
         </div>
       </div>
       <div className="min-h-0 flex-1">
-        <AsyncState
+        {/* A table always has columns, so a list with columns was read before: a failed re-read keeps its rows. */}
+        <K8sAsyncState
           status={entry?.status ?? "loading"}
+          hasData={!!entry?.columns.length}
           error={entry?.error}
           onRetry={reload}
           empty={empty}
@@ -211,7 +214,7 @@ function LoadedTypeList({
               onOpen={openRow}
             />
           )}
-        </AsyncState>
+        </K8sAsyncState>
       </div>
     </div>
   );

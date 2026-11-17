@@ -185,6 +185,24 @@ describe("K8s resource list", () => {
     expect(screen.queryByTestId("async-state-error")).not.toBeInTheDocument();
   });
 
+  it("keeps the rows under the reason and a retry when a refresh fails", async () => {
+    const user = userEvent.setup();
+    let fail = false;
+    mockPods(() => {
+      if (fail) throw new Error("context deadline exceeded");
+      return podTable([{ name: "api-1" }, { name: "web-1" }]);
+    });
+    render(<K8sClusterPage asset={asset(nextId++)} />);
+    await openPods(user);
+    await screen.findByText("web-1");
+
+    fail = true;
+    await user.click(screen.getAllByRole("button", { name: "action.refresh" }).at(-1)!);
+    expect(await screen.findByTestId("k8s-stale-error")).toHaveTextContent("context deadline exceeded");
+    expect(rowNames()).toEqual(["api-1", "web-1"]);
+    expect(screen.queryByTestId("async-state-error")).not.toBeInTheDocument();
+  });
+
   it("keeps filter, sort and auto-refresh when the page unmounts and remounts", async () => {
     const user = userEvent.setup();
     mockPods(() => podTable([{ name: "api-1" }, { name: "web-1" }]));

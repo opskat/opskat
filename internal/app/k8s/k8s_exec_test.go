@@ -205,6 +205,22 @@ func TestK8sExecCleanupEndsAllSessions(t *testing.T) {
 	assert.True(t, srv.WaitEnded(5*time.Second))
 }
 
+// 会话 ID 由前端给出：重复的 ID 不能顶掉仍在运行的会话（否则旧会话再也停不掉，应用退出时也收不回）。
+func TestK8sExecRejectsSessionIDInUse(t *testing.T) {
+	srv := k8stest.NewExecServer(t, false, nil)
+	k, rec, c := execTestBinder(t, srv.Host())
+	id, err := k.startExec(c, execReq("web-0"))
+	require.NoError(t, err)
+
+	_, err = k.startExec(c, execReq("web-0"))
+	require.ErrorContains(t, err, "in use")
+	assert.Len(t, srv.Requests(), 1, "nothing is dialed for a duplicate session")
+
+	k.StopK8sExec(id)
+	assert.Equal(t, K8sExecEnd{Reason: ExecEndClosed}, rec.waitEnd(t, id))
+	assert.True(t, srv.WaitEnded(5*time.Second), "the first session is still the one stopped")
+}
+
 func TestK8sExecConnectFailureReturnsClusterReason(t *testing.T) {
 	logs := observeLogs(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

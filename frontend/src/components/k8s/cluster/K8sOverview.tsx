@@ -8,6 +8,7 @@ import {
   listKey,
   listTabId,
   resourceTabId,
+  typeKeyOf,
   useK8sStore,
   type K8sAttentionItem,
   type K8sClusterState,
@@ -101,7 +102,7 @@ export function K8sOverview({
   const attentionErrors = data ? ATTENTION_SECTIONS.filter((s) => data.errors[s]) : [];
   const attentionMessage = attentionErrors.map((s) => `${s}: ${data?.errors[s]}`).join("\n");
   const openAttention = (a: K8sAttentionItem) =>
-    openTab(assetId, { id: resourceTabId(`${a.group}/${a.resource}`, a.namespace, a.name), label: a.name });
+    openTab(assetId, { id: resourceTabId(typeKeyOf(a), a.namespace, a.name), label: a.name });
 
   const events5 = (events?.data ?? []).slice(0, RECENT_EVENTS);
   const loadNodes = () => void loadList(assetId, NODES, "", { force: true });
@@ -235,8 +236,9 @@ export function K8sOverview({
 
       <div data-testid="k8s-node-cards">
         <K8sSectionCard title={t("asset.k8sNodes")} icon={Server}>
-          <AsyncState
+          <K8sAsyncState
             status={nodes?.status ?? "loading"}
+            hasData={!!nodes?.columns.length}
             error={nodes?.error}
             onRetry={loadNodes}
             empty={nodes?.status === "ready" && nodes.rows.length === 0 ? t("asset.k8sNoNodes") : undefined}
@@ -267,7 +269,7 @@ export function K8sOverview({
                 );
               })}
             </div>
-          </AsyncState>
+          </K8sAsyncState>
         </K8sSectionCard>
       </div>
     </div>

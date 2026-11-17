@@ -20,6 +20,8 @@ import {
   TooltipTrigger,
   cn,
 } from "@opskat/ui";
+import { toast } from "sonner";
+import { errorMessage } from "@/lib/errorMessage";
 import { notifyCopied } from "@/lib/notify";
 import type { K8sListSort, K8sResourceRow, K8sTableColumn } from "@/stores/k8sStore";
 import { actionLabelKey, getK8sActions, type K8sAction, type K8sActionContext } from "../actions";
@@ -68,7 +70,10 @@ export function K8sResourceGrid({ assetId, typeKey, columns, rows, sort, onSort,
     object: row.object,
   });
   const copyName = (row: K8sResourceRow) => {
-    void navigator.clipboard.writeText(row.name).then(() => notifyCopied(t("action.copied")));
+    navigator.clipboard.writeText(row.name).then(
+      () => notifyCopied(t("action.copied")),
+      (e) => toast.error(errorMessage(e))
+    );
   };
 
   return (

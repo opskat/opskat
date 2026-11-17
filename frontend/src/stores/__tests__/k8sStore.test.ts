@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { GetK8sClusterVersion, GetK8sResourceTypes, ListK8sResources } from "../../../wailsjs/go/k8s/K8s";
+import {
+  GetK8sClusterVersion,
+  GetK8sResource,
+  GetK8sResourceTypes,
+  ListK8sEvents,
+  ListK8sResources,
+} from "../../../wailsjs/go/k8s/K8s";
 import type { k8s } from "../../../wailsjs/go/models";
-import { objectsKey, useK8sStore } from "../k8sStore";
+import { objectsKey, resourceTabId, useK8sStore } from "../k8sStore";
 import { useTabStore } from "../tabStore";
 
 const TYPES = {
@@ -294,6 +300,69 @@ describe("k8sStore", () => {
     expect(useK8sStore.getState().objectLists[assetId][objectsKey(req)].data).toEqual([
       { name: "api-1", object: { metadata: { name: "api-1" }, spec: { image: "new" } } },
     ]);
+  });
+
+  it("reads the detail of a resource whose name contains ':' (e.g. ClusterRole system:aggregate-to-admin)", async () => {
+    mockCluster(namespacesOK);
+    vi.mocked(GetK8sResourceTypes).mockResolvedValue(
+      JSON.stringify({
+        types: [
+          ...TYPES.types,
+          {
+            group: "rbac.authorization.k8s.io",
+            version: "v1",
+            resource: "clusterroles",
+            kind: "ClusterRole",
+            namespaced: false,
+            verbs: ["list"],
+            category: "rbac",
+          },
+        ],
+        failedGroups: [],
+      }) as never
+    );
+    vi.mocked(GetK8sResource).mockResolvedValue(
+      JSON.stringify({ notFound: false, object: { kind: "ClusterRole" }, yaml: "" }) as never
+    );
+    vi.mocked(ListK8sEvents).mockResolvedValue(JSON.stringify({ events: [] }) as never);
+    const store = useK8sStore.getState();
+    store.initCluster(assetId, "");
+    await flush();
+
+    const tabId = resourceTabId("rbac.authorization.k8s.io/clusterroles", "", "system:aggregate-to-admin");
+    await store.loadDetail(assetId, tabId);
+
+    expect(vi.mocked(GetK8sResource).mock.calls.at(-1)?.[0]).toMatchObject({
+      group: "rbac.authorization.k8s.io",
+      resource: "clusterroles",
+      namespace: "",
+      name: "system:aggregate-to-admin",
+    });
+    expect(useK8sStore.getState().details[assetId][tabId].resource.status).toBe("ready");
+  });
+
+  it("re-reads the full-object lists of a type after a write to it (a CronJob's Jobs after 立即运行)", async () => {
+    let jobs = ["nightly-1"];
+    mockCluster(async (req) => {
+      if (req.resource !== "jobs") return namespacesOK(req);
+      return JSON.stringify({ columns: [], rows: jobs.map((name) => ({ name, object: { metadata: { name } } })) });
+    });
+    const store = useK8sStore.getState();
+    store.initCluster(assetId, "prod");
+    await flush();
+    const jobsReq = { group: "batch", version: "v1", resource: "jobs", namespace: "prod", labelSelector: "" };
+    const podsReq = { group: "", version: "v1", resource: "pods", namespace: "prod", labelSelector: "" };
+    await store.loadObjects(assetId, jobsReq);
+    await store.loadObjects(assetId, podsReq);
+
+    jobs = ["nightly-1", "nightly-manual-abcde"];
+    await store.refreshType(assetId, "batch/jobs");
+
+    expect(useK8sStore.getState().objectLists[assetId][objectsKey(jobsReq)].data?.map((j) => j.name)).toEqual([
+      "nightly-1",
+      "nightly-manual-abcde",
+    ]);
+    expect(listCalls("pods")).toHaveLength(1);
   });
 
   it("keeps the overview tab when closing tabs and activates a neighbour of the closed active tab", () => {

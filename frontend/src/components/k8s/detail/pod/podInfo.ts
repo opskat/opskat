@@ -5,11 +5,12 @@ import { getContainerStateColor, getK8sStatusColor } from "../../utils";
 interface ContainerState {
   running?: unknown;
   waiting?: { reason?: string };
-  terminated?: { reason?: string };
+  terminated?: { reason?: string; exitCode?: number; signal?: number };
 }
 interface ContainerStatus {
   name: string;
   ready?: boolean;
+  started?: boolean;
   restartCount?: number;
   state?: ContainerState;
 }
@@ -18,6 +19,8 @@ interface ContainerSpec {
   image?: string;
   ports?: ContainerPort[];
   resources?: ContainerResources;
+  /** "Always" on an init container makes it a sidecar. */
+  restartPolicy?: string;
 }
 interface PodShape {
   metadata?: { deletionTimestamp?: string; annotations?: Record<string, string> };
@@ -25,6 +28,7 @@ interface PodShape {
   status?: {
     phase?: string;
     reason?: string;
+    conditions?: { type: string; status: string }[];
     containerStatuses?: ContainerStatus[];
     initContainerStatuses?: ContainerStatus[];
   };
@@ -90,14 +94,50 @@ export function podRestarts(pod: Record<string, unknown>): number {
     .reduce((n, c) => n + c.restarts, 0);
 }
 
-/** The status word `kubectl get pods` would print: a waiting reason beats the phase, a deletion shows Terminating. */
+/** A terminated container's word when it has no reason: the signal, else the exit code. */
+function exitText(t: NonNullable<ContainerState["terminated"]>): string {
+  return t.signal ? `Signal:${t.signal}` : `ExitCode:${t.exitCode ?? 0}`;
+}
+
+/**
+ * The status word `kubectl get pods` prints (its printPod, in the same order): a failing or pending init container
+ * as `Init:<reason>` / `Init:<done>/<total>`, else the last regular container's waiting / terminated reason, else
+ * the Pod's reason or phase; a deletion shows Terminating.
+ */
 export function podStatus(pod: Record<string, unknown>): { text: string; variant: StatusVariant } {
-  const { status, metadata } = pod as PodShape;
+  const { status, metadata, spec } = pod as PodShape;
   let text = status?.reason || status?.phase || "Unknown";
-  for (const cs of status?.containerStatuses ?? []) {
-    if (cs.state?.waiting?.reason) text = cs.state.waiting.reason;
+  const conditionTrue = (type: string) => !!status?.conditions?.some((c) => c.type === type && c.status === "True");
+  const initSpecs = spec?.initContainers ?? [];
+
+  let initializing = false;
+  const initStatuses = status?.initContainerStatuses ?? [];
+  for (const [i, cs] of initStatuses.entries()) {
+    const { terminated, waiting } = cs.state ?? {};
+    if (terminated?.exitCode === 0) continue;
+    // A started sidecar runs alongside the regular containers; it doesn't hold the Pod in Init.
+    const sidecar = initSpecs.find((c) => c.name === cs.name)?.restartPolicy === "Always";
+    if (sidecar && cs.started) continue;
+    if (terminated) text = `Init:${terminated.reason || exitText(terminated)}`;
+    else if (waiting?.reason && waiting.reason !== "PodInitializing") text = `Init:${waiting.reason}`;
+    else text = `Init:${i}/${initSpecs.length}`;
+    initializing = true;
+    break;
   }
-  if (metadata?.deletionTimestamp) text = "Terminating";
+
+  if (!initializing || conditionTrue("Initialized")) {
+    let hasRunning = false;
+    for (const cs of [...(status?.containerStatuses ?? [])].reverse()) {
+      const { terminated, waiting, running } = cs.state ?? {};
+      if (waiting?.reason) text = waiting.reason;
+      else if (terminated) text = terminated.reason || exitText(terminated);
+      else if (cs.ready && running) hasRunning = true;
+    }
+    // A Pod whose finished container left another still running is not "Completed".
+    if (text === "Completed" && hasRunning) text = conditionTrue("Ready") ? "Running" : "NotReady";
+  }
+
+  if (metadata?.deletionTimestamp) text = status?.reason === "NodeLost" ? "Unknown" : "Terminating";
   return { text, variant: getK8sStatusColor(text) };
 }
 

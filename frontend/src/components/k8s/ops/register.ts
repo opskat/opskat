@@ -1,5 +1,5 @@
 import { CirclePause, CircleSlash, Play, RefreshCw, Scaling, Trash2 } from "lucide-react";
-import { useK8sStore } from "@/stores/k8sStore";
+import { k8sTypeOf, useK8sStore } from "@/stores/k8sStore";
 import { registerK8sAction } from "../actions";
 import { isCronJobSuspended, isNodeUnschedulable } from "./schedulingState";
 
@@ -11,11 +11,7 @@ const NOT_DELETABLE = new Set(["/nodes"]);
 const supportsDelete = (typeKey: string, assetId?: number) =>
   assetId !== undefined &&
   !NOT_DELETABLE.has(typeKey) &&
-  !!useK8sStore
-    .getState()
-    .clusters[assetId]?.types.data?.types.some(
-      (type) => `${type.group}/${type.resource}` === typeKey && type.verbs.includes("delete")
-    );
+  !!k8sTypeOf(useK8sStore.getState().clusters[assetId], typeKey)?.verbs.includes("delete");
 
 registerK8sAction({
   id: "scale",

@@ -131,9 +131,7 @@ func (k *K8s) GetK8sResource(ref K8sResourceRef) (string, error) {
 		return "", fmt.Errorf("get K8S resource: %w", err)
 	}
 	return k.runK8sCall(ref.AssetID, "get K8S resource", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetResource(ctx, c.kubeconfig, k8spkg.ResourceRef{
-			Group: ref.Group, Version: ref.Version, Resource: ref.Resource, Namespace: ref.Namespace, Name: ref.Name,
-		}, c.opts...)
+		return k8spkg.GetResource(ctx, c.kubeconfig, ref.pkgRef(), c.opts...)
 	})
 }
 

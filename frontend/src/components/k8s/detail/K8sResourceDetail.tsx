@@ -202,7 +202,7 @@ export function K8sResourceDetail({
             </TabsContent>
           ))}
           <TabsContent value="events">
-            <K8sEventsTab events={entry.events} onRetry={reload} />
+            <K8sEventsTab assetId={assetId} types={types ?? []} events={entry.events} onRetry={reload} />
           </TabsContent>
           <TabsContent value="yaml">
             <K8sYamlTab yaml={detail.yaml} onEdit={editYaml && (() => void editYaml.run(ctx))} />

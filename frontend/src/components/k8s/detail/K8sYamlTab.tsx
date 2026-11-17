@@ -1,15 +1,18 @@
 import { useTranslation } from "react-i18next";
 import { Copy, Pencil } from "lucide-react";
 import { Button } from "@opskat/ui";
+import { toast } from "sonner";
+import { errorMessage } from "@/lib/errorMessage";
 import { notifyCopied } from "@/lib/notify";
 
 /** Read-only YAML (the cluster read already omits managedFields); 「编辑」 only when the type's 编辑 YAML action applies. */
 export function K8sYamlTab({ yaml, onEdit }: { yaml: string; onEdit: (() => void) | undefined }) {
   const { t } = useTranslation();
-  const copy = async () => {
-    await navigator.clipboard.writeText(yaml);
-    notifyCopied(t("action.copied"));
-  };
+  const copy = () =>
+    navigator.clipboard.writeText(yaml).then(
+      () => notifyCopied(t("action.copied")),
+      (e) => toast.error(errorMessage(e))
+    );
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">

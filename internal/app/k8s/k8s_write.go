@@ -27,14 +27,8 @@ func (k *K8s) UpdateK8sResource(req K8sUpdateRequest) (string, error) {
 	if err := req.Ref.validate(); err != nil {
 		return "", fmt.Errorf("update K8S resource: %w", err)
 	}
-	ref := req.Ref
-	target := []zap.Field{
-		zap.String("resource", ref.Resource), zap.String("namespace", ref.Namespace), zap.String("name", ref.Name),
-	}
-	return k.runK8sWrite(ref.AssetID, "update K8S resource", target, func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.UpdateResource(ctx, c.kubeconfig, k8spkg.ResourceRef{
-			Group: ref.Group, Version: ref.Version, Resource: ref.Resource, Namespace: ref.Namespace, Name: ref.Name,
-		}, req.YAML, c.opts...)
+	return k.runK8sWrite(req.Ref.AssetID, "update K8S resource", refTarget(req.Ref), func(ctx context.Context, c *k8sCallContext) (any, error) {
+		return k8spkg.UpdateResource(ctx, c.kubeconfig, req.Ref.pkgRef(), req.YAML, c.opts...)
 	})
 }
 

@@ -42,6 +42,11 @@ interface Entry extends PodTerminal {
 const entries = new Map<string, Entry>();
 const keyOf = (assetId: number, tabId: string) => `${assetId}|${tabId}`;
 
+/** The terminal's font family: a per-terminal sentinel keeps xterm from sharing its glyph atlas (see terminalFonts). */
+export function podTerminalFontFamily(assetId: number, tabId: string, fontFamily: string) {
+  return withTerminalFontIsolation(keyOf(assetId, tabId), withTerminalFontFallback(fontFamily));
+}
+
 export function getPodTerminal(assetId: number, tabId: string): PodTerminal | undefined {
   return entries.get(keyOf(assetId, tabId));
 }
@@ -59,8 +64,7 @@ export function startPodTerminal(assetId: number, tabId: string) {
   const term = new XTerminal({
     cursorBlink: true,
     fontSize,
-    // A per-terminal sentinel keeps xterm from sharing its glyph atlas between terminals (see terminalFonts).
-    fontFamily: withTerminalFontIsolation(key, withTerminalFontFallback(fontFamily)),
+    fontFamily: podTerminalFontFamily(assetId, tabId, fontFamily),
     scrollback,
   });
   const fitAddon = new FitAddon();

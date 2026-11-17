@@ -92,6 +92,28 @@ describe("K8s events view", () => {
     expect(vi.mocked(ListK8sEvents).mock.calls.at(-1)?.[0]).toMatchObject({ namespace: "default", warningOnly: false });
   });
 
+  it("disables the refresh button while its re-read is in flight", async () => {
+    const user = userEvent.setup();
+    render(<K8sClusterPage asset={asset(nextId++)} />);
+    const view = within(await openEvents(user));
+    await waitFor(() => expect(rowReasons()).toHaveLength(2));
+
+    let release = () => {};
+    vi.mocked(ListK8sEvents).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(JSON.stringify({ events: WARNINGS }) as never);
+        }) as never
+    );
+    const refresh = view.getByRole("button", { name: "action.refresh" });
+    await user.click(refresh);
+    expect(refresh).toBeDisabled();
+    expect(rowReasons()).toHaveLength(2);
+
+    release();
+    await waitFor(() => expect(refresh).toBeEnabled());
+  });
+
   it("filters by object, reason and message", async () => {
     const user = userEvent.setup();
     render(<K8sClusterPage asset={asset(nextId++)} />);

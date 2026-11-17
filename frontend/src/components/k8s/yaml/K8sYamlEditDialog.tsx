@@ -18,7 +18,7 @@ import { CodeDiffViewer } from "@/components/CodeDiffViewer";
 import { errorMessage } from "@/lib/errorMessage";
 import { notifySuccess } from "@/lib/notify";
 import { buildTextDiffBlocks } from "@/lib/textDiffBlocks";
-import { useK8sStore, type K8sResourceDetail } from "@/stores/k8sStore";
+import { apiVersionOf, useK8sStore, type K8sResourceDetail } from "@/stores/k8sStore";
 import { GetK8sResource, UpdateK8sResource } from "../../../../wailsjs/go/k8s/K8s";
 import type { K8sActionContext } from "../actions";
 import { K8sYamlEditor } from "./K8sYamlEditor";
@@ -45,12 +45,7 @@ function metadataOf(object: Record<string, unknown>) {
 /** The edit-YAML dialog of one resource: edits the text, compares it with the cluster's version and saves it. */
 export function K8sYamlEditDialog({ assetId, ctx }: { assetId: number; ctx: K8sActionContext }) {
   const { t } = useTranslation();
-  const apiVersion = useK8sStore((s) => {
-    const [group] = ctx.typeKey.split("/");
-    return group === ""
-      ? "v1"
-      : s.clusters[assetId]?.types.data?.types.find((x) => `${x.group}/${x.resource}` === ctx.typeKey)?.version;
-  });
+  const apiVersion = useK8sStore((s) => apiVersionOf(s.clusters[assetId], ctx.typeKey));
   const closeDialog = useK8sStore((s) => s.closeYamlDialog);
 
   /** The version saving is based on (read when the dialog opened, or reloaded after a conflict). */

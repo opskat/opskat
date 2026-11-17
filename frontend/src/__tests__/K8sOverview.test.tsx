@@ -303,6 +303,28 @@ describe("K8s cluster overview", () => {
     expect(vi.mocked(GetK8sClusterHealth).mock.calls.length).toBe(calls + 1);
   });
 
+  it("keeps the node cards under the reason when re-reading the nodes fails", async () => {
+    let fail = false;
+    mockCluster({
+      nodes: async () => {
+        if (fail) throw new Error("nodes: i/o timeout");
+        return nodeTable();
+      },
+    });
+    const id = nextId++;
+    render(<K8sClusterPage asset={asset(id)} />);
+    const cards = await screen.findByTestId("k8s-node-cards");
+    await waitFor(() => expect(within(cards).getAllByTestId("k8s-node-card")).toHaveLength(2));
+
+    fail = true;
+    await useK8sStore.getState().refreshAll(id);
+
+    await waitFor(() =>
+      expect(within(cards).getByTestId("k8s-stale-error").textContent).toContain("nodes: i/o timeout")
+    );
+    expect(within(cards).getAllByTestId("k8s-node-card")).toHaveLength(2);
+  });
+
   it("offers a retry when only some 需要关注 sections failed", async () => {
     mockCluster({
       health: async () => JSON.stringify({ ...HEALTH, errors: { statefulsets: "statefulsets.apps is forbidden" } }),

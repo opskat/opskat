@@ -1,4 +1,4 @@
-import { useK8sStore } from "@/stores/k8sStore";
+import { k8sTypeOf, useK8sStore } from "@/stores/k8sStore";
 import { useListed } from "./useListed";
 
 const HPA_TYPE_KEY = "autoscaling/horizontalpodautoscalers";
@@ -15,9 +15,7 @@ export interface RelatedHpa {
  * lookup errored.
  */
 export function useHpaOf(assetId: number, namespace: string, kind: string, name: string) {
-  const version = useK8sStore(
-    (s) => s.clusters[assetId]?.types.data?.types.find((t) => `${t.group}/${t.resource}` === HPA_TYPE_KEY)?.version
-  );
+  const version = useK8sStore((s) => k8sTypeOf(s.clusters[assetId], HPA_TYPE_KEY)?.version);
   const listed = useListed(
     assetId,
     version

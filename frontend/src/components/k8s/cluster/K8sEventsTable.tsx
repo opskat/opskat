@@ -15,10 +15,12 @@ interface Props {
   events: K8sEvent[];
   /** Overview preview: no count column. */
   compact?: boolean;
+  /** The events of one resource: no object column. */
+  hideObject?: boolean;
 }
 
 /** Events as a table: type, reason, object (a link when its type is listed), message, count, last seen. */
-export function K8sEventsTable({ assetId, types, events, compact }: Props) {
+export function K8sEventsTable({ assetId, types, events, compact, hideObject }: Props) {
   const { t } = useTranslation();
   const openTab = useK8sStore((s) => s.openTab);
   return (
@@ -27,7 +29,7 @@ export function K8sEventsTable({ assetId, types, events, compact }: Props) {
         <tr className="border-b text-xs text-muted-foreground">
           <th className="py-2 pr-4 font-medium">{t("asset.k8sEventType")}</th>
           <th className="py-2 pr-4 font-medium">{t("asset.k8sEventReason")}</th>
-          <th className="py-2 pr-4 font-medium">{t("asset.k8sEventObject")}</th>
+          {!hideObject && <th className="py-2 pr-4 font-medium">{t("asset.k8sEventObject")}</th>}
           <th className="py-2 pr-4 font-medium">{t("asset.k8sEventMessage")}</th>
           {!compact && <th className="py-2 pr-4 font-medium">{t("asset.k8sEventCount")}</th>}
           <th className="py-2 font-medium">{t("asset.k8sEventLastSeen")}</th>
@@ -50,24 +52,26 @@ export function K8sEventsTable({ assetId, types, events, compact }: Props) {
               <td className="py-2 pr-4 text-xs" data-testid="k8s-event-reason">
                 {e.reason}
               </td>
-              <td className="py-2 pr-4 font-mono text-xs">
-                {target ? (
-                  <button
-                    className="text-primary hover:underline"
-                    data-testid="k8s-event-object"
-                    onClick={() =>
-                      openTab(assetId, {
-                        id: resourceTabId(typeKeyOf(target), obj.namespace, obj.name),
-                        label: obj.name,
-                      })
-                    }
-                  >
-                    {label}
-                  </button>
-                ) : (
-                  <span data-testid="k8s-event-object">{label}</span>
-                )}
-              </td>
+              {!hideObject && (
+                <td className="py-2 pr-4 font-mono text-xs">
+                  {target ? (
+                    <button
+                      className="text-primary hover:underline"
+                      data-testid="k8s-event-object"
+                      onClick={() =>
+                        openTab(assetId, {
+                          id: resourceTabId(typeKeyOf(target), obj.namespace, obj.name),
+                          label: obj.name,
+                        })
+                      }
+                    >
+                      {label}
+                    </button>
+                  ) : (
+                    <span data-testid="k8s-event-object">{label}</span>
+                  )}
+                </td>
+              )}
               <td className="select-text break-words py-2 pr-4 text-xs text-muted-foreground">{e.message}</td>
               {!compact && <td className="py-2 pr-4 font-mono text-xs">{e.count}</td>}
               <td className="whitespace-nowrap py-2 text-xs text-muted-foreground">{e.lastTimestamp}</td>
