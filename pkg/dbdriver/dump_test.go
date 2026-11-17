@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -403,6 +404,23 @@ func TestDumpKeepsBigIntegersExact(t *testing.T) {
 
 	require.Len(t, source.written, 1)
 	assert.Equal(t, []map[string]any{{"id": int64(9007199254740993), "name": "big"}}, source.written[0].Rows)
+}
+
+// 浮点列里的 NaN 与正负无穷（PostgreSQL 的 float 能存）不让转储停下：JSON 写不出它们，它们以文字
+// 'NaN' / 'Infinity' / '-Infinity' 交给 writer，写成浮点列认得的字面量。
+func TestDumpWritesNonFiniteFloatsAsText(t *testing.T) {
+	source := newDumpSource()
+	source.rows["users"] = [][]any{{math.NaN(), "nan"}, {math.Inf(1), "inf"}, {float32(math.Inf(-1)), "-inf"}, {1.5, "finite"}}
+
+	_, err := Dump(context.Background(), DumpRequest{
+		Database: "shop", Tables: []string{"users"}, WithData: true, Header: dumpHeader(), Writer: &bytes.Buffer{},
+	}, source, &dumpDialect{})
+	require.NoError(t, err)
+
+	require.Len(t, source.written, 1)
+	assert.Equal(t, []map[string]any{
+		{"id": "NaN", "name": "nan"}, {"id": "Infinity", "name": "inf"}, {"id": "-Infinity", "name": "-inf"}, {"id": 1.5, "name": "finite"},
+	}, source.written[0].Rows)
 }
 
 // 方言给出的 InsertModifier（PostgreSQL 的 OVERRIDING SYSTEM VALUE）随行的请求交给 writer。

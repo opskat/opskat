@@ -472,29 +472,15 @@ func hostKerberosTicket(_ context.Context, spn string) ([]byte, error) {
 }
 
 // executeScriptBatch runs a batch the host sent (extwire.DriverOpExecuteScriptBatch)
-// on executor a statement at a time, asking shouldStop before each: the batch's
-// Stop does not cross the ABI, so a run stopped while the batch is in flight ends
-// after the statement running then, as it does for a built-in driver — not at the
-// end of the batch. Executed indexes are the batch's.
+// on executor a statement at a time (dbdriver.ExecuteScriptStatements), asking
+// shouldStop before each: the batch's Stop does not cross the ABI, so a run stopped
+// while the batch is in flight ends after the statement running then, as it does
+// for a built-in driver — not at the end of the batch. Executed indexes are the
+// batch's.
 func executeScriptBatch(ctx context.Context, executor dbdriver.ScriptExecutor, batch dbdriver.ScriptBatch, shouldStop func() bool) (*dbdriver.BatchResult, error) {
-	result := &dbdriver.BatchResult{Executed: []dbdriver.BatchStatement{}}
-	for index, statement := range batch.Statements {
-		if shouldStop() {
-			return result, nil
-		}
-		one, err := executor.ExecuteScriptBatch(ctx, dbdriver.ScriptBatch{Statements: []string{statement}, ContinueOnError: batch.ContinueOnError})
-		for _, executed := range one.Executed {
-			executed.Index = index
-			result.Executed = append(result.Executed, executed)
-		}
-		if err != nil {
-			return result, err
-		}
-		if one.Failed() && !batch.ContinueOnError {
-			break
-		}
-	}
-	return result, nil
+	return dbdriver.ExecuteScriptStatements(ctx, batch, shouldStop, func(ctx context.Context, statement string) (*dbdriver.BatchResult, error) {
+		return executor.ExecuteScriptBatch(ctx, dbdriver.ScriptBatch{Statements: []string{statement}, ContinueOnError: batch.ContinueOnError})
+	})
 }
 
 // closeDriverSession closes the session's cursors and SQL file executors, then the
@@ -563,7 +549,7 @@ func decodeRowStatementsRequest(a extwire.DriverArgs) (dbdriver.RowStatementsReq
 	}
 	for _, row := range req.Rows {
 		for column, value := range row {
-			number, err := exactNumber(value)
+			number, err := dbdriver.ExactNumbers(value)
 			if err != nil {
 				return req, fmt.Errorf("parse %T: column %q: %w", req, column, err)
 			}
@@ -585,24 +571,4 @@ func decodeRowStatementsRequest(a extwire.DriverArgs) (dbdriver.RowStatementsReq
 		req.Rows[ref.Row][ref.Column] = raw
 	}
 	return req, nil
-}
-
-// exactNumber is value with each json.Number in it (in a list too) an int64 when it
-// is an integer that fits, otherwise a float64.
-func exactNumber(value any) (any, error) {
-	switch v := value.(type) {
-	case json.Number:
-		if n, err := v.Int64(); err == nil {
-			return n, nil
-		}
-		return v.Float64()
-	case []any:
-		for i, element := range v {
-			var err error
-			if v[i], err = exactNumber(element); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return value, nil
 }

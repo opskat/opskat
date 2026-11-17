@@ -114,8 +114,12 @@ func insertableColumns(ctx context.Context, conn *sql.Conn, object dbdriver.Dump
 	return columns, nil
 }
 
-// errNoSuchTable 是 MySQL 的 ER_NO_SUCH_TABLE：5.7 与 MariaDB 没有 information_schema.VIEW_TABLE_USAGE。
-const errNoSuchTable = 1146
+// errUnknownTable / errNoSuchTable 是查不存在的 information_schema 表时服务器的报错：5.7 与 MariaDB 没有
+// information_schema.VIEW_TABLE_USAGE，报 ER_UNKNOWN_TABLE；ER_NO_SUCH_TABLE 是一般的「表不存在」。
+const (
+	errUnknownTable = 1109
+	errNoSuchTable  = 1146
+)
 
 // viewDependencies 是视图用到的同库对象：8.0.13 起 information_schema.VIEW_TABLE_USAGE 有精确的记录；没有
 // 这张表的服务器改看定义里写出的名字（referenced），其中不是这批视图的名字不影响次序。
@@ -127,7 +131,7 @@ func viewDependencies(ctx context.Context, conn *sql.Conn, object dbdriver.DumpO
 	switch {
 	case err == nil:
 		return used, nil
-	case errors.As(err, &mysqlErr) && mysqlErr.Number == errNoSuchTable:
+	case errors.As(err, &mysqlErr) && (mysqlErr.Number == errUnknownTable || mysqlErr.Number == errNoSuchTable):
 		return referenced, nil
 	}
 	return nil, sqldb.Wrap("view dependencies", err)

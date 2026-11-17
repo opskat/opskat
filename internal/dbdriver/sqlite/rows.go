@@ -3,16 +3,25 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 )
 
-// 行语句：声明类型含 BLOB 的列（BLOB 亲和性）写成 X'…'；按主键或全部列定位的 UPDATE 不另加限制。
+// 行语句：声明类型含 BLOB 的列（BLOB 亲和性）写成 X'…'；别的列（SQLite 的列可以不声明类型）里不是 UTF-8 文本
+// 的值也写成 X'…'——它只能是 blob，写成字符串字面量文件就不是 UTF-8 了；按主键或全部列定位的 UPDATE 不另加限制。
 var _ sqldb.RowWriter = dialect{}
 
 var literals = sqldb.Literals{
+	Formatted: func(_, text string) (string, bool) {
+		if utf8.ValidString(text) {
+			return "", false
+		}
+		return "X'" + hex.EncodeToString([]byte(text)) + "'", true
+	},
 	Binary: func(columnType string) (string, string, bool) {
 		if strings.Contains(strings.ToUpper(columnType), "BLOB") {
 			return "X'", "'", true

@@ -985,8 +985,9 @@ func (s *driverSession) RunScript(ctx context.Context, req dbdriver.ScriptReques
 // driverScriptRunner is the guest's half of a SQL file run (dbdriver.ScriptRunner).
 type driverScriptRunner struct {
 	session *driverSession
-	// inst is the instance the run's executor holds, once it is open: the splits go
-	// to it too rather than taking another instance.
+	// inst is the instance the run's executor holds. dbdriver.RunScript opens the
+	// executor before the first split, so the splits go to it too rather than
+	// taking another instance.
 	inst *driverInstance
 }
 
@@ -996,14 +997,7 @@ func (r *driverScriptRunner) SplitScript(ctx context.Context, chunk dbdriver.Scr
 		return nil, fmt.Errorf("marshal database driver %s request: %w", extwire.DriverOpSplitScript, err)
 	}
 	var split *dbdriver.ScriptSplit
-	call := func(inst *driverInstance) error {
-		return inst.call(ctx, extwire.DriverCall{Op: extwire.DriverOpSplitScript, Session: inst.session, Args: extwire.DriverArgs{Request: raw}}, &split)
-	}
-	if r.inst != nil {
-		err = call(r.inst)
-	} else {
-		err = r.session.on(ctx, call)
-	}
+	err = r.inst.call(ctx, extwire.DriverCall{Op: extwire.DriverOpSplitScript, Session: r.inst.session, Args: extwire.DriverArgs{Request: raw}}, &split)
 	if err == nil && split == nil {
 		err = fmt.Errorf("database driver %q of extension %q answered %s with no split", r.session.driver, r.session.drivers.name(), extwire.DriverOpSplitScript)
 	}
@@ -1018,10 +1012,13 @@ func (r *driverScriptRunner) OpenScriptExecutor(ctx context.Context, database st
 	if err != nil {
 		return nil, err
 	}
-	var opened extwire.DriverScriptExecutorOpened
+	var opened *extwire.DriverScriptExecutorOpened
 	err = inst.call(ctx, extwire.DriverCall{Op: extwire.DriverOpOpenScriptExecutor, Session: inst.session, Args: extwire.DriverArgs{
 		Database: database,
 	}}, &opened)
+	if err == nil && opened == nil {
+		err = fmt.Errorf("database driver %q of extension %q answered %s with no executor", r.session.driver, r.session.drivers.name(), extwire.DriverOpOpenScriptExecutor)
+	}
 	if err != nil {
 		r.session.release(inst)
 		return nil, err
@@ -1107,6 +1104,14 @@ func (d driverDumpDialect) DumpFile(ctx context.Context, scope dbdriver.DumpScop
 	script, err := forwardRequest[*dbdriver.DumpFileScript](ctx, d.session, extwire.DriverOpDumpFile, extwire.DriverArgs{}, scope)
 	if err == nil && script == nil {
 		err = d.noAnswer(extwire.DriverOpDumpFile)
+	}
+	// An extension writes dumpDisablesForeignKeyChecks into its descriptor by hand
+	// rather than deriving it from the dialect: a dump asked to turn the checks off
+	// gets the statements for it, or fails instead of writing a file whose header
+	// says they are off.
+	if err == nil && scope.Options.DisableForeignKeyChecks && len(script.DisableForeignKeyChecks) == 0 {
+		err = fmt.Errorf("database driver %q of extension %q was asked to turn foreign key checks off in the dump but gave no statements for it",
+			d.session.driver, d.session.drivers.name())
 	}
 	return script, err
 }

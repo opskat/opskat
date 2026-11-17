@@ -333,6 +333,20 @@ func TestExtensionDriverDumps(t *testing.T) {
 		assert.Contains(t, dump(dbdriver.DumpOptions{Drops: true}), "\nDROP TABLE IF EXISTS [users];\n")
 	})
 
+	t.Run("turning foreign key checks off fails when the guest gives no statements for it", func(t *testing.T) {
+		d := newDriver()
+		s := d.open(t)
+		defer func() { _ = s.Close() }()
+		var out strings.Builder
+		_, err := s.Dump(ctx, dbdriver.DumpRequest{
+			Database: "app", Tables: []string{"users"}, Writer: &out,
+			Options: dbdriver.DumpOptions{ForeignKeys: true, DisableForeignKeyChecks: true},
+		})
+		require.Error(t, err, "a file whose header says the checks are off must not be written without the statements that turn them off")
+		assert.Contains(t, err.Error(), "foreign key checks")
+		assert.Empty(t, out.String())
+	})
+
 	t.Run("a canceled dump leaves the target as it was", func(t *testing.T) {
 		d := newDriver()
 		d.server.Hold = "QUERY SELECT * FROM [app].[series]"

@@ -269,3 +269,41 @@ INSERT INTO app.notes VALUES (1, 'sad', '{low,high}', 'open'), (2, NULL, NULL, '
 	assert.Equal(t, []string{"app.spare", "app.state", "lookup.level", "lookup.mood"}, queryLines(t, targetDB, enums))
 	assert.Equal(t, tableData(t, sourceDB), tableData(t, targetDB))
 }
+
+// 不勾「包含索引」：外键引用的列只有唯一索引（不是唯一约束）时，唯一索引照样写出，外键才加得上；浮点列里的
+// NaN 与正负无穷照样转储、还原。文件在空库上每条语句都成功，数据一样。
+func TestIntegrationDumpWithoutIndexesKeepsUniqueIndexesAndNonFiniteFloats(t *testing.T) {
+	admin := openDDLDatabase(t, os.Getenv("E2E_POSTGRES_DATABASE"))
+	suffix := time.Now().UnixNano()
+	source, target := fmt.Sprintf("opskat_dump_uniq_src_%d", suffix), fmt.Sprintf("opskat_dump_uniq_dst_%d", suffix)
+	createScratchDatabase(t, admin, source)
+	createScratchDatabase(t, admin, target)
+	sourceDB, targetDB := openDDLDatabase(t, source), openDDLDatabase(t, target)
+	_, err := sourceDB.Exec(`CREATE TABLE public.parents (id integer PRIMARY KEY, code text NOT NULL);
+CREATE UNIQUE INDEX parents_code ON public.parents (code);
+CREATE INDEX parents_plain ON public.parents (id, code);
+CREATE TABLE public.children (id integer PRIMARY KEY, code text REFERENCES public.parents (code));
+CREATE TABLE public.readings (id integer PRIMARY KEY, value double precision, small real);
+INSERT INTO public.parents VALUES (1, 'a');
+INSERT INTO public.children VALUES (1, 'a');
+INSERT INTO public.readings VALUES (1, 'NaN', 'Infinity'), (2, '-Infinity', 1.5), (3, 2.25, 'NaN');`)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	var out strings.Builder
+	_, err = newSession(sourceDB).Dump(ctx, dbdriver.DumpRequest{
+		Database: source, Whole: true, WithData: true, Writer: &out, Options: dbdriver.DumpOptions{ForeignKeys: true},
+		Header: dbdriver.DumpHeader{Version: "test", Asset: "pg", Time: time.Now()},
+	})
+	require.NoError(t, err)
+	script := out.String()
+	t.Log(script)
+	assert.NotContains(t, script, "parents_plain", "indexes that aren't unique stay out")
+
+	result, err := newSession(targetDB).RunScript(ctx, dbdriver.ScriptRequest{
+		Database: target, Script: strings.NewReader(script), Size: int64(len(script)),
+	})
+	require.NoError(t, err)
+	require.Nil(t, result.Failure, "the dump must run on an empty database: %+v", result.Failure)
+	assert.Equal(t, tableData(t, sourceDB), tableData(t, targetDB))
+}

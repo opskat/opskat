@@ -169,6 +169,32 @@ type ScriptExecutor interface {
 	io.Closer
 }
 
+// ExecuteScriptStatements 是 ScriptExecutor.ExecuteScriptBatch 的逐条执行：每条语句之前问一次 stopped，为真
+// 就停下（没轮到的语句不执行、也不记在结果里）；每条经 execute 单独执行，结果的下标换成它在 batch 里的下标；
+// 不继续时停在第一条失败的语句。execute 返回 error（连接出错、ctx 被取消）时停下并返回它。sqldb 的执行器与
+// 扩展 SDK（经宿主的停下检查）都用它，两边停下与失败的规则一样。
+func ExecuteScriptStatements(ctx context.Context, batch ScriptBatch, stopped func() bool,
+	execute func(ctx context.Context, statement string) (*BatchResult, error)) (*BatchResult, error) {
+	result := &BatchResult{Executed: []BatchStatement{}}
+	for index, statement := range batch.Statements {
+		if stopped() {
+			return result, nil
+		}
+		one, err := execute(ctx, statement)
+		for _, executed := range one.Executed {
+			executed.Index = index
+			result.Executed = append(result.Executed, executed)
+		}
+		if err != nil {
+			return result, err
+		}
+		if one.Failed() && !batch.ContinueOnError {
+			break
+		}
+	}
+	return result, nil
+}
+
 // ScriptRunner 是驱动给运行 SQL 文件的两个钩子：切分，与在一条固定连接上执行。
 type ScriptRunner interface {
 	ScriptSplitter

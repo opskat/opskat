@@ -310,7 +310,7 @@ func TestWithoutForeignKeys(t *testing.T) {
 	}
 }
 
-// 「包含索引」不勾时不写表的索引（约束自动建的索引随建表语句，不受影响）；「包含外键」不勾时建表语句里没有
+// 「包含索引」不勾时不写表的索引（约束自动建的索引随建表语句，不受影响），唯一索引除外（外键可能引用它）；「包含外键」不勾时建表语句里没有
 // 外键；「关闭外键检查」不勾时没有 PRAGMA。SQLite 能在会话里关闭外键检查（驱动描述由方言得出）。
 func TestDumpSQLiteHonoursTheStructureOptions(t *testing.T) {
 	assert.True(t, descriptor.DumpDisablesForeignKeyChecks)
@@ -319,6 +319,7 @@ func TestDumpSQLiteHonoursTheStructureOptions(t *testing.T) {
 		"CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT UNIQUE)",
 		"CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INT REFERENCES users (id) ON DELETE CASCADE)",
 		"CREATE INDEX orders_user ON orders (user_id)",
+		"CREATE UNIQUE INDEX users_name_lower ON users (lower(name))",
 	)
 	dump := func(options dbdriver.DumpOptions) string {
 		var out strings.Builder
@@ -336,6 +337,7 @@ func TestDumpSQLiteHonoursTheStructureOptions(t *testing.T) {
 	assert.Contains(t, none, "CREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INT);\n")
 	assert.Contains(t, none, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT UNIQUE);\n")
 	assert.NotContains(t, none, "CREATE INDEX")
+	assert.Contains(t, none, "CREATE UNIQUE INDEX users_name_lower ON users (lower(name));\n")
 	assert.NotContains(t, none, "PRAGMA")
 	assert.NotContains(t, none, "DROP")
 }
@@ -392,4 +394,79 @@ func TestDumpOverwritesTheOriginalDatabase(t *testing.T) {
 		assert.Equal(t, rows, queryRows(t, source, query), query)
 	}
 	assert.Empty(t, queryRows(t, source, "SELECT * FROM pragma_foreign_key_check"))
+}
+
+// 整库转储里的虚表（FTS5）：它的影子表（docs_data、docs_config 等，CREATE VIRTUAL TABLE 自己建）不另写，
+// 文件在空库上运行成功，全文检索照样查得到原来的行。
+func TestDumpRoundTripsAVirtualTableWithoutItsShadowTables(t *testing.T) {
+	ctx := context.Background()
+	source := openFileSession(t, "source.db")
+	execAll(t, source,
+		"CREATE VIRTUAL TABLE docs USING fts5(title, body)",
+		"INSERT INTO docs VALUES ('first', 'hello world'), ('second', 'goodbye moon')",
+	)
+	var out strings.Builder
+	_, err := source.Dump(ctx, dbdriver.DumpRequest{
+		Database: "main", Whole: true, WithData: true, Options: allOptions, Header: dumpHeader(), Writer: &out,
+	})
+	require.NoError(t, err)
+	script := out.String()
+	assert.NotContains(t, script, "docs_config")
+
+	target := openFileSession(t, "target.db")
+	run, err := target.RunScript(ctx, dbdriver.ScriptRequest{Database: "main", Script: strings.NewReader(script), Size: int64(len(script))})
+	require.NoError(t, err)
+	require.Nil(t, run.Failure, "the dump must run on an empty database: %+v", run.Failure)
+	assert.Equal(t, [][]any{{"first"}}, queryRows(t, target, "SELECT title FROM docs WHERE docs MATCH 'hello'"))
+}
+
+// 没有声明类型（或声明的不是 BLOB）的列里存着不是 UTF-8 文本的二进制值：转储写成 X'…'，文件仍是 UTF-8，在空库上
+// 运行成功，字节一样、仍是 blob。
+func TestDumpWritesBinaryValuesOfUntypedColumnsAsBlobLiterals(t *testing.T) {
+	ctx := context.Background()
+	source := openFileSession(t, "source.db")
+	execAll(t, source,
+		"CREATE TABLE kv (k TEXT PRIMARY KEY, v)",
+		"INSERT INTO kv VALUES ('raw', X'00FF10FE'), ('text', 'plain')",
+	)
+	var out strings.Builder
+	_, err := source.Dump(ctx, dbdriver.DumpRequest{
+		Database: "main", Tables: []string{"kv"}, WithData: true, Options: allOptions, Header: dumpHeader(), Writer: &out,
+	})
+	require.NoError(t, err)
+	script := out.String()
+
+	target := openFileSession(t, "target.db")
+	run, err := target.RunScript(ctx, dbdriver.ScriptRequest{Database: "main", Script: strings.NewReader(script), Size: int64(len(script))})
+	require.NoError(t, err)
+	require.Nil(t, run.Failure, "the dump must run on an empty database: %+v", run.Failure)
+	query := "SELECT k, hex(v), typeof(v) FROM kv ORDER BY k"
+	assert.Equal(t, queryRows(t, source, query), queryRows(t, target, query))
+}
+
+// AUTOINCREMENT 的表：最大的那一行被删掉之后，sqlite_sequence 里的值比现存的行大；结构和数据的转储在空库上
+// 还原出同样的值，之后插入的行不会重用删掉的 id。
+func TestDumpRestoresTheAutoIncrementCounter(t *testing.T) {
+	ctx := context.Background()
+	source := openFileSession(t, "source.db")
+	execAll(t, source,
+		"CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT)",
+		"INSERT INTO notes (body) VALUES ('a'), ('b'), ('c')",
+		"DELETE FROM notes WHERE id = 3",
+	)
+	var out strings.Builder
+	_, err := source.Dump(ctx, dbdriver.DumpRequest{
+		Database: "main", Tables: []string{"notes"}, WithData: true, Options: allOptions, Header: dumpHeader(), Writer: &out,
+	})
+	require.NoError(t, err)
+	script := out.String()
+
+	target := openFileSession(t, "target.db")
+	for range 2 {
+		run, err := target.RunScript(ctx, dbdriver.ScriptRequest{Database: "main", Script: strings.NewReader(script), Size: int64(len(script))})
+		require.NoError(t, err)
+		require.Nil(t, run.Failure, "the dump must run on an empty database and again over itself: %+v", run.Failure)
+	}
+	query := "SELECT name, seq FROM sqlite_sequence ORDER BY name"
+	assert.Equal(t, queryRows(t, source, query), queryRows(t, target, query))
 }

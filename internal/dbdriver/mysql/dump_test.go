@@ -37,8 +37,11 @@ func expectObjects(mock sqlmock.Sqlmock, views ...string) {
 	mock.ExpectQuery(triggersSQL).WillReturnRows(names("TRIGGER_NAME"))
 }
 
-func noViewTableUsage() error {
-	return &gomysql.MySQLError{Number: 1146, Message: "Table 'information_schema.VIEW_TABLE_USAGE' doesn't exist"}
+// noViewTableUsage 是服务器没有 information_schema.VIEW_TABLE_USAGE 时的两种报错：查 information_schema 里没有的
+// 表，MySQL 5.7 与 MariaDB 报 ER_UNKNOWN_TABLE（1109），也有服务器报 ER_NO_SUCH_TABLE（1146）。
+var noViewTableUsage = map[string]error{
+	"unknown table": &gomysql.MySQLError{Number: 1109, Message: "Unknown table 'VIEW_TABLE_USAGE' in information_schema"},
+	"no such table": &gomysql.MySQLError{Number: 1146, Message: "Table 'information_schema.VIEW_TABLE_USAGE' doesn't exist"},
 }
 
 // allOptions 是全部勾上的导出选项。
@@ -168,21 +171,25 @@ func TestDumpDataSkipsGeneratedColumnsAndOmitsTheDatabase(t *testing.T) {
 
 // 视图依赖：information_schema.VIEW_TABLE_USAGE 不存在（5.7、MariaDB）时改看定义里引用的名字。
 func TestDumpViewDependsOnNamesInItsDefinitionWithoutViewTableUsage(t *testing.T) {
-	session, mock := newMock(t)
-	expectObjects(mock, "v_a", "v_b")
-	mock.ExpectQuery("SHOW CREATE TABLE `v_a`").WillReturnRows(sqlmock.NewRows([]string{"View", "Create View"}).
-		AddRow("v_a", "CREATE VIEW `v_a` AS select `v_b`.`id` AS `id` from `v_b`"))
-	mock.ExpectQuery(viewUsageSQL).WithArgs("app", "v_a").WillReturnError(noViewTableUsage())
-	mock.ExpectQuery("SHOW CREATE TABLE `v_b`").WillReturnRows(sqlmock.NewRows([]string{"View", "Create View"}).
-		AddRow("v_b", "CREATE VIEW `v_b` AS select 1 AS `id`"))
-	mock.ExpectQuery(viewUsageSQL).WithArgs("app", "v_b").WillReturnError(noViewTableUsage())
+	for name, missing := range noViewTableUsage {
+		t.Run(name, func(t *testing.T) {
+			session, mock := newMock(t)
+			expectObjects(mock, "v_a", "v_b")
+			mock.ExpectQuery("SHOW CREATE TABLE `v_a`").WillReturnRows(sqlmock.NewRows([]string{"View", "Create View"}).
+				AddRow("v_a", "CREATE VIEW `v_a` AS select `v_b`.`id` AS `id` from `v_b`"))
+			mock.ExpectQuery(viewUsageSQL).WithArgs("app", "v_a").WillReturnError(missing)
+			mock.ExpectQuery("SHOW CREATE TABLE `v_b`").WillReturnRows(sqlmock.NewRows([]string{"View", "Create View"}).
+				AddRow("v_b", "CREATE VIEW `v_b` AS select 1 AS `id`"))
+			mock.ExpectQuery(viewUsageSQL).WithArgs("app", "v_b").WillReturnError(missing)
 
-	var out strings.Builder
-	_, err := session.Dump(context.Background(), dbdriver.DumpRequest{
-		Database: "app", Tables: []string{"v_a", "v_b"}, Header: dumpHeader(), Writer: &out,
-	})
-	require.NoError(t, err)
-	assert.Less(t, strings.Index(out.String(), "VIEW `v_b`"), strings.Index(out.String(), "VIEW `v_a`"))
+			var out strings.Builder
+			_, err := session.Dump(context.Background(), dbdriver.DumpRequest{
+				Database: "app", Tables: []string{"v_a", "v_b"}, Header: dumpHeader(), Writer: &out,
+			})
+			require.NoError(t, err)
+			assert.Less(t, strings.Index(out.String(), "VIEW `v_b`"), strings.Index(out.String(), "VIEW `v_a`"))
+		})
+	}
 }
 
 // 其他错误不当作「没有这张表」吞掉。

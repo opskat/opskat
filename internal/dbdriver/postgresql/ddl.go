@@ -67,13 +67,18 @@ const tableConstraintsQuery = "SELECT con.conname, pg_get_constraintdef(con.oid)
 	"WHERE n.nspname = $1 AND c.relname = $2 AND con.contype IN ('p', 'u', 'c', 'x') " +
 	"ORDER BY CASE con.contype WHEN 'p' THEN 0 WHEN 'u' THEN 1 WHEN 'c' THEN 2 ELSE 3 END, con.conname"
 
-// tableIndexesQuery 读不由约束建出的索引的定义（由主键、唯一、排除约束建出的随约束建出）。
-const tableIndexesQuery = "SELECT pg_get_indexdef(i.indexrelid) FROM pg_index i " +
+// tableIndexesFrom 是不由约束建出的索引（由主键、唯一、排除约束建出的随约束建出）。
+const tableIndexesFrom = "SELECT pg_get_indexdef(i.indexrelid) FROM pg_index i " +
 	"JOIN pg_class c ON c.oid = i.indrelid JOIN pg_namespace n ON n.oid = c.relnamespace " +
 	"JOIN pg_class ic ON ic.oid = i.indexrelid " +
 	"WHERE n.nspname = $1 AND c.relname = $2 AND NOT EXISTS (SELECT 1 FROM pg_constraint con " +
-	"WHERE con.conrelid = i.indrelid AND con.conindid = i.indexrelid AND con.contype IN ('p', 'u', 'x')) " +
-	"ORDER BY ic.relname"
+	"WHERE con.conrelid = i.indrelid AND con.conindid = i.indexrelid AND con.contype IN ('p', 'u', 'x')) "
+
+// tableIndexesQuery 读不由约束建出的索引的定义。
+const tableIndexesQuery = tableIndexesFrom + "ORDER BY ic.relname"
+
+// tableUniqueIndexesQuery 只读其中的唯一索引：外键可以引用只有唯一索引的列，不写它外键就加不上。
+const tableUniqueIndexesQuery = tableIndexesFrom + "AND i.indisunique ORDER BY ic.relname"
 
 // viewDefQuery 取视图定义：建表语句与对象源码共用。format('%I.%I', ...) 给标识符加引号，
 // 混合大小写或带特殊字符的视图名才能解析到正确的 regclass。format 的参数是 variadic "any"，
@@ -156,7 +161,8 @@ func (d dialect) TableDDL(ctx context.Context, conn *sql.Conn, _, table string) 
 	return d.tableDDL(ctx, conn, table, true)
 }
 
-// tableDDL 是 TableDDL 的建表语句；withIndexes 为假时不含不由约束建出的索引（转储不勾「包含索引」时）。
+// tableDDL 是 TableDDL 的建表语句；withIndexes 为假时不含不由约束建出的索引（转储不勾「包含索引」时），唯一
+// 索引除外：外键可能引用它。
 func (d dialect) tableDDL(ctx context.Context, conn *sql.Conn, table string, withIndexes bool) (string, error) {
 	schema, tbl := splitSchemaTable(table)
 	rel, err := queryDDLRelation(ctx, conn, schema, tbl)
@@ -183,11 +189,13 @@ func (d dialect) tableDDL(ctx context.Context, conn *sql.Conn, table string, wit
 	if err != nil {
 		return "", err
 	}
-	var indexes []string
-	if withIndexes {
-		if indexes, err = sqldb.QueryNames(ctx, conn, tableIndexesQuery, schema, tbl); err != nil {
-			return "", err
-		}
+	indexesQuery := tableIndexesQuery
+	if !withIndexes {
+		indexesQuery = tableUniqueIndexesQuery
+	}
+	indexes, err := sqldb.QueryNames(ctx, conn, indexesQuery, schema, tbl)
+	if err != nil {
+		return "", err
 	}
 
 	var statements []string

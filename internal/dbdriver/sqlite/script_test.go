@@ -48,6 +48,31 @@ func TestRunScriptOnARealDatabaseKeepsSessionStateAndTriggerBodies(t *testing.T)
 	}
 }
 
+// 文件在连接上留下的状态（这里是没提交的事务与临时表；真实的文件里常见关闭外键检查、SET 会话变量）
+// 不跟着连接回到会话的连接池：运行停在中途时，查询面板之后的语句不会落进那个没提交的事务、看到那张
+// 临时表。
+func TestRunScriptDoesNotLeaveItsConnectionStateInTheSessionPool(t *testing.T) {
+	session := openLocalSession(t, &dbdriver.Config{
+		Driver: asset_entity.DriverSQLite, Path: filepath.Join(t.TempDir(), "state.db"),
+	})
+	ctx := context.Background()
+	_, err := session.Execute(ctx, "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+	require.NoError(t, err)
+	script := "CREATE TEMP TABLE staging (x INTEGER);\nBEGIN;\nINSERT INTO t VALUES (1);\nINSERT INTO missing VALUES (1);\nCOMMIT;\n"
+
+	result, err := session.RunScript(ctx, dbdriver.ScriptRequest{Script: strings.NewReader(script), Size: int64(len(script))})
+	require.NoError(t, err)
+	require.NotNil(t, result.Failure)
+
+	_, err = session.Execute(ctx, "SELECT x FROM temp.staging")
+	require.Error(t, err, "the script's temp table is visible to the panel's next statement")
+	_, err = session.Execute(ctx, "COMMIT")
+	require.Error(t, err, "the panel's next statement ran inside the script's open transaction")
+	rows, err := session.Execute(ctx, "SELECT id FROM t")
+	require.NoError(t, err)
+	assert.Empty(t, rows.Rows.Rows)
+}
+
 // 第一条失败的语句处停下：报出第几条、文件第几行、SQLite 的错误；之后的语句没有执行。
 func TestRunScriptOnARealDatabaseStopsAtTheFirstFailure(t *testing.T) {
 	session := openLocalSession(t, &dbdriver.Config{

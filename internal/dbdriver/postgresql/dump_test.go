@@ -195,7 +195,7 @@ func TestDumpWholeSchemaKeepsToItsSchema(t *testing.T) {
 	assert.Equal(t, readGolden(t, "dump_schema.sql"), out.String())
 }
 
-// expectNotesDDL 预期 app.notes 的建表语句的查询（有一个不由约束建出的索引）；indexes 为假时没有索引的查询。
+// expectNotesDDL 预期 app.notes 的建表语句的查询（有一个不由约束建出的索引）；indexes 为假时只查唯一索引（没有）。
 func expectNotesDDL(mock sqlmock.Sqlmock, indexes bool) {
 	mock.ExpectQuery(ddlColumnsQuery).WithArgs("app", "notes").WillReturnRows(ddlColumnRows("r", nil,
 		ddlCol{name: "id", dataType: "integer"}, ddlCol{name: "item_id", dataType: "integer", nullable: true}))
@@ -204,7 +204,9 @@ func expectNotesDDL(mock sqlmock.Sqlmock, indexes bool) {
 	if indexes {
 		mock.ExpectQuery(tableIndexesQuery).WithArgs("app", "notes").
 			WillReturnRows(names("def", `CREATE INDEX notes_item ON app.notes USING btree (item_id)`))
+		return
 	}
+	mock.ExpectQuery(tableUniqueIndexesQuery).WithArgs("app", "notes").WillReturnRows(names("def"))
 }
 
 // 选中一张有索引与外键的表：「包含索引」不勾时建表语句之后没有它的索引（主键随建表语句）；「包含外键」不勾时

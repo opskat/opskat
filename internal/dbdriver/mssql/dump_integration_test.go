@@ -268,3 +268,45 @@ func TestIntegrationDumpOverwritesTheOriginalDatabase(t *testing.T) {
 		assert.Equal(t, want, databaseSnapshot(t, db), name)
 	}
 }
+
+// 不勾「包含索引」：外键引用的列只有唯一索引（不是唯一约束）时，唯一索引照样写出，外键才加得上；文件在空库上
+// 每条语句都成功，数据一样，不是唯一的索引不写。
+func TestIntegrationDumpWithoutIndexesKeepsUniqueIndexes(t *testing.T) {
+	master := openDDLDatabase(t, "master")
+	suffix := time.Now().UnixNano()
+	source, target := fmt.Sprintf("opskat_dump_uniq_src_%d", suffix), fmt.Sprintf("opskat_dump_uniq_dst_%d", suffix)
+	createScratchDatabase(t, master, source)
+	createScratchDatabase(t, master, target)
+	sourceDB, targetDB := openDDLDatabase(t, source), openDDLDatabase(t, target)
+	for _, statement := range []string{
+		"CREATE TABLE dbo.parents (id int PRIMARY KEY, code nvarchar(20) NOT NULL)",
+		"CREATE UNIQUE INDEX parents_code ON dbo.parents (code)",
+		"CREATE INDEX parents_plain ON dbo.parents (id, code)",
+		"CREATE TABLE dbo.children (id int PRIMARY KEY, code nvarchar(20) REFERENCES dbo.parents (code))",
+		"INSERT INTO dbo.parents VALUES (1, N'a')",
+		"INSERT INTO dbo.children VALUES (1, N'a')",
+	} {
+		_, err := sourceDB.Exec(statement)
+		require.NoError(t, err, statement)
+	}
+
+	ctx := context.Background()
+	var out strings.Builder
+	_, err := newSession(sourceDB).Dump(ctx, dbdriver.DumpRequest{
+		Database: source, Whole: true, WithData: true, Writer: &out, Options: dbdriver.DumpOptions{ForeignKeys: true},
+		Header: dbdriver.DumpHeader{Version: "test", Asset: "mssql", Time: time.Now()},
+	})
+	require.NoError(t, err)
+	script := out.String()
+	t.Log(script)
+	assert.NotContains(t, script, "parents_plain", "indexes that aren't unique stay out")
+
+	result, err := newSession(targetDB).RunScript(ctx, dbdriver.ScriptRequest{
+		Database: target, Script: strings.NewReader(script), Size: int64(len(script)),
+	})
+	require.NoError(t, err)
+	require.Nil(t, result.Failure, "the dump must run on an empty database: %+v", result.Failure)
+	for _, table := range []string{"dbo.parents", "dbo.children"} {
+		assert.Equal(t, tableRows(t, sourceDB, table), tableRows(t, targetDB, table))
+	}
+}

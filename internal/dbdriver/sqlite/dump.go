@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
@@ -127,19 +128,20 @@ func identifierByte(c byte) bool {
 	return c == '_' || c == '$' || c >= 0x80 || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
-// dumpTable 不包含外键时从建表语句里去掉外键，包含索引时在建表语句之后接着写表的索引；结构和数据时 INSERT
-// 不写生成列。
+// dumpTable 不包含外键时从建表语句里去掉外键，在建表语句之后接着写表的索引（不包含索引时只写唯一索引）；结构
+// 和数据时 INSERT 不写生成列。
 func dumpTable(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error {
 	if !object.Options.ForeignKeys {
 		script.Definition = []string{sqldb.TerminateStatement(withoutForeignKeys(object.Definition))}
 	}
-	if object.Options.Indexes {
-		if err := dumpIndexes(ctx, conn, object, script); err != nil {
-			return err
-		}
+	if err := dumpIndexes(ctx, conn, object, script); err != nil {
+		return err
 	}
 	if !object.WithData {
 		return nil
+	}
+	if err := autoIncrementCounter(ctx, conn, object, script); err != nil {
+		return err
 	}
 	// hidden：0 是普通列，1 是虚表的隐藏列（不在 SELECT * 里），2 / 3 是虚拟 / 存储的生成列（写不进去）。
 	columns, err := sqldb.QueryNames(ctx, conn,
@@ -151,11 +153,47 @@ func dumpTable(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, 
 	return nil
 }
 
-// dumpIndexes 在建表语句之后接着写表的索引（sqlite_master 里的原文）。
+// autoIncrementCounter 把 AUTOINCREMENT 表在 sqlite_sequence 里的值写在全部数据之后（PostData）：最大的行被删掉
+// 后它比现存的行大，只靠插入的数据还原不出来。库里没有 AUTOINCREMENT 表时没有 sqlite_sequence。
+func autoIncrementCounter(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error {
+	exists, err := sqldb.QueryNames(ctx, conn,
+		"SELECT name FROM "+qualify(object.Database, "sqlite_master")+" WHERE type = 'table' AND name = 'sqlite_sequence'")
+	if err != nil {
+		return sqldb.Wrap("auto-increment counter", err)
+	}
+	if len(exists) == 0 {
+		return nil
+	}
+	counters, err := sqldb.QueryNames(ctx, conn,
+		"SELECT CAST(seq AS TEXT) FROM "+qualify(object.Database, "sqlite_sequence")+" WHERE name = ?", object.Name)
+	if err != nil {
+		return sqldb.Wrap("auto-increment counter", err)
+	}
+	if len(counters) == 0 {
+		return nil
+	}
+	name, err := sqldb.DefinitionLiterals.Literal(object.Name, "")
+	if err != nil {
+		return err
+	}
+	seq, err := strconv.ParseInt(counters[0], 10, 64)
+	if err != nil {
+		return sqldb.Wrap("auto-increment counter", err)
+	}
+	script.PostData = append(script.PostData,
+		"DELETE FROM sqlite_sequence WHERE name = "+name+";",
+		"INSERT INTO sqlite_sequence (name, seq) VALUES ("+name+", "+strconv.FormatInt(seq, 10)+");")
+	return nil
+}
+
+// dumpIndexes 在建表语句之后接着写表的索引（sqlite_master 里的原文）；不包含索引时只写唯一索引：外键可能引用
+// 它（SQLite 要求被引用的列是主键或有唯一索引）。
 func dumpIndexes(ctx context.Context, conn *sql.Conn, object dbdriver.DumpObject, script *dbdriver.DumpObjectScript) error {
 	indexes, err := sqldb.QueryNames(ctx, conn,
-		"SELECT sql FROM "+qualify(object.Database, "sqlite_master")+" WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL ORDER BY name",
-		object.Name)
+		"SELECT m.sql FROM "+qualify(object.Database, "sqlite_master")+" m WHERE m.type = 'index' AND m.tbl_name = ? AND m.sql IS NOT NULL "+
+			"AND (? OR EXISTS (SELECT 1 FROM "+qualify(object.Database, "pragma_index_list(m.tbl_name)")+" l WHERE l.name = m.name AND l.\"unique\")) "+
+			"ORDER BY m.name",
+		object.Name, object.Options.Indexes)
 	if err != nil {
 		return sqldb.Wrap("indexes", err)
 	}

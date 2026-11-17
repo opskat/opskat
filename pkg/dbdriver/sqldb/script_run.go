@@ -3,6 +3,8 @@ package sqldb
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
@@ -48,28 +50,29 @@ func (r scriptRunner) OpenScriptExecutor(ctx context.Context, _ string) (dbdrive
 // scriptExecutor 在一条固定的连接上执行 SQL 文件的语句，每条单独提交（不开事务）。
 type scriptExecutor struct{ conn *sql.Conn }
 
-// ExecuteScriptBatch 逐条执行一批语句；batch.Stop 被关闭后在当前语句之后停下，没轮到的语句不执行。
+// ExecuteScriptBatch 逐条执行一批语句（dbdriver.ExecuteScriptStatements）；batch.Stop 被关闭后在当前语句之后
+// 停下，没轮到的语句不执行。
 func (e scriptExecutor) ExecuteScriptBatch(ctx context.Context, batch dbdriver.ScriptBatch) (*dbdriver.BatchResult, error) {
-	result := &dbdriver.BatchResult{Executed: []dbdriver.BatchStatement{}}
-	for index, statement := range batch.Statements {
+	stopped := func() bool {
 		select {
 		case <-batch.Stop:
-			return result, nil
+			return true
 		default:
-		}
-		one, err := runStatements(ctx, e.conn, dbdriver.BatchRequest{Statements: []string{statement}, ContinueOnError: batch.ContinueOnError})
-		for _, executed := range one.Executed {
-			executed.Index = index
-			result.Executed = append(result.Executed, executed)
-		}
-		if err != nil {
-			return result, err
-		}
-		if one.Failed() && !batch.ContinueOnError {
-			break
+			return false
 		}
 	}
-	return result, nil
+	return dbdriver.ExecuteScriptStatements(ctx, batch, stopped, func(ctx context.Context, statement string) (*dbdriver.BatchResult, error) {
+		return runStatements(ctx, e.conn, dbdriver.BatchRequest{Statements: []string{statement}, ContinueOnError: batch.ContinueOnError})
+	})
 }
 
-func (e scriptExecutor) Close() error { return e.conn.Close() }
+// Close 丢掉这条连接，不放回会话的连接池：文件在它上面留下的状态（没提交的事务、关闭的外键检查、
+// SET 的会话变量、USE 换的库、临时表）不能落到查询面板之后的语句上。Raw 里返回 driver.ErrBadConn 是
+// database/sql 丢掉一条连接的办法，它同时关闭 e.conn。
+func (e scriptExecutor) Close() error {
+	err := e.conn.Raw(func(any) error { return driver.ErrBadConn })
+	if errors.Is(err, driver.ErrBadConn) {
+		return nil
+	}
+	return err
+}
