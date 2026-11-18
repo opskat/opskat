@@ -1,10 +1,8 @@
-import { useEffect, useImperativeHandle, useMemo, useRef, type Ref } from "react";
+import { useEffect, useImperativeHandle, useRef, type Ref } from "react";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { useTerminalThemeStore, toXtermTheme } from "@/stores/terminalThemeStore";
-import { builtinThemes, defaultLightTheme, defaultDarkTheme } from "@/data/terminalThemes";
-import { useResolvedTheme } from "@/components/theme-provider";
+import { useTerminalThemeStore, useXtermTheme } from "@/stores/terminalThemeStore";
 
 export interface K8sLogTerminalHandle {
   write: (data: string | Uint8Array) => void;
@@ -18,18 +16,7 @@ export function K8sLogTerminal({ ref }: { ref?: Ref<K8sLogTerminalHandle> }) {
 
   const fontSize = useTerminalThemeStore((s) => s.fontSize);
   const scrollback = useTerminalThemeStore((s) => s.scrollback);
-  const selectedThemeId = useTerminalThemeStore((s) => s.selectedThemeId);
-  const customThemes = useTerminalThemeStore((s) => s.customThemes);
-  const resolvedTheme = useResolvedTheme();
-
-  const xtermTheme = useMemo(() => {
-    if (selectedThemeId === "default") {
-      return resolvedTheme === "light" ? toXtermTheme(defaultLightTheme) : toXtermTheme(defaultDarkTheme);
-    }
-    const theme =
-      builtinThemes.find((t) => t.id === selectedThemeId) || customThemes.find((t) => t.id === selectedThemeId);
-    return theme ? toXtermTheme(theme) : undefined;
-  }, [selectedThemeId, customThemes, resolvedTheme]);
+  const xtermTheme = useXtermTheme();
 
   useImperativeHandle(ref, () => ({
     write: (data: string | Uint8Array) => {

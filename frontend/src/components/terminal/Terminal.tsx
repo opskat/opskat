@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -14,10 +13,8 @@ import type { FitAddon } from "@xterm/addon-fit";
 import { ClipboardSetText } from "../../../wailsjs/runtime/runtime";
 import { useShortcutStore, formatBinding } from "@/stores/shortcutStore";
 import { useTerminalStore, TRANSPORTS } from "@/stores/terminalStore";
-import { useTerminalThemeStore, toXtermTheme } from "@/stores/terminalThemeStore";
-import { builtinThemes, defaultLightTheme, defaultDarkTheme } from "@/data/terminalThemes";
+import { useTerminalThemeStore, useXtermTheme } from "@/stores/terminalThemeStore";
 import { withTerminalFontFallback, withTerminalFontIsolation } from "@/data/terminalFonts";
-import { useResolvedTheme } from "@/components/theme-provider";
 import { useTranslation } from "react-i18next";
 import { notifyCopied } from "@/lib/notify";
 import {
@@ -76,17 +73,7 @@ export function Terminal({ sessionId, active, tabId, ref }: TerminalProps) {
   const highlightLinks = useTerminalThemeStore((s) => s.highlightLinks);
   const osc52Clipboard = useTerminalThemeStore((s) => s.osc52ClipboardEnabled);
   const copyBehavior = useTerminalThemeStore((s) => s.copyBehavior);
-  const selectedThemeId = useTerminalThemeStore((s) => s.selectedThemeId);
-  const customThemes = useTerminalThemeStore((s) => s.customThemes);
-  const resolvedTheme = useResolvedTheme();
-  const xtermTheme = useMemo(() => {
-    if (selectedThemeId === "default") {
-      return resolvedTheme === "light" ? toXtermTheme(defaultLightTheme) : toXtermTheme(defaultDarkTheme);
-    }
-    const theme =
-      builtinThemes.find((t) => t.id === selectedThemeId) || customThemes.find((t) => t.id === selectedThemeId);
-    return theme ? toXtermTheme(theme) : undefined;
-  }, [selectedThemeId, customThemes, resolvedTheme]);
+  const xtermTheme = useXtermTheme();
   const transport = useTerminalStore((s) => s.tabData[tabId]?.panes[sessionId]?.transport ?? "ssh");
   const spec = TRANSPORTS[transport];
   const paneConnected = useTerminalStore((s) => s.tabData[tabId]?.panes[sessionId]?.connected ?? false);

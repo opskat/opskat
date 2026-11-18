@@ -3,9 +3,14 @@ package host_key_svc
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/cago-frame/cago/database/db"
+	"github.com/glebarez/sqlite"
 	"github.com/opskat/opskat/internal/model/entity/host_key_entity"
+	"github.com/opskat/opskat/internal/repository/host_key_repo"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -66,8 +71,16 @@ func (r *memoryHostKeyRepo) Upsert(_ context.Context, key *host_key_entity.HostK
 		return r.upsertErr
 	}
 	r.upserts++
+	mapKey := hostKeyMapKey(key.Host, key.Port, key.KeyType)
+	if key.ID == 0 {
+		// same contract as the SQL repo: inserting an endpoint that already has a key keeps the stored one
+		if r.keys[mapKey] != nil {
+			return nil
+		}
+		key.ID = int64(len(r.keys) + 1000)
+	}
 	keyCopy := *key
-	r.keys[hostKeyMapKey(key.Host, key.Port, key.KeyType)] = &keyCopy
+	r.keys[mapKey] = &keyCopy
 	return nil
 }
 
@@ -192,4 +205,139 @@ func TestHostKeyServiceIsolatesKeyTypesAtSameEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, CheckFirstUse, got.State)
 	require.Empty(t, got.OldFingerprint)
+}
+
+func openHostKeySQLite(t *testing.T) {
+	t.Helper()
+	gdb, err := gorm.Open(sqlite.Open("file:"+filepath.Join(t.TempDir(), "hk.db")+"?_pragma=busy_timeout(10000)"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&host_key_entity.HostKey{}))
+	db.SetDefault(gdb)
+}
+
+func TestTrustConcurrentFirstContactStoresOneRecord(t *testing.T) {
+	openHostKeySQLite(t)
+	ctx := context.Background()
+	svc := New(host_key_repo.NewHostKey())
+	key := PresentedKey{Host: "jump.example", Port: 22, KeyType: "ssh-ed25519", PublicKey: "pub", Fingerprint: "SHA256:a"}
+
+	const n = 16
+	start := make(chan struct{})
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			<-start
+			errs <- svc.Trust(ctx, key, false)
+		}()
+	}
+	close(start)
+	for i := 0; i < n; i++ {
+		require.NoError(t, <-errs)
+	}
+
+	keys, err := host_key_repo.NewHostKey().List(ctx)
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	require.Equal(t, "pub", keys[0].PublicKey)
+}
+
+func TestTrustConcurrentDifferentKeysKeepsOneAndRejectsOthers(t *testing.T) {
+	openHostKeySQLite(t)
+	ctx := context.Background()
+	svc := New(host_key_repo.NewHostKey())
+	a := PresentedKey{Host: "jump.example", Port: 22, KeyType: "ssh-ed25519", PublicKey: "pubA", Fingerprint: "SHA256:a"}
+	b := PresentedKey{Host: "jump.example", Port: 22, KeyType: "ssh-ed25519", PublicKey: "pubB", Fingerprint: "SHA256:b"}
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, k := range []PresentedKey{a, b} {
+		go func() {
+			<-start
+			errs <- svc.Trust(ctx, k, false)
+		}()
+	}
+	close(start)
+	e1, e2 := <-errs, <-errs
+	// exactly one wins; the other must be told the key differs, never silently trusted
+	require.True(t, (e1 == nil) != (e2 == nil), "e1=%v e2=%v", e1, e2)
+	for _, e := range []error{e1, e2} {
+		if e != nil {
+			require.ErrorIs(t, e, ErrChangedKeyRequiresReplacement)
+		}
+	}
+	keys, err := host_key_repo.NewHostKey().List(ctx)
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+}
+
+func TestTrustAgainstSQLiteKeepsFirstSeenAndHonoursReplace(t *testing.T) {
+	openHostKeySQLite(t)
+	ctx := context.Background()
+	repo := host_key_repo.NewHostKey()
+	clock := time.Unix(1000, 0)
+	svc := &hostKeySvc{repo: func() host_key_repo.HostKeyRepo { return repo }, now: func() time.Time { return clock }}
+	key := PresentedKey{Host: "h", Port: 22, KeyType: "ssh-rsa", PublicKey: "pub", Fingerprint: "SHA256:a"}
+
+	require.NoError(t, svc.Trust(ctx, key, false))
+	clock = time.Unix(2000, 0)
+	require.NoError(t, svc.Trust(ctx, key, false))
+	stored, err := repo.FindByHostPortKeyType(ctx, "h", 22, "ssh-rsa")
+	require.NoError(t, err)
+	require.Equal(t, int64(1000), stored.FirstSeen)
+	require.Equal(t, int64(2000), stored.LastSeen)
+
+	changed := key
+	changed.PublicKey, changed.Fingerprint = "pub2", "SHA256:b"
+	require.ErrorIs(t, svc.Trust(ctx, changed, false), ErrChangedKeyRequiresReplacement)
+	stored, _ = repo.FindByHostPortKeyType(ctx, "h", 22, "ssh-rsa")
+	require.Equal(t, "pub", stored.PublicKey)
+
+	clock = time.Unix(3000, 0)
+	require.NoError(t, svc.Trust(ctx, changed, true))
+	stored, _ = repo.FindByHostPortKeyType(ctx, "h", 22, "ssh-rsa")
+	require.Equal(t, "pub2", stored.PublicKey)
+	require.Equal(t, "SHA256:b", stored.Fingerprint)
+	require.Equal(t, int64(1000), stored.FirstSeen)
+	require.Equal(t, int64(3000), stored.LastSeen)
+}
+
+// lostInsertRaceRepo stores a competing key right before the service's first read, so that read reports
+// no record and the service's own insert is the one that loses the race.
+type lostInsertRaceRepo struct {
+	host_key_repo.HostKeyRepo
+	competing *host_key_entity.HostKey
+}
+
+func (r *lostInsertRaceRepo) FindByHostPortKeyType(ctx context.Context, host string, port int, keyType string) (*host_key_entity.HostKey, error) {
+	if c := r.competing; c != nil {
+		r.competing = nil
+		if err := r.Upsert(ctx, c); err != nil {
+			return nil, err
+		}
+		return nil, gorm.ErrRecordNotFound
+	}
+	return r.HostKeyRepo.FindByHostPortKeyType(ctx, host, port, keyType)
+}
+
+func TestTrustFirstUseThatLosesTheInsertRaceComparesWithTheWinner(t *testing.T) {
+	openHostKeySQLite(t)
+	ctx := context.Background()
+	key := PresentedKey{Host: "jump.example", Port: 22, KeyType: "ssh-ed25519", PublicKey: "pubA", Fingerprint: "SHA256:a"}
+	winner := func(pub, fp string) *host_key_entity.HostKey {
+		return &host_key_entity.HostKey{Host: key.Host, Port: key.Port, KeyType: key.KeyType, PublicKey: pub, Fingerprint: fp, FirstSeen: 1, LastSeen: 1}
+	}
+
+	same := &lostInsertRaceRepo{HostKeyRepo: host_key_repo.NewHostKey(), competing: winner("pubA", "SHA256:a")}
+	require.NoError(t, New(same).Trust(ctx, key, false))
+
+	other := key
+	other.Host = "other.example"
+	different := &lostInsertRaceRepo{HostKeyRepo: host_key_repo.NewHostKey(), competing: winner("pubB", "SHA256:b")}
+	different.competing.Host = other.Host
+	require.ErrorIs(t, New(different).Trust(ctx, other, false), ErrChangedKeyRequiresReplacement)
+
+	stored, err := host_key_repo.NewHostKey().FindByHostPortKeyType(ctx, other.Host, other.Port, other.KeyType)
+	require.NoError(t, err)
+	require.Equal(t, "pubB", stored.PublicKey, "the losing first-use trust must not overwrite the winner")
+	require.Equal(t, int64(1), stored.FirstSeen)
 }

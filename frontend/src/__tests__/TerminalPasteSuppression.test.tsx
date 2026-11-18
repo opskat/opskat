@@ -87,7 +87,7 @@ vi.mock("@/stores/terminalStore", () => ({
 }));
 
 vi.mock("@/stores/terminalThemeStore", () => ({
-  toXtermTheme: vi.fn(() => ({})),
+  useXtermTheme: vi.fn(() => undefined),
   useTerminalThemeStore: (selector: (state: unknown) => unknown) =>
     selector({
       fontSize: 14,
@@ -115,16 +115,6 @@ vi.mock("@/stores/shortcutStore", () => ({
         "tab.close": {},
       },
     }),
-}));
-
-vi.mock("@/components/theme-provider", () => ({
-  useResolvedTheme: vi.fn(() => "light"),
-}));
-
-vi.mock("@/data/terminalThemes", () => ({
-  builtinThemes: [],
-  defaultLightTheme: {},
-  defaultDarkTheme: {},
 }));
 
 vi.mock("@/data/terminalFonts", () => ({

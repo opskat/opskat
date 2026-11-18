@@ -8,15 +8,7 @@ import { K8sSectionCard } from "./K8sSectionCard";
 import { K8sLogTerminal, type K8sLogTerminalHandle } from "./K8sLogTerminal";
 import { buildLogBufferKey, MAX_LOG_CHUNKS, type LogTabState, type LogTabStateUpdate } from "./k8sLogState";
 import { errorMessage } from "@/lib/errorMessage";
-
-function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
+import { base64ToBytes } from "./utils";
 
 interface K8sLogsPanelProps {
   assetId: number;

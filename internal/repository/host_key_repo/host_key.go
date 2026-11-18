@@ -8,6 +8,7 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/host_key_entity"
 
 	"github.com/cago-frame/cago/database/db"
+	"gorm.io/gorm/clause"
 )
 
 // HostKeyRepo 主机密钥数据访问接口
@@ -52,11 +53,16 @@ func (r *hostKeyRepo) UpdateLastSeen(ctx context.Context, id int64, lastSeen int
 	return db.Ctx(ctx).Model(&host_key_entity.HostKey{}).Where("id = ?", id).Update("last_seen", lastSeen).Error
 }
 
+// Upsert 保存主机密钥。ID 为空时按 (host, port, key_type) 幂等插入：已有同键记录时保持原记录不变
+// （不覆盖其公钥），由调用方重新读取后判断是否一致，这样并发的首次握手只会写入一条记录。
 func (r *hostKeyRepo) Upsert(ctx context.Context, key *host_key_entity.HostKey) error {
 	if key.ID > 0 {
 		return db.Ctx(ctx).Save(key).Error
 	}
-	return db.Ctx(ctx).Create(key).Error
+	return db.Ctx(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "host"}, {Name: "port"}, {Name: "key_type"}},
+		DoNothing: true,
+	}).Create(key).Error
 }
 
 func (r *hostKeyRepo) Delete(ctx context.Context, id int64) error {

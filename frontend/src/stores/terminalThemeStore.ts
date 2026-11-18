@@ -1,6 +1,8 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { TerminalTheme, builtinThemes } from "@/data/terminalThemes";
+import { useResolvedTheme } from "@opskat/ui";
+import { TerminalTheme, builtinThemes, defaultDarkTheme, defaultLightTheme } from "@/data/terminalThemes";
 import {
   CUSTOM_TERMINAL_FONT_PRESET_ID,
   DEFAULT_TERMINAL_FONT_FAMILY,
@@ -221,4 +223,22 @@ export function toXtermTheme(theme: TerminalTheme) {
     brightCyan: theme.brightCyan,
     brightWhite: theme.brightWhite,
   };
+}
+
+/**
+ * The xterm theme of the terminal theme chosen in settings; "default" follows the app's light / dark mode.
+ * undefined when the selection no longer exists (xterm keeps its own colours).
+ */
+export function useXtermTheme() {
+  const selectedThemeId = useTerminalThemeStore((s) => s.selectedThemeId);
+  const customThemes = useTerminalThemeStore((s) => s.customThemes);
+  const resolvedTheme = useResolvedTheme();
+  return useMemo(() => {
+    if (selectedThemeId === "default") {
+      return toXtermTheme(resolvedTheme === "light" ? defaultLightTheme : defaultDarkTheme);
+    }
+    const theme =
+      builtinThemes.find((t) => t.id === selectedThemeId) || customThemes.find((t) => t.id === selectedThemeId);
+    return theme ? toXtermTheme(theme) : undefined;
+  }, [selectedThemeId, customThemes, resolvedTheme]);
 }

@@ -18,4 +18,13 @@ describe("notify helpers", () => {
     notifySuccess("已保存");
     expect(toast.success).toHaveBeenCalledWith("已保存", { position: "top-center" });
   });
+
+  it("notifySuccess 带 action 时把可点击按钮交给 toast，位置不变", () => {
+    const onClick = vi.fn();
+    notifySuccess("已创建", { action: { label: "打开", onClick } });
+    expect(toast.success).toHaveBeenCalledWith("已创建", {
+      position: "top-center",
+      action: { label: "打开", onClick },
+    });
+  });
 });

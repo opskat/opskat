@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -21,18 +22,53 @@ import (
 	"github.com/opskat/opskat/internal/sshpool"
 
 	"github.com/cago-frame/cago/pkg/logger"
-	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"go.uber.org/zap"
 )
 
-// k8sCallContext 加载 K8S 资产时返回的所有调用上下文。
-// kubeconfig 是已解密的 YAML 文本，opts 已带上 SSH 隧道 dial 函数（若配置）。
+// k8sCallContext 是一个 K8S 资产的调用上下文，按资产缓存在 K8s.conns 里，同一资产的请求共用它。
 type k8sCallContext struct {
-	kubeconfig string
-	opts       []k8spkg.ClientOption
+	// conn 按资产配置（kubeconfig、context、SSH 隧道 / 代理链拨号）建立，请求经它复用到集群的连接。
+	conn *k8spkg.Conn
+	// namespace 是资产配置的默认命名空间，空表示未配置。
+	namespace string
 }
 
-// loadK8sCall 校验资产、解析 K8S 配置、解密 kubeconfig、构造 ClientOption。
+// Close 让缓存丢弃这一项时关闭它的连接。
+func (c *k8sCallContext) Close() error { return c.conn.Close() }
+
+// call 取资产的调用上下文：已缓存则复用，否则按资产当前配置新建并缓存。
+// 资产改配置 / 删除、集群标签关闭、空闲超时后缓存项被丢弃，下次调用按最新配置重建；
+// 连接断开由 HTTP 客户端在下次请求时重新拨号，缓存项本身不会因此失效。
+func (k *K8s) call(ctx context.Context, assetID int64) (*k8sCallContext, error) {
+	created := false
+	c, _, err := k.conns.GetOrDial(assetID, strconv.FormatInt(assetID, 10), func() (*k8sCallContext, io.Closer, error) {
+		created = true
+		c, err := k.loadCall(ctx, assetID)
+		return c, nil, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if created {
+		logger.Ctx(ctx).Debug("k8s connection created", zap.Int64("assetID", assetID))
+	} else {
+		logger.Ctx(ctx).Debug("k8s connection reused", zap.Int64("assetID", assetID))
+	}
+	return c, nil
+}
+
+// ReleaseK8sConnections 关闭并丢弃该资产缓存的集群连接（前端关闭集群标签时调用）；之后的请求按资产当前配置重新建立。
+func (k *K8s) ReleaseK8sConnections(assetID int64) {
+	k.dropAssetConns(k.ctx, assetID)
+}
+
+// dropAssetConns 丢弃该资产缓存的连接；也由 assetconn 在资产改配置或被删除时调用（见 New）。
+func (k *K8s) dropAssetConns(ctx context.Context, assetID int64) {
+	k.conns.DropAsset(assetID)
+	logger.Ctx(ctx).Info("k8s connections released", zap.Int64("assetID", assetID))
+}
+
+// loadK8sCall 校验资产、解析 K8S 配置、解密 kubeconfig、按 SSH 隧道 / 代理链构造连接。
 func (k *K8s) loadK8sCall(ctx context.Context, assetID int64) (*k8sCallContext, error) {
 	asset, err := asset_svc.Asset().Get(ctx, assetID)
 	if err != nil {
@@ -60,19 +96,52 @@ func (k *K8s) loadK8sCall(ctx context.Context, assetID int64) (*k8sCallContext, 
 	if err != nil {
 		return nil, fmt.Errorf("resolve K8S proxy chain: %w", err)
 	}
-	return &k8sCallContext{
-		kubeconfig: kubeconfig,
-		opts:       opts,
-	}, nil
+	return newCallContext(kubeconfig, cfg.Namespace, opts...)
 }
 
-// runK8sCall 是 9 个 GetK8sNamespace*/GetK8sClusterInfo/GetK8sPodDetail 共用的模板：
-// 加载上下文 → 调用 fn → JSON 序列化。
-func (k *K8s) runK8sCall(assetID int64, label string, fn func(ctx context.Context, c *k8sCallContext) (any, error)) (string, error) {
-	ctx, cancel := context.WithTimeout(k.ctx, 30*time.Second)
-	defer cancel()
+// newCallContext 由已解密的 kubeconfig、默认命名空间与拨号选项构造调用上下文。
+func newCallContext(kubeconfig, namespace string, opts ...k8spkg.ClientOption) (*k8sCallContext, error) {
+	conn, err := k8spkg.NewConn(kubeconfig, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &k8sCallContext{conn: conn, namespace: namespace}, nil
+}
 
-	c, err := k.loadK8sCall(ctx, assetID)
+// runK8sCall 是 K8S 读取类 IPC 共用的模板：加载上下文 → 调用 fn → JSON 序列化，
+// 并记录开始 / 结束 / 失败（带 assetID）。
+func (k *K8s) runK8sCall(assetID int64, label string, fn func(ctx context.Context, c *k8sCallContext) (any, error)) (string, error) {
+	return k.runLogged(assetID, label, 30*time.Second, false, nil, fn)
+}
+
+// runK8sWrite 是写入类 IPC（更新 / 应用）的模板：同 runK8sCall，但开始 / 结束以 Info 记录并带上操作对象
+// （target 只放资源标识，绝不放资源内容）。
+func (k *K8s) runK8sWrite(assetID int64, label string, target []zap.Field, fn func(ctx context.Context, c *k8sCallContext) (any, error)) (string, error) {
+	return k.runLogged(assetID, label, 2*time.Minute, true, target, fn)
+}
+
+func (k *K8s) runLogged(assetID int64, label string, timeout time.Duration, write bool, target []zap.Field, fn func(ctx context.Context, c *k8sCallContext) (any, error)) (string, error) {
+	ctx, cancel := context.WithTimeout(k.ctx, timeout)
+	defer cancel()
+	log := logger.Ctx(ctx).With(append([]zap.Field{zap.String("op", label), zap.Int64("assetID", assetID)}, target...)...)
+	say := log.Debug
+	if write {
+		say = log.Info
+	}
+	start := time.Now()
+	say("k8s call start")
+
+	data, err := k.doK8sCall(ctx, assetID, label, fn)
+	if err != nil {
+		log.Error("k8s call failed", zap.Duration("elapsed", time.Since(start)), zap.Error(err))
+		return "", err
+	}
+	say("k8s call done", zap.Duration("elapsed", time.Since(start)))
+	return data, nil
+}
+
+func (k *K8s) doK8sCall(ctx context.Context, assetID int64, label string, fn func(ctx context.Context, c *k8sCallContext) (any, error)) (string, error) {
+	c, err := k.call(ctx, assetID)
 	if err != nil {
 		return "", err
 	}
@@ -87,58 +156,10 @@ func (k *K8s) runK8sCall(assetID int64, label string, fn func(ctx context.Contex
 	return string(data), nil
 }
 
-func (k *K8s) GetK8sClusterInfo(assetID int64) (string, error) {
-	return k.runK8sCall(assetID, "get K8S cluster info", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetClusterInfo(ctx, c.kubeconfig, c.opts...)
-	})
-}
-
-func (k *K8s) GetK8sNamespaceResources(assetID int64, namespace string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S namespace resources", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetNamespaceResources(ctx, c.kubeconfig, namespace, c.opts...)
-	})
-}
-
-func (k *K8s) GetK8sNamespacePods(assetID int64, namespace string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S namespace pods", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetNamespacePods(ctx, c.kubeconfig, namespace, c.opts...)
-	})
-}
-
-func (k *K8s) GetK8sNamespaceDeployments(assetID int64, namespace string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S namespace deployments", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetNamespaceDeployments(ctx, c.kubeconfig, namespace, c.opts...)
-	})
-}
-
-func (k *K8s) GetK8sNamespaceServices(assetID int64, namespace string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S namespace services", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetNamespaceServices(ctx, c.kubeconfig, namespace, c.opts...)
-	})
-}
-
-func (k *K8s) GetK8sNamespaceConfigMaps(assetID int64, namespace string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S namespace configmaps", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetNamespaceConfigMaps(ctx, c.kubeconfig, namespace, c.opts...)
-	})
-}
-
-func (k *K8s) GetK8sNamespaceSecrets(assetID int64, namespace string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S namespace secrets", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetNamespaceSecrets(ctx, c.kubeconfig, namespace, c.opts...)
-	})
-}
-
-func (k *K8s) GetK8sPodDetail(assetID int64, namespace, podName string) (string, error) {
-	return k.runK8sCall(assetID, "get K8S pod detail", func(ctx context.Context, c *k8sCallContext) (any, error) {
-		return k8spkg.GetPodDetail(ctx, c.kubeconfig, namespace, podName, c.opts...)
-	})
-}
-
 func (k *K8s) StartK8sPodLogs(assetID int64, namespace, podName, container string, tailLines int64) (string, error) {
 	loadCtx, loadCancel := context.WithTimeout(k.ctx, 30*time.Second)
 	defer loadCancel()
-	c, err := k.loadK8sCall(loadCtx, assetID)
+	c, err := k.call(loadCtx, assetID)
 	if err != nil {
 		return "", err
 	}
@@ -147,7 +168,7 @@ func (k *K8s) StartK8sPodLogs(assetID int64, namespace, podName, container strin
 	ctx, cancel := context.WithCancel(k.ctx)
 	k.logStreams.Store(streamID, cancel)
 
-	reader, err := k8spkg.StreamPodLogs(ctx, c.kubeconfig, namespace, podName, container, tailLines, c.opts...)
+	reader, err := k8spkg.StreamPodLogs(ctx, c.conn, namespace, podName, container, tailLines)
 	if err != nil {
 		cancel()
 		k.logStreams.Delete(streamID)
@@ -163,9 +184,7 @@ func (k *K8s) StartK8sPodLogs(assetID int64, namespace, podName, container strin
 		defer cancel()
 		defer k.logStreams.Delete(streamID)
 
-		pumpPodLogs(reader, streamID, func(event string, payload any) {
-			wailsRuntime.EventsEmit(k.ctx, event, payload)
-		})
+		pumpPodLogs(reader, streamID, k.emit)
 	}()
 
 	return streamID, nil
