@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -889,4 +890,98 @@ func TestEndExecSessionsWithoutSessionsReturnsImmediately(t *testing.T) {
 	assert.Less(t, time.Since(started), time.Second)
 	assert.Empty(t, srv.Commands(false))
 	assert.Empty(t, logs.FilterMessage("k8s exec sessions ended on quit").All())
+}
+
+// 自定义命令可能带着口令（mysql -p<password>）：日志里任何消息 / 字段（含集群回显命令的错误文本）都不能出现命令原文。
+const execLeakMarker = "unique-fake-marker-9f2a"
+
+func assertNoSecretLogged(t *testing.T, logs *observer.ObservedLogs) {
+	t.Helper()
+	all := logs.All()
+	require.NotEmpty(t, all)
+	for _, e := range all {
+		assert.NotContains(t, e.Message, execLeakMarker)
+		for k, v := range e.ContextMap() {
+			assert.NotContains(t, fmt.Sprint(v), execLeakMarker, "%s field %s", e.Message, k)
+		}
+	}
+}
+
+func TestK8sExecCustomCommandNeverLoggedOnSuccessAndCleanup(t *testing.T) {
+	logs := observeLogs(t)
+	srv := k8stest.NewExecServer(t, false, nil)
+	k, rec, c := execTestBinder(t, srv.Host())
+	req := execReq("web-0")
+	req.Shell = "mysql -u root -p" + execLeakMarker + " -h db"
+	id, err := k.startExec(c, req)
+	require.NoError(t, err)
+	k.StopK8sExec(id)
+	rec.waitEnd(t, id)
+	require.Eventually(t, func() bool { return len(logs.FilterMessage("k8s exec shell cleanup done").All()) > 0 }, 5*time.Second, 10*time.Millisecond)
+
+	assertNoSecretLogged(t, logs)
+	start := logs.FilterMessage("k8s exec start").All()
+	require.Len(t, start, 1)
+	assert.Equal(t, "custom", start[0].ContextMap()["shell"])
+	assert.Equal(t, int64(6), start[0].ContextMap()["argv_count"])
+	assertSessionFields(t, start[0], "web-0")
+}
+
+func TestK8sExecCustomCommandNeverLoggedWhenClusterEchoesIt(t *testing.T) {
+	logs := observeLogs(t)
+	srv := k8stest.NewExecServer(t, false, func(s *k8stest.ExecSession) int {
+		s.Failure = fmt.Sprintf("OCI runtime exec failed: exec: %q: executable file not found in $PATH", strings.Join(userArgv(s.Command()), " "))
+		return 0
+	})
+	k, rec, c := execTestBinder(t, srv.Host())
+	req := execReq("web-0")
+	req.Shell = "mysql -p" + execLeakMarker
+	id, err := k.startExec(c, req)
+	require.NoError(t, err)
+	end := rec.waitEnd(t, id)
+	assert.Contains(t, end.Error, execLeakMarker, "the user still sees the cluster's own reason")
+	require.Eventually(t, func() bool { return len(logs.FilterMessage("k8s exec ended").All()) > 0 }, 5*time.Second, 10*time.Millisecond)
+
+	assert.NotEmpty(t, logs.FilterMessage("k8s exec failed").All())
+	assertNoSecretLogged(t, logs)
+}
+
+func TestK8sExecCustomCommandNeverLoggedWhenConnectFails(t *testing.T) {
+	logs := observeLogs(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		body, _ := json.Marshal(map[string]any{"kind": "Status", "apiVersion": "v1", "status": "Failure", "reason": "Forbidden", "code": 403,
+			"message": "forbidden: " + r.URL.RawQuery})
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(srv.Close)
+	k, _, c := execTestBinder(t, srv.Listener.Addr().String())
+	req := execReq("web-0")
+	req.Shell = "mysql -p" + execLeakMarker
+	_, err := k.startExec(c, req)
+	require.Error(t, err)
+
+	assert.NotEmpty(t, logs.FilterMessage("k8s exec failed").All())
+	assertNoSecretLogged(t, logs)
+}
+
+func TestK8sExecStandardShellsStillLogTheirPath(t *testing.T) {
+	for _, shell := range []string{"auto", "/bin/bash", "/bin/sh"} {
+		t.Run(shell, func(t *testing.T) {
+			logs := observeLogs(t)
+			srv := k8stest.NewExecServer(t, false, nil)
+			k, rec, c := execTestBinder(t, srv.Host())
+			req := execReq("web-0")
+			req.Shell = shell
+			id, err := k.startExec(c, req)
+			require.NoError(t, err)
+			k.StopK8sExec(id)
+			rec.waitEnd(t, id)
+			start := logs.FilterMessage("k8s exec start").All()
+			require.Len(t, start, 1)
+			assert.Equal(t, shell, start[0].ContextMap()["shell"])
+			assert.NotContains(t, start[0].ContextMap(), "argv_count")
+		})
+	}
 }

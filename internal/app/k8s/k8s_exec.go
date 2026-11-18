@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -277,14 +278,14 @@ func (o *execOutput) Write(p []byte) (int, error) {
 // 实际运行的 shell 经 k8s:exec:started:<id> 告知，会话结束时发 k8s:exec:end:<id>。
 func (k *K8s) StartK8sExec(req K8sExecRequest) (string, error) {
 	if err := req.validate(); err != nil {
-		logger.Ctx(k.ctx).Error("k8s exec failed", execLogFields(req, zap.Error(err))...)
+		logger.Ctx(k.ctx).Error("k8s exec failed", execLogFields(req, req.logErr(err))...)
 		return "", fmt.Errorf("start K8S exec: %w", err)
 	}
 	loadCtx, cancel := context.WithTimeout(k.ctx, 30*time.Second)
 	defer cancel()
 	c, err := k.call(loadCtx, req.AssetID)
 	if err != nil {
-		logger.Ctx(k.ctx).Error("k8s exec failed", execLogFields(req, zap.Error(err))...)
+		logger.Ctx(k.ctx).Error("k8s exec failed", execLogFields(req, req.logErr(err))...)
 		return "", err
 	}
 	return k.startExec(c, req)
@@ -296,8 +297,43 @@ func execLogFields(req K8sExecRequest, extra ...zap.Field) []zap.Field {
 		zap.String("namespace", req.Namespace),
 		zap.String("pod", req.Pod),
 		zap.String("container", req.Container),
-		zap.String("shell", req.Shell),
-	}, extra...)
+	}, append(req.shellLogFields(), extra...)...)
+}
+
+// isStandardShell 判断 Shell 是不是内置选项（自动 / bash / sh）；其余是用户输入的自定义命令，可能带口令。
+func isStandardShell(shell string) bool {
+	return shell == ShellAuto || shell == "/bin/bash" || shell == "/bin/sh"
+}
+
+// shellLogFields 是 Shell 在日志里的安全描述：内置选项记路径；自定义命令只记 shell="custom" 与参数个数，不记命令原文。
+func (r K8sExecRequest) shellLogFields() []zap.Field {
+	if isStandardShell(r.Shell) {
+		return []zap.Field{zap.String("shell", r.Shell)}
+	}
+	argv, _ := splitCommand(r.Shell)
+	return []zap.Field{zap.String("shell", "custom"), zap.Int("argv_count", len(argv))}
+}
+
+// logErr 把错误记成日志字段：集群或传输层的错误文本可能回显命令（含 URL 里的 command 参数），自定义命令时先抹掉。
+// 返给前端的错误不经此处，用户仍能看到集群给出的原文。
+func (r K8sExecRequest) logErr(err error) zap.Field {
+	if err == nil || isStandardShell(r.Shell) {
+		return zap.Error(err)
+	}
+	msg := err.Error()
+	argv, _ := splitCommand(r.Shell)
+	secrets := []string{r.Shell}
+	for _, a := range argv {
+		if len(a) >= 3 {
+			secrets = append(secrets, a)
+		}
+	}
+	for _, s := range secrets {
+		for _, form := range []string{s, url.QueryEscape(s), url.PathEscape(s)} {
+			msg = strings.ReplaceAll(msg, form, "<command>")
+		}
+	}
+	return zap.String("error", msg)
 }
 
 func (k *K8s) startExec(c *k8sCallContext, req K8sExecRequest) (string, error) {
@@ -316,7 +352,7 @@ func (k *K8s) startExec(c *k8sCallContext, req K8sExecRequest) (string, error) {
 	if _, loaded := k.execSessions.LoadOrStore(sessionID, sess); loaded {
 		cancel()
 		err := fmt.Errorf("session id %s is already in use", sessionID)
-		log.Error("k8s exec failed", zap.Error(err))
+		log.Error("k8s exec failed", req.logErr(err))
 		return "", fmt.Errorf("start K8S exec: %w", err)
 	}
 
@@ -347,7 +383,7 @@ func (k *K8s) startExec(c *k8sCallContext, req K8sExecRequest) (string, error) {
 	if connectErr != nil {
 		cancel()
 		k.execSessions.Delete(sessionID)
-		log.Error("k8s exec failed", zap.Duration("elapsed", time.Since(started)), zap.Error(connectErr))
+		log.Error("k8s exec failed", zap.Duration("elapsed", time.Since(started)), req.logErr(connectErr))
 		return "", fmt.Errorf("start K8S exec: %w", connectErr)
 	}
 
@@ -377,7 +413,7 @@ func (k *K8s) startExec(c *k8sCallContext, req K8sExecRequest) (string, error) {
 			fields = append(fields, zap.Bool("podGone", true))
 		}
 		if end.Reason == ExecEndError || end.Reason == ExecEndFailed {
-			log.Error("k8s exec failed", append(fields, zap.Error(err))...)
+			log.Error("k8s exec failed", append(fields, req.logErr(err))...)
 		}
 		log.Info("k8s exec ended", fields...)
 		k.emit("k8s:exec:end:"+sessionID, end)
@@ -408,7 +444,7 @@ func (k *K8s) endShell(c *k8sCallContext, req K8sExecRequest, tag string, end K8
 	log.Info("k8s exec shell cleanup start")
 	err := k8spkg.EndShell(ctx, c.conn, k8spkg.ExecTarget{Namespace: req.Namespace, Pod: req.Pod, Container: req.Container}, tag)
 	if err != nil {
-		log.Warn("k8s exec shell cleanup failed", zap.Duration("elapsed", time.Since(started)), zap.Error(err))
+		log.Warn("k8s exec shell cleanup failed", zap.Duration("elapsed", time.Since(started)), req.logErr(err))
 		return
 	}
 	log.Info("k8s exec shell cleanup done", zap.Duration("elapsed", time.Since(started)))
@@ -438,13 +474,13 @@ func (k *K8s) runAttempts(ctx context.Context, c *k8sCallContext, req K8sExecReq
 			emitStarted, announceOnConnect, onConnected)
 		if missing(connected, produced, err) {
 			if code, isExit := k8spkg.ExitCode(err); isExit && code == k8spkg.ShellCommandNotFound && hasNext {
-				log.Info("k8s exec shell missing, falling back", zap.String("shell", a.Shell), zap.Error(err))
+				log.Info("k8s exec shell missing, falling back", req.logErr(err))
 				continue
 			}
-			log.Info("k8s exec wrapped command did not start, running it untracked", zap.Error(err))
+			log.Info("k8s exec wrapped command did not start, running it untracked", req.logErr(err))
 			connected, produced, err = k.runAttempt(ctx, c, req, sess, a.Command, "", sessionID, emitStarted, announceOnConnect, onConnected)
 			if missing(connected, produced, err) && hasNext {
-				log.Info("k8s exec shell missing, falling back", zap.String("shell", a.Shell), zap.Error(err))
+				log.Info("k8s exec shell missing, falling back", req.logErr(err))
 				continue
 			}
 		}
