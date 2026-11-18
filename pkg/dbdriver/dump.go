@@ -173,7 +173,8 @@ type DumpObjectScript struct {
 	// 勾了 DumpOptions.Drops 时写在删除段的最前面。不带 CASCADE。
 	DropForeignKeys []string `json:"dropForeignKeys,omitempty"`
 	// Definition 是建出它的语句，已按方言包好（如 MySQL 的 DELIMITER、Oracle 的 /），索引等附属定义
-	// 也在其中。
+	// 也在其中。为空表示方言不转储这个对象（如 Oracle 列在视图里的物化视图）：它不写进文件（没有注释分隔行、
+	// 删除与其余语句），不计入对象数，也不在交给 DumpFile 的范围里。
 	Definition []string `json:"definition"`
 	// DataColumns 是 INSERT 写入的列，按次序（生成列 / 计算列不在其中）；nil 表示读出的全部列。
 	DataColumns []string `json:"dataColumns"`
@@ -399,9 +400,24 @@ func (d *dump) prepareAll(plan *dumpPlan) error {
 			}
 		}
 	}
+	plan.leaveOutUnwritten()
 	plan.tables = dependencyOrder(plan.tables)
 	plan.definitions = dependencyOrder(plan.definitions)
 	return nil
+}
+
+// leaveOutUnwritten 去掉方言不转储的对象（给出的 Definition 为空，见 DumpObjectScript.Definition）：它们不在
+// 文件里，也不在交给方言的范围与对象数里。
+func (p *dumpPlan) leaveOutUnwritten() {
+	unwritten := func(item *dumpItem) bool { return len(item.script.Definition) == 0 }
+	for _, item := range slices.Concat(p.tables, p.definitions) {
+		if unwritten(item) {
+			p.listed = slices.DeleteFunc(p.listed, func(name string) bool { return name == item.name })
+		}
+	}
+	p.tables = slices.DeleteFunc(p.tables, unwritten)
+	p.definitions = slices.DeleteFunc(p.definitions, unwritten)
+	p.triggers = slices.DeleteFunc(p.triggers, unwritten)
 }
 
 func (d *dump) run(file *DumpFileScript, plan *dumpPlan) error {

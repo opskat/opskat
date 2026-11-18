@@ -173,6 +173,8 @@ type dumpDialect struct {
 	partitions map[string][]string
 	// plain 为真时对象只给出存在则删除与定义（像什么钩子都没实现的方言）。
 	plain bool
+	// unwritten 是方言不转储的对象（给出空的语句，如 Oracle 列在视图里的物化视图）。
+	unwritten map[string]bool
 }
 
 func (d *dumpDialect) DumpFile(_ context.Context, scope DumpScope) (*DumpFileScript, error) {
@@ -183,6 +185,9 @@ func (d *dumpDialect) DumpFile(_ context.Context, scope DumpScope) (*DumpFileScr
 
 func (d *dumpDialect) DumpObject(_ context.Context, object DumpObject) (*DumpObjectScript, error) {
 	d.objects = append(d.objects, object)
+	if d.unwritten[object.Name] {
+		return &DumpObjectScript{}, nil
+	}
 	script := &DumpObjectScript{
 		Drop:         []string{fmt.Sprintf("DROP %s IF EXISTS %s;", strings.ToUpper(object.Kind), object.Name)},
 		Definition:   []string{object.Definition + ";"},
@@ -802,6 +807,40 @@ func TestDumpWholeTakesViewsFromListObjects(t *testing.T) {
 		assert.Equal(t, "sales.b", dialect.objects[0].Name)
 		assert.NotContains(t, out, "VIEW")
 	})
+}
+
+// 方言不转储的对象（给出的定义为空，如 Oracle 列在视图里的物化视图）不在文件里：没有注释分隔行与删除语句，
+// 不计入对象数，进度里也没有它；方言拿到的范围里也没有它。
+func TestDumpLeavesOutObjectsTheDialectWritesNothingFor(t *testing.T) {
+	source := &dumpSource{
+		ddl: map[string]string{
+			"sales.b": "CREATE TABLE sales.b ()", "sales.mv": "CREATE MATERIALIZED VIEW sales.mv AS SELECT 1",
+			"sales.v": "CREATE VIEW sales.v AS SELECT 1",
+		},
+		tables: []string{"sales.b"},
+		views:  []string{"sales.mv", "sales.v"},
+	}
+	dialect := &dumpDialect{plain: true, unwritten: map[string]bool{"sales.mv": true}}
+	var out bytes.Buffer
+	var progress []DumpProgress
+	result, err := Dump(context.Background(), DumpRequest{
+		Database: "shop", Schema: "sales", Whole: true, Options: allOptions, Header: dumpHeader(), Writer: &out,
+		Progress: func(p DumpProgress) { progress = append(progress, p) },
+	}, source, dialect)
+	require.NoError(t, err)
+
+	assert.NotContains(t, out.String(), "sales.mv")
+	assert.Equal(t, 2, result.Objects)
+	var finished []string
+	for _, p := range progress {
+		assert.Equal(t, 2, p.Objects)
+		if p.Finished != nil {
+			finished = append(finished, p.Finished.Name)
+		}
+	}
+	assert.Equal(t, []string{"sales.b", "sales.v"}, finished)
+	require.Len(t, dialect.scopes, 1)
+	assert.Equal(t, []string{"sales.b", "sales.v"}, dialect.scopes[0].Tables)
 }
 
 // 转储选中的表时只有表与选中的视图：不列库里的表，不写函数、过程与触发器。
