@@ -32,6 +32,41 @@ type EqualityComparer interface {
 	EqualitySQL(columnType, column, literal string) string
 }
 
+// InsertRowWriter 是方言里「某一行的 INSERT 要不要整条自己写」：默认的 INSERT INTO t (列) VALUES (值);
+// 放不下的行（Oracle 放不进一条字面量的 LOB，要写成先插入空 LOB 再分段追加的 PL/SQL 块，以单独
+// 一行 / 结尾）由它写出完整语句。只用于行语句生成器（RowStatementWriter：转储、复制为 INSERT、
+// 导出为 SQL）的 RowInsert；RowUpdate 与表格编辑（RowEditor）不经过它。内置驱动都不实现。
+type InsertRowWriter interface {
+	// InsertRowSQL 为一行写出完整语句（自带结尾的分号或 /）；ok 为假表示这一行不用它，回落到默认
+	// INSERT。返回 error 时整个请求失败。
+	InsertRowSQL(row InsertRow) (statement string, ok bool, err error)
+}
+
+// InsertRow 是 InsertRowWriter 写一行语句要的全部：表引用、列（按语句里的次序，带类型与值）、
+// 引号与字面量规则。
+type InsertRow struct {
+	// TableRef 是已按 RowStatementsRequest.OmitDatabase 取好的表引用。
+	TableRef string
+	// Columns 是写入的列，次序同 RowStatementsRequest.Columns；行里没有的列 Value 为 nil。
+	Columns []InsertColumn
+	// Modifier 是 RowStatementsRequest.InsertModifier（可为空）：默认 INSERT 把它写在列与 VALUES 之间；
+	// 自己写整条语句的方言自行决定是否适用。
+	Modifier string
+	// Quote 给标识符加引号（Tables.QuoteIdent）。
+	Quote func(string) string
+	// Literals 是这条连接上的字面量规则。
+	Literals Literals
+}
+
+// InsertColumn 是 InsertRow 里的一列。
+type InsertColumn struct {
+	Name string
+	// Type 是列类型文本（TableColumn.Type）；表的列里没有这一列时为空串。
+	Type string
+	// Value 是这一行这一列的值，含义同 RowStatementsRequest.Rows。
+	Value any
+}
+
 // PrepareRowStatements 在一条连接上查表的列类型与方言的字面量规则，用完即还；交回的 writer
 // 只按它们生成语句，不再碰数据库。
 func (s *Session) PrepareRowStatements(ctx context.Context, database, table string) (dbdriver.RowStatementWriter, error) {
@@ -69,7 +104,9 @@ func (s *Session) rowSQL(tables Tables, writer RowWriter, tableRef string, colum
 	if comparer, ok := s.dialect.(EqualityComparer); ok {
 		equality = comparer.EqualitySQL
 	}
+	inserter, _ := s.dialect.(InsertRowWriter)
 	return rowSQL{
+		inserter: inserter,
 		tableRef: tableRef,
 		quote:    tables.QuoteIdent,
 		literals: literals,
@@ -83,7 +120,9 @@ func (s *Session) rowSQL(tables Tables, writer RowWriter, tableRef string, colum
 type rowSQL struct {
 	tableRef string
 	// bareRef 是不带库名的表引用（RowStatementsRequest.OmitDatabase）。
-	bareRef  string
+	bareRef string
+	// inserter 非空时先问它某一行的 INSERT 要不要整条自己写。
+	inserter InsertRowWriter
 	quote    func(string) string
 	literals Literals
 	// types 是列名到列类型文本；表的列里没有的列不在其中。
@@ -119,6 +158,18 @@ func (w rowSQL) statement(req dbdriver.RowStatementsRequest, row map[string]any)
 		tableRef = w.bareRef
 	}
 	if req.Kind == dbdriver.RowInsert {
+		if w.inserter != nil {
+			columns := make([]InsertColumn, len(req.Columns))
+			for i, column := range req.Columns {
+				columns[i] = InsertColumn{Name: column, Type: w.types[column], Value: row[column]}
+			}
+			statement, ok, err := w.inserter.InsertRowSQL(InsertRow{
+				TableRef: tableRef, Columns: columns, Modifier: req.InsertModifier, Quote: w.quote, Literals: w.literals,
+			})
+			if err != nil || ok {
+				return statement, err
+			}
+		}
 		names := make([]string, len(req.Columns))
 		values := make([]string, len(req.Columns))
 		for i, column := range req.Columns {

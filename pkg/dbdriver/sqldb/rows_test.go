@@ -207,3 +207,70 @@ func TestQuoteSchemaTable(t *testing.T) {
 		assert.Equal(t, want, QuoteSchemaTable(name, angle), "name %q", name)
 	}
 }
+
+// blockInsertDialect 对 memo 列有值的行写整条语句，其余行放弃，回落到默认 INSERT。
+type blockInsertDialect struct {
+	rowsDialect
+	got *InsertRow
+}
+
+func (d blockInsertDialect) InsertRowSQL(row InsertRow) (string, bool, error) {
+	if d.got != nil {
+		*d.got = row
+	}
+	for _, column := range row.Columns {
+		if column.Name == "memo" && column.Value != nil {
+			if column.Value == "boom" {
+				return "", false, errors.New("cannot write block")
+			}
+			literal, err := row.Literals.Literal(column.Value, column.Type)
+			if err != nil {
+				return "", false, err
+			}
+			return "BEGIN INTO " + row.TableRef + " " + row.Quote("memo") + "=" + literal + " [" + row.Modifier + "];\n/", true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// 实现了 InsertRowWriter 的方言可以为某一行写整条语句；它放弃的行仍是默认 INSERT，
+// 表引用遵循 OmitDatabase，InsertModifier、列类型与字面量规则一并交给它；UPDATE 不经过它。
+func TestRowStatementsLetTheDialectWriteWholeInsertStatements(t *testing.T) {
+	var got InsertRow
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	session := NewSession(db, blockInsertDialect{got: &got})
+	expectColumnTypes(mock)
+
+	req := dbdriver.RowStatementsRequest{
+		Kind: dbdriver.RowInsert, Columns: []string{"id", "memo"}, InsertModifier: "MOD",
+		Rows: []map[string]any{{"id": float64(1), "memo": "x"}, {"id": float64(2)}},
+	}
+	statements, err := dbdrivertest.RowStatements(context.Background(), session, "db", "t", req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"BEGIN INTO <db>.<t> <memo>='x' [MOD];\n/",
+		"INSERT INTO <db>.<t> (<id>, <memo>) MOD VALUES ('2', NULL);",
+	}, statements)
+
+	expectColumnTypes(mock)
+	req.OmitDatabase = true
+	statements, err = dbdrivertest.RowStatements(context.Background(), session, "db", "t", req)
+	require.NoError(t, err)
+	assert.Equal(t, "BEGIN INTO <t> <memo>='x' [MOD];\n/", statements[0])
+	assert.Equal(t, []InsertColumn{{Name: "id", Type: "int", Value: float64(2)}, {Name: "memo", Type: "text"}}, got.Columns)
+
+	expectColumnTypes(mock)
+	req.Rows = []map[string]any{{"id": float64(3), "memo": "boom"}}
+	_, err = dbdrivertest.RowStatements(context.Background(), session, "db", "t", req)
+	assert.EqualError(t, err, "cannot write block")
+
+	expectColumnTypes(mock)
+	statements, err = dbdrivertest.RowStatements(context.Background(), session, "db", "t", dbdriver.RowStatementsRequest{
+		Kind: dbdriver.RowUpdate, Columns: []string{"memo"}, PrimaryKeys: []string{"id"},
+		Rows: []map[string]any{{"id": float64(1), "memo": "x"}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"UPDATE <db>.<t> SET <memo> = 'x' WHERE <id> = '1' ONE ROW;"}, statements)
+}
