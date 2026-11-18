@@ -31,9 +31,9 @@ type DumpRequest struct {
 	Tables []string
 	// WithData 为真时每张表的结构之后写出全部行（视图、函数、过程与触发器只写定义）。
 	WithData bool
-	// Whole 为真时转储整个库（Schema 为空）或整个 schema 的全部对象：ListTables 给出的表与视图，以及
-	// ListObjects 给出的函数、过程与触发器。有 schema 分组的驱动给的名字是「schema.名字」（同 ListTables），
-	// 整个 schema 就是以「Schema.」开头的那些。
+	// Whole 为真时转储整个库（Schema 为空）或整个 schema 的全部对象：ListTables 给出的表，以及 ListObjects
+	// 给出的视图（ListTables 没有列出的也在内）、函数、过程与触发器。有 schema 分组的驱动给的名字是
+	// 「schema.名字」（同 ListTables），整个 schema 就是以「Schema.」开头的那些。
 	Whole bool
 	// Options 是导出选项（「导出数据」之外的，那一项是 WithData）。
 	Options DumpOptions
@@ -305,16 +305,27 @@ func planDump(ctx context.Context, req DumpRequest, source DumpSource) (*dumpPla
 		return nil, fmt.Errorf("list objects: %w", err)
 	}
 	plan := &dumpPlan{listed: slices.Clone(req.Tables)} // 随父表带上的分区接在后面，不能写进调用方的切片
-	var views []*dumpItem
 	if req.Whole {
 		all, err := source.ListTables(ctx, req.Database)
 		if err != nil {
 			return nil, fmt.Errorf("list tables: %w", err)
 		}
 		plan.listed = slices.DeleteFunc(all, func(name string) bool { return !inDumpSchema(req.Schema, name) })
+		// 视图取自 ListObjects：ListTables 也列出的按它的次序，只有 ListObjects 知道的（ListTables 只列表的驱动）
+		// 按 ListObjects 的次序接在后面。
+		for _, view := range objects.Views {
+			if inDumpSchema(req.Schema, view.Name) && !slices.Contains(plan.listed, view.Name) {
+				plan.listed = append(plan.listed, view.Name)
+			}
+		}
 	}
+	isView := make(map[string]bool, len(objects.Views))
+	for _, view := range objects.Views {
+		isView[view.Name] = true
+	}
+	var views []*dumpItem
 	for _, name := range plan.listed {
-		if !slices.ContainsFunc(objects.Views, func(view ObjectMeta) bool { return view.Name == name }) {
+		if !isView[name] {
 			plan.tables = append(plan.tables, &dumpItem{kind: DumpTable, name: name, withData: req.WithData})
 		} else if !req.Whole || req.Options.Views {
 			views = append(views, &dumpItem{kind: ObjectView, name: name})

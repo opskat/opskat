@@ -757,6 +757,53 @@ func TestDumpWholeSchemaKeepsToItsSchema(t *testing.T) {
 	assert.Equal(t, []DumpScope{{Database: "shop", Schema: "sales", Tables: []string{"sales.b", "sales.v"}, Whole: true, Options: allOptions}}, dialect.scopes)
 }
 
+// 整库或整个 schema 的视图取自 ListObjects：ListTables 只列表的驱动（如 Oracle 扩展）照样转储视图。ListTables
+// 也列出的视图按它的次序、只写一次、不当作表，只有 ListObjects 知道的接在后面（按它的次序）；方言拿到的范围里
+// 也有它们。不勾「视图」时一个视图也不写。
+func TestDumpWholeTakesViewsFromListObjects(t *testing.T) {
+	source := func() *dumpSource {
+		return &dumpSource{
+			ddl: map[string]string{
+				"sales.b": "CREATE TABLE sales.b ()", "sales.v_listed": "CREATE VIEW sales.v_listed AS SELECT 1",
+				"sales.v_only": "CREATE VIEW sales.v_only AS SELECT 1", "public.v": "CREATE VIEW public.v AS SELECT 1",
+			},
+			tables: []string{"sales.b", "sales.v_listed"},
+			views:  []string{"public.v", "sales.v_only", "sales.v_listed"},
+		}
+	}
+	dump := func(t *testing.T, options DumpOptions) (*dumpDialect, string) {
+		t.Helper()
+		dialect := &dumpDialect{plain: true}
+		var out bytes.Buffer
+		_, err := Dump(context.Background(), DumpRequest{
+			Database: "shop", Schema: "sales", Whole: true, Options: options, Header: dumpHeader(), Writer: &out,
+		}, source(), dialect)
+		require.NoError(t, err)
+		return dialect, out.String()
+	}
+
+	t.Run("views on", func(t *testing.T) {
+		dialect, _ := dump(t, allOptions)
+		names := make([]string, 0, len(dialect.objects))
+		for _, object := range dialect.objects {
+			names = append(names, object.Kind+" "+object.Name)
+		}
+		assert.Equal(t, []string{"table sales.b", "view sales.v_listed", "view sales.v_only"}, names)
+		assert.Equal(t, []DumpScope{{
+			Database: "shop", Schema: "sales", Tables: []string{"sales.b", "sales.v_listed", "sales.v_only"}, Whole: true, Options: allOptions,
+		}}, dialect.scopes)
+	})
+
+	t.Run("views off", func(t *testing.T) {
+		options := allOptions
+		options.Views = false
+		dialect, out := dump(t, options)
+		require.Len(t, dialect.objects, 1)
+		assert.Equal(t, "sales.b", dialect.objects[0].Name)
+		assert.NotContains(t, out, "VIEW")
+	})
+}
+
 // 转储选中的表时只有表与选中的视图：不列库里的表，不写函数、过程与触发器。
 func TestDumpSelectedTablesLeavesOutRoutinesAndTriggers(t *testing.T) {
 	source := newWholeDumpSource()
