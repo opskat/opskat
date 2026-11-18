@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { requestAutoBackupCheck } from "@/lib/autoBackupSync";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import {
@@ -220,6 +221,7 @@ export function PortForwardPage() {
     }
     setDialogOpen(false);
     notifySuccess(t("forward.saved"));
+    requestAutoBackupCheck();
     void loadConfigs();
   };
 
@@ -234,6 +236,7 @@ export function PortForwardPage() {
       return;
     }
     setDeleteTarget(null);
+    requestAutoBackupCheck();
     void loadConfigs();
   };
 
@@ -259,6 +262,7 @@ export function PortForwardPage() {
           })
       );
       await UpdateForwardConfig(cfg.id, cfg.name, assetId, rules);
+      requestAutoBackupCheck();
       if (wasRunning) {
         await startAndReport(cfg.id);
       } else {

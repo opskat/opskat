@@ -50,6 +50,7 @@ import {
 import { backup_svc } from "../../../wailsjs/go/models";
 import { ExportDialog, type WebDAVExportDefaults } from "@/components/settings/ExportDialog";
 import { BackupImportDialog, type BackupImportSource } from "@/components/settings/BackupImportDialog";
+import { BACKUP_GIST_CARD_ID, BACKUP_WEBDAV_CARD_ID } from "@/components/settings/AutoBackupCard";
 import {
   Download,
   Upload,
@@ -69,6 +70,7 @@ import { notifyCopied, notifySuccess } from "@/lib/notify";
 import { BrowserOpenURL } from "../../../wailsjs/runtime/runtime";
 import { SecretInput } from "@/components/SecretInput";
 import { errorMessage } from "@/lib/errorMessage";
+import { formatLocalDateTime } from "@/lib/formatDateTime";
 
 const githubTokenInvalidMarker = "[GITHUB_TOKEN_INVALID]";
 
@@ -534,7 +536,7 @@ export function BackupSection() {
       </Card>
 
       {/* Gist backup */}
-      <Card>
+      <Card id={BACKUP_GIST_CARD_ID} className="scroll-mt-4">
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-1.5">
             <Github className="h-4 w-4" />
@@ -596,7 +598,7 @@ export function BackupSection() {
       </Card>
 
       {/* WebDAV backup */}
-      <Card>
+      <Card id={BACKUP_WEBDAV_CARD_ID} className="scroll-mt-4">
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-1.5">
             <Cloud className="h-4 w-4" />
@@ -691,7 +693,12 @@ export function BackupSection() {
                           <SelectContent>
                             {webdavBackups.map((backup) => (
                               <SelectItem key={backup.name} value={backup.name}>
-                                {t("backup.webdavBackupItem", { name: backup.name, size: backup.size })}
+                                {backup.auto && backup.createdAt
+                                  ? t("backup.webdavAutoBackupItem", {
+                                      time: formatLocalDateTime(backup.createdAt),
+                                      size: backup.size,
+                                    })
+                                  : t("backup.webdavBackupItem", { name: backup.name, size: backup.size })}
                               </SelectItem>
                             ))}
                           </SelectContent>

@@ -1296,10 +1296,83 @@
       "desc": "Turn on detailed logging, open the logs folder, or report a bug"
     }
   },
+  "autoBackup": {
+    "title": "Automatic backup",
+    "desc": "Checks your data on a schedule and, when something changed, writes an encrypted backup to the locations selected below. Unchanged data is never uploaded again.",
+    "enable": "Enable automatic backup",
+    "contents": "Includes assets, groups, credentials, policy groups, port forwards, shortcuts and terminal themes — always encrypted with the password below.",
+    "password": "Backup password",
+    "passwordPlaceholder": "Set a password to encrypt automatic backups",
+    "passwordSavedPlaceholder": "Saved — leave blank to keep it",
+    "passwordHint": "You'll need this password to restore an automatic backup. Changing it only affects new backups; older ones still need the old password.",
+    "passwordRequired": "Set a backup password",
+    "interval": "Check every",
+    "intervalOption": {
+      "5": "5 minutes",
+      "30": "30 minutes",
+      "60": "Hour",
+      "1440": "Day"
+    },
+    "keep": "Keep",
+    "keepOption": "Latest {{count}}",
+    "targets": "Back up to",
+    "targetsRequired": "Choose at least one location",
+    "target": {
+      "webdav": "WebDAV",
+      "gist": "GitHub Gist",
+      "local": "Local folder"
+    },
+    "webdav": {
+      "unavailable": "WebDAV isn't set up yet. ",
+      "goConfigure": "Set it up below"
+    },
+    "gist": {
+      "unavailable": "Not signed in to GitHub. ",
+      "goConfigure": "Sign in below",
+      "detail": "{{user}} · one private gist, overwritten each time; older versions are in GitHub's revision history and aren't counted toward Keep"
+    },
+    "local": {
+      "placeholder": "Choose a folder — a synced folder such as iCloud or OneDrive works too",
+      "pick": "Choose folder",
+      "required": "Choose a folder"
+    },
+    "status": {
+      "running": "Backing up…",
+      "queued": "Waiting",
+      "failed": "Failed",
+      "failedRetry": "Failed · retrying {{time}}"
+    },
+    "summary": {
+      "running": "Checking for changes…",
+      "saved": "Settings saved · next check {{next}}",
+      "never": "Not checked yet",
+      "unchanged": "Checked {{time}} · nothing changed, skipped",
+      "written": "Checked {{time}} · new version written",
+      "failed": "Checked {{time}} · some locations failed",
+      "failedWithError": "Checked {{time}} · {{error}}"
+    },
+    "save": "Save",
+    "saved": "Automatic backup settings saved",
+    "saveFailed": "Couldn't save automatic backup settings",
+    "runNow": "Back up now",
+    "running": "Backing up…",
+    "unsavedHint": "You have unsaved changes — save them before backing up now.",
+    "error": {
+      "failed": "Write failed",
+      "folder_missing": "Folder not found",
+      "not_a_folder": "The selected path isn't a folder",
+      "write_failed": "Couldn't write the backup file",
+      "folder_required": "Choose a folder",
+      "github_signed_out": "Not signed in to GitHub",
+      "export_failed": "Couldn't build the backup",
+      "encrypt_failed": "Couldn't encrypt the backup",
+      "disabled": "Automatic backup is off"
+    }
+  },
   "backup": {
     "title": "Backup",
     "file": "File Backup",
-    "fileDesc": "Export or import backup files, with optional encryption",
+    "fileDesc": "Export or import backup files, with optional encryption. Automatic backups saved to a local folder are imported here too",
     "export": "Export Backup",
     "import": "Import Backup",
     "exportSuccess": "Export successful",
@@ -1394,7 +1467,8 @@
     "importMode": "Import Mode",
     "modeMerge": "Merge (append)",
     "modeReplace": "Replace (clear existing data)",
-    "replaceWarning": "Replace mode will delete all existing data in selected modules. This cannot be undone!"
+    "replaceWarning": "Replace mode will delete all existing data in selected modules. This cannot be undone!",
+    "webdavAutoBackupItem": "Automatic backup · {{time}} ({{size}} bytes)"
   },
   "setup": {
     "title": "Configure AI Assistant",

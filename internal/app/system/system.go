@@ -11,6 +11,7 @@ import (
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"github.com/opskat/opskat/internal/service/auto_backup_svc"
 	"github.com/opskat/opskat/internal/sshpool"
 )
 
@@ -45,6 +46,8 @@ type System struct {
 	storeRefresh func(context.Context) error
 	// emit replaces the Wails event emit in tests.
 	emit func(event string, data ...any)
+	// autoBackup 默认是 auto_backup_svc.Default()；测试注入使用临时状态文件的实例。
+	autoBackup *auto_backup_svc.Service
 }
 
 func (s *System) SetConfirmQuitHandler(handler func()) { s.confirmQuit = handler }
@@ -113,10 +116,13 @@ func (s *System) Startup(ctx context.Context) {
 	s.startAutoUpdateCheck()
 	s.emitSystemStatusImpl()
 	s.watchCommandReviewConfigErrors()
+	s.startAutoBackup()
 }
 
-// Cleanup 关闭时调用：当前没有持有的资源。
-func (s *System) Cleanup() {}
+// Cleanup 关闭时调用：停止自动备份调度。
+func (s *System) Cleanup() {
+	s.autoBackupService().Stop()
+}
 
 // Lang 返回当前语言（LangProvider 接口）。
 func (s *System) Lang() string {

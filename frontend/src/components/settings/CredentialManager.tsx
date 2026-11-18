@@ -1,4 +1,5 @@
 import { AsyncState } from "@/components/common/AsyncState";
+import { requestAutoBackupCheck } from "@/lib/autoBackupSync";
 import { useState, useEffect, useCallback, useRef, type CSSProperties, type DragEvent } from "react";
 import { toast } from "sonner";
 import { notifyCopied, notifySuccess } from "@/lib/notify";
@@ -133,8 +134,10 @@ export function CredentialManager() {
   const loadError = credentialsError ?? agentSourcesError;
   const hasListData = credentials.length > 0 || agentSources.length > 0;
 
+  // 增删改凭据后（及失败重试时）调用；顺带请求一次自动备份检查（数据未变化时后端跳过）。
   const fetchCredentials = useCallback(() => {
     setLoading(true);
+    requestAutoBackupCheck();
     void loadCredentials();
   }, [loadCredentials]);
 

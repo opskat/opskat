@@ -44,6 +44,7 @@ import { asset_entity, group_entity } from "../wailsjs/go/models";
 import { EventsEmit, EventsOn, WindowToggleMaximise } from "../wailsjs/runtime/runtime";
 import { ConfirmQuit } from "../wailsjs/go/system/System";
 import { errorMessage } from "@/lib/errorMessage";
+import { installAutoBackupSync } from "@/lib/autoBackupSync";
 
 function App() {
   const { t } = useTranslation();
@@ -97,6 +98,9 @@ function App() {
       .fetchSessions()
       .catch((err) => console.error("Fetch external edit sessions failed:", err));
   }, []);
+
+  // 自动备份：同步快捷键 / 主题快照，数据改动后请求检查
+  useEffect(() => installAutoBackupSync(), []);
 
   // 监听外部数据变更（opsctl 等），自动刷新 UI
   useEffect(() => {

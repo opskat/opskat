@@ -143,21 +143,22 @@ function loadCustom(): Partial<Record<ShortcutAction, ShortcutBinding>> {
   }
 }
 
-function saveCustom(shortcuts: Record<ShortcutAction, ShortcutBinding>) {
+/** 与默认值不同的绑定（本地存储、备份导出都只保存这些）。 */
+export function customShortcuts(
+  shortcuts: Record<ShortcutAction, ShortcutBinding>
+): Partial<Record<ShortcutAction, ShortcutBinding>> {
   const custom: Partial<Record<ShortcutAction, ShortcutBinding>> = {};
   for (const [key, val] of Object.entries(shortcuts)) {
     const def = DEFAULT_SHORTCUTS[key as ShortcutAction];
-    if (
-      def &&
-      (val.code !== def.code ||
-        val.mod !== def.mod ||
-        val.ctrl !== def.ctrl ||
-        val.shift !== def.shift ||
-        val.alt !== def.alt)
-    ) {
+    if (def && !bindingsEqual(val, def)) {
       custom[key as ShortcutAction] = val;
     }
   }
+  return custom;
+}
+
+function saveCustom(shortcuts: Record<ShortcutAction, ShortcutBinding>) {
+  const custom = customShortcuts(shortcuts);
   if (Object.keys(custom).length > 0) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(custom));
   } else {

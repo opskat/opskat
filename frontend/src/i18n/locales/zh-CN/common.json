@@ -1296,10 +1296,83 @@
       "desc": "开启详细日志、打开日志目录或反馈问题"
     }
   },
+  "autoBackup": {
+    "title": "自动备份",
+    "desc": "按设定间隔检查数据，有变化时自动加密备份到下方选中的位置；数据未变化时不会重复上传。",
+    "enable": "启用自动备份",
+    "contents": "备份内容：资产、分组、凭据、策略组、端口转发、快捷键、终端主题。始终使用下方密码加密。",
+    "password": "备份密码",
+    "passwordPlaceholder": "设置用于加密自动备份的密码",
+    "passwordSavedPlaceholder": "已保存，留空则不修改",
+    "passwordHint": "恢复自动备份时需要此密码。修改后只影响之后的备份，已有的旧版本仍需旧密码。",
+    "passwordRequired": "请设置备份密码",
+    "interval": "检查间隔",
+    "intervalOption": {
+      "5": "每 5 分钟",
+      "30": "每 30 分钟",
+      "60": "每小时",
+      "1440": "每天"
+    },
+    "keep": "保留份数",
+    "keepOption": "最近 {{count}} 份",
+    "targets": "备份位置",
+    "targetsRequired": "至少选择一个备份位置",
+    "target": {
+      "webdav": "WebDAV",
+      "gist": "GitHub Gist",
+      "local": "本地文件夹"
+    },
+    "webdav": {
+      "unavailable": "尚未配置 WebDAV。",
+      "goConfigure": "前往下方配置"
+    },
+    "gist": {
+      "unavailable": "尚未登录 GitHub。",
+      "goConfigure": "前往下方登录",
+      "detail": "{{user}} · 单个私密 Gist，每次覆盖；旧版本在 GitHub 修订历史中，不受保留份数限制"
+    },
+    "local": {
+      "placeholder": "选择一个文件夹，可以是 iCloud / OneDrive 等同步目录",
+      "pick": "选择文件夹",
+      "required": "请选择备份文件夹"
+    },
+    "status": {
+      "running": "备份中…",
+      "queued": "等待中",
+      "failed": "失败",
+      "failedRetry": "失败 · {{time}}重试"
+    },
+    "summary": {
+      "running": "正在检查数据变化…",
+      "saved": "设置已保存 · 下次检查{{next}}",
+      "never": "尚未检查",
+      "unchanged": "上次检查{{time}} · 数据无变化，已跳过",
+      "written": "上次检查{{time}} · 已写入新版本",
+      "failed": "上次检查{{time}} · 部分位置失败",
+      "failedWithError": "上次检查{{time}} · {{error}}"
+    },
+    "save": "保存",
+    "saved": "自动备份设置已保存",
+    "saveFailed": "保存自动备份设置失败",
+    "runNow": "立即备份",
+    "running": "备份中…",
+    "unsavedHint": "有未保存的修改，保存后才能立即备份。",
+    "error": {
+      "failed": "写入失败",
+      "folder_missing": "文件夹不存在",
+      "not_a_folder": "所选路径不是文件夹",
+      "write_failed": "写入备份文件失败",
+      "folder_required": "请选择备份文件夹",
+      "github_signed_out": "尚未登录 GitHub",
+      "export_failed": "生成备份失败",
+      "encrypt_failed": "加密备份失败",
+      "disabled": "自动备份未开启"
+    }
+  },
   "backup": {
     "title": "备份",
     "file": "文件备份",
-    "fileDesc": "导出或导入备份文件，支持加密",
+    "fileDesc": "导出或导入备份文件，支持加密（本地文件夹中的自动备份也从这里导入）",
     "export": "导出备份",
     "import": "导入备份",
     "exportSuccess": "导出成功",
@@ -1394,7 +1467,8 @@
     "importMode": "导入模式",
     "modeMerge": "合并（追加）",
     "modeReplace": "覆盖（清除已有数据）",
-    "replaceWarning": "覆盖模式将删除选中模块的所有现有数据，此操作不可恢复！"
+    "replaceWarning": "覆盖模式将删除选中模块的所有现有数据，此操作不可恢复！",
+    "webdavAutoBackupItem": "自动备份 · {{time}}（{{size}} 字节）"
   },
   "setup": {
     "title": "配置 AI 助手",
