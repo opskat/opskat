@@ -130,7 +130,7 @@ func (s *hostKeySvc) Trust(ctx context.Context, key PresentedKey, replace bool) 
 
 	now := s.now().Unix()
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		stored = &host_key_entity.HostKey{
+		created := &host_key_entity.HostKey{
 			Host:        key.Host,
 			Port:        key.Port,
 			KeyType:     key.KeyType,
@@ -139,7 +139,21 @@ func (s *hostKeySvc) Trust(ctx context.Context, key PresentedKey, replace bool) 
 			FirstSeen:   now,
 			LastSeen:    now,
 		}
-	} else if stored.PublicKey == key.PublicKey {
+		if err := s.repo().Upsert(ctx, created); err != nil {
+			return s.failTrust(ctx, key, "persist trusted host key", err)
+		}
+		// 并发的首次握手只会有一个插入生效，重新读取以确认落库的正是本次出示的密钥。
+		stored, err = s.repo().FindByHostPortKeyType(ctx, key.Host, key.Port, key.KeyType)
+		if err != nil {
+			return s.failTrust(ctx, key, "read stored host key after trust", err)
+		}
+		if stored.PublicKey == key.PublicKey {
+			logger.Ctx(ctx).Info("host key trust end",
+				zap.String("host", key.Host), zap.Int("port", key.Port), zap.String("keyType", key.KeyType), zap.Bool("replace", replace))
+			return nil
+		}
+	}
+	if stored.PublicKey == key.PublicKey {
 		stored.LastSeen = now
 	} else {
 		if !replace {
@@ -153,12 +167,16 @@ func (s *hostKeySvc) Trust(ctx context.Context, key PresentedKey, replace bool) 
 	}
 
 	if err := s.repo().Upsert(ctx, stored); err != nil {
-		wrapped := fmt.Errorf("persist trusted host key: %w", err)
-		logger.Ctx(ctx).Error("host key trust failed",
-			zap.String("host", key.Host), zap.Int("port", key.Port), zap.String("keyType", key.KeyType), zap.Error(wrapped))
-		return wrapped
+		return s.failTrust(ctx, key, "persist trusted host key", err)
 	}
 	logger.Ctx(ctx).Info("host key trust end",
 		zap.String("host", key.Host), zap.Int("port", key.Port), zap.String("keyType", key.KeyType), zap.Bool("replace", replace))
 	return nil
+}
+
+func (s *hostKeySvc) failTrust(ctx context.Context, key PresentedKey, what string, err error) error {
+	wrapped := fmt.Errorf("%s: %w", what, err)
+	logger.Ctx(ctx).Error("host key trust failed",
+		zap.String("host", key.Host), zap.Int("port", key.Port), zap.String("keyType", key.KeyType), zap.Error(wrapped))
+	return wrapped
 }
