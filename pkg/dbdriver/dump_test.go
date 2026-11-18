@@ -173,7 +173,7 @@ type dumpDialect struct {
 	partitions map[string][]string
 	// plain 为真时对象只给出存在则删除与定义（像什么钩子都没实现的方言）。
 	plain bool
-	// unwritten 是方言不转储的对象（给出空的语句，如 Oracle 列在视图里的物化视图）。
+	// unwritten 是方言不转储的对象（给出空的语句，如 Oracle 列在视图里的物化视图），键是「种类 名字」。
 	unwritten map[string]bool
 }
 
@@ -185,7 +185,7 @@ func (d *dumpDialect) DumpFile(_ context.Context, scope DumpScope) (*DumpFileScr
 
 func (d *dumpDialect) DumpObject(_ context.Context, object DumpObject) (*DumpObjectScript, error) {
 	d.objects = append(d.objects, object)
-	if d.unwritten[object.Name] {
+	if d.unwritten[object.Kind+" "+object.Name] {
 		return &DumpObjectScript{}, nil
 	}
 	script := &DumpObjectScript{
@@ -820,7 +820,7 @@ func TestDumpLeavesOutObjectsTheDialectWritesNothingFor(t *testing.T) {
 		tables: []string{"sales.b"},
 		views:  []string{"sales.mv", "sales.v"},
 	}
-	dialect := &dumpDialect{plain: true, unwritten: map[string]bool{"sales.mv": true}}
+	dialect := &dumpDialect{plain: true, unwritten: map[string]bool{"view sales.mv": true}}
 	var out bytes.Buffer
 	var progress []DumpProgress
 	result, err := Dump(context.Background(), DumpRequest{
@@ -841,6 +841,24 @@ func TestDumpLeavesOutObjectsTheDialectWritesNothingFor(t *testing.T) {
 	assert.Equal(t, []string{"sales.b", "sales.v"}, finished)
 	require.Len(t, dialect.scopes, 1)
 	assert.Equal(t, []string{"sales.b", "sales.v"}, dialect.scopes[0].Tables)
+}
+
+// 方言不转储的函数与同名的表无关（PostgreSQL 的函数与表不共用名字空间）：表照样写，也还在交给方言的范围里。
+func TestDumpLeavesOutOnlyTheUnwrittenObjectNotItsNamesake(t *testing.T) {
+	source := newWholeDumpSource()
+	source.functions = []string{"users"}
+	source.sources["function users"] = "CREATE FUNCTION users() RETURNS int"
+	dialect := &dumpDialect{plain: true, unwritten: map[string]bool{"function users": true}}
+	var out bytes.Buffer
+	_, err := Dump(context.Background(), DumpRequest{
+		Database: "shop", Whole: true, Options: allOptions, Header: dumpHeader(), Writer: &out,
+	}, source, dialect)
+	require.NoError(t, err)
+
+	assert.Contains(t, out.String(), "CREATE TABLE users")
+	assert.NotContains(t, out.String(), "CREATE FUNCTION users")
+	require.Len(t, dialect.scopes, 1)
+	assert.Contains(t, dialect.scopes[0].Tables, "users")
 }
 
 // 转储选中的表时只有表与选中的视图：不列库里的表，不写函数、过程与触发器。

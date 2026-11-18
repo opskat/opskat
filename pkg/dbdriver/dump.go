@@ -407,11 +407,12 @@ func (d *dump) prepareAll(plan *dumpPlan) error {
 }
 
 // leaveOutUnwritten 去掉方言不转储的对象（给出的 Definition 为空，见 DumpObjectScript.Definition）：它们不在
-// 文件里，也不在交给方言的范围与对象数里。
+// 文件里，也不在交给方言的范围与对象数里。范围（listed）里只有表与视图：同名的函数或过程（不共用名字空间的库）
+// 不写时，表还在其中。
 func (p *dumpPlan) leaveOutUnwritten() {
 	unwritten := func(item *dumpItem) bool { return len(item.script.Definition) == 0 }
 	for _, item := range slices.Concat(p.tables, p.definitions) {
-		if unwritten(item) {
+		if unwritten(item) && (item.kind == DumpTable || item.kind == ObjectView) {
 			p.listed = slices.DeleteFunc(p.listed, func(name string) bool { return name == item.name })
 		}
 	}
