@@ -71,8 +71,16 @@ func (r *memoryHostKeyRepo) Upsert(_ context.Context, key *host_key_entity.HostK
 		return r.upsertErr
 	}
 	r.upserts++
+	mapKey := hostKeyMapKey(key.Host, key.Port, key.KeyType)
+	if key.ID == 0 {
+		// same contract as the SQL repo: inserting an endpoint that already has a key keeps the stored one
+		if r.keys[mapKey] != nil {
+			return nil
+		}
+		key.ID = int64(len(r.keys) + 1000)
+	}
 	keyCopy := *key
-	r.keys[hostKeyMapKey(key.Host, key.Port, key.KeyType)] = &keyCopy
+	r.keys[mapKey] = &keyCopy
 	return nil
 }
 
@@ -291,4 +299,45 @@ func TestTrustAgainstSQLiteKeepsFirstSeenAndHonoursReplace(t *testing.T) {
 	require.Equal(t, "SHA256:b", stored.Fingerprint)
 	require.Equal(t, int64(1000), stored.FirstSeen)
 	require.Equal(t, int64(3000), stored.LastSeen)
+}
+
+// lostInsertRaceRepo stores a competing key right before the service's first read, so that read reports
+// no record and the service's own insert is the one that loses the race.
+type lostInsertRaceRepo struct {
+	host_key_repo.HostKeyRepo
+	competing *host_key_entity.HostKey
+}
+
+func (r *lostInsertRaceRepo) FindByHostPortKeyType(ctx context.Context, host string, port int, keyType string) (*host_key_entity.HostKey, error) {
+	if c := r.competing; c != nil {
+		r.competing = nil
+		if err := r.Upsert(ctx, c); err != nil {
+			return nil, err
+		}
+		return nil, gorm.ErrRecordNotFound
+	}
+	return r.HostKeyRepo.FindByHostPortKeyType(ctx, host, port, keyType)
+}
+
+func TestTrustFirstUseThatLosesTheInsertRaceComparesWithTheWinner(t *testing.T) {
+	openHostKeySQLite(t)
+	ctx := context.Background()
+	key := PresentedKey{Host: "jump.example", Port: 22, KeyType: "ssh-ed25519", PublicKey: "pubA", Fingerprint: "SHA256:a"}
+	winner := func(pub, fp string) *host_key_entity.HostKey {
+		return &host_key_entity.HostKey{Host: key.Host, Port: key.Port, KeyType: key.KeyType, PublicKey: pub, Fingerprint: fp, FirstSeen: 1, LastSeen: 1}
+	}
+
+	same := &lostInsertRaceRepo{HostKeyRepo: host_key_repo.NewHostKey(), competing: winner("pubA", "SHA256:a")}
+	require.NoError(t, New(same).Trust(ctx, key, false))
+
+	other := key
+	other.Host = "other.example"
+	different := &lostInsertRaceRepo{HostKeyRepo: host_key_repo.NewHostKey(), competing: winner("pubB", "SHA256:b")}
+	different.competing.Host = other.Host
+	require.ErrorIs(t, New(different).Trust(ctx, other, false), ErrChangedKeyRequiresReplacement)
+
+	stored, err := host_key_repo.NewHostKey().FindByHostPortKeyType(ctx, other.Host, other.Port, other.KeyType)
+	require.NoError(t, err)
+	require.Equal(t, "pubB", stored.PublicKey, "the losing first-use trust must not overwrite the winner")
+	require.Equal(t, int64(1), stored.FirstSeen)
 }

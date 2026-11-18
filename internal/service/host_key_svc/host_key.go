@@ -122,10 +122,7 @@ func (s *hostKeySvc) Trust(ctx context.Context, key PresentedKey, replace bool) 
 		zap.String("host", key.Host), zap.Int("port", key.Port), zap.String("keyType", key.KeyType), zap.Bool("replace", replace))
 	stored, err := s.repo().FindByHostPortKeyType(ctx, key.Host, key.Port, key.KeyType)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		wrapped := fmt.Errorf("read stored host key before trust: %w", err)
-		logger.Ctx(ctx).Error("host key trust failed",
-			zap.String("host", key.Host), zap.Int("port", key.Port), zap.String("keyType", key.KeyType), zap.Error(wrapped))
-		return wrapped
+		return s.failTrust(ctx, key, "read stored host key before trust", err)
 	}
 
 	now := s.now().Unix()
