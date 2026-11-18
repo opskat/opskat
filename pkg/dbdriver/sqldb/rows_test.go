@@ -214,7 +214,23 @@ type blockInsertDialect struct {
 	got *InsertRow
 }
 
-func (d blockInsertDialect) InsertRowSQL(row InsertRow) (string, bool, error) {
+// 同一个方言类型既能是 RowEditor 又能是 InsertRowWriter（Oracle 扩展就是如此）：两个接口的方法不能重名。
+var _ interface {
+	RowEditor
+	InsertRowWriter
+} = blockInsertDialect{}
+
+func (blockInsertDialect) InsertRowSQL(tableRef, columns, values string, _ bool) string {
+	return "INSERT " + tableRef + " (" + columns + ") VALUES (" + values + ");"
+}
+
+func (blockInsertDialect) DeleteRowSQL(tableRef, where string) string {
+	return "DELETE FROM " + tableRef + " WHERE " + where + ";"
+}
+
+func (blockInsertDialect) ExactRow(string, string) (string, bool) { return "", false }
+
+func (d blockInsertDialect) RowInsertStatement(row InsertRow) (string, bool, error) {
 	if d.got != nil {
 		*d.got = row
 	}

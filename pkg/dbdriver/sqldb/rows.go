@@ -37,9 +37,9 @@ type EqualityComparer interface {
 // 一行 / 结尾）由它写出完整语句。只用于行语句生成器（RowStatementWriter：转储、复制为 INSERT、
 // 导出为 SQL）的 RowInsert；RowUpdate 与表格编辑（RowEditor）不经过它。内置驱动都不实现。
 type InsertRowWriter interface {
-	// InsertRowSQL 为一行写出完整语句（自带结尾的分号或 /）；ok 为假表示这一行不用它，回落到默认
+	// RowInsertStatement 为一行写出完整语句（自带结尾的分号或 /）；ok 为假表示这一行不用它，回落到默认
 	// INSERT。返回 error 时整个请求失败。
-	InsertRowSQL(row InsertRow) (statement string, ok bool, err error)
+	RowInsertStatement(row InsertRow) (statement string, ok bool, err error)
 }
 
 // InsertRow 是 InsertRowWriter 写一行语句要的全部：表引用、列（按语句里的次序，带类型与值）、
@@ -163,7 +163,7 @@ func (w rowSQL) statement(req dbdriver.RowStatementsRequest, row map[string]any)
 			for i, column := range req.Columns {
 				columns[i] = InsertColumn{Name: column, Type: w.types[column], Value: row[column]}
 			}
-			statement, ok, err := w.inserter.InsertRowSQL(InsertRow{
+			statement, ok, err := w.inserter.RowInsertStatement(InsertRow{
 				TableRef: tableRef, Columns: columns, Modifier: req.InsertModifier, Quote: w.quote, Literals: w.literals,
 			})
 			if err != nil || ok {
