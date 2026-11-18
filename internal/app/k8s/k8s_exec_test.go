@@ -985,3 +985,73 @@ func TestK8sExecStandardShellsStillLogTheirPath(t *testing.T) {
 		})
 	}
 }
+
+// 集群回显命令的两种常见形式：连不上时 client-go 的错误带着整条 exec URL（每个参数一个 command=），
+// 运行时（containerd）报错时以 %v 打出整个 argv。口令是其他参数的超串、或短于 3 个字符时也不能漏出。
+func TestK8sExecCustomCommandMaskedInEchoedForms(t *testing.T) {
+	refused := func(t *testing.T) string {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		addr := l.Addr().String()
+		require.NoError(t, l.Close())
+		return addr
+	}
+	runtimeEcho := func(t *testing.T) string {
+		return k8stest.NewExecServer(t, false, func(s *k8stest.ExecSession) int {
+			s.Failure = fmt.Sprintf("error executing command %v, exit code 127", s.Command())
+			return 0
+		}).Host()
+	}
+	for _, tc := range []struct {
+		name, shell, secret string
+	}{
+		{"password contains the program name", "mysql -p'mysql" + execLeakMarker + "'", execLeakMarker},
+		{"two-character password", `redis-cli  -a "Zq"`, "Zq"},
+	} {
+		for _, echo := range []struct {
+			name   string
+			target func(t *testing.T) string
+		}{{"connection refused", refused}, {"runtime error", runtimeEcho}} {
+			t.Run(tc.name+"/"+echo.name, func(t *testing.T) {
+				logs := observeLogs(t)
+				k, rec, c := execTestBinder(t, echo.target(t))
+				req := execReq("web-0")
+				req.Shell = tc.shell
+				if id, err := k.startExec(c, req); err == nil {
+					rec.waitEnd(t, id)
+					require.Eventually(t, func() bool { return len(logs.FilterMessage("k8s exec ended").All()) > 0 }, 5*time.Second, 10*time.Millisecond)
+				}
+				require.NotEmpty(t, logs.FilterMessage("k8s exec failed").All())
+				for _, e := range logs.All() {
+					for key, v := range e.ContextMap() {
+						assert.NotContains(t, fmt.Sprint(v), tc.secret, "%s field %s", e.Message, key)
+					}
+				}
+			})
+		}
+	}
+}
+
+// 退出流程开始后不再开新会话：它在等待清理之后才连上的话没人等它的清理，容器里会遗留 shell。
+func TestEndExecSessionsRefusesLaterSessions(t *testing.T) {
+	observeLogs(t)
+	srv := k8stest.NewExecServer(t, false, nil)
+	k, rec, c := execTestBinder(t, srv.Host())
+	a, err := k.startExec(c, execReq("web-0"))
+	require.NoError(t, err)
+	require.True(t, EndExecSessions(k, 10*time.Second))
+	rec.waitEnd(t, a)
+	opened := len(srv.Commands(true))
+
+	_, err = k.startExec(c, execReq("web-1"))
+	require.Error(t, err)
+	assert.Len(t, srv.Commands(true), opened)
+}
+
+// 抹命令只针对它的片段：只有一个不足 3 个字符的程序名时不抹，错误正文里同样的字母（via）不受影响。
+func TestK8sExecMaskKeepsUnrelatedText(t *testing.T) {
+	req := execReq("web-0")
+	req.Shell = "vi"
+	msg := `exec: "vi": executable file not found in $PATH (dial via proxy)`
+	assert.Equal(t, msg, req.maskCommand(msg))
+}

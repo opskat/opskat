@@ -39,9 +39,12 @@ type K8s struct {
 	logStreamCounter atomic.Int64
 
 	execSessions sync.Map // map[string]*execSession
-	// execEnding 跟踪已连上、尚未跑完结束流程（含容器内 shell 清理）的会话；execLive 是其个数。
-	execEnding sync.WaitGroup
-	execLive   atomic.Int64
+	// execEnding 跟踪已登记（连接中或已连上）、尚未跑完结束流程（含容器内 shell 清理）的会话；execLive 是已连上的个数。
+	// 登记在 execMu 下进行，EndExecSessions 先在 execMu 下置 execQuitting 再 Wait，保证 Add 都发生在 Wait 之前。
+	execMu       sync.Mutex
+	execQuitting bool
+	execEnding   sync.WaitGroup
+	execLive     atomic.Int64
 }
 
 // New 构造 k8s binder。

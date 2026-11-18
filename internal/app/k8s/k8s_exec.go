@@ -10,6 +10,7 @@ import (
 	"io"
 	"math"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -314,26 +315,66 @@ func (r K8sExecRequest) shellLogFields() []zap.Field {
 	return []zap.Field{zap.String("shell", "custom"), zap.Int("argv_count", len(argv))}
 }
 
-// logErr 把错误记成日志字段：集群或传输层的错误文本可能回显命令（含 URL 里的 command 参数），自定义命令时先抹掉。
+// logErr 把错误记成日志字段：集群或传输层的错误文本可能回显命令，自定义命令时先抹掉（见 maskCommand）。
 // 返给前端的错误不经此处，用户仍能看到集群给出的原文。
 func (r K8sExecRequest) logErr(err error) zap.Field {
 	if err == nil || isStandardShell(r.Shell) {
 		return zap.Error(err)
 	}
-	msg := err.Error()
+	return zap.String("error", r.maskCommand(err.Error()))
+}
+
+// maskCommand 把 msg 里自定义命令出现过的片段换成 <command>。回显的形式有：命令原文；整个 argv 以空格连起来
+// （运行时以 %v 打出 argv）；exec URL 里逐个参数的 command=（连不上时 client-go 的错误带着整条 URL）；
+// 以及单个参数。不足 3 个字符的片段不抹，免得把正文里的每个 "-a" 都抹掉——短参数在前两种连起来的形式里已被抹掉，
+// 只剩单个短参数的命令（vi）只是程序名。每种都另按 URL 查询 / 路径转义、Go 引号转义各抹一遍。所有片段先在原文上标出再一起替换，
+// 一个参数是另一个参数的子串（mysql -pmysql123）时也不会先被抹掉一截、让另一个对不上而漏出余下部分。
+func (r K8sExecRequest) maskCommand(msg string) string {
 	argv, _ := splitCommand(r.Shell)
-	secrets := []string{r.Shell}
-	for _, a := range argv {
-		if len(a) >= 3 {
-			secrets = append(secrets, a)
+	forms := []string{r.Shell}
+	if len(argv) > 0 {
+		query := make([]string, len(argv))
+		for i, a := range argv {
+			query[i] = url.QueryEscape(a)
+		}
+		forms = append(forms, strings.Join(argv, " "), "command="+strings.Join(query, "&command="))
+	}
+	forms = append(forms, argv...)
+	masked := make([]bool, len(msg))
+	mark := func(s string) {
+		if len(s) < 3 {
+			return
+		}
+		for i := 0; i+len(s) <= len(msg); {
+			j := strings.Index(msg[i:], s)
+			if j < 0 {
+				return
+			}
+			for k := i + j; k < i+j+len(s); k++ {
+				masked[k] = true
+			}
+			i += j + 1
 		}
 	}
-	for _, s := range secrets {
-		for _, form := range []string{s, url.QueryEscape(s), url.PathEscape(s)} {
-			msg = strings.ReplaceAll(msg, form, "<command>")
+	for _, f := range forms {
+		quoted := strconv.Quote(f)
+		for _, v := range []string{f, url.QueryEscape(f), url.PathEscape(f), quoted[1 : len(quoted)-1]} {
+			mark(v)
 		}
 	}
-	return zap.String("error", msg)
+	var b strings.Builder
+	for i := 0; i < len(msg); {
+		if !masked[i] {
+			b.WriteByte(msg[i])
+			i++
+			continue
+		}
+		b.WriteString("<command>")
+		for i < len(msg) && masked[i] {
+			i++
+		}
+	}
+	return b.String()
 }
 
 func (k *K8s) startExec(c *k8sCallContext, req K8sExecRequest) (string, error) {
@@ -346,11 +387,17 @@ func (k *K8s) startExec(c *k8sCallContext, req K8sExecRequest) (string, error) {
 	log.Info("k8s exec start")
 	started := time.Now()
 
+	if !k.trackExec() {
+		err := errors.New("the application is quitting")
+		log.Error("k8s exec failed", req.logErr(err))
+		return "", fmt.Errorf("start K8S exec: %w", err)
+	}
 	ctx, cancel := context.WithCancel(k.ctx)
 	sess := &execSession{cancel: cancel, size: k8spkg.TerminalSize{Width: uint16(req.Cols), Height: uint16(req.Rows)}}
 	// 连接期间就登记：重复的 ID 不能顶掉仍在运行的会话，连接中的会话也能被 StopK8sExec / Cleanup 停掉。
 	if _, loaded := k.execSessions.LoadOrStore(sessionID, sess); loaded {
 		cancel()
+		k.execEnding.Done()
 		err := fmt.Errorf("session id %s is already in use", sessionID)
 		log.Error("k8s exec failed", req.logErr(err))
 		return "", fmt.Errorf("start K8S exec: %w", err)
@@ -383,12 +430,12 @@ func (k *K8s) startExec(c *k8sCallContext, req K8sExecRequest) (string, error) {
 	if connectErr != nil {
 		cancel()
 		k.execSessions.Delete(sessionID)
+		k.execEnding.Done()
 		log.Error("k8s exec failed", zap.Duration("elapsed", time.Since(started)), req.logErr(connectErr))
 		return "", fmt.Errorf("start K8S exec: %w", connectErr)
 	}
 
 	log.Info("k8s exec connected", zap.Duration("elapsed", time.Since(started)))
-	k.execEnding.Add(1)
 	k.execLive.Add(1)
 	go func() {
 		defer k.execEnding.Done()
@@ -671,9 +718,23 @@ func (k *K8s) StopK8sExec(sessionID string) {
 // newShellTag 生成每次尝试的 shell 标记（见 k8spkg.ShellCommand）。
 var newShellTag = rand.Text
 
+// trackExec 在 execEnding 里登记一个新会话；应用退出流程已开始时返回 false，不再开新会话。
+func (k *K8s) trackExec() bool {
+	k.execMu.Lock()
+	defer k.execMu.Unlock()
+	if k.execQuitting {
+		return false
+	}
+	k.execEnding.Add(1)
+	return true
+}
+
 // EndExecSessions 结束全部已连上的终端会话，并等它们在容器里的 shell 清理跑完，最多等 bound；返回是否在期限内完成。
-// 供应用退出时同步调用（binder 的 Cleanup 是异步的，进程会赶在清理之前退出）；没有会话时立即返回。
+// 供应用退出时同步调用（binder 的 Cleanup 是异步的，进程会赶在清理之前退出）；此后不再开新会话，没有会话时立即返回。
 func EndExecSessions(k *K8s, bound time.Duration) bool {
+	k.execMu.Lock()
+	k.execQuitting = true
+	k.execMu.Unlock()
 	sessions := int(k.execLive.Load())
 	if sessions == 0 {
 		return true
