@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { K8sClusterPage } from "@/components/k8s/K8sClusterPage";
+import { K8sEventsTable } from "@/components/k8s/cluster/K8sEventsTable";
 import { useK8sStore } from "@/stores/k8sStore";
 import {
   CountK8sResources,
@@ -155,5 +156,20 @@ describe("K8s events view", () => {
     );
     await user.click(within(view).getByTestId("async-state-retry"));
     await waitFor(() => expect(rowReasons()).toHaveLength(2));
+  });
+});
+
+describe("K8s events table layout", () => {
+  it("keeps the object column at a readable minimum width and breaks it only at word or slash boundaries", () => {
+    const event = ev("Warning", "FailedScheduling", "0/3 nodes are available", "pending-pod", "2026-11-12T08:00:00Z");
+    render(<K8sEventsTable assetId={1} types={[]} events={[event as never]} />);
+
+    const objectCell = screen.getByTestId("k8s-event-object").closest("td") as HTMLElement;
+    expect(objectCell.className).toMatch(/min-w-\d+/);
+    expect(objectCell.className).toContain("break-words");
+    expect(objectCell.className).not.toContain("break-all");
+
+    const timeCell = screen.getByText("2026-11-12T08:00:00Z");
+    expect(timeCell.className).toContain("whitespace-nowrap");
   });
 });

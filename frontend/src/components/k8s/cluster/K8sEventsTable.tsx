@@ -54,7 +54,7 @@ export function K8sEventsTable({ assetId, types, events, compact, hideObject }: 
                   {e.reason}
                 </td>
                 {!hideObject && (
-                  <td className="break-all py-2 pr-4 font-mono text-xs">
+                  <td className="min-w-40 break-words py-2 pr-4 font-mono text-xs">
                     {target ? (
                       <button
                         className="text-primary hover:underline"
