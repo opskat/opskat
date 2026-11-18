@@ -56,14 +56,14 @@ export function K8sEventsTable({ assetId, types, events, compact, hideObject }: 
                     {e.type}
                   </span>
                 </td>
-                <td className="py-2 pr-3 text-xs break-words" data-testid="k8s-event-reason">
+                <td className="py-2 pr-3 text-xs" data-testid="k8s-event-reason">
                   {e.reason}
                 </td>
                 {!hideObject && (
-                  <td className="break-words py-2 pr-3 font-mono text-xs">
+                  <td className="py-2 pr-3 font-mono text-xs">
                     {target ? (
                       <button
-                        className="text-primary hover:underline"
+                        className="text-left text-primary hover:underline"
                         data-testid="k8s-event-object"
                         onClick={() =>
                           openTab(assetId, {
