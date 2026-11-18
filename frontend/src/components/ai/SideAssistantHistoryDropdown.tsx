@@ -4,18 +4,7 @@ import { useTranslation } from "react-i18next";
 import { cn, Button, Input, Popover, PopoverContent, PopoverTrigger } from "@opskat/ui";
 import { useAIStore } from "@/stores/aiStore";
 import { useTabStore, type AITabMeta } from "@/stores/tabStore";
-
-function formatRelativeTime(timestamp: number, locale: string): string {
-  const now = Date.now() / 1000;
-  const diff = now - timestamp;
-  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
-  if (diff < 60) return rtf.format(0, "second");
-  if (diff < 3600) return rtf.format(-Math.floor(diff / 60), "minute");
-  if (diff < 86400) return rtf.format(-Math.floor(diff / 3600), "hour");
-  if (diff < 604800) return rtf.format(-Math.floor(diff / 86400), "day");
-  const date = new Date(timestamp * 1000);
-  return new Intl.DateTimeFormat(locale, { month: "numeric", day: "numeric" }).format(date);
-}
+import { formatRelativeTime } from "@/lib/relativeTime";
 
 interface SideAssistantHistoryDropdownProps {
   activeConversationId: number | null;
