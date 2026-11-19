@@ -2483,7 +2483,7 @@
     "sessionPatterns": "会话已允许模式",
     "decisionSources": {
       "assisted": "辅助审批",
-      "autopilot": "自动驾驶",
+      "autopilot": "Autopilot",
       "grant": "授权",
       "policy": "策略",
       "user": "手动审批",
