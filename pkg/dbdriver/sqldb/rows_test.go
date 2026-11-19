@@ -230,6 +230,16 @@ func (blockInsertDialect) DeleteRowSQL(tableRef, where string) string {
 
 func (blockInsertDialect) ExactRow(string, string) (string, bool) { return "", false }
 
+// InsertRowKey 在备好 writer 的那条连接上查定位一行的列。
+func (blockInsertDialect) InsertRowKey(ctx context.Context, conn *sql.Conn, database, table string) ([]string, error) {
+	return QueryPrimaryKeys(ctx, conn, "column_name", "ROW KEY", database, table)
+}
+
+// expectRowKey 回答 blockInsertDialect 的定位列查询：键是 id。
+func expectRowKey(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("ROW KEY").WithArgs("db", "t").WillReturnRows(sqlmock.NewRows([]string{"column_name"}).AddRow("id"))
+}
+
 func (d blockInsertDialect) RowInsertStatement(row InsertRow) (string, bool, error) {
 	if d.got != nil {
 		*d.got = row
@@ -250,7 +260,8 @@ func (d blockInsertDialect) RowInsertStatement(row InsertRow) (string, bool, err
 }
 
 // 实现了 InsertRowWriter 的方言可以为某一行写整条语句；它放弃的行仍是默认 INSERT，
-// 表引用遵循 OmitDatabase，InsertModifier、列类型与字面量规则一并交给它；UPDATE 不经过它。
+// 表引用遵循 OmitDatabase，InsertModifier、列类型、字面量规则与备好 writer 时在连接上查出的定位列
+// 一并交给它；UPDATE 不经过它。
 func TestRowStatementsLetTheDialectWriteWholeInsertStatements(t *testing.T) {
 	var got InsertRow
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
@@ -258,6 +269,7 @@ func TestRowStatementsLetTheDialectWriteWholeInsertStatements(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	session := NewSession(db, blockInsertDialect{got: &got})
 	expectColumnTypes(mock)
+	expectRowKey(mock)
 
 	req := dbdriver.RowStatementsRequest{
 		Kind: dbdriver.RowInsert, Columns: []string{"id", "memo"}, InsertModifier: "MOD",
@@ -271,18 +283,29 @@ func TestRowStatementsLetTheDialectWriteWholeInsertStatements(t *testing.T) {
 	}, statements)
 
 	expectColumnTypes(mock)
+	expectRowKey(mock)
 	req.OmitDatabase = true
 	statements, err = dbdrivertest.RowStatements(context.Background(), session, "db", "t", req)
 	require.NoError(t, err)
 	assert.Equal(t, "BEGIN INTO <t> <memo>='x' [MOD];\n/", statements[0])
 	assert.Equal(t, []InsertColumn{{Name: "id", Type: "int", Value: float64(2)}, {Name: "memo", Type: "text"}}, got.Columns)
+	assert.Equal(t, []string{"id"}, got.Key)
 
 	expectColumnTypes(mock)
+	expectRowKey(mock)
 	req.Rows = []map[string]any{{"id": float64(3), "memo": "boom"}}
 	_, err = dbdrivertest.RowStatements(context.Background(), session, "db", "t", req)
 	assert.EqualError(t, err, "cannot write block")
 
+	// 查定位列失败时备 writer 失败，数据库的错误原样返回。
 	expectColumnTypes(mock)
+	boom := errors.New("no dictionary")
+	mock.ExpectQuery("ROW KEY").WillReturnError(boom)
+	_, err = session.PrepareRowStatements(context.Background(), "db", "t")
+	require.ErrorIs(t, err, boom)
+
+	expectColumnTypes(mock)
+	expectRowKey(mock)
 	statements, err = dbdrivertest.RowStatements(context.Background(), session, "db", "t", dbdriver.RowStatementsRequest{
 		Kind: dbdriver.RowUpdate, Columns: []string{"memo"}, PrimaryKeys: []string{"id"},
 		Rows: []map[string]any{{"id": float64(1), "memo": "x"}},
