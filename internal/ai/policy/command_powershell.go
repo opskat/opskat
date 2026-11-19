@@ -103,10 +103,10 @@ func validatePowerShellSyntax(s string) error {
 	return nil
 }
 
-func matchingPSDelim(open, close byte) bool {
-	return (open == '(' && close == ')') ||
-		(open == '{' && close == '}') ||
-		(open == '[' && close == ']')
+func matchingPSDelim(openCh, closeCh byte) bool {
+	return (openCh == '(' && closeCh == ')') ||
+		(openCh == '{' && closeCh == '}') ||
+		(openCh == '[' && closeCh == ']')
 }
 
 func findHereStringEnd(s string, from int, quote byte) (int, bool) {
@@ -213,9 +213,10 @@ func findMatchingParen(s string, openIdx int) (int, error) {
 			i++
 			continue
 		}
-		if ch == open {
+		switch ch {
+		case open:
 			depth++
-		} else if ch == closeCh {
+		case closeCh:
 			depth--
 			if depth == 0 {
 				return i, nil
