@@ -11,9 +11,10 @@ import (
 type Syntax string
 
 const (
-	SyntaxText  Syntax = "text"  // 纯文本：SQL、路径、不经过 shell 执行的命令 DSL
-	SyntaxShell Syntax = "shell" // shell 命令
-	SyntaxRedis Syntax = "redis" // Redis 命令
+	SyntaxText       Syntax = "text"       // 纯文本：SQL、路径、不经过 shell 执行的命令 DSL
+	SyntaxShell      Syntax = "shell"      // POSIX shell 命令
+	SyntaxPowerShell Syntax = "powershell" // PowerShell 命令
+	SyntaxRedis      Syntax = "redis"      // Redis 命令
 )
 
 // ReviewRequest 是交给审核端口的一条命令：规范资产类型、原命令和写法。审核器收到的就是

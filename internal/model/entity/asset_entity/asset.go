@@ -124,6 +124,29 @@ type SSHConfig struct {
 	AgentForwarding bool `json:"agent_forwarding,omitempty"`
 	// AgentForwardSourceID 是 SSH Agent 转发使用的来源 ID；仅 AgentForwarding=true 时有效。
 	AgentForwardSourceID int64 `json:"agent_forward_source_id,omitempty"`
+	// Shell 指定远端 SSH 默认 shell 类型：空或 "posix" 表示 POSIX/Bash，"powershell" 表示 PowerShell。
+	// 用于命令策略子命令拆分与模型审核反混淆路径选择。
+	Shell string `json:"shell,omitempty"`
+}
+
+// SSH 远端 shell 类型常量。空值等同于 SSHShellPOSIX。
+const (
+	SSHShellPOSIX      = "posix"
+	SSHShellPowerShell = "powershell"
+)
+
+// IsPowerShell 报告该 SSH 配置是否声明远端为 PowerShell。
+func (c *SSHConfig) IsPowerShell() bool {
+	return c != nil && c.Shell == SSHShellPowerShell
+}
+
+// IsPowerShellSSH 报告该资产是否为声明了 PowerShell 的 SSH 资产。
+func (a *Asset) IsPowerShellSSH() bool {
+	if a == nil || !a.IsSSH() {
+		return false
+	}
+	cfg, err := a.GetSSHConfig()
+	return err == nil && cfg.IsPowerShell()
 }
 
 // RDPConfig RDP 类型的特定配置。

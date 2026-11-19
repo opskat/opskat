@@ -13,9 +13,16 @@ import (
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 )
 
-// parseExecArgv 解析 opsctl exec <asset> 之后的参数：[--type <t>] [--scope <s>] [--] <command>。
+// execOptions 是 opsctl exec <asset> 在命令之前解析出的选项。
+type execOptions struct {
+	declaredType string
+	scope        string
+	noStdin      bool
+}
+
+// parseExecArgv 解析 opsctl exec <asset> 之后的参数：[--type <t>] [--scope <s>] [-n | --no-stdin] [--] <command>。
 // 选项只出现在命令开始之前——遇到 "--" 或第一个非选项 token 即进入命令，其后一切
-// 原样属于远端命令（find / --type f 里的 --type 不是 opsctl 的，--scope 同理）。命令之前的
+// 原样属于远端命令（find / --type f 里的 --type 不是 opsctl 的，--scope、-n 同理）。命令之前的
 // 未知选项报错，不能静默丢弃，也不能拼进远端命令。全局 flag 已由 hoistGlobalFlags 取走。
 //
 // scope 语义与 AI exec 工具的 scope 参数一致（内部 ai/tool/tools_unified.go 的 schema
@@ -25,7 +32,7 @@ import (
 //
 // 命令原样保留成 argv：注册了流式执行入口的类型（permission.StreamExecutorFor，如通用资产）
 // 按参数边界执行，`-H 'X-Caller: two words'` 必须仍是一个参数；其余类型由调用方用空格拼接。
-func parseExecArgv(args []string) (declaredType, scope string, argv []string, err error) {
+func parseExecArgv(args []string) (opts execOptions, argv []string, err error) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
@@ -33,35 +40,38 @@ func parseExecArgv(args []string) (declaredType, scope string, argv []string, er
 			argv = args[i+1:]
 		case arg == "--type":
 			if i+1 >= len(args) {
-				return "", "", nil, fmt.Errorf("--type requires a value")
+				return execOptions{}, nil, fmt.Errorf("--type requires a value")
 			}
-			declaredType = args[i+1] //nolint:gosec // guarded by the i+1 >= len(args) check above
+			opts.declaredType = args[i+1] //nolint:gosec // guarded by the i+1 >= len(args) check above
 			i++
 			continue
 		case strings.HasPrefix(arg, "--type="):
-			declaredType = strings.TrimPrefix(arg, "--type=")
+			opts.declaredType = strings.TrimPrefix(arg, "--type=")
 			continue
 		case arg == "--scope":
 			if i+1 >= len(args) {
-				return "", "", nil, fmt.Errorf("--scope requires a value")
+				return execOptions{}, nil, fmt.Errorf("--scope requires a value")
 			}
-			scope = args[i+1] //nolint:gosec // guarded by the i+1 >= len(args) check above
+			opts.scope = args[i+1] //nolint:gosec // guarded by the i+1 >= len(args) check above
 			i++
 			continue
 		case strings.HasPrefix(arg, "--scope="):
-			scope = strings.TrimPrefix(arg, "--scope=")
+			opts.scope = strings.TrimPrefix(arg, "--scope=")
+			continue
+		case arg == "-n" || arg == "--no-stdin":
+			opts.noStdin = true
 			continue
 		case strings.HasPrefix(arg, "-"):
-			return "", "", nil, fmt.Errorf("unknown flag %s (put the remote command after --)", arg)
+			return execOptions{}, nil, fmt.Errorf("unknown flag %s (put the remote command after --)", arg)
 		default:
 			argv = args[i:]
 		}
 		break
 	}
 	if strings.Join(argv, " ") == "" {
-		return "", "", nil, fmt.Errorf("no command given")
+		return execOptions{}, nil, fmt.Errorf("no command given")
 	}
-	return declaredType, scope, argv, nil
+	return opts, argv, nil
 }
 
 // quoteExecArgv 把 argv 逐个按需加引号拼成命令串，cmdline.Words 能把它原样切回 argv。

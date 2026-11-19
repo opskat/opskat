@@ -12,6 +12,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
+	"github.com/opskat/opskat/internal/pkg/pwshdecode"
 	"github.com/opskat/opskat/internal/pkg/shelldecode"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 )
@@ -76,18 +77,32 @@ func applyReviews(ctx context.Context, reqs []PermissionRequest, results []aictx
 // send 为假时 final 就是这条命令的结果。
 func reviewRequestFor(ctx context.Context, req PermissionRequest, result aictx.CheckResult, mode string) (review ReviewRequest, final aictx.CheckResult, send bool) {
 	assetType, syntax, reviewRaw := reviewTypeFor(req.AssetType)
+	if syntax == SyntaxShell && assetType == asset_entity.AssetTypeSSH {
+		if asset := resolveAssetForPolicy(ctx, req.AssetID); asset.IsPowerShellSSH() {
+			syntax = SyntaxPowerShell
+		}
+	}
 	command := req.Command
 	if reviewRaw && req.RawCommand != "" {
 		command = req.RawCommand
 	}
 	review = ReviewRequest{AssetType: assetType, Command: command, Syntax: syntax}
-	if syntax != SyntaxShell {
+	if syntax != SyntaxShell && syntax != SyntaxPowerShell {
 		return review, result, true
 	}
-	hidden, err := shelldecode.DecodesAndRuns(req.Command)
+	var hidden bool
+	var err error
+	var tooLong bool
+	if syntax == SyntaxPowerShell {
+		hidden, err = pwshdecode.DecodesAndRuns(req.Command)
+		tooLong = errors.Is(err, pwshdecode.ErrTooLong)
+	} else {
+		hidden, err = shelldecode.DecodesAndRuns(req.Command)
+		tooLong = errors.Is(err, shelldecode.ErrTooLong)
+	}
 	var reason string
 	switch {
-	case errors.Is(err, shelldecode.ErrTooLong):
+	case tooLong:
 		reason = aictx.ReviewReasonTooLong
 	case err != nil:
 		reason = aictx.ReviewReasonUnparseable

@@ -22,6 +22,7 @@ interface SSHConfig {
   jump_host_id?: number;
   proxy?: ProxyConfigJSON | null;
   proxy_chain?: ProxyChainJSON | null;
+  shell?: string;
 }
 
 // 详情可用性文案：运行时状态（ok/empty/unavailable/unsupported）复用 agentStatusLabel，
@@ -78,6 +79,7 @@ export function SSHDetailInfoCard({ asset, sshTunnelName }: DetailInfoCardProps)
           <InfoItem label={t("asset.host")} value={cfg.host} mono />
           <InfoItem label={t("asset.port")} value={String(cfg.port)} mono />
           <InfoItem label={t("asset.username")} value={cfg.username} mono />
+          {cfg.shell === "powershell" && <InfoItem label={t("asset.sshShell")} value={t("asset.sshShellPowerShell")} />}
           <InfoItem
             label={t("asset.authType")}
             value={

@@ -267,4 +267,27 @@ func TestCmdExec_AutopilotPipedInput(t *testing.T) {
 			t.Fatalf("forwarded stdin = %q, want the piped content", p.forwarded)
 		}
 	})
+
+	t.Run("--no-stdin / -n：显式关闭 stdin 转发，不预读也不判为管道输入，照常送审并执行", func(t *testing.T) {
+		for _, flag := range []string{"--no-stdin", "-n"} {
+			t.Run(flag, func(t *testing.T) {
+				p := setupPipedExec(t, policyent.PermissionModeAutopilot, strings.NewReader("ignored\n"), true)
+
+				code := cmdExec(p.env.ctx, p.env.handlers, []string{"web-1", "--type", "ssh", flag, "--", "bash"}, "")
+
+				if code != 0 {
+					t.Fatalf("exit code = %d, want 0", code)
+				}
+				if p.peekWait != nil {
+					t.Fatalf("peekWait = %v, want nil: %s must not inspect stdin", *p.peekWait, flag)
+				}
+				if p.reviewer.reviewed != 1 || p.env.sshStreamCalls != 1 {
+					t.Fatalf("reviewed = %d, ssh stream calls = %d; want 1 and 1", p.reviewer.reviewed, p.env.sshStreamCalls)
+				}
+				if p.forwarded != "" {
+					t.Fatalf("forwarded stdin = %q, want empty when %s is set", p.forwarded, flag)
+				}
+			})
+		}
+	})
 }

@@ -28,6 +28,7 @@ interface SSHConfig {
   startup_command?: string;
   agent_forwarding?: boolean;
   agent_forward_source_id?: number;
+  shell?: string;
 }
 
 /** ssh 表单子状态(凭据中的 password 走 useAssetCredential,不入此 state)。 */
@@ -60,6 +61,8 @@ export interface SSHFormState extends ConnectionFormFields {
   agentForwarding: boolean;
   /** 转发使用的 SSH Agent 来源。0 = 未选。 */
   agentForwardSourceId: number;
+  /** 远端默认 Shell 类型：posix（默认）或 powershell。 */
+  shell: "posix" | "powershell";
 }
 
 export const SSH_DEFAULTS: SSHFormState = {
@@ -80,6 +83,7 @@ export const SSH_DEFAULTS: SSHFormState = {
   startupCommand: "",
   agentForwarding: false,
   agentForwardSourceId: 0,
+  shell: "posix",
   ...CONNECTION_DEFAULTS,
 };
 
@@ -158,6 +162,11 @@ export function buildSSHConfig(state: SSHFormState, opts: SSHBuildOptions): stri
     cfg.startup_command = state.startupCommand;
   }
 
+  // posix 为默认，不写入 config(omitempty 语义)。
+  if (state.shell === "powershell") {
+    cfg.shell = "powershell";
+  }
+
   return JSON.stringify(cfg);
 }
 
@@ -186,6 +195,7 @@ export function parseSSHConfig(configJSON: string, assetTunnelId = 0): SSHFormSt
       startupCommand: cfg.startup_command || "",
       agentForwarding: cfg.agent_forwarding || false,
       agentForwardSourceId: cfg.agent_forwarding ? cfg.agent_forward_source_id || 0 : 0,
+      shell: cfg.shell === "powershell" ? "powershell" : "posix",
       ...parseConnectionFields(cfg.proxy, tunnelId, cfg.proxy_chain),
     };
   } catch {

@@ -107,7 +107,13 @@ func checkShellCommandPolicy(ctx context.Context, assetID int64, asset *asset_en
 
 	// 解析失败或没有可枚举的执行单元（纯赋值/注释等）时不能整串匹配规则，
 	// 否则 `ls *` 这类规则会误放行 parser 失败的输入；只按独立 `*` 判定。
-	subCmds, parseErr := policy.ExtractSubCommands(command)
+	var subCmds []string
+	var parseErr error
+	if asset.IsPowerShellSSH() {
+		subCmds, parseErr = policy.ExtractPowerShellSubCommands(command)
+	} else {
+		subCmds, parseErr = policy.ExtractSubCommands(command)
+	}
 	if parseErr != nil || len(subCmds) == 0 {
 		return policy.DecideUnenumerableShell(ctx, command, parseErr, allAllowRules, allDenyRules)
 	}
