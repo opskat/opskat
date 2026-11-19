@@ -712,3 +712,24 @@ func TestPluginCallsAfterCloseFailWithErrPluginClosed(t *testing.T) {
 		t.Errorf("Lease after Close: got %v, want ErrPluginClosed", err)
 	}
 }
+
+// An instance serves hundreds of calls inside a fixed linear memory
+// (WithMemoryLimitPages) and is idle between them. A call that grows a large
+// value leaves it all as garbage; unless the guest collects it at the call
+// boundary, the next large allocations grow memory instead, and within a few
+// dozen calls the instance runs out of it and traps (wasm error: unreachable,
+// from runtime.throw in mallocgcLarge).
+func TestPluginReclaimsGarbageBetweenCalls(t *testing.T) {
+	Convey("Given the fixture extension on one instance", t, func() {
+		p := newFixturePlugin(t, newRecordedHost(), t.TempDir(), WithMaxInstances(1))
+
+		Convey("calls that each drop several MiB keep succeeding", func() {
+			for i := 0; i < 50; i++ {
+				for _, mb := range []int{6, 2} {
+					out := callTool(t, p, "grow", map[string]any{"mb": mb})
+					So(out["bytes"], ShouldEqual, mb<<20)
+				}
+			}
+		})
+	})
+}
