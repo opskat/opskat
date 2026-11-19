@@ -5,11 +5,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	. "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
@@ -329,4 +332,48 @@ func TestStreamNextBoundsPagesBySize(t *testing.T) {
 			So(err, ShouldContainSubstring, "connection reset")
 		})
 	})
+}
+
+// A row statement may be tens of MB (an Oracle row of large LOBs) in an instance
+// whose memory is capped: its reply is written into one buffer of its exact size,
+// not grown by doubling and copied again for the envelope, and reads back as
+// json.Marshal's would — quotes, backslashes, control characters, characters
+// outside ASCII, invalid UTF-8 (as U+FFFD), <, > and &.
+func TestStatementRepliesAreEncodedIntoOneBuffer(t *testing.T) {
+	big := strings.Repeat("DBMS_LOB.APPEND(l1, TO_CLOB('a''\\中文😀\n'));\n", 200_000)
+	statements := []string{big, "x\"\\\x00\x1f\t\r\u2028<>&\xff\xfe中", ""}
+	want, err := json.Marshal(extwire.DriverReply{Result: mustJSON(t, statements)})
+	require.NoError(t, err)
+
+	var got []byte
+	var result any = statements // as runDriverOp returns it
+	allocs := testing.AllocsPerRun(3, func() {
+		got, err = encodeReply(result, nil)
+	})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, allocs, 1.0)
+	assert.Equal(t, len(got), cap(got))
+	var gotReply, wantReply extwire.DriverReply
+	require.NoError(t, json.Unmarshal(got, &gotReply))
+	require.NoError(t, json.Unmarshal(want, &wantReply))
+	var gotStatements, wantStatements []string
+	require.NoError(t, json.Unmarshal(gotReply.Result, &gotStatements))
+	require.NoError(t, json.Unmarshal(wantReply.Result, &wantStatements))
+	assert.Equal(t, wantStatements, gotStatements)
+	assert.Nil(t, gotReply.Error)
+
+	// An empty list stays a list; a failure keeps its envelope.
+	got, err = encodeReply([]string{}, nil)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"result":[]}`, string(got))
+	got, err = encodeReply(nil, fmt.Errorf("wrap: %w", dbdriver.ErrUnsupported))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"error":{"message":"wrap: `+dbdriver.ErrUnsupported.Error()+`","code":"`+extwire.DriverCodeUnsupported+`"}}`, string(got))
+}
+
+func mustJSON(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	require.NoError(t, err)
+	return raw
 }

@@ -216,11 +216,28 @@ func serve(input []byte) (json.RawMessage, error) {
 		delete(driverHandles.writers, id)
 	}
 	result, opErr := runDriverOp(context.Background(), call)
+	reply, err := encodeReply(result, opErr)
+	if err != nil {
+		return nil, fmt.Errorf("encode %s result: %w", call.Op, err)
+	}
+	return reply, nil
+}
+
+// encodeReply is the extwire.DriverReply of an operation's result and failure.
+// A list of strings (row statements, which may be tens of MB: an Oracle row of
+// large LOBs) is written into one buffer of the reply's exact size (stringsReply):
+// json.Marshal grows its buffer by doubling and the envelope copies the result
+// again, which together trapped an instance at its memory cap (a dump of a row of
+// three 16 MB LOBs, a 63 MB statement, at 512 MiB).
+func encodeReply(result any, opErr error) ([]byte, error) {
+	if statements, ok := result.([]string); ok && opErr == nil {
+		return stringsReply(statements), nil
+	}
 	var reply extwire.DriverReply
 	if result != nil {
 		raw, err := json.Marshal(result)
 		if err != nil {
-			return nil, fmt.Errorf("encode %s result: %w", call.Op, err)
+			return nil, err
 		}
 		if string(raw) != "null" {
 			reply.Result = raw
@@ -233,6 +250,83 @@ func serve(input []byte) (json.RawMessage, error) {
 		}
 	}
 	return json.Marshal(reply)
+}
+
+// stringsReply is {"result":[…]} of list, each string written as json.Marshal
+// writes it as far as reading it back goes (invalid UTF-8 as U+FFFD), sized first
+// so that it is written once into a buffer of its size.
+func stringsReply(list []string) []byte {
+	const prefix, suffix = `{"result":[`, `]}`
+	size := len(prefix) + len(suffix) + max(len(list)-1, 0)
+	for _, text := range list {
+		size += quotedSize(text)
+	}
+	out := make([]byte, 0, size)
+	out = append(out, prefix...)
+	for i, text := range list {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		out = appendQuoted(out, text)
+	}
+	return append(out, suffix...)
+}
+
+// jsonEscapes is how a byte of ASCII is written inside a JSON string when it is
+// not written as it is.
+var jsonEscapes = func() (escapes [utf8.RuneSelf]string) {
+	for c := range 0x20 {
+		escapes[c] = fmt.Sprintf(`\u%04x`, c)
+	}
+	escapes['\n'], escapes['\r'], escapes['\t'], escapes['"'], escapes['\\'] = `\n`, `\r`, `\t`, `\"`, `\\`
+	return escapes
+}()
+
+// invalidUTF8 is how a byte that is not part of valid UTF-8 is written (U+FFFD).
+const invalidUTF8 = `\ufffd`
+
+// quotedSize is the size of text written as a JSON string (appendQuoted).
+func quotedSize(text string) int {
+	size := 2
+	for i := 0; i < len(text); {
+		c := text[i]
+		if c < utf8.RuneSelf {
+			size, i = size+max(len(jsonEscapes[c]), 1), i+1
+			continue
+		}
+		r, n := utf8.DecodeRuneInString(text[i:])
+		if r == utf8.RuneError && n == 1 {
+			size += len(invalidUTF8)
+		} else {
+			size += n
+		}
+		i += n
+	}
+	return size
+}
+
+// appendQuoted appends text as a JSON string, runs of bytes written as they are
+// copied whole.
+func appendQuoted(out []byte, text string) []byte {
+	out = append(out, '"')
+	start := 0
+	for i := 0; i < len(text); {
+		c := text[i]
+		escape, n := "", 1
+		if c < utf8.RuneSelf {
+			escape = jsonEscapes[c]
+		} else if r, size := utf8.DecodeRuneInString(text[i:]); r == utf8.RuneError && size == 1 {
+			escape = invalidUTF8
+		} else {
+			n = size
+		}
+		if escape != "" {
+			out = append(append(out, text[start:i]...), escape...)
+			start = i + n
+		}
+		i += n
+	}
+	return append(append(out, text[start:]...), '"')
 }
 
 func runDriverOp(ctx context.Context, call extwire.DriverCall) (any, error) {
