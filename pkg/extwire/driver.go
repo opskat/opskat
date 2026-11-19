@@ -13,7 +13,9 @@ package extwire
 // encoding/json decoding).
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
 )
@@ -179,6 +181,19 @@ type DriverRowValue struct {
 	Column string `json:"column"`
 }
 
+// RowBytesOf names the values of rows that are bytes, for DriverArgs.RowBytes.
+func RowBytesOf(rows []map[string]any) []DriverRowValue {
+	var out []DriverRowValue
+	for i, row := range rows {
+		for column, value := range row {
+			if _, ok := value.([]byte); ok {
+				out = append(out, DriverRowValue{Row: i, Column: column})
+			}
+		}
+	}
+	return out
+}
+
 // DriverCell names the value at Rows[Row][Column] of a DriverStreamPage.
 type DriverCell struct {
 	Row    int `json:"row"`
@@ -221,6 +236,29 @@ type DriverStreamOpened struct {
 // request here. Sizes are estimated with ValueBytes.
 const DriverRowsBytes = 4 << 20
 
+// DriverStreamRows is how many rows the host asks one DriverOpStreamNext for.
+const DriverStreamRows = 256
+
+// RowParts cuts rows into consecutive parts that each stop once their values
+// take about DriverRowsBytes (ValueBytes), with at least one row; no rows are
+// one empty part. The host sends a DriverOpRowStatements request's rows one part
+// per call, the rest of the request unchanged, and joins the parts' statements
+// in order: the writer answers one statement per row.
+func RowParts(rows []map[string]any) [][]map[string]any {
+	var parts [][]map[string]any
+	start, size := 0, 0
+	for i, row := range rows {
+		if i > start && size >= DriverRowsBytes {
+			parts = append(parts, rows[start:i])
+			start, size = i, 0
+		}
+		for _, value := range row {
+			size += ValueBytes(value)
+		}
+	}
+	return append(parts, rows[start:])
+}
+
 // ValueBytes estimates the bytes a row value takes: the length of text and bytes,
 // which is where a large row's size is, and a few bytes for any other value.
 func ValueBytes(value any) int {
@@ -248,6 +286,27 @@ type DriverStreamPage struct {
 	// otherwise replace their invalid bytes; the host turns each back into the
 	// string of those bytes.
 	Bytes []DriverCell `json:"bytes,omitempty"`
+}
+
+// RestoreBytes turns each cell p.Bytes names back from the base64 it traveled as
+// into the string of its raw bytes, the value a built-in driver's cursor gives
+// for a binary column.
+func (p *DriverStreamPage) RestoreBytes() error {
+	for _, cell := range p.Bytes {
+		if cell.Row < 0 || cell.Row >= len(p.Rows) || cell.Column < 0 || cell.Column >= len(p.Rows[cell.Row]) {
+			return fmt.Errorf("database driver cursor named bytes at row %d column %d outside its page", cell.Row, cell.Column)
+		}
+		text, ok := p.Rows[cell.Row][cell.Column].(string)
+		if !ok {
+			return fmt.Errorf("database driver cursor named bytes at row %d column %d that are not base64 text", cell.Row, cell.Column)
+		}
+		raw, err := base64.StdEncoding.DecodeString(text)
+		if err != nil {
+			return fmt.Errorf("database driver cursor bytes at row %d column %d: %w", cell.Row, cell.Column, err)
+		}
+		p.Rows[cell.Row][cell.Column] = string(raw)
+	}
+	return nil
 }
 
 // DriverWriterPrepared answers DriverOpPrepareRowStatements.

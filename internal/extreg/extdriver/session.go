@@ -10,7 +10,6 @@ package extdriver
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,9 +52,6 @@ const (
 	// driverSessionInstances is how many instances, and so database connections,
 	// one session runs at once.
 	driverSessionInstances = 3
-	// driverStreamRows is how many rows one cursor read brings over at most; the
-	// guest answers fewer when they are large (extwire.DriverStreamPage).
-	driverStreamRows = 256
 	// defaultIdleTimeout is how long an instance of a session may stay idle
 	// before it is closed, unless it is the session's last one.
 	defaultIdleTimeout = time.Minute
@@ -826,7 +822,7 @@ func (s *driverSession) CountTableRows(ctx context.Context, database, table stri
 }
 
 // StreamTableRows opens the cursor in the guest and reads it over as many calls
-// as it takes, up to driverStreamRows rows at a time and fewer when they are
+// as it takes, up to extwire.DriverStreamRows rows at a time and fewer when they are
 // large (extwire.DriverStreamPage), until a page says the cursor is done, so the
 // table is never held whole on either side. The cursor holds its instance until it is closed. ctx bounds
 // every one of those reads, as it would bound reading a database/sql cursor.
@@ -1188,9 +1184,9 @@ func (r *driverStream) Next() bool {
 		}
 		var page extwire.DriverStreamPage
 		r.err = r.inst.call(r.ctx, extwire.DriverCall{Op: extwire.DriverOpStreamNext, Args: extwire.DriverArgs{
-			Stream: r.id, Max: driverStreamRows, AcceptBytes: true,
+			Stream: r.id, Max: extwire.DriverStreamRows, AcceptBytes: true,
 		}}, &page)
-		if err := restoreBytes(&page); err != nil {
+		if err := page.RestoreBytes(); err != nil {
 			r.err = errors.Join(r.err, err)
 			return false
 		}
@@ -1198,27 +1194,6 @@ func (r *driverStream) Next() bool {
 	}
 	r.row, r.rows = r.rows[0], r.rows[1:]
 	return true
-}
-
-// restoreBytes turns each cell page.Bytes names back from the base64 it traveled
-// as into the string of its raw bytes, the value a built-in driver's cursor gives
-// for a binary column.
-func restoreBytes(page *extwire.DriverStreamPage) error {
-	for _, cell := range page.Bytes {
-		if cell.Row < 0 || cell.Row >= len(page.Rows) || cell.Column < 0 || cell.Column >= len(page.Rows[cell.Row]) {
-			return fmt.Errorf("database driver cursor named bytes at row %d column %d outside its page", cell.Row, cell.Column)
-		}
-		text, ok := page.Rows[cell.Row][cell.Column].(string)
-		if !ok {
-			return fmt.Errorf("database driver cursor named bytes at row %d column %d that are not base64 text", cell.Row, cell.Column)
-		}
-		raw, err := base64.StdEncoding.DecodeString(text)
-		if err != nil {
-			return fmt.Errorf("database driver cursor bytes at row %d column %d: %w", cell.Row, cell.Column, err)
-		}
-		page.Rows[cell.Row][cell.Column] = string(raw)
-	}
-	return nil
 }
 
 func (r *driverStream) Row() []any { return r.row }
@@ -1260,7 +1235,7 @@ type writerRef struct {
 }
 
 // RowStatements generates in the guest, in consecutive parts of about
-// extwire.DriverRowsBytes of row values (rowStatementParts), each sent with the
+// extwire.DriverRowsBytes of row values (extwire.RowParts), each sent with the
 // rest of req as it is: a dump hands over hundreds of rows at a time, and the
 // guest must not hold all of them, their JSON and their statements at once. The
 // writer answers one statement per row in order, so the parts' statements one
@@ -1270,7 +1245,7 @@ func (w *driverRowWriter) RowStatements(req dbdriver.RowStatementsRequest) ([]st
 	// in the guest and its hold on the instance.
 	defer runtime.KeepAlive(w)
 	out := make([]string, 0, len(req.Rows))
-	for _, rows := range rowStatementParts(req.Rows) {
+	for _, rows := range extwire.RowParts(req.Rows) {
 		part := req
 		part.Rows = rows
 		statements, err := w.rowStatements(part)
@@ -1282,24 +1257,6 @@ func (w *driverRowWriter) RowStatements(req dbdriver.RowStatementsRequest) ([]st
 	return out, nil
 }
 
-// rowStatementParts cuts rows into consecutive parts that each stop once their
-// values take about extwire.DriverRowsBytes (extwire.ValueBytes), with at least
-// one row; no rows are one empty part.
-func rowStatementParts(rows []map[string]any) [][]map[string]any {
-	var parts [][]map[string]any
-	start, size := 0, 0
-	for i, row := range rows {
-		if i > start && size >= extwire.DriverRowsBytes {
-			parts = append(parts, rows[start:i])
-			start, size = i, 0
-		}
-		for _, value := range row {
-			size += extwire.ValueBytes(value)
-		}
-	}
-	return append(parts, rows[start:])
-}
-
 // rowStatements generates the statements of req in one guest call.
 func (w *driverRowWriter) rowStatements(req dbdriver.RowStatementsRequest) ([]string, error) {
 	raw, err := json.Marshal(req)
@@ -1307,17 +1264,9 @@ func (w *driverRowWriter) rowStatements(req dbdriver.RowStatementsRequest) ([]st
 		return nil, fmt.Errorf("marshal row statements request: %w", err)
 	}
 	// JSON writes bytes as base64 text: name them so the guest turns them back.
-	var rowBytes []extwire.DriverRowValue
-	for i, row := range req.Rows {
-		for column, value := range row {
-			if _, ok := value.([]byte); ok {
-				rowBytes = append(rowBytes, extwire.DriverRowValue{Row: i, Column: column})
-			}
-		}
-	}
 	var out []string
 	err = w.inst.call(w.inst.drivers.life, extwire.DriverCall{Op: extwire.DriverOpRowStatements, Args: extwire.DriverArgs{
-		Writer: w.id, Request: raw, RowBytes: rowBytes,
+		Writer: w.id, Request: raw, RowBytes: extwire.RowBytesOf(req.Rows),
 	}}, &out)
 	return out, err
 }

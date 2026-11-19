@@ -131,7 +131,7 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 	})
 
 	// memdb's lobs table: six rows of 1.5 MiB and a last one of 6 MiB, the letter
-	// 'a'+i repeated. A page of up to driverStreamRows rows would hold all of it at
+	// 'a'+i repeated. A page of up to extwire.DriverStreamRows rows would hold all of it at
 	// once in the guest.
 	t.Run("a cursor over large rows reads them in pages bounded by size, each row once", func(t *testing.T) {
 		const lobs = 7
