@@ -1259,10 +1259,49 @@ type writerRef struct {
 	id   uint64
 }
 
+// RowStatements generates in the guest, in consecutive parts of about
+// extwire.DriverRowsBytes of row values (rowStatementParts), each sent with the
+// rest of req as it is: a dump hands over hundreds of rows at a time, and the
+// guest must not hold all of them, their JSON and their statements at once. The
+// writer answers one statement per row in order, so the parts' statements one
+// after another are what a single call would answer.
 func (w *driverRowWriter) RowStatements(req dbdriver.RowStatementsRequest) ([]string, error) {
-	// The writer stays reachable until its call is done: its cleanup releases it in
-	// the guest and its hold on the instance.
+	// The writer stays reachable until its calls are done: its cleanup releases it
+	// in the guest and its hold on the instance.
 	defer runtime.KeepAlive(w)
+	out := make([]string, 0, len(req.Rows))
+	for _, rows := range rowStatementParts(req.Rows) {
+		part := req
+		part.Rows = rows
+		statements, err := w.rowStatements(part)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, statements...)
+	}
+	return out, nil
+}
+
+// rowStatementParts cuts rows into consecutive parts that each stop once their
+// values take about extwire.DriverRowsBytes (extwire.ValueBytes), with at least
+// one row; no rows are one empty part.
+func rowStatementParts(rows []map[string]any) [][]map[string]any {
+	var parts [][]map[string]any
+	start, size := 0, 0
+	for i, row := range rows {
+		if i > start && size >= extwire.DriverRowsBytes {
+			parts = append(parts, rows[start:i])
+			start, size = i, 0
+		}
+		for _, value := range row {
+			size += extwire.ValueBytes(value)
+		}
+	}
+	return append(parts, rows[start:])
+}
+
+// rowStatements generates the statements of req in one guest call.
+func (w *driverRowWriter) rowStatements(req dbdriver.RowStatementsRequest) ([]string, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal row statements request: %w", err)

@@ -448,6 +448,44 @@ func TestExtensionDriverDumps(t *testing.T) {
 		assert.False(t, rows.Next())
 		require.NoError(t, rows.Err())
 	})
+
+	// A dump hands the writer its rows 500 at a time. 64 rows of 1 MiB are far
+	// more than one guest call can hold at once alongside its JSON and the
+	// statements: in one call the guest runs out of memory and traps.
+	t.Run("a writer request of many large rows comes back whole, every field applied to every row", func(t *testing.T) {
+		d := newDriver()
+		s := d.open(t)
+		defer func() { _ = s.Close() }()
+		body := func(i int) string { return strings.Repeat(string(rune('a'+i%26)), 1<<20) }
+		const n = 64
+		rows := make([]map[string]any, n)
+		for i := range rows {
+			rows[i] = map[string]any{"id": int64(i + 1), "body": body(i)}
+		}
+
+		w, err := s.PrepareRowStatements(ctx, "app", "lobs")
+		require.NoError(t, err)
+		inserts, err := w.RowStatements(dbdriver.RowStatementsRequest{
+			Kind: dbdriver.RowInsert, Columns: []string{"id", "body"}, Rows: rows,
+			OmitDatabase: true, InsertModifier: "OVERRIDING SYSTEM VALUE",
+		})
+		require.NoError(t, err)
+		require.Len(t, inserts, n)
+		for i, statement := range inserts {
+			want := fmt.Sprintf("INSERT INTO [lobs] ([id], [body]) OVERRIDING SYSTEM VALUE VALUES ('%d', '%s');", i+1, body(i))
+			require.True(t, statement == want, "insert %d is row %d's, in order (%.60s)", i, i+1, statement)
+		}
+
+		updates, err := w.RowStatements(dbdriver.RowStatementsRequest{
+			Kind: dbdriver.RowUpdate, Columns: []string{"body"}, Rows: rows, PrimaryKeys: []string{"id"},
+		})
+		require.NoError(t, err)
+		require.Len(t, updates, n)
+		for i, statement := range updates {
+			want := fmt.Sprintf("UPDATE [app].[lobs] SET [body] = '%s' WHERE [id] = '%d';", body(i), i+1)
+			require.True(t, statement == want, "update %d is row %d's, in order (%.60s)", i, i+1, statement)
+		}
+	})
 }
 
 // An extension built for hostABI 1.0 keeps working: its driver declares neither

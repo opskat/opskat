@@ -56,8 +56,10 @@ const (
 	// are large (see DriverStreamPage); DriverOpStreamClose closes it.
 	DriverOpStreamNext  = "streamNext"
 	DriverOpStreamClose = "streamClose"
-	// DriverOpRowStatements generates statements with a prepared writer. A writer
-	// outlives the session it was prepared on: it no longer touches the database.
+	// DriverOpRowStatements generates statements with a prepared writer, one per row
+	// in order; the host sends a large request's rows over several calls
+	// (DriverRowsBytes). A writer outlives the session it was prepared on: it no
+	// longer touches the database.
 	DriverOpRowStatements = "rowStatements"
 
 	// DriverOpClassifyStatements splits and classifies DriverArgs.Statement with driver
@@ -211,11 +213,32 @@ type DriverStreamOpened struct {
 	Columns []string `json:"columns"`
 }
 
+// DriverRowsBytes is about how many bytes of row values one driver call carries:
+// the rows, their JSON and what the guest makes of them are all in the instance's
+// memory at once, so a batch of large rows crosses in several calls of about this
+// much, each with at least one row. A guest built with the current SDK ends a
+// cursor page here (DriverStreamPage); the host splits a DriverOpRowStatements
+// request here. Sizes are estimated with ValueBytes.
+const DriverRowsBytes = 4 << 20
+
+// ValueBytes estimates the bytes a row value takes: the length of text and bytes,
+// which is where a large row's size is, and a few bytes for any other value.
+func ValueBytes(value any) int {
+	switch v := value.(type) {
+	case string:
+		return len(v)
+	case []byte:
+		return len(v)
+	default:
+		return 8
+	}
+}
+
 // DriverStreamPage answers DriverOpStreamNext: the next rows, and whether the cursor has no
 // more after them. A guest built with the current SDK also ends a page once its
-// values take about 4 MiB, with at least one row, so a page with fewer rows than
-// DriverArgs.Max is not the end unless Done says so; one built with an earlier
-// SDK answers Max rows, or fewer only at the end, and sets Done then.
+// values take about DriverRowsBytes, with at least one row, so a page with fewer
+// rows than DriverArgs.Max is not the end unless Done says so; one built with an
+// earlier SDK answers Max rows, or fewer only at the end, and sets Done then.
 type DriverStreamPage struct {
 	Rows [][]any `json:"rows"`
 	Done bool    `json:"done"`

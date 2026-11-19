@@ -15,6 +15,7 @@ import (
 	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
 	opskat "github.com/opskat/opskat/pkg/extsdk"
 	"github.com/opskat/opskat/pkg/extsdk/internal/registration"
+	"github.com/opskat/opskat/pkg/extwire"
 )
 
 var demoDriver = dbdriver.Descriptor{
@@ -298,7 +299,7 @@ func TestStreamNextBoundsPagesBySize(t *testing.T) {
 		return sizes, done, lastErr
 	}
 
-	Convey("a cursor page holds rows until about streamPageBytes, at least one, and is done only when the cursor is", t, func() {
+	Convey("a cursor page holds rows until about DriverRowsBytes, at least one, and is done only when the cursor is", t, func() {
 		Convey("an empty cursor answers one empty page that is done", func() {
 			sizes, done, err := pages(&listRows{})
 			So(sizes, ShouldResemble, [][]int{{}})
@@ -307,7 +308,7 @@ func TestStreamNextBoundsPagesBySize(t *testing.T) {
 		})
 
 		Convey("a page that reaches the size stops there short of max, and is not done", func() {
-			half := streamPageBytes / 2
+			half := extwire.DriverRowsBytes / 2
 			sizes, done, err := pages(&listRows{rows: [][]any{text(half), text(half), text(half)}})
 			So(sizes, ShouldResemble, [][]int{{half, half}, {half}})
 			So(done, ShouldBeTrue)
@@ -315,8 +316,8 @@ func TestStreamNextBoundsPagesBySize(t *testing.T) {
 		})
 
 		Convey("a row larger than a page comes alone, and the rows after it follow", func() {
-			sizes, done, err := pages(&listRows{rows: [][]any{text(2 * streamPageBytes), text(10), text(10)}})
-			So(sizes, ShouldResemble, [][]int{{2 * streamPageBytes}, {10, 10}})
+			sizes, done, err := pages(&listRows{rows: [][]any{text(2 * extwire.DriverRowsBytes), text(10), text(10)}})
+			So(sizes, ShouldResemble, [][]int{{2 * extwire.DriverRowsBytes}, {10, 10}})
 			So(done, ShouldBeTrue)
 			So(err, ShouldBeEmpty)
 		})
