@@ -511,8 +511,15 @@ func closeDriverSession(id uint64, s dbdriver.Session) error {
 	return errors.Join(errs...)
 }
 
-// streamNext reads up to a.Max rows; fewer means the cursor is done. A read error
-// is answered together with the rows read before it.
+// streamPageBytes is about how many bytes of values one cursor page holds: the
+// page, its JSON and the host's copy of it are all in the instance's memory at
+// once, so a page of large values is cut short rather than read to a.Max rows.
+const streamPageBytes = 4 << 20
+
+// streamNext reads up to a.Max rows, stopping early once the page holds about
+// streamPageBytes of values; a page always has a row unless the cursor has
+// ended. Done is set only when the cursor has ended, so a short page is not the
+// end. A read error is answered together with the rows read before it.
 func streamNext(a extwire.DriverArgs) (any, error) {
 	stream, ok := driverHandles.streams[a.Stream]
 	if !ok {
@@ -521,9 +528,14 @@ func streamNext(a extwire.DriverArgs) (any, error) {
 	if a.Max <= 0 {
 		return nil, fmt.Errorf("read cursor %d: max must be positive, got %d", a.Stream, a.Max)
 	}
-	page := extwire.DriverStreamPage{Rows: make([][]any, 0, a.Max)}
-	for len(page.Rows) < a.Max && stream.rows.Next() {
+	page := extwire.DriverStreamPage{Rows: [][]any{}}
+	for size := 0; len(page.Rows) < a.Max && size < streamPageBytes; {
+		if !stream.rows.Next() {
+			page.Done = true
+			return page, stream.rows.Err()
+		}
 		row := stream.rows.Row()
+		size += rowBytes(row)
 		if a.AcceptBytes {
 			for column, value := range row {
 				// sqldb reads a binary column into a string of its bytes; JSON would
@@ -536,11 +548,25 @@ func streamNext(a extwire.DriverArgs) (any, error) {
 		}
 		page.Rows = append(page.Rows, row)
 	}
-	page.Done = len(page.Rows) < a.Max
-	if page.Done {
-		return page, stream.rows.Err()
-	}
 	return page, nil
+}
+
+// rowBytes estimates the bytes a row's values take: the length of text and
+// bytes, which is where a large row's size is, and a few bytes for any other
+// value.
+func rowBytes(row []any) int {
+	n := 0
+	for _, value := range row {
+		switch v := value.(type) {
+		case string:
+			n += len(v)
+		case []byte:
+			n += len(v)
+		default:
+			n += 8
+		}
+	}
+	return n
 }
 
 // decodeRowStatementsRequest reads a DriverOpRowStatements request as the host

@@ -8,7 +8,7 @@ import (
 // callGarbageLimit is how far the heap may grow past what the last collection at
 // a call boundary left alive before the next call boundary collects again.
 //
-// A guest instance lives in a fixed linear memory (the host caps it at 64 MiB,
+// A guest instance lives in a fixed linear memory (the host caps it at 256 MiB,
 // the module's static data included) and is idle between calls, so Go's pacer
 // never gets to run: after a call that held a lot at once, its next goal is
 // twice that, and the dead values stay in the heap until it is reached. A large

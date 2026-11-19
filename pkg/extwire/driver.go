@@ -52,7 +52,8 @@ const (
 	DriverOpImportStatements         = "importStatements"
 	DriverOpExecuteBatch             = "executeBatch"
 
-	// DriverOpStreamNext reads up to DriverArgs.Max rows of a cursor; DriverOpStreamClose closes it.
+	// DriverOpStreamNext reads up to DriverArgs.Max rows of a cursor — fewer when they
+	// are large (see DriverStreamPage); DriverOpStreamClose closes it.
 	DriverOpStreamNext  = "streamNext"
 	DriverOpStreamClose = "streamClose"
 	// DriverOpRowStatements generates statements with a prepared writer. A writer
@@ -157,7 +158,8 @@ type DriverArgs struct {
 	Stream   uint64 `json:"stream,omitempty"`
 	Writer   uint64 `json:"writer,omitempty"`
 	Executor uint64 `json:"executor,omitempty"`
-	// Max is how many rows DriverOpStreamNext may answer.
+	// Max is how many rows DriverOpStreamNext may answer at most. The guest may
+	// answer fewer; only DriverStreamPage.Done says the cursor has ended.
 	Max int `json:"max,omitempty"`
 	// AcceptBytes tells DriverOpStreamNext the host reads DriverStreamPage.Bytes: only
 	// then does the guest send raw byte values as bytes. A host that does not set it
@@ -210,7 +212,10 @@ type DriverStreamOpened struct {
 }
 
 // DriverStreamPage answers DriverOpStreamNext: the next rows, and whether the cursor has no
-// more after them.
+// more after them. A guest built with the current SDK also ends a page once its
+// values take about 4 MiB, with at least one row, so a page with fewer rows than
+// DriverArgs.Max is not the end unless Done says so; one built with an earlier
+// SDK answers Max rows, or fewer only at the end, and sets Done then.
 type DriverStreamPage struct {
 	Rows [][]any `json:"rows"`
 	Done bool    `json:"done"`

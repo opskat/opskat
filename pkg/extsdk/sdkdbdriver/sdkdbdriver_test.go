@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -237,4 +239,93 @@ func TestDatabaseDriverServesSessionsOverJSON(t *testing.T) {
 func jsonNumber(n uint64) string {
 	raw, _ := json.Marshal(n)
 	return string(raw)
+}
+
+// listRows is a cursor over rows, failing with err once they are read.
+type listRows struct {
+	rows [][]any
+	err  error
+	row  []any
+}
+
+func (r *listRows) Columns() []string { return []string{"body"} }
+
+func (r *listRows) Next() bool {
+	if len(r.rows) == 0 {
+		return false
+	}
+	r.row, r.rows = r.rows[0], r.rows[1:]
+	return true
+}
+
+func (r *listRows) Row() []any { return r.row }
+
+func (r *listRows) Err() error {
+	if len(r.rows) == 0 {
+		return r.err
+	}
+	return nil
+}
+
+func (r *listRows) Close() error { return nil }
+
+// streamPage is a streamNext answer as the host reads it.
+type streamPage struct {
+	Rows [][]any `json:"rows"`
+	Done bool    `json:"done"`
+}
+
+func TestStreamNextBoundsPagesBySize(t *testing.T) {
+	text := func(size int) []any { return []any{strings.Repeat("x", size)} }
+	// pages reads the cursor the way the host does, max rows at a time, until a
+	// page says it is done or fails, and answers each page's row sizes.
+	pages := func(rows *listRows) (sizes [][]int, done bool, lastErr string) {
+		resetDrivers()
+		driverHandles.streams[1] = driverStream{rows: rows}
+		for i := 0; i < 10 && !done && lastErr == ""; i++ {
+			reply := callDriver(t, `{"op":"streamNext","args":{"stream":1,"max":256}}`)
+			if reply.Error != nil {
+				lastErr = reply.Error.Message
+			}
+			var page streamPage
+			So(json.Unmarshal(reply.Result, &page), ShouldBeNil)
+			pageSizes := make([]int, 0, len(page.Rows))
+			for _, row := range page.Rows {
+				pageSizes = append(pageSizes, len(row[0].(string)))
+			}
+			sizes, done = append(sizes, pageSizes), page.Done
+		}
+		return sizes, done, lastErr
+	}
+
+	Convey("a cursor page holds rows until about streamPageBytes, at least one, and is done only when the cursor is", t, func() {
+		Convey("an empty cursor answers one empty page that is done", func() {
+			sizes, done, err := pages(&listRows{})
+			So(sizes, ShouldResemble, [][]int{{}})
+			So(done, ShouldBeTrue)
+			So(err, ShouldBeEmpty)
+		})
+
+		Convey("a page that reaches the size stops there short of max, and is not done", func() {
+			half := streamPageBytes / 2
+			sizes, done, err := pages(&listRows{rows: [][]any{text(half), text(half), text(half)}})
+			So(sizes, ShouldResemble, [][]int{{half, half}, {half}})
+			So(done, ShouldBeTrue)
+			So(err, ShouldBeEmpty)
+		})
+
+		Convey("a row larger than a page comes alone, and the rows after it follow", func() {
+			sizes, done, err := pages(&listRows{rows: [][]any{text(2 * streamPageBytes), text(10), text(10)}})
+			So(sizes, ShouldResemble, [][]int{{2 * streamPageBytes}, {10, 10}})
+			So(done, ShouldBeTrue)
+			So(err, ShouldBeEmpty)
+		})
+
+		Convey("a read error mid-page answers the rows read before it with the error, and the page is done", func() {
+			sizes, done, err := pages(&listRows{rows: [][]any{text(10), text(10)}, err: errors.New("connection reset")})
+			So(sizes, ShouldResemble, [][]int{{10, 10}})
+			So(done, ShouldBeTrue)
+			So(err, ShouldContainSubstring, "connection reset")
+		})
+	})
 }

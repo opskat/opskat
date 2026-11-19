@@ -733,3 +733,19 @@ func TestPluginReclaimsGarbageBetweenCalls(t *testing.T) {
 		})
 	})
 }
+
+// A call may hold far more than the 64 MiB an instance used to be capped at:
+// a page of large rows, or one large value read whole, is held at once. Under
+// the old cap the allocation could not grow linear memory and the instance
+// trapped (wasm error: unreachable, from runtime.throw in mallocgcLarge).
+func TestPluginInstanceHoldsMoreThan64MiB(t *testing.T) {
+	Convey("Given the fixture extension", t, func() {
+		p := newFixturePlugin(t, newRecordedHost(), t.TempDir(), WithMaxInstances(1))
+
+		Convey("a call that holds 100 MiB at once succeeds", func() {
+			out := callTool(t, p, "hold", map[string]any{"mb": 100})
+			So(out["bytes"], ShouldEqual, 100<<20)
+			So(out["pages"], ShouldEqual, 100<<20/(4<<10))
+		})
+	})
+}

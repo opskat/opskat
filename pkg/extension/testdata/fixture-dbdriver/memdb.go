@@ -96,10 +96,30 @@ var tables = map[string]map[string]*memTable{
 			row:     func(i int) []driver.Value { return events2026[i] },
 			ddl:     "CREATE TABLE [app].[events_2026] PARTITION OF [events]",
 		},
+		"lobs": {
+			columns: []memColumn{{name: "id", typ: "int", primaryKey: true}, {name: "body", typ: "text"}},
+			size:    lobsSize,
+			row:     lobRow,
+			ddl:     "CREATE TABLE [app].[lobs] ([id] int PRIMARY KEY, [body] text)",
+		},
 	},
 }
 
 var events2026 = [][]driver.Value{{int64(1)}, {int64(2)}}
+
+// lobs is a table SHOW TABLES does not list, so dumps and the conformance suites
+// never read it: lobsSize rows whose body, the letter 'a'+i, is 1.5 MiB long, and
+// a last one of 6 MiB. Together they are far more than one cursor page may hold,
+// and the last alone is more. The rows are made as they are read.
+const lobsSize = 7
+
+func lobRow(i int) []driver.Value {
+	size := 3 << 19
+	if i == lobsSize-1 {
+		size = 6 << 20
+	}
+	return []driver.Value{int64(i + 1), strings.Repeat(string(rune('a'+i)), size)}
+}
 
 // tableOrder is the order SHOW TABLES lists them in.
 var tableOrder = []string{"users", "series", "blobs", "events_2026", "events"}
@@ -110,9 +130,9 @@ var views = map[string]string{"v_users": "SELECT [id] FROM [app].[users]"}
 // FUNCTION SOURCE gives their source. users_count reads the view v_users.
 var functions = map[string]string{"users_count": "CREATE FUNCTION [users_count]() RETURNS int AS SELECT COUNT(*) FROM [v_users]"}
 
-// seriesProduced counts the rows the most recent read of series has produced so
-// far; SHOW STREAM PROGRESS answers it.
-var seriesProduced int
+// streamProduced counts the rows the most recent whole read of a table has
+// produced so far; SHOW STREAM PROGRESS answers it.
+var streamProduced int
 
 type connector struct {
 	dial     dbdriver.DialFunc
@@ -273,7 +293,7 @@ func (c *conn) query(q string) (driver.Rows, error) {
 	case q == "SHOW DATABASES":
 		return values([]string{"name"}, []driver.Value{defaultDatabase}), nil
 	case q == "SHOW STREAM PROGRESS":
-		return values([]string{"produced"}, []driver.Value{int64(seriesProduced)}), nil
+		return values([]string{"produced"}, []driver.Value{int64(streamProduced)}), nil
 	case q == "SHOW OPEN CONFIG":
 		raw, err := json.Marshal(c.config)
 		if err != nil {
@@ -379,12 +399,8 @@ func selectTable(ref, limit, offset string) (driver.Rows, error) {
 	for i, column := range t.columns {
 		columns[i] = column.name
 	}
-	r := &memRows{columns: columns, next: start, end: end, row: t.row}
-	if t == tables[defaultDatabase]["series"] {
-		seriesProduced = 0
-		r.produced = &seriesProduced
-	}
-	return r, nil
+	streamProduced = 0
+	return &memRows{columns: columns, next: start, end: end, row: t.row, produced: &streamProduced}, nil
 }
 
 func showNames(what, database string) (driver.Rows, error) {

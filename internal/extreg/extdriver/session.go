@@ -53,7 +53,8 @@ const (
 	// driverSessionInstances is how many instances, and so database connections,
 	// one session runs at once.
 	driverSessionInstances = 3
-	// driverStreamRows is how many rows one cursor read brings over.
+	// driverStreamRows is how many rows one cursor read brings over at most; the
+	// guest answers fewer when they are large (extwire.DriverStreamPage).
 	driverStreamRows = 256
 	// defaultIdleTimeout is how long an instance of a session may stay idle
 	// before it is closed, unless it is the session's last one.
@@ -825,8 +826,9 @@ func (s *driverSession) CountTableRows(ctx context.Context, database, table stri
 }
 
 // StreamTableRows opens the cursor in the guest and reads it over as many calls
-// as it takes, driverStreamRows rows at a time, so the table is never held whole
-// on either side. The cursor holds its instance until it is closed. ctx bounds
+// as it takes, up to driverStreamRows rows at a time and fewer when they are
+// large (extwire.DriverStreamPage), until a page says the cursor is done, so the
+// table is never held whole on either side. The cursor holds its instance until it is closed. ctx bounds
 // every one of those reads, as it would bound reading a database/sql cursor.
 func (s *driverSession) StreamTableRows(ctx context.Context, database, table string, query dbdriver.TableQuery) (dbdriver.RowStream, error) {
 	inst, err := s.acquire(ctx)

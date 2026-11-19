@@ -69,6 +69,10 @@ type growArgs struct {
 	MB int `json:"mb" desc:"How many MiB to grow a slice to"`
 }
 
+type holdArgs struct {
+	MB int `json:"mb" desc:"How many MiB to hold at once"`
+}
+
 type urlArgs struct {
 	URL string `json:"url" desc:"URL to GET"`
 }
@@ -330,6 +334,18 @@ func init() {
 			buf = append(buf, piece...)
 		}
 		return map[string]any{"bytes": len(buf)}, nil
+	}).Policy("read")
+
+	// hold allocates args.MB MiB in one piece and writes to every page of it, so
+	// all of it is live linear memory before the call returns.
+	opskat.Tool("hold", func(_ *opskat.ToolContext, args holdArgs) (any, error) {
+		buf := make([]byte, args.MB<<20)
+		touched := 0
+		for i := 0; i < len(buf); i += 4 << 10 {
+			buf[i] = 1
+			touched += int(buf[i])
+		}
+		return map[string]any{"bytes": len(buf), "pages": touched}, nil
 	}).Policy("read")
 
 	// The host-only tools are called by host subsystems (extreg.CallHostTool), never
