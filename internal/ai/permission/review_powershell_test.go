@@ -194,3 +194,97 @@ func TestPowerShellDenyIgnoresCaseAndBuiltinAliases(t *testing.T) {
 		require.Equal(t, aictx.SourcePolicyDeny, r.DecisionSource, "cmd=%s", cmd)
 	}
 }
+
+// issue #384 里的巡检命令：每一段都有规则时，和 Linux 上的复杂命令一样由规则直接放行。
+const psInspectDirs = `Get-ChildItem C:\ -Directory -Force -EA SilentlyContinue | ForEach-Object { $s=(Get-ChildItem $_.FullName -Recurse -Force -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum; [pscustomobject]@{D=$_.Name;GB=[math]::Round($s/1GB,1)} } | Sort-Object GB -Descending | Select-Object -First 10`
+
+func TestPowerShellRulesAllowCompleteCommands(t *testing.T) {
+	_, mockRepo, _ := setupPolicyTest(t)
+	ctx := withPowerShellGrantSession(t)
+	pol := &asset_entity.CommandPolicy{AllowList: []string{
+		"Get-ChildItem *", "ForEach-Object *", "Measure-Object *", "Sort-Object *", "Select-Object *", "Set-Content *",
+	}}
+	mockRepo.EXPECT().Find(gomock.Any(), int64(311)).Return(powershellSSHAsset(311, policyent.PermissionModeDefault, pol), nil).AnyTimes()
+	mockRepo.EXPECT().Find(gomock.Any(), int64(312)).Return(powershellSSHAsset(312, policyent.PermissionModeDefault, nil), nil).AnyTimes()
+	SaveGrantPattern(ctx, "sess-ps", 312, "win-ssh", "exec", "Get-Item *")
+	SaveGrantPattern(ctx, "sess-ps", 312, "win-ssh", "exec", "ForEach-Object *")
+
+	t.Run("脚本块、子表达式、哈希表里的命令都有规则时直接放行", func(t *testing.T) {
+		r := CheckPermission(ctx, asset_entity.AssetTypeSSH, 311, psInspectDirs)
+		require.Equal(t, aictx.Allow, r.Decision)
+		require.Equal(t, aictx.SourcePolicyAllow, r.DecisionSource)
+	})
+
+	t.Run("脚本块里有一条没规则的命令就不放行", func(t *testing.T) {
+		r := CheckPermission(ctx, asset_entity.AssetTypeSSH, 311, `Get-ChildItem C:\tmp | ForEach-Object { Remove-Item $_.FullName }`)
+		require.NotEqual(t, aictx.Allow, r.Decision)
+	})
+
+	t.Run("内置别名按指向的命令匹配；只在一个版本里有的别名不算", func(t *testing.T) {
+		for _, cmd := range []string{`ls C:\logs`, `dir C:\logs`, `gci C:\logs | select -First 3`} {
+			r := CheckPermission(ctx, asset_entity.AssetTypeSSH, 311, cmd)
+			require.Equal(t, aictx.Allow, r.Decision, cmd)
+		}
+		// sc 在 PowerShell 7 里是 sc.exe（服务控制），不能借 Set-Content 的规则放行
+		r := CheckPermission(ctx, asset_entity.AssetTypeSSH, 311, `sc delete spooler`)
+		require.NotEqual(t, aictx.Allow, r.Decision)
+	})
+
+	t.Run("ForEach-Object 的授权不放行按名字调用方法", func(t *testing.T) {
+		r := CheckPermission(ctx, asset_entity.AssetTypeSSH, 312, `Get-Item C:\x | ForEach-Object { $_.Name }`)
+		require.Equal(t, aictx.Allow, r.Decision)
+		require.Equal(t, aictx.SourceGrantAllow, r.DecisionSource)
+		for _, cmd := range []string{`Get-Item C:\x | ForEach-Object Delete`, `Get-Item C:\x | % -MemberName Delete`, `Get-Item C:\x | ForEach-Object { $_.Delete() }`} {
+			r = CheckPermission(ctx, asset_entity.AssetTypeSSH, 312, cmd)
+			require.NotEqual(t, aictx.Allow, r.Decision, cmd)
+		}
+	})
+}
+
+// 「始终允许」与 grant 匹配用同一种拆法：拆得全的命令（含脚本块里的命令）存下的 pattern 下次能命中，
+// 拆不全的命令存不下能命中的 pattern，审批时就只给一次性允许。
+func TestPowerShellRememberMatchesGrantCheck(t *testing.T) {
+	_, mockRepo, _ := setupPolicyTest(t)
+	ctx := withPowerShellGrantSession(t)
+	mockRepo.EXPECT().Find(gomock.Any(), int64(331)).Return(powershellSSHAsset(331, policyent.PermissionModeDefault, nil), nil).AnyTimes()
+
+	nested := `Get-ChildItem C:\logs | ForEach-Object { Get-FileHash $_.FullName }`
+	require.Equal(t, ApprovalKindSingle, ApprovalKindFor(ctx, 331, "exec", nested))
+	SaveGrantPatternsForApproval(ctx, "sess-ps", 331, "win-ssh", "exec", nested, GrantOriginSystem)
+	r := CheckPermission(ctx, asset_entity.AssetTypeSSH, 331, nested)
+	require.Equal(t, aictx.Allow, r.Decision)
+	require.Equal(t, aictx.SourceGrantAllow, r.DecisionSource)
+
+	for _, cmd := range []string{`(Get-Item C:\x).Delete()`, `Get-Item C:\x | ForEach-Object Delete`, `Get-ChildItem a#b`} {
+		require.Equal(t, ApprovalKindOnce, ApprovalKindFor(ctx, 331, "exec", cmd), cmd)
+		require.Empty(t, ApprovalRuleSubjects(ctx, "exec", ApprovalItem{Type: "exec", AssetID: 331, Command: cmd}), cmd)
+	}
+}
+
+// PowerShell 资产的默认策略组：Windows 只读命令直接放行，格式化磁盘、关机重启直接拒绝。
+func TestPowerShellBuiltinWindowsGroups(t *testing.T) {
+	ctx, mockRepo, _ := setupPolicyTest(t)
+	pol := &asset_entity.CommandPolicy{Groups: []string{policyent.BuiltinWindowsReadOnly, policyent.BuiltinWindowsDangerousDeny}}
+	mockRepo.EXPECT().Find(gomock.Any(), int64(321)).Return(powershellSSHAsset(321, policyent.PermissionModeDefault, pol), nil).AnyTimes()
+
+	for _, cmd := range []string{
+		psInspectDirs,
+		`Get-WinEvent -FilterHashtable @{LogName='System';Level=1,2;StartTime=(Get-Date).AddHours(-48)} -MaxEvents 15`,
+		`Get-Service | Where-Object { $_.Status -eq 'Running' } | Select-Object Name, Status`,
+		`Get-Process | Sort-Object WS -Descending | Select-Object -First 12`,
+		`Get-CimInstance Win32_OperatingSystem | Select-Object Caption, LastBootUpTime`,
+		`ls C:\Users`,
+	} {
+		r := CheckPermission(ctx, asset_entity.AssetTypeSSH, 321, cmd)
+		require.Equal(t, aictx.Allow, r.Decision, cmd)
+		require.Equal(t, aictx.SourcePolicyAllow, r.DecisionSource, cmd)
+	}
+	for _, cmd := range []string{`Remove-Item C:\x`, `Stop-Service spooler`, `Set-Content C:\x 1`, `Get-Item C:\x | ForEach-Object Delete`} {
+		r := CheckPermission(ctx, asset_entity.AssetTypeSSH, 321, cmd)
+		require.Equal(t, aictx.NeedConfirm, r.Decision, cmd)
+	}
+	for _, cmd := range []string{`Format-Volume -DriveLetter D`, `Clear-Disk -Number 1`, `Stop-Computer -Force`, `Restart-Computer`, `shutdown /r /t 0`, `diskpart /s x.txt`} {
+		r := CheckPermission(ctx, asset_entity.AssetTypeSSH, 321, cmd)
+		require.Equal(t, aictx.Deny, r.Decision, cmd)
+	}
+}

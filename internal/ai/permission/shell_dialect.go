@@ -1,6 +1,9 @@
 package permission
 
 import (
+	"context"
+	"strings"
+
 	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/pkg/pwshdecode"
@@ -21,6 +24,9 @@ type shellDialect struct {
 	reviewSyntax   Syntax
 	decodesAndRuns func(command string) (bool, error)
 	errTooLong     error
+	// grantPatterns 把审批输入拆成 grant pattern（见 NormalizeGrantPatternsFor）；nil 时用类型
+	// 注册的拆法。
+	grantPatterns func(command string) []string
 }
 
 var (
@@ -38,15 +44,42 @@ var (
 	powerShellDialect = shellDialect{
 		parse: func(command string) ([]string, bool, error) {
 			parsed, err := policy.ParsePowerShellCommand(command)
-			return parsed.SubCommands, parsed.Plain, err
+			return parsed.SubCommands, parsed.Complete, err
 		},
 		allow:          policy.MatchPowerShellRule,
 		deny:           policy.MatchPowerShellDenyRule,
 		reviewSyntax:   SyntaxPowerShell,
 		decodesAndRuns: pwshdecode.DecodesAndRuns,
 		errTooLong:     pwshdecode.ErrTooLong,
+		grantPatterns:  powerShellGrantPatterns,
 	}
 )
+
+// powerShellGrantPatterns 只给拆得全的命令出 pattern：checkShellCommandPolicy 只让拆得全的
+// PowerShell 命令走 grant，拆不全的存下 pattern 也永远命中不了，审批时就不该提供「始终允许」。
+func powerShellGrantPatterns(command string) []string {
+	parsed, err := policy.ParsePowerShellCommand(command)
+	if err != nil || !parsed.Complete {
+		return nil
+	}
+	return parsed.SubCommands
+}
+
+// NormalizeGrantPatternsFor 是按资产的 NormalizeGrantPatterns：shell 写法的命令按资产声明的远端
+// shell 拆，其余与 NormalizeGrantPatterns 相同。审批里决定能否「始终允许」、落库 grant 时都用它，
+// 拆法才与 checkShellCommandPolicy 匹配 grant 时一致。
+func NormalizeGrantPatternsFor(ctx context.Context, assetID int64, approvalType, command string, origin GrantOrigin) []string {
+	if handler, ok := permissionTypeFor(approvalType); ok && handler.reviewSyntax == SyntaxShell && assetID > 0 {
+		if split := shellDialectFor(resolveAssetForPolicy(ctx, assetID)).grantPatterns; split != nil {
+			cmd := strings.TrimSpace(command)
+			if cmd == "" {
+				return nil
+			}
+			return split(cmd)
+		}
+	}
+	return NormalizeGrantPatterns(approvalType, command, origin)
+}
 
 // shellDialectFor 按资产声明的远端 shell 选方言：声明了 PowerShell 的 SSH 资产用 PowerShell，
 // 其余用 POSIX shell。

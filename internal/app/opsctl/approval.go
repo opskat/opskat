@@ -117,7 +117,7 @@ const opsctlAuditSource = "opsctl"
 func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.ApprovalItem, sessionID string) (permission.ParsedApprovalResponse, string) {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
 	// 与 opsctl 终端提示同一判定：分类失败的扩展调用没有可落的规则，只给本次允许/拒绝。
-	kind := permission.ApprovalKindForItem(item.Type, item)
+	kind := permission.ApprovalKindForItem(ctx, item.Type, item)
 	log := logger.Ctx(o.ctx).With(
 		zap.String("confirmID", confirmID),
 		zap.String("approvalType", item.Type),

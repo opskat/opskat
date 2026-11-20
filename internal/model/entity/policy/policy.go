@@ -19,6 +19,13 @@ func DefaultCommandPolicy() *CommandPolicy {
 	}
 }
 
+// DefaultPowerShellCommandPolicy 返回远端 shell 为 PowerShell 的 SSH 资产的默认命令权限策略。
+func DefaultPowerShellCommandPolicy() *CommandPolicy {
+	return &CommandPolicy{
+		Groups: []string{BuiltinWindowsReadOnly, BuiltinWindowsDangerousDeny},
+	}
+}
+
 // QueryPolicy SQL 权限策略（database 类型资产使用）
 type QueryPolicy struct {
 	AllowTypes []string `json:"allow_types"`      // 允许的语句类型: SELECT, SHOW, DESCRIBE, EXPLAIN
@@ -174,6 +181,8 @@ func DefaultEtcdPolicy() *EtcdPolicy {
 
 const (
 	BuiltinLinuxReadOnly         = "builtin:linux-readonly"
+	BuiltinWindowsReadOnly       = "builtin:windows-readonly"
+	BuiltinWindowsDangerousDeny  = "builtin:windows-dangerous-deny"
 	BuiltinK8sReadOnly           = "builtin:k8s-readonly"
 	BuiltinK8sDangerousDeny      = "builtin:k8s-dangerous-deny"
 	BuiltinDockerReadOnly        = "builtin:docker-readonly"

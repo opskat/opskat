@@ -1,6 +1,7 @@
 package permission
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -204,13 +205,14 @@ const ApprovalTypeDelete = "delete"
 //
 // 类型决定上限，命令决定能否达到：支持 pattern grant 的类型，只有这条命令归一化得出
 // 至少一条 pattern 时才是 single（可"始终允许"）。归一化不出 pattern 的命令——拆不出
-// 子命令的 shell 命令、OSS 不落常驻授权的主体（决策 D20）——没有可落库的规则，只能一次性审批。
-func ApprovalKindFor(approvalType, command string) string {
+// 子命令的 shell 命令、拆不全的 PowerShell 命令、OSS 不落常驻授权的主体（决策 D20）——没有可落库的
+// 规则，只能一次性审批。assetID 决定 shell 命令按哪种远端 shell 拆（NormalizeGrantPatternsFor）。
+func ApprovalKindFor(ctx context.Context, assetID int64, approvalType, command string) string {
 	switch approvalType {
 	case ApprovalTypeDelete:
 		return ApprovalKindDelete
 	default:
-		if SupportsGrantApproval(approvalType) && len(NormalizeGrantPatterns(approvalType, command, GrantOriginSystem)) > 0 {
+		if SupportsGrantApproval(approvalType) && len(NormalizeGrantPatternsFor(ctx, assetID, approvalType, command, GrantOriginSystem)) > 0 {
 			return ApprovalKindSingle
 		}
 		return ApprovalKindOnce

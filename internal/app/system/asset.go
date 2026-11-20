@@ -113,9 +113,13 @@ func (s *System) TestAssetConnection(testID, assetType, configJSON, plainPasswor
 // SetSSHPool 注入桌面端共享的 SSH 连接池，供测试连接经隧道拨号（main.go 构造 binder 后调用）。
 func (s *System) SetSSHPool(pool *sshpool.Pool) { s.sshPool = pool }
 
-// GetDefaultPolicy 获取指定资产类型的默认策略 JSON
-func (s *System) GetDefaultPolicy(assetType string) (string, error) {
-	p, ok := policyent.GetDefaultPolicyOf(assetType)
+// GetDefaultPolicy 获取一个资产「恢复默认」时的默认策略 JSON：与新建资产时写入的一致，
+// 由资产类型与其配置共同决定（如远端 shell 为 PowerShell 的 SSH 资产用 Windows 组）。
+func (s *System) GetDefaultPolicy(assetType, assetConfig string) (string, error) {
+	p, ok, err := policyent.DefaultPolicyForAsset(s.ctx, assetType, assetConfig)
+	if err != nil {
+		return "", err
+	}
 	if !ok {
 		return "", fmt.Errorf("unsupported asset type: %s", assetType)
 	}

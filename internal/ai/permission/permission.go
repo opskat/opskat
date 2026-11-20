@@ -887,7 +887,7 @@ func SaveGrantPatternsForApproval(ctx context.Context, sessionID string, assetID
 	patterns := grant.Rules
 	switch {
 	case !isExt:
-		patterns = NormalizeGrantPatterns(approvalType, command, origin)
+		patterns = NormalizeGrantPatternsFor(ctx, assetID, approvalType, command, origin)
 	case err != nil:
 		logger.Ctx(ctx).Warn("extension grant pattern invalid; nothing persisted",
 			zap.Int64("assetID", assetID), zap.String("approvalType", approvalType), zap.Error(err))

@@ -317,6 +317,8 @@ func TestRequireBatchApprovalPaths(t *testing.T) {
 
 	Convey("非交互且桌面端不可达：NEEDS AUTHORIZATION，逐条给 allow 命令", t, func() {
 		preserveTTYSeams(t)
+		restoreAssetRepoAfter(t)
+		setupOpsctlExecAssets(t)
 		origDial := dialApprovalSocket
 		origDataDir := sessionDataDir
 		dialApprovalSocket = func(string) error { return errors.New("connection refused") }

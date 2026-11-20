@@ -307,7 +307,7 @@ func (c *CommandPolicyChecker) handleConfirm(ctx context.Context, assetID int64,
 	item, cls := buildApprovalItem(ctx, assetID, assetName, assetType, command, detail...)
 	item.Review = review
 	approvalType := item.Type
-	kind := ApprovalKindFor(approvalType, command)
+	kind := ApprovalKindFor(ctx, assetID, approvalType, command)
 	resp := c.confirmFunc(ctx, kind, []ApprovalItem{item})
 	parsed, parseErr := ParseApprovalResponse(kind, resp, []ApprovalItem{item})
 	if parseErr != nil || parsed.Decision == ApprovalDeny {
@@ -348,10 +348,10 @@ func (c *CommandPolicyChecker) handleConfirm(ctx context.Context, assetID int64,
 			patterns = extensionGrantPatterns(ctx, cls, item, parsed.EditedItems)
 		} else if len(parsed.EditedItems) > 0 {
 			for _, item := range parsed.EditedItems {
-				patterns = append(patterns, NormalizeGrantPatterns(assetType, item.Command, GrantOriginUser)...)
+				patterns = append(patterns, NormalizeGrantPatternsFor(ctx, assetID, assetType, item.Command, GrantOriginUser)...)
 			}
 		} else {
-			patterns = NormalizeGrantPatterns(assetType, command, GrantOriginSystem)
+			patterns = NormalizeGrantPatternsFor(ctx, assetID, assetType, command, GrantOriginSystem)
 		}
 		// 归一化交出空列表是一个**答案**，不是失败：OSS 会把"批准了但不该变成常驻授权"
 		// 的串（决策 D20 的目录标记）全部丢掉。此处不能退回 []string{command} —— 那条串
@@ -527,8 +527,8 @@ func buildApprovalItem(ctx context.Context, assetID int64, assetName, assetType,
 // no resource — whose exact tail "<action>:" no permanent rule can hold (the
 // extension rule sink refuses an empty glob) — is covered by its bare action. An
 // extension call that did not classify has none: no rule can match it. Every other
-// call has its normalized command (NormalizeGrantPatterns, system origin).
-func ApprovalRuleSubjects(face string, item ApprovalItem) []string {
+// call has its normalized command (NormalizeGrantPatternsFor on the item's asset, system origin).
+func ApprovalRuleSubjects(ctx context.Context, face string, item ApprovalItem) []string {
 	if item.Action != "" {
 		if len(item.Resources) == 0 {
 			return []string{item.Action}
@@ -538,7 +538,7 @@ func ApprovalRuleSubjects(face string, item ApprovalItem) []string {
 	if _, isExtension := classifyFor(face); isExtension {
 		return nil
 	}
-	return NormalizeGrantPatterns(face, item.Command, GrantOriginSystem)
+	return NormalizeGrantPatternsFor(ctx, item.AssetID, face, item.Command, GrantOriginSystem)
 }
 
 // ApprovalKindForItem is ApprovalKindFor for an approval whose "always allow"
@@ -547,9 +547,9 @@ func ApprovalRuleSubjects(face string, item ApprovalItem) []string {
 // did not classify) has nothing an "always allow" could persist, so it is approved
 // once: persisting its command text instead would land as a rule spelled like the
 // command, matching something other than what the user was shown.
-func ApprovalKindForItem(face string, item ApprovalItem) string {
-	kind := ApprovalKindFor(face, item.Command)
-	if kind == ApprovalKindSingle && len(ApprovalRuleSubjects(face, item)) == 0 {
+func ApprovalKindForItem(ctx context.Context, face string, item ApprovalItem) string {
+	kind := ApprovalKindFor(ctx, item.AssetID, face, item.Command)
+	if kind == ApprovalKindSingle && len(ApprovalRuleSubjects(ctx, face, item)) == 0 {
 		return ApprovalKindOnce
 	}
 	return kind

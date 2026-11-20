@@ -1,6 +1,7 @@
 package permission
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -70,7 +71,7 @@ func TestApprovalKindFor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, ApprovalKindFor(tt.approvalType, tt.command))
+			require.Equal(t, tt.want, ApprovalKindFor(context.Background(), 0, tt.approvalType, tt.command))
 		})
 	}
 }

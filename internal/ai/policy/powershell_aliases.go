@@ -1,8 +1,8 @@
 package policy
 
-// powerShellBuiltinAliases 是 PowerShell 的内置别名（小写别名 → 指向的命令），供 deny 规则按实际 cmdlet 匹配。
+// powerShellBuiltinAliases 是 PowerShell 的内置别名（小写别名 → 指向的命令），供规则按实际 cmdlet 匹配。
 // 取自 Windows 11 上 powershell -NoProfile（5.1）与 pwsh -NoProfile（7.6）中 Get-Alias 的并集，两个版本
-// 的同名别名指向同一个命令。profile 里自定义的别名不在其中。
+// 都有的别名指向同一个命令。profile 里自定义的别名不在其中。
 var powerShellBuiltinAliases = map[string]string{
 	"%":       "ForEach-Object",
 	"?":       "Where-Object",
@@ -159,3 +159,13 @@ var powerShellBuiltinAliases = map[string]string{
 	"wjb":     "Wait-Job",
 	"write":   "Write-Output",
 }
+
+// powerShellVersionSpecificAliases 是只有一个版本才有的内置别名：另一个版本里同名的可能是别的程序
+// （sc、curl、wget 在 7 里是 sc.exe / curl.exe / wget），allow 规则不按它们匹配，deny 规则照认。
+var powerShellVersionSpecificAliases = toSet(
+	// 只在 5.1
+	"asnp", "cfs", "curl", "epsn", "gsnp", "gwmi", "ipsn", "ise", "iwmi", "lp", "npssc", "rsnp", "rujb", "rwmi", "sc",
+	"sujb", "swmi", "trcm", "wget",
+	// 只在 7
+	"gerr",
+)

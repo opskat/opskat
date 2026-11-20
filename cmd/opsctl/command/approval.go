@@ -239,7 +239,7 @@ func refuseApproval(ctx context.Context, req approval.ApprovalRequest, hints []s
 	hasCommand := req.AssetID > 0 && req.Command != ""
 	var patterns []string
 	if hasCommand {
-		patterns = approvalSubjects(req)
+		patterns = approvalSubjects(ctx, req)
 	}
 	switch {
 	case len(patterns) > 0:
@@ -286,7 +286,7 @@ func refuseBatchApproval(items []approval.BatchItem, session string) (ApprovalRe
 			assetName:    item.AssetName,
 			assetID:      item.AssetID,
 			approvalType: item.Type,
-			patterns:     batchItemSubjects(item),
+			patterns:     batchItemSubjects(ctx, item),
 		})
 	}
 	err := &structuredRefusal{

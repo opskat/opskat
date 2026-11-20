@@ -10,16 +10,16 @@ import (
 
 // PowerShellCommand 是一条 PowerShell 命令在策略面上的形状（用于 shell=powershell 的 SSH 资产）。
 //
-// 本地没有 PowerShell 解析器，拆分只能近似，所以两种用途分开对待：
-//   - SubCommands 用来匹配 deny 规则和给出提示规则，尽力而为：在 Plain 时它就是逐条语句，
-//     否则是从脚本块、子表达式、括号、双引号 $(…)、赋值右侧里递归找出来的命令；
-//   - 只有 Plain 时 allow 规则与 grant 才能放行。Plain 要求整串只有字面量命令与参数、
-//     语句之间只用 ; | 换行 && || 分隔——没有变量、表达式、方法调用、脚本块、注释、重定向。
-//     这样的串怎么切分没有歧义；其余写法哪怕少拆一个单元，剩下的单元全命中 allow 就会被
-//     直接执行（`(Get-Item x).Delete()` 只拆得出 Get-Item），所以一律交给模型审核或人工。
+// 本地没有完整的 PowerShell 解析器，两种用途分开对待：
+//   - Complete 时整串落在 completePowerShellCommands 认得的语法子集里，SubCommands 就是这条命令
+//     会调用的全部命令，allow 规则与 grant 逐条判定；
+//   - 否则 SubCommands 是尽力而为地从脚本块、子表达式、括号、双引号 $(…)、赋值右侧里找出来的
+//     命令，只用来匹配 deny 规则和给出提示规则。这时哪怕少拆一个单元，剩下的全命中 allow 就会被
+//     直接执行（`(Get-Item x).Delete()` 只拆得出 Get-Item），所以 allow 规则与 grant 不放行，
+//     交给模型审核或人工。
 type PowerShellCommand struct {
 	SubCommands []string
-	Plain       bool
+	Complete    bool
 }
 
 // ParsePowerShellCommand 解析一条 PowerShell 命令。引号、注释、here-string、括号未闭合，
@@ -28,8 +28,8 @@ func ParsePowerShellCommand(command string) (PowerShellCommand, error) {
 	if err := pwshlex.CheckSyntax(command); err != nil {
 		return PowerShellCommand{}, err
 	}
-	if units, ok := plainPowerShellStatements(command); ok {
-		return PowerShellCommand{SubCommands: units, Plain: true}, nil
+	if units, ok := completePowerShellCommands(command); ok {
+		return PowerShellCommand{SubCommands: units, Complete: true}, nil
 	}
 	var out []string
 	extractPSBlock(normalizePSWhitespace(command), &out)
@@ -64,137 +64,53 @@ var psKeywords = map[string]bool{
 	"until": true, "using": true, "var": true, "while": true, "workflow": true,
 }
 
-// plainArgByte 是 Plain 命令里允许出现在引号之外的 ASCII 标点（字母数字另算）。
-// 不含 $ ` ( ) { } [ ] @ # < > ! ^ 与单个 &：它们会引入变量、表达式、脚本块、注释、重定向或调用运算符。
-const plainArgBytes = `-_.:\/,=*?~%+`
-
-// plainPowerShellStatements 判断整串是否是 Plain 命令；是则返回逐条语句。
-func plainPowerShellStatements(s string) ([]string, bool) {
-	var units []string
-	segStart := 0
-	needCommand := false // 刚经过 | && || 时下一段必须是命令
-	cut := func(end int) bool {
-		seg := strings.TrimSpace(s[segStart:end])
-		if seg == "" {
-			return !needCommand
-		}
-		if !plainCommandHead(seg) {
-			return false
-		}
-		units = append(units, seg)
-		needCommand = false
+// MatchPowerShellRule 按 PowerShell 的语义匹配 allow 规则与 grant：命令名与参数都不区分大小写；
+// \ 与 / 同为路径分隔符——两边都换成 /，规则里的 \ 才不会被 glob 当成转义（否则
+// `Get-ChildItem C:\logs` 连它自己都匹配不上），* 也不会跨目录（C:\logs\* 不匹配 C:\logs\..\..\Windows）；
+// 内置别名按它指向的命令匹配（ls / dir / gci 命中 Get-ChildItem 的规则），但只认 5.1 与 7 里指向
+// 同一个命令的别名：sc 在 5.1 是 Set-Content、在 7 里是 sc.exe。
+func MatchPowerShellRule(rule, command string) bool {
+	if matchPowerShellForm(rule, command) {
 		return true
 	}
-	for i := 0; i < len(s); {
-		r, size := utf8.DecodeRuneInString(s[i:])
-		switch {
-		case r == '\'':
-			end, ok := pwshlex.SingleQuoteEnd(s, i)
-			if !ok {
-				return nil, false
-			}
-			i = end + 1
-			continue
-		case r == '"':
-			end, ok := plainDoubleQuoteEnd(s, i)
-			if !ok {
-				return nil, false
-			}
-			i = end + 1
-			continue
-		case r == ';' || r == '\n' || r == '\r':
-			if !cut(i) {
-				return nil, false
-			}
-			segStart = i + 1
-		case r == '|' || r == '&':
-			if r == '&' && (i+1 >= len(s) || s[i+1] != '&') {
-				return nil, false // 调用运算符或后台作业
-			}
-			if !cut(i) {
-				return nil, false
-			}
-			if i+1 < len(s) && s[i+1] == s[i] {
-				i++
-			}
-			needCommand = true
-			segStart = i + 1
-		case r == ' ' || r == '\t':
-		case r < utf8.RuneSelf:
-			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && !strings.ContainsRune(plainArgBytes, r) {
-				return nil, false
-			}
-		default:
-			if !unicode.IsLetter(r) && !unicode.IsDigit(r) && !unicode.IsMark(r) {
-				return nil, false
-			}
-		}
-		i += size
+	head, rest := splitPSHead(strings.TrimSpace(command))
+	alias := strings.ToLower(head)
+	if target, ok := powerShellBuiltinAliases[alias]; ok && !powerShellVersionSpecificAliases[alias] {
+		return matchPowerShellForm(rule, joinPSHead(target, rest))
 	}
-	if !cut(len(s)) {
-		return nil, false
-	}
-	return units, true
+	return false
 }
 
-// plainDoubleQuoteEnd 找 Plain 命令里双引号字符串的结尾；里面出现 $ 或 `（会展开或转义）就不是 Plain。
-func plainDoubleQuoteEnd(s string, start int) (int, bool) {
-	for i := start + 1; i < len(s); i++ {
-		switch s[i] {
-		case '$', '`':
-			return 0, false
-		case '"':
-			if i+1 < len(s) && s[i+1] == '"' {
-				i++
-				continue
-			}
-			return i, true
-		}
-	}
-	return 0, false
-}
-
-// plainCommandHead 检查一条 Plain 语句的命令名：字母、_、. 或 \ 开头的裸词（数字、- 开头是表达式，
-// 引号开头是字符串），不是语言关键字，且整条语句不含停止解析符 --%。
-func plainCommandHead(stmt string) bool {
-	head, _, _ := strings.Cut(stmt, " ")
-	head, _, _ = strings.Cut(head, "\t")
-	if strings.ContainsAny(head, `'"`) || psKeywords[strings.ToLower(head)] {
-		return false
-	}
-	r, _ := utf8.DecodeRuneInString(head)
-	if !unicode.IsLetter(r) && r != '_' && r != '.' && r != '\\' {
-		return false
-	}
-	for _, f := range strings.Fields(stmt) {
-		if f == "--%" {
-			return false
-		}
-	}
-	return true
-}
-
-// MatchPowerShellRule 按 PowerShell 的语义匹配一条命令规则：命令名与参数都不区分大小写；
-// \ 与 / 同为路径分隔符——两边都换成 /，规则里的 \ 才不会被 glob 当成转义（否则
-// `Get-ChildItem C:\logs` 连它自己都匹配不上），* 也不会跨目录（C:\logs\* 不匹配 C:\logs\..\..\Windows）。
-// 用于 allow 规则与 grant。
-func MatchPowerShellRule(rule, command string) bool {
-	norm := func(s string) string { return strings.ReplaceAll(strings.ToLower(s), `\`, "/") }
-	return MatchCommandRule(norm(rule), norm(command))
-}
-
-// MatchPowerShellDenyRule 在 MatchPowerShellRule 之外，还按命令实际解析到的 cmdlet 匹配：
-// 去掉调用运算符（& Remove-Item、. Remove-Item）、模块限定（Microsoft.PowerShell.Management\Remove-Item），
-// 并把内置别名换成它指向的 cmdlet（rm / del / ri → Remove-Item）。deny 只能尽力而为——
-// iex、& $name 这类动态调用本地看不出来，靠模型审核与人工兜底。
+// MatchPowerShellDenyRule 匹配 deny 规则：在 MatchPowerShellRule 之外，还按命令实际可能解析到的
+// cmdlet 匹配——去掉调用运算符（& Remove-Item、. Remove-Item）、模块限定
+// （Microsoft.PowerShell.Management\Remove-Item），并认任一版本的内置别名（rm / del / ri → Remove-Item）。
+// deny 只能尽力而为：iex、& $name 这类动态调用本地看不出来，靠模型审核与人工兜底。
 func MatchPowerShellDenyRule(rule, command string) bool {
 	for _, c := range powerShellCommandForms(command) {
-		if MatchPowerShellRule(rule, c) {
+		if matchPowerShellForm(rule, c) {
 			return true
 		}
 	}
 	return false
 }
+
+func matchPowerShellForm(rule, command string) bool {
+	norm := func(s string) string { return strings.ReplaceAll(strings.ToLower(s), `\`, "/") }
+	return MatchCommandRule(norm(rule), norm(command))
+}
+
+// splitPSHead 把一条子命令切成命令名与其余部分；%{ … } / ?{ … } 的命令名是 % / ?。
+func splitPSHead(cmd string) (head, rest string) {
+	if len(cmd) > 1 && (cmd[0] == '%' || cmd[0] == '?') && cmd[1] == '{' {
+		return cmd[:1], cmd[1:]
+	}
+	if i := strings.IndexAny(cmd, " \t"); i >= 0 {
+		return cmd[:i], cmd[i+1:]
+	}
+	return cmd, ""
+}
+
+func joinPSHead(head, rest string) string { return strings.TrimSpace(head + " " + rest) }
 
 // powerShellCommandForms 返回一条子命令的原样形式，以及按调用运算符、模块限定、内置别名
 // 还原后的形式。
@@ -202,25 +118,25 @@ func powerShellCommandForms(command string) []string {
 	forms := []string{command}
 	cmd := strings.TrimSpace(command)
 	if strings.HasPrefix(cmd, "&") || strings.HasPrefix(cmd, ". ") {
-		head, rest, _ := strings.Cut(strings.TrimSpace(cmd[1:]), " ")
+		head, rest := splitPSHead(strings.TrimSpace(cmd[1:]))
 		if unq := strings.Trim(head, `'"`); !strings.ContainsAny(unq, `'"$`) {
 			head = unq
 		}
-		cmd = strings.TrimSpace(head + " " + rest)
+		cmd = joinPSHead(head, rest)
 		forms = append(forms, cmd)
 	}
-	head, rest, _ := strings.Cut(cmd, " ")
+	head, rest := splitPSHead(cmd)
 	if i := strings.LastIndexByte(head, '\\'); i > 0 && head[0] != '.' && !strings.ContainsAny(head[:i], `:\/`) {
 		head = head[i+1:]
-		forms = append(forms, strings.TrimSpace(head+" "+rest))
+		forms = append(forms, joinPSHead(head, rest))
 	}
 	if target, ok := powerShellBuiltinAliases[strings.ToLower(head)]; ok {
-		forms = append(forms, strings.TrimSpace(target+" "+rest))
+		forms = append(forms, joinPSHead(target, rest))
 	}
 	return forms
 }
 
-// --- 尽力而为的子命令提取（非 Plain 命令的 deny 匹配与提示） ---
+// --- 尽力而为的子命令提取（拆不全的命令的 deny 匹配与提示） ---
 
 // extractPSBlock 按顶层语句分隔符切分并提取所有可执行子命令。
 func extractPSBlock(s string, out *[]string) {

@@ -18,6 +18,17 @@ type sshHandler struct{}
 func init() {
 	Register(&sshHandler{})
 	policy.RegisterDefaultPolicy("ssh", func() any { return asset_entity.DefaultCommandPolicy() })
+	policy.RegisterAssetDefaultPolicy(asset_entity.AssetTypeSSH, sshDefaultPolicy)
+}
+
+// sshDefaultPolicy 按远端 shell 给出新建资产（与「恢复默认」）的默认命令策略：PowerShell 资产用
+// Windows 组，其余用 Linux 组。
+func sshDefaultPolicy(_ context.Context, assetConfig string) (any, error) {
+	a := &asset_entity.Asset{Type: asset_entity.AssetTypeSSH, Config: assetConfig}
+	if a.IsPowerShellSSH() {
+		return policy.DefaultPowerShellCommandPolicy(), nil
+	}
+	return asset_entity.DefaultCommandPolicy(), nil
 }
 
 func (h *sshHandler) Type() string     { return asset_entity.AssetTypeSSH }
