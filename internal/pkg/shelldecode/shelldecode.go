@@ -64,7 +64,8 @@ var ErrUnparseable = errors.New("command cannot be parsed")
 //     判断，没有引号的（$X/dev/stdin）会按空白拆开，无法静态确定（决定 25）；字面的路径（./ls、
 //     /usr/bin/base64）是在执行那个文件，不按名字判断；容器 exec / run 没有 -- 时子命令之后的动态词
 //     （docker exec -i c $b）也是，docker、podman、nerdctl 的 -- 不分开程序（docker exec -i -- c $b
-//     同样算）。同一命令里定义的函数与别名按内容判断，
+//     同样算）；认得出容器名、镜像名的位置时，那里只会展开成一个词的动态词（"$c"、取自循环列表的
+//     $c）不算（决定 29）。同一命令里定义的函数与别名按内容判断，
 //     像在调用处展开：别名的内容接上调用时带上的词（alias s=sudo; s $b 是 sudo $b），函数体里的
 //     位置参数换成带上的词（f(){ base64 "$@"; }; f -d 是 base64 -d），落在交给 shell 的位置上、或被
 //     送进 shell、解释器标准输入的词按脚本、代码看（f(){ sh -c "$1"; }; f '…'、alias s=sudo; s -s '…'、
@@ -147,6 +148,7 @@ func DecodesAndRuns(command string) (bool, error) {
 			levels = append(levels, next)
 		}
 	}
+	f.quoteLoopVars(command, levels)
 	f.profile()
 	for depth, level := range levels {
 		for _, l := range level {
@@ -1965,6 +1967,11 @@ func afterFindExec(args []*syntax.Word, from int) int {
 // 选项与赋值）分不清是容器名还是程序，guess 是它的下标；没有时为 -1（修正轮 7）。docker / podman /
 // nerdctl 的 -- 只结束它们自己的选项，之后还是容器名、镜像名（docker exec -i -- c $b）；容器名之后的 --
 // 原样交给容器当作程序名，也不分开程序。
+//
+// docker / podman / nerdctl 的 exec、run 按 containerOptions 认得出容器名、镜像名的位置时（issue #384）：
+// 它之前的选项与值不是程序；它自己只会是一个词时（singleField："$c"，或取自循环列表、已按 loopvars 加上
+// 双引号的 $c）也不是程序，只会是容器名、镜像名，或者运行时是一个选项——那样程序在它之后，照样按下面
+// 的规则看。不加引号的 $c 可能拆成几个词，第二个词起就是程序，仍按分不清处理。
 func containerCommandAt(tool string, args []*syntax.Word, from int) (at, guess int) {
 	at, guess = -1, -1
 	k := from
@@ -1979,10 +1986,15 @@ func containerCommandAt(tool string, args []*syntax.Word, from int) (at, guess i
 	sub, _ := value(args[k])
 	optionsEnd := optionsEndingDash[tool]
 	guessing := containerProgramSubcommands[tool][sub] && (optionsEnd || dashDashAt(args, k+1) < 0)
+	nameAt := -1
+	if guessing && optionsEnd && onlyContainerGroup(args[from:k]) {
+		nameAt = containerNameAt(containerOptions[sub], args, k+1)
+	}
 	for k++; k < len(args); k++ {
 		v, ok := value(args[k])
 		if !ok {
-			if prefix := literalPrefix(args[k]); guessing && guess < 0 && !strings.HasPrefix(prefix, "-") && !isAssignment(prefix) {
+			named := k < nameAt || k == nameAt && singleField(args[k])
+			if prefix := literalPrefix(args[k]); guessing && guess < 0 && !named && !strings.HasPrefix(prefix, "-") && !isAssignment(prefix) {
 				guess = k
 			}
 			continue
