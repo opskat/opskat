@@ -108,6 +108,21 @@ const (
 	// DriverOpDumpObject answers the statements of one object of a dump (session
 	// operation; dbdriver.DumpObject → dbdriver.DumpObjectScript).
 	DriverOpDumpObject = "dumpObject"
+	// DriverOpTableStatements opens the guest's own writing of a table's rows of a
+	// dump into their statements (session operation; DriverArgs.Database / Table and
+	// dbdriver.TableStatementsRequest → DriverStreamOpened, without columns), so the
+	// values never cross: the host only writes the statements into the file. The
+	// host sends it only to a session whose DriverOpened.TableStatements says the
+	// guest has it; otherwise a dump reads the rows with DriverOpStreamTableRows and
+	// has DriverOpRowStatements write them. The stream holds its instance until it
+	// is closed with DriverOpStreamClose, like a cursor.
+	DriverOpTableStatements = "tableStatements"
+	// DriverOpStatementsNext answers the next page of statements of stream
+	// DriverArgs.Stream (dbdriver.TableStatementPage), cut as the request said
+	// (dbdriver.TableStatementsRequest: about PageBytes of statements and at least
+	// one statement a page, a page ending where a batch of rows does); only Done says
+	// the table has ended, and a row's statements may span pages.
+	DriverOpStatementsNext = "statementsNext"
 )
 
 // DriverCall is the input of DriverFunction.
@@ -220,6 +235,13 @@ const DriverCodeUnsupported = "unsupported"
 // DriverOpened answers DriverOpOpen.
 type DriverOpened struct {
 	Session uint64 `json:"session"`
+	// TableStatements says the session writes a dump's table rows into their
+	// statements itself (DriverOpTableStatements; dbdriver.TableStatementSource):
+	// the SDK sets it when the driver's dialect implements
+	// sqldb.TableStatementsWriter. Every instance of a session runs the same
+	// driver, so the first login's answer holds for the session. A guest built
+	// before it existed leaves it unset and is dumped as before.
+	TableStatements bool `json:"tableStatements,omitempty"`
 }
 
 // DriverStreamOpened answers DriverOpStreamTableRows.

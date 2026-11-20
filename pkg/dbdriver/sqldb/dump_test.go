@@ -170,3 +170,65 @@ func TestDumpDisablesForeignKeyChecksComesFromTheDialect(t *testing.T) {
 	assert.False(t, DumpDisablesForeignKeyChecks(plainDumpDialect{}))
 	assert.False(t, DumpDisablesForeignKeyChecks(tablesDialect{}))
 }
+
+// statementsDumpDialect 自己写表的数据（TableStatementsWriter）：给出 statements，记下钩子拿到的表。
+type statementsDumpDialect struct {
+	plainDumpDialect
+	statements []string
+	got        *TableStatementsTable
+}
+
+func (d statementsDumpDialect) TableStatements(_ context.Context, table TableStatementsTable) (dbdriver.StatementCursor, error) {
+	*d.got = table
+	return &sliceCursor{statements: d.statements}, nil
+}
+
+type sliceCursor struct {
+	statements []string
+	current    string
+}
+
+func (c *sliceCursor) Next() bool {
+	if len(c.statements) == 0 {
+		return false
+	}
+	c.current, c.statements = c.statements[0], c.statements[1:]
+	return true
+}
+func (c *sliceCursor) Statement() string { return c.current }
+func (c *sliceCursor) RowEnd() bool      { return true }
+func (c *sliceCursor) Err() error        { return nil }
+func (c *sliceCursor) Close() error      { return nil }
+
+// TableStatements 是会话自己写表的数据（扩展 SDK 经它在 ABI 上提供 dbdriver.TableStatementSource）：方言实现了
+// TableStatementsWriter 才有，它拿到会话的连接池、表与请求，逐条给出的语句按请求分页；没实现的以 ErrUnsupported
+// 拒绝、不拿连接。
+func TestTableStatementsAreTheDialectsOwn(t *testing.T) {
+	session, mock := newTablesSession(t)
+	_, err := session.TableStatements()
+	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	var got TableStatementsTable
+	source, err := NewSession(db, statementsDumpDialect{statements: []string{"INSERT 1;", "INSERT 2;", "INSERT 3;"}, got: &got}).TableStatements()
+	require.NoError(t, err)
+	req := dbdriver.TableStatementsRequest{Columns: []string{"id"}, OmitDatabase: true, OwnRows: true, PageBytes: 1 << 20, BatchRows: 2}
+	pages, err := source.TableStatements(context.Background(), "db", "t", req)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, pages.Close()) }()
+
+	first, err := pages.Next()
+	require.NoError(t, err)
+	assert.Equal(t, dbdriver.TableStatementPage{Statements: []string{"INSERT 1;", "INSERT 2;"}, Rows: 2}, *first)
+	last, err := pages.Next()
+	require.NoError(t, err)
+	assert.Equal(t, dbdriver.TableStatementPage{Statements: []string{"INSERT 3;"}, Rows: 1, Done: true}, *last)
+	assert.Same(t, db, got.DB)
+	assert.Equal(t, "db", got.Database)
+	assert.Equal(t, "t", got.Table)
+	assert.Equal(t, req, got.Request)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

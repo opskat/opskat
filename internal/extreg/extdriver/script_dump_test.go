@@ -488,6 +488,54 @@ func TestExtensionDriverDumps(t *testing.T) {
 	})
 }
 
+// A driver whose dialect writes a dump's table rows itself (sqldb.TableStatementsWriter)
+// dumps them in the guest: the host gets pages of statements of about
+// dbdriver.DumpPageBytes and only writes them. The file is the one a build of the
+// same driver without the hook gets through the cursor and the row writer, byte
+// for byte — the integer past 2^53, the binary value, the rows of a partition, the
+// 1.5 MiB rows several to a page and the 6 MiB one alone on its page, intact — and
+// progress comes per page.
+func TestExtensionDriverDumpsTableRowsInTheGuest(t *testing.T) {
+	own := fixtureDrivers(t, extensiontest.LoadDBDriverFixture(t))
+	cursorExt, err := extensiontest.LoadDBDriverFixtureBuild(t, extensiontest.DBDriverFixtureBuild{CursorDump: true}, extensiontest.AcceptingContributions())
+	require.NoError(t, err)
+	viaCursor := fixtureDrivers(t, cursorExt)
+
+	// dump answers the file and, for the lobs table, the rows written so far at
+	// each progress report after its start.
+	dump := func(newDriver func() *extensionDriver) (string, []int64) {
+		d := newDriver()
+		s := d.open(t)
+		defer func() { _ = s.Close() }()
+		var out strings.Builder
+		var lobs []int64
+		var start int64 = -1
+		_, err := s.Dump(context.Background(), dbdriver.DumpRequest{
+			Database: "app", Tables: []string{"users", "series", "blobs", "events", "lobs"}, WithData: true, Writer: &out,
+			Header: dbdriver.DumpHeader{Version: "test", Asset: "fixture", Time: time.Unix(0, 0).UTC()},
+			Progress: func(p dbdriver.DumpProgress) {
+				switch {
+				case p.Name != "lobs" || p.Finished != nil:
+				case start < 0:
+					start = p.Rows
+				default:
+					lobs = append(lobs, p.Rows-start)
+				}
+			},
+		})
+		require.NoError(t, err)
+		return out.String(), lobs
+	}
+
+	inGuest, guestProgress := dump(own)
+	throughCursor, cursorProgress := dump(viaCursor)
+	assert.True(t, inGuest == throughCursor, "the files differ (%d and %d bytes)", len(inGuest), len(throughCursor))
+	assert.Contains(t, inGuest, "\nINSERT INTO [blobs] ([id], [data]) VALUES ('9007199254740993', X'00fffe6f6b');\n")
+	assert.Contains(t, inGuest, "\nINSERT INTO [lobs] ([id], [body]) VALUES ('7', '"+strings.Repeat("g", 6<<20)+"');\n")
+	assert.Equal(t, []int64{2, 4, 6, 7}, guestProgress, "pages of at most 4 MiB: two 1.5 MiB rows a page, the 6 MiB row alone")
+	assert.Equal(t, []int64{7}, cursorProgress, "through the cursor the rows come in one chunk")
+}
+
 // An extension built for hostABI 1.0 keeps working: its driver declares neither
 // feature, so neither is offered, and the host refuses both without calling into
 // the guest, which has no operations for them.

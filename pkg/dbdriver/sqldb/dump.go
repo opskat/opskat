@@ -161,3 +161,60 @@ func QueryDumpDependencies(ctx context.Context, conn *sql.Conn, query string, ar
 	}
 	return dependencies, rows.Err()
 }
+
+// TableStatementsWriter 是可选的钩子：转储时方言自己读出一张表的行、写成语句（dbdriver.TableStatementSource），
+// 值不必为了写语句从扩展交给宿主、再交回扩展（Oracle 的大 LOB 由它分片读、写成几个追加块）。只经扩展 SDK 在
+// ABI 上提供（Session.TableStatements）；进程内的会话转储照旧经游标与行语句生成器，内置驱动都不实现它。
+//
+// 它逐条给出语句（dbdriver.StatementCursor：一行可以是几条，最后一条标明行的结束），分页由 sqldb 按请求做
+// （dbdriver.PageStatements）。写法要与经游标、行语句生成器写出的一样（每行一条「复制为 INSERT」的 INSERT）；
+// 只照着写的方言给出 table.RowInsertStatements(ctx) 即可。它取的连接、打开的游标在游标 Close 时还回。
+type TableStatementsWriter interface {
+	TableStatements(ctx context.Context, table TableStatementsTable) (dbdriver.StatementCursor, error)
+}
+
+// TableStatementsTable 是 TableStatementsWriter 要写的那张表。
+type TableStatementsTable struct {
+	// DB 是会话的连接池。
+	DB *sql.DB
+	// Database、Table 同 dbdriver.TableStatementSource.TableStatements 的。
+	Database, Table string
+	// Request 是要写的语句（列、InsertModifier、OmitDatabase、OwnRows）与分页（分页不用方言管）。
+	Request dbdriver.TableStatementsRequest
+
+	session *Session
+}
+
+// TableStatements 是会话自己写表的数据（扩展 SDK 经它在 ABI 上提供 dbdriver.TableStatementSource）：方言的
+// TableStatementsWriter 逐条给出的语句，按请求分页。方言没有实现它时以 dbdriver.ErrUnsupported 拒绝。
+func (s *Session) TableStatements() (dbdriver.TableStatementSource, error) {
+	hook, ok := s.dialect.(TableStatementsWriter)
+	if !ok {
+		return nil, fmt.Errorf("%w: this driver does not write a table's statements itself", dbdriver.ErrUnsupported)
+	}
+	return tableStatementSource{session: s, hook: hook}, nil
+}
+
+type tableStatementSource struct {
+	session *Session
+	hook    TableStatementsWriter
+}
+
+func (t tableStatementSource) TableStatements(ctx context.Context, database, table string, req dbdriver.TableStatementsRequest) (dbdriver.TableStatementPages, error) {
+	cursor, err := t.hook.TableStatements(ctx, TableStatementsTable{DB: t.session.db, Database: database, Table: table, Request: req, session: t.session})
+	if err != nil {
+		return nil, err
+	}
+	return dbdriver.PageStatements(cursor, req), nil
+}
+
+// PrepareRowStatements 是这张表的行语句生成器（Session.PrepareRowStatements）：「复制为 INSERT」的写法。
+func (t TableStatementsTable) PrepareRowStatements(ctx context.Context) (dbdriver.RowStatementWriter, error) {
+	return t.session.PrepareRowStatements(ctx, t.Database, t.Table)
+}
+
+// RowInsertStatements 是照着经游标与行语句生成器的写法写这张表的语句（dbdriver.RowInsertStatements）：会话的
+// 游标逐行读出、生成器逐行写出，值不离开会话。
+func (t TableStatementsTable) RowInsertStatements(ctx context.Context) (dbdriver.StatementCursor, error) {
+	return dbdriver.RowInsertStatements(ctx, t.session, t.Database, t.Table, t.Request)
+}

@@ -217,14 +217,14 @@ type DumpDialect interface {
 	DumpObject(ctx context.Context, object DumpObject) (*DumpObjectScript, error)
 }
 
-// DumpSource 是转储读库用到的会话操作（Session 都有）。
+// DumpSource 是转储读库用到的会话操作（Session 都有）。还实现了 TableStatementSource 的，表的数据由它自己读出、
+// 写成语句（见 TableStatementSource）。
 type DumpSource interface {
 	ListTables(ctx context.Context, database string) ([]string, error)
 	ListObjects(ctx context.Context, database string) (*DatabaseObjects, error)
 	TableDDL(ctx context.Context, database, table string) (string, error)
 	ObjectSource(ctx context.Context, database, objType, name, table string) (string, error)
-	PrepareRowStatements(ctx context.Context, database, table string) (RowStatementWriter, error)
-	StreamTableRows(ctx context.Context, database, table string, query TableQuery) (RowStream, error)
+	TableRowSource
 }
 
 // dumpChunkRows 是一块数据的行数：按块生成 INSERT、报进度、写批分隔符。
@@ -679,9 +679,12 @@ func (d *dump) write(item *dumpItem) error {
 	return nil
 }
 
-// rows 读出一张表的全部行，按块生成 INSERT 写出。writer 在游标打开之前备好：游标占着连接时（远端
-// SQLite 只有一条）不能再去查列类型。
+// rows 写出一张表的全部行：会话能自己写语句（TableStatementSource）时用它（见 statementRows），否则读出行、按块
+// 生成 INSERT 写出。writer 在游标打开之前备好：游标占着连接时（远端 SQLite 只有一条）不能再去查列类型。
 func (d *dump) rows(table string, script *DumpObjectScript) (written int64, err error) {
+	if source, ok := d.source.(TableStatementSource); ok {
+		return d.statementRows(source, table, script)
+	}
 	writer, err := d.source.PrepareRowStatements(d.ctx, d.req.Database, table)
 	if err != nil {
 		return 0, err
@@ -705,7 +708,7 @@ func (d *dump) rows(table string, script *DumpObjectScript) (written int64, err 
 		if len(chunk) == 0 {
 			return nil
 		}
-		statements, err := insertStatements(writer, RowStatementsRequest{
+		statements, err := InsertStatements(writer, RowStatementsRequest{
 			Kind: RowInsert, Columns: columns, OmitDatabase: true, InsertModifier: script.InsertModifier,
 		}, chunk)
 		if err != nil {
@@ -725,12 +728,7 @@ func (d *dump) rows(table string, script *DumpObjectScript) (written int64, err 
 		return d.ctx.Err()
 	}
 	for stream.Next() {
-		values := stream.Row()
-		row := make(map[string]any, len(streamColumns))
-		for i, column := range streamColumns {
-			row[column] = values[i]
-		}
-		chunk = append(chunk, row)
+		chunk = append(chunk, rowMap(streamColumns, stream.Row()))
 		if len(chunk) == dumpChunkRows {
 			if err := flush(); err != nil {
 				return written, err
@@ -743,10 +741,70 @@ func (d *dump) rows(table string, script *DumpObjectScript) (written int64, err 
 	return written, flush()
 }
 
-// insertStatements 生成一块行的 INSERT（req 是除了行之外的请求）。行先转成前端拿到再带回来的样子（经
-// JSON：nil、字符串、数字、布尔），语句才与「复制为 INSERT」对这些行给出的一字不差；二进制的值（见
-// binaryValue）、整数（见 ExactNumbers）与 JSON 写不出的浮点数（见 nonFiniteText）除外。
-func insertStatements(writer RowStatementWriter, req RowStatementsRequest, rows []map[string]any) ([]string, error) {
+// statementRows 写出会话自己为一张表写的语句，一页一页地：每页的语句写完报一次进度（写完的行数），写完的行数到
+// 一块（dumpChunkRows）时、以及最后一页之后（这一块还有行时）写批分隔符，与按块经 writer 写出的位置一样；页与
+// 页之间被取消就停下。语句流在任何情况下都关掉。
+func (d *dump) statementRows(source TableStatementSource, table string, script *DumpObjectScript) (written int64, err error) {
+	pages, err := source.TableStatements(d.ctx, d.req.Database, table, TableStatementsRequest{
+		Columns: script.DataColumns, InsertModifier: script.InsertModifier, OmitDatabase: true, OwnRows: true,
+		PageBytes: DumpPageBytes, BatchRows: dumpChunkRows,
+	})
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if closeErr := pages.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
+	inBatch := 0
+	for {
+		page, err := pages.Next()
+		if err != nil {
+			return written, err
+		}
+		if len(page.Statements) == 0 && !page.Done {
+			return written, errors.New("the database driver gave a page with no statements before the end of the table")
+		}
+		for _, statement := range page.Statements {
+			d.out.write(statement + "\n")
+		}
+		inBatch += page.Rows
+		if inBatch >= dumpChunkRows || (page.Done && inBatch > 0) {
+			d.batchEnd()
+			inBatch = 0
+		}
+		written += int64(page.Rows)
+		d.progress.Rows += int64(page.Rows)
+		if len(page.Statements) > 0 {
+			d.report(nil)
+		}
+		if d.out.err != nil {
+			return written, d.out.err
+		}
+		if page.Done {
+			return written, nil
+		}
+		if err := d.ctx.Err(); err != nil {
+			return written, err
+		}
+	}
+}
+
+// rowMap 是游标的一行按列名取值的样子（行语句请求里的行）。
+func rowMap(columns []string, values []any) map[string]any {
+	row := make(map[string]any, len(columns))
+	for i, column := range columns {
+		row[column] = values[i]
+	}
+	return row
+}
+
+// InsertStatements 生成转储里一块行的 INSERT（req 是除了行之外的请求，rows 是游标读出的样子，会被改写）。行先
+// 转成前端拿到再带回来的样子（经 JSON：nil、字符串、数字、布尔），语句才与「复制为 INSERT」对这些行给出的一字
+// 不差；二进制的值（见 binaryValue）、整数（见 ExactNumbers）与 JSON 写不出的浮点数（见 nonFiniteText）除外。
+// 自己读行的 TableStatementSource 用它写出与转储经游标、writer 写出的一样的语句。
+func InsertStatements(writer RowStatementWriter, req RowStatementsRequest, rows []map[string]any) ([]string, error) {
 	for _, row := range rows {
 		for column, value := range row {
 			if text, ok := nonFiniteText(value); ok {

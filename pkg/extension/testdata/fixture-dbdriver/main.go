@@ -37,8 +37,10 @@ func main() {}
 // the ticket and network.assetEndpoint / assetRoute for the reach path. It splits
 // and classifies statements itself (split.go), probing the host first when asked
 // to (classifyProbing). Built for hostABI 1.1 — the default build — it also runs
-// SQL files and dumps them (abi11.go); built with the fixture_hostabi10 tag it is
-// the same driver as an extension built for hostABI 1.0 (abi10.go).
+// SQL files and dumps them (abi11.go), writing a dump's table rows in the guest
+// (table_statements.go, left out with the fixture_cursor_dump tag); built with the
+// fixture_hostabi10 tag it is the same driver as an extension built for hostABI 1.0
+// (abi10.go).
 var descriptor = dbdriver.Descriptor{
 	ID:          "fixturedb",
 	Name:        "FixtureDB",

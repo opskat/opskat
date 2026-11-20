@@ -377,3 +377,165 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 	require.NoError(t, err)
 	return raw
 }
+
+// statementsDialect writes a table's statements itself (sqldb.TableStatementsWriter):
+// one statement per row, from statements; closing its cursor is recorded.
+type statementsDialect struct {
+	sqldb.LimitOffset
+	statements []string
+	closed     *bool
+	requests   *[]sqldb.TableStatementsTable
+}
+
+func (d statementsDialect) TableStatements(_ context.Context, table sqldb.TableStatementsTable) (dbdriver.StatementCursor, error) {
+	*d.requests = append(*d.requests, table)
+	return &rowsCursor{statements: d.statements, closed: d.closed}, nil
+}
+
+type rowsCursor struct {
+	statements []string
+	current    string
+	closed     *bool
+}
+
+func (c *rowsCursor) Next() bool {
+	if len(c.statements) == 0 {
+		return false
+	}
+	c.current, c.statements = c.statements[0], c.statements[1:]
+	return true
+}
+func (c *rowsCursor) Statement() string { return c.current }
+func (c *rowsCursor) RowEnd() bool      { return true }
+func (c *rowsCursor) Err() error        { return nil }
+func (c *rowsCursor) Close() error {
+	*c.closed = true
+	return nil
+}
+
+// statementPage is a statementsNext answer as the host reads it.
+type statementPage struct {
+	Statements []string `json:"statements"`
+	Rows       int      `json:"rows"`
+	Done       bool     `json:"done"`
+}
+
+func TestDatabaseDriverServesTheSessionsOwnTableStatements(t *testing.T) {
+	Convey("a dialect that writes a table's statements itself is served as a stream of pages", t, func() {
+		resetDrivers()
+		db, mock, err := sqlmock.New()
+		So(err, ShouldBeNil)
+		big := strings.Repeat("x", 3<<20)
+		var closed bool
+		var requests []sqldb.TableStatementsTable
+		var dialect sqldb.Dialect = statementsDialect{statements: []string{big, big, "INSERT 3;"}, closed: &closed, requests: &requests}
+		DatabaseDriver(demoDriver, func(context.Context, dbdriver.OpenRequest) (*sql.DB, sqldb.Dialect, error) {
+			return db, dialect, nil
+		})
+		open := func() (session uint64, tableStatements bool) {
+			reply := callDriver(t, `{"op":"open","args":{"driver":"demodb","config":{"driver":"demodb"}}}`)
+			So(reply.Error, ShouldBeNil)
+			var opened struct {
+				Session         uint64 `json:"session"`
+				TableStatements bool   `json:"tableStatements"`
+			}
+			So(json.Unmarshal(reply.Result, &opened), ShouldBeNil)
+			return opened.Session, opened.TableStatements
+		}
+
+		Convey("the open reply says so, and only for such a dialect", func() {
+			_, tableStatements := open()
+			So(tableStatements, ShouldBeTrue)
+			dialect = sqldb.LimitOffset{}
+			_, tableStatements = open()
+			So(tableStatements, ShouldBeFalse)
+		})
+
+		Convey("the stream answers pages cut as the request says, and is closed like a cursor", func() {
+			session, _ := open()
+			reply := callDriver(t, `{"op":"tableStatements","session":`+jsonNumber(session)+
+				`,"args":{"database":"app","table":"t","request":{"columns":["id"],"omitDatabase":true,"ownRows":true,"pageBytes":4194304,"batchRows":500}}}`)
+			So(reply.Error, ShouldBeNil)
+			var stream struct {
+				Stream uint64 `json:"stream"`
+			}
+			So(json.Unmarshal(reply.Result, &stream), ShouldBeNil)
+			So(requests, ShouldHaveLength, 1)
+			So(requests[0].Database, ShouldEqual, "app")
+			So(requests[0].Table, ShouldEqual, "t")
+			So(requests[0].Request, ShouldResemble, dbdriver.TableStatementsRequest{
+				Columns: []string{"id"}, OmitDatabase: true, OwnRows: true, PageBytes: 4 << 20, BatchRows: 500,
+			})
+
+			var pages []statementPage
+			for range 3 {
+				reply = callDriver(t, `{"op":"statementsNext","args":{"stream":`+jsonNumber(stream.Stream)+`}}`)
+				So(reply.Error, ShouldBeNil)
+				var page statementPage
+				So(json.Unmarshal(reply.Result, &page), ShouldBeNil)
+				pages = append(pages, page)
+				if page.Done {
+					break
+				}
+			}
+			So(pages, ShouldResemble, []statementPage{
+				{Statements: []string{big}, Rows: 1},
+				{Statements: []string{big, "INSERT 3;"}, Rows: 2, Done: true},
+			})
+
+			reply = callDriver(t, `{"op":"streamNext","args":{"stream":`+jsonNumber(stream.Stream)+`,"max":256}}`)
+			So(reply.Error, ShouldNotBeNil)
+			reply = callDriver(t, `{"op":"streamClose","args":{"stream":`+jsonNumber(stream.Stream)+`}}`)
+			So(reply.Error, ShouldBeNil)
+			So(closed, ShouldBeTrue)
+		})
+
+		Convey("closing the session closes its streams", func() {
+			mock.ExpectClose()
+			session, _ := open()
+			reply := callDriver(t, `{"op":"tableStatements","session":`+jsonNumber(session)+
+				`,"args":{"database":"app","table":"t","request":{"pageBytes":4194304,"batchRows":500}}}`)
+			So(reply.Error, ShouldBeNil)
+			reply = callDriver(t, `{"op":"close","session":`+jsonNumber(session)+`}`)
+			So(reply.Error, ShouldBeNil)
+			So(closed, ShouldBeTrue)
+		})
+
+		Convey("a dialect without it refuses the operation as unsupported", func() {
+			dialect = sqldb.LimitOffset{}
+			session, _ := open()
+			reply := callDriver(t, `{"op":"tableStatements","session":`+jsonNumber(session)+`,"args":{"request":{}}}`)
+			So(reply.Error, ShouldNotBeNil)
+			So(reply.Error.Code, ShouldEqual, "unsupported")
+		})
+	})
+}
+
+// A page of statements may be tens of MB: like a list of row statements it is
+// written into one buffer of its exact size, and reads back as json.Marshal's would.
+func TestStatementPageRepliesAreEncodedIntoOneBuffer(t *testing.T) {
+	big := strings.Repeat("DBMS_LOB.APPEND(l1, TO_CLOB('a''\\中文😀\n'));\n", 200_000)
+	page := &dbdriver.TableStatementPage{Statements: []string{big, "x\"\\\x00\x1f\t\r\u2028<>&\xff\xfe中", ""}, Rows: 2, Done: true}
+	want, err := json.Marshal(extwire.DriverReply{Result: mustJSON(t, page)})
+	require.NoError(t, err)
+
+	var got []byte
+	var result any = page // as runDriverOp returns it
+	allocs := testing.AllocsPerRun(3, func() {
+		got, err = encodeReply(result, nil)
+	})
+	require.NoError(t, err)
+	assert.LessOrEqual(t, allocs, 1.0)
+	assert.Equal(t, len(got), cap(got))
+	var gotReply, wantReply extwire.DriverReply
+	require.NoError(t, json.Unmarshal(got, &gotReply))
+	require.NoError(t, json.Unmarshal(want, &wantReply))
+	var gotPage, wantPage dbdriver.TableStatementPage
+	require.NoError(t, json.Unmarshal(gotReply.Result, &gotPage))
+	require.NoError(t, json.Unmarshal(wantReply.Result, &wantPage))
+	assert.Equal(t, wantPage, gotPage)
+
+	got, err = encodeReply(&dbdriver.TableStatementPage{Statements: []string{}, Done: true}, nil)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"result":{"statements":[],"rows":0,"done":true}}`, string(got))
+}

@@ -156,6 +156,7 @@ func (d *Drivers) OpenDriverSession(ctx context.Context, id string, req dbdriver
 	if err != nil {
 		return nil, err
 	}
+	s.tableStatements = inst.tableStatements
 	s.release(inst)
 	return s, nil
 }
@@ -256,7 +257,7 @@ func (s *driverSession) openInstance(ctx context.Context) (*driverInstance, erro
 			zap.String("extension", s.drivers.name()), zap.String("driver", s.driver), zap.String("invocation", inst.ID()), zap.Error(err))
 		return nil, err
 	}
-	d.session = opened.Session
+	d.session, d.tableStatements = opened.Session, opened.TableStatements
 	logger.Ctx(ctx).Info("extension database driver instance logged in",
 		zap.String("extension", s.drivers.name()), zap.String("driver", s.driver), zap.String("invocation", inst.ID()))
 	return d, nil
@@ -366,6 +367,8 @@ type driverInstance struct {
 	inst    *extension.Instance
 	// session is the instance's session in the guest.
 	session uint64
+	// tableStatements is what its login answered for extwire.DriverOpened.TableStatements.
+	tableStatements bool
 
 	// idleGen and idleTimer belong to the session (guarded by its mu): the
 	// instance's current idle spell, and the timer that closes it if the spell
@@ -563,6 +566,10 @@ type driverSession struct {
 	// load); for any other the host refuses both without calling into the guest,
 	// which has no operations for them.
 	runsScripts, dumps bool
+	// tableStatements is whether the session writes a dump's table rows into their
+	// statements in the guest (extwire.DriverOpened.TableStatements, as the first
+	// login answered it).
+	tableStatements bool
 
 	mu sync.Mutex
 	// live counts the instances that exist, busy or idle, or are logging in.
@@ -839,7 +846,7 @@ func (s *driverSession) StreamTableRows(ctx context.Context, database, table str
 		s.release(inst)
 		return nil, err
 	}
-	return &driverStream{ctx: ctx, session: s, inst: inst, id: opened.Stream, columns: opened.Columns}, nil
+	return &driverStream{guestCursor: guestCursor{ctx: ctx, session: s, inst: inst, id: opened.Stream}, columns: opened.Columns}, nil
 }
 
 func (s *driverSession) TableDDL(ctx context.Context, database, table string) (string, error) {
@@ -1084,15 +1091,64 @@ func (e *driverScriptExecutor) Close() error {
 }
 
 // Dump writes a dump the way a built-in driver's session does (dbdriver.Dump):
-// the host lists the objects, orders them, reads the definitions and the rows
-// through the session's operations, reports progress and writes the file; the
-// guest answers the driver's dump dialect, once per file and once per object. A
-// driver that does not declare dbdriver.CapDumpSQL is refused without a call.
+// the host lists the objects, orders them, reads the definitions through the
+// session's operations, reports progress and writes the file; the guest answers
+// the driver's dump dialect, once per file and once per object. A table's rows
+// the guest writes into their statements itself when its session says it can
+// (guestStatements), so the values never cross; otherwise the host reads them
+// with the cursor and has the row writer write them. A driver that does not
+// declare dbdriver.CapDumpSQL is refused without a call.
 func (s *driverSession) Dump(ctx context.Context, req dbdriver.DumpRequest) (*dbdriver.DumpResult, error) {
 	if !s.dumps {
 		return nil, fmt.Errorf("%w: database driver %q of extension %q does not dump SQL files", dbdriver.ErrUnsupported, s.driver, s.drivers.name())
 	}
-	return dbdriver.Dump(ctx, req, s, driverDumpDialect{session: s})
+	var source dbdriver.DumpSource = s
+	if s.tableStatements {
+		source = guestStatements{s}
+	}
+	return dbdriver.Dump(ctx, req, source, driverDumpDialect{session: s})
+}
+
+// guestStatements is a session whose guest writes a dump's table rows into their
+// statements itself (dbdriver.TableStatementSource).
+type guestStatements struct{ *driverSession }
+
+// TableStatements opens the statement stream in the guest and reads it a page per
+// call, as the guest cut them, until a page says the table is done. Like a cursor
+// the stream holds its instance until it is closed, and ctx bounds every read.
+func (s guestStatements) TableStatements(ctx context.Context, database, table string, req dbdriver.TableStatementsRequest) (dbdriver.TableStatementPages, error) {
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal database driver %s request: %w", extwire.DriverOpTableStatements, err)
+	}
+	inst, err := s.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var opened *extwire.DriverStreamOpened
+	err = inst.call(ctx, extwire.DriverCall{Op: extwire.DriverOpTableStatements, Session: inst.session, Args: extwire.DriverArgs{
+		Database: database, Table: table, Request: raw,
+	}}, &opened)
+	if err == nil && opened == nil {
+		err = fmt.Errorf("database driver %q of extension %q answered %s with no stream", s.driver, s.drivers.name(), extwire.DriverOpTableStatements)
+	}
+	if err != nil {
+		s.release(inst)
+		return nil, err
+	}
+	return &driverStatementPages{guestCursor{ctx: ctx, session: s.driverSession, inst: inst, id: opened.Stream}}, nil
+}
+
+// driverStatementPages is a dump's statement stream of one table in the guest.
+type driverStatementPages struct{ guestCursor }
+
+func (p *driverStatementPages) Next() (*dbdriver.TableStatementPage, error) {
+	var page *dbdriver.TableStatementPage
+	err := p.inst.call(p.ctx, extwire.DriverCall{Op: extwire.DriverOpStatementsNext, Args: extwire.DriverArgs{Stream: p.id}}, &page)
+	if err == nil && page == nil {
+		err = fmt.Errorf("database driver %q of extension %q answered %s with no page", p.session.driver, p.session.drivers.name(), extwire.DriverOpStatementsNext)
+	}
+	return page, err
 }
 
 // driverDumpDialect is the driver's dump dialect in the guest (dbdriver.DumpDialect).
@@ -1159,20 +1215,46 @@ func (s *driverSession) Close() error {
 	return errors.Join(errs...)
 }
 
-// driverStream is a cursor in the guest, read over in batches on the instance
-// it was opened on, which it holds until closed.
-type driverStream struct {
+// guestCursor is a cursor in the guest — of a table's rows (driverStream) or of a
+// dump's statements (driverStatementPages) — read over on the instance it was
+// opened on, which it holds until closed.
+type guestCursor struct {
 	ctx     context.Context
 	session *driverSession
 	inst    *driverInstance
 	id      uint64
+	closed  bool
+}
+
+// Close closes the cursor in the guest and gives its instance back to the
+// session. A cursor whose instance is already unusable has nothing left to
+// close; one whose ctx has ended is closed by discarding its instance, since
+// closing it in the guest could mean reading out the rest of the result.
+func (c *guestCursor) Close() error {
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+	defer c.session.release(c.inst)
+	if err := c.ctx.Err(); err != nil {
+		c.inst.discard(err)
+		return nil
+	}
+	if !c.inst.usable() {
+		return nil
+	}
+	return c.inst.call(c.ctx, extwire.DriverCall{Op: extwire.DriverOpStreamClose, Args: extwire.DriverArgs{Stream: c.id}}, nil)
+}
+
+// driverStream is a cursor of rows in the guest, read over in batches.
+type driverStream struct {
+	guestCursor
 	columns []string
 
-	rows   [][]any
-	row    []any
-	done   bool
-	err    error
-	closed bool
+	rows [][]any
+	row  []any
+	done bool
+	err  error
 }
 
 func (r *driverStream) Columns() []string { return r.columns }
@@ -1199,26 +1281,6 @@ func (r *driverStream) Next() bool {
 func (r *driverStream) Row() []any { return r.row }
 
 func (r *driverStream) Err() error { return r.err }
-
-// Close closes the cursor in the guest and gives its instance back to the
-// session. A cursor whose instance is already unusable has nothing left to
-// close; one whose ctx has ended is closed by discarding its instance, since
-// closing it in the guest could mean reading out the rest of the result.
-func (r *driverStream) Close() error {
-	if r.closed {
-		return nil
-	}
-	r.closed = true
-	defer r.session.release(r.inst)
-	if err := r.ctx.Err(); err != nil {
-		r.inst.discard(err)
-		return nil
-	}
-	if !r.inst.usable() {
-		return nil
-	}
-	return r.inst.call(r.ctx, extwire.DriverCall{Op: extwire.DriverOpStreamClose, Args: extwire.DriverArgs{Stream: r.id}}, nil)
-}
 
 // driverRowWriter is a row statement writer prepared in the guest. Once it is
 // collected the guest forgets it (driverInstance.releaseWriter).

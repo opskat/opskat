@@ -110,7 +110,8 @@ func InstallBadKindsFixture(t testing.TB, root string) string {
 
 // DBDriverFixtureBuild is how the database driver fixture is built. The zero value
 // is the fixture as it is: built for hostABI 1.1, declaring and serving running SQL
-// files and dumping them.
+// files and dumping them, a dump's table rows written into their statements in the
+// guest.
 type DBDriverFixtureBuild struct {
 	// HostABI10 builds the driver the way an extension built for hostABI 1.0 is: it
 	// neither declares nor serves running SQL files and dumping them, and its
@@ -119,11 +120,19 @@ type DBDriverFixtureBuild struct {
 	// ManifestHostABI, when set, is the hostABI the manifest declares in place of
 	// the build's own — for a manifest that does not match its code.
 	ManifestHostABI string
+	// CursorDump builds the driver without writing a dump's table rows itself
+	// (sqldb.TableStatementsWriter): the host reads them through the cursor and has
+	// the row writer write them, as for an extension built before the hook existed.
+	CursorDump bool
 }
 
 // dbDriverFixtureABI10Tag is the build tag of DBDriverFixtureBuild.HostABI10
 // (testdata/fixture-dbdriver/abi10.go).
 const dbDriverFixtureABI10Tag = "fixture_hostabi10"
+
+// dbDriverFixtureCursorDumpTag is the build tag of DBDriverFixtureBuild.CursorDump
+// (testdata/fixture-dbdriver/table_statements.go).
+const dbDriverFixtureCursorDumpTag = "fixture_cursor_dump"
 
 // InstallDBDriverFixtureBuild is InstallDBDriverFixture for a build of the database
 // driver fixture other than its own.
@@ -136,6 +145,9 @@ func InstallDBDriverFixtureBuild(t testing.TB, root string, b DBDriverFixtureBui
 		if hostABI == "" {
 			hostABI = "1.0"
 		}
+	}
+	if b.CursorDump {
+		tags = append(tags, dbDriverFixtureCursorDumpTag)
 	}
 	return installBuild(t, root, DBDriverFixtureName, tags, hostABI)
 }
