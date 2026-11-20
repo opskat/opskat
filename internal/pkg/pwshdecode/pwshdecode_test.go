@@ -36,6 +36,9 @@ func TestDecodesAndRuns(t *testing.T) {
 			`$s = [Convert]::FromBase64String('aWQ='); I` + "`" + `E` + "`" + `X ([Text.Encoding]::UTF8.GetString($s))`,
 			`[ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('aWQ=')))`,
 			`certutil -decode payload.b64 payload.ps1; powershell -File payload.ps1`,
+			// 词中的 # 不是注释、行注释在 CR 处结束：后面的解码执行不能被当成注释去掉
+			`Write-Output a#; [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('aWQ=')) | iex`,
+			"Write-Output x #c\r[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('aWQ=')) | iex",
 		}
 		for _, cmd := range hiddenCases {
 			hidden, err := DecodesAndRuns(cmd)
@@ -51,6 +54,9 @@ func TestDecodesAndRuns(t *testing.T) {
 
 	t.Run("语法未闭合返回解析错误", func(t *testing.T) {
 		_, err := DecodesAndRuns("Get-ChildItem 'unclosed")
+		require.Error(t, err)
+		// PowerShell 把弯引号当引号，配对看不清的不当作看清了
+		_, err = DecodesAndRuns("Write-Output '\u2019; iex $x; '\u2019")
 		require.Error(t, err)
 	})
 }

@@ -1176,7 +1176,7 @@
     "sshShell": "Remote Shell",
     "sshShellPosix": "POSIX (sh / bash)",
     "sshShellPowerShell": "PowerShell (Windows)",
-    "sshShellHint": "Used for command policy splitting and model review parsing; choose PowerShell for Windows SSH hosts.",
+    "sshShellHint": "How command policies split commands and how model review reads them. Pick PowerShell for Windows SSH hosts. With PowerShell, allow rules and granted commands only auto-approve simple commands without variables, expressions or script blocks; everything else goes to model review or to you.",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
     "addDescription": "Add description",

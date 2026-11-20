@@ -1176,7 +1176,7 @@
     "sshShell": "远端 Shell",
     "sshShellPosix": "POSIX (sh / bash)",
     "sshShellPowerShell": "PowerShell (Windows)",
-    "sshShellHint": "用于命令策略拆分与模型审核解析；Windows SSH 主机建议选择 PowerShell。",
+    "sshShellHint": "决定命令策略怎样拆分命令、模型审核按哪种语法理解命令。Windows SSH 主机请选 PowerShell；选了之后，只有不含变量、表达式、脚本块的简单命令能直接被允许规则或已授权的命令放行，其余交给模型审核或人工确认。",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
     "addDescription": "添加备注",

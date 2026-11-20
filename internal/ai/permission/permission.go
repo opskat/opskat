@@ -107,13 +107,8 @@ func checkShellCommandPolicy(ctx context.Context, assetID int64, asset *asset_en
 
 	// 解析失败或没有可枚举的执行单元（纯赋值/注释等）时不能整串匹配规则，
 	// 否则 `ls *` 这类规则会误放行 parser 失败的输入；只按独立 `*` 判定。
-	var subCmds []string
-	var parseErr error
-	if asset.IsPowerShellSSH() {
-		subCmds, parseErr = policy.ExtractPowerShellSubCommands(command)
-	} else {
-		subCmds, parseErr = policy.ExtractSubCommands(command)
-	}
+	dialect := shellDialectFor(asset)
+	subCmds, ruleDecidable, parseErr := dialect.parse(command)
 	if parseErr != nil || len(subCmds) == 0 {
 		return policy.DecideUnenumerableShell(ctx, command, parseErr, allAllowRules, allDenyRules)
 	}
@@ -126,28 +121,13 @@ func checkShellCommandPolicy(ctx context.Context, assetID int64, asset *asset_en
 	// deny list
 	for _, cmd := range subCmds {
 		for _, rule := range allDenyRules {
-			if policy.MatchCommandRule(rule, cmd) {
+			if dialect.deny(rule, cmd) {
 				hints := policy.FindHintRules(cmd, allAllowRules)
 				reason := policy.PolicyMsg(ctx, "command blocked by policy", "命令被策略禁止执行")
 				msg := policy.FormatDenyMessage(ctx, assetName, command, reason, hints)
 				return aictx.CheckResult{Decision: aictx.Deny, Message: msg, HintRules: hints, DecisionSource: aictx.SourcePolicyDeny, MatchedPattern: rule}
 			}
 		}
-	}
-
-	// allow list
-	if len(allAllowRules) > 0 {
-		if ok, matched := policy.AllSubCommandsAllowed(subCmds, allAllowRules); ok {
-			return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow, MatchedPattern: matched}
-		}
-	}
-
-	// DB Grant 匹配
-	matchGrant := func(pattern, cmd string) bool {
-		return slices.ContainsFunc(storedSubPatterns(pattern), func(sub string) bool { return policy.MatchCommandRule(sub, cmd) })
-	}
-	if grantPattern := matchGrantPatternsWith(ctx, assetID, groups, subCmds, grantToolName, matchGrant); grantPattern != "" {
-		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceGrantAllow, MatchedPattern: grantPattern}
 	}
 
 	// 只返回与命令相似的 allow 规则作为提示
@@ -161,6 +141,31 @@ func checkShellCommandPolicy(ctx context.Context, assetID int64, asset *asset_en
 			}
 		}
 	}
+
+	// 子命令不保证拆全时（见 shellDialect.parse），具体 allow 规则与 grant 都不能放行：漏拆的
+	// 那一条正是没人看过的。和拆不出子命令时一样只认独立 `*`，其余交给模型审核或人工。
+	if !ruleDecidable {
+		if allow, ok := policy.WildcardAllowWithoutDeny(allAllowRules, allDenyRules); ok {
+			return allow
+		}
+		return aictx.CheckResult{Decision: aictx.NeedConfirm, HintRules: filteredHints}
+	}
+
+	// allow list
+	if len(allAllowRules) > 0 {
+		if ok, matched := policy.AllSubCommandsAllowedWith(subCmds, allAllowRules, dialect.allow); ok {
+			return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow, MatchedPattern: matched}
+		}
+	}
+
+	// DB Grant 匹配
+	matchGrant := func(pattern, cmd string) bool {
+		return slices.ContainsFunc(storedSubPatterns(pattern), func(sub string) bool { return dialect.allow(sub, cmd) })
+	}
+	if grantPattern := matchGrantPatternsWith(ctx, assetID, groups, subCmds, grantToolName, matchGrant); grantPattern != "" {
+		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceGrantAllow, MatchedPattern: grantPattern}
+	}
+
 	return aictx.CheckResult{Decision: aictx.NeedConfirm, HintRules: filteredHints}
 }
 
