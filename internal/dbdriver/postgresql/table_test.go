@@ -139,3 +139,23 @@ func TestTableColumnsReportIdentityAndSerial(t *testing.T) {
 	}, got)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// 只取表自己的行（TableQuery.OwnRows，转储用它）：读分区表的父表或继承的父表时用 ONLY，子表的行不在其中；
+// 不要求时照常读，带上子表的行（表格浏览看到的仍是整个分区表）。
+func TestOwnRowsReadsTheTableWithOnly(t *testing.T) {
+	session, mock := newMock(t)
+	ctx := context.Background()
+	mock.ExpectQuery(`SELECT * FROM ONLY "public"."base"`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+	mock.ExpectQuery(`SELECT * FROM ONLY "public"."base" LIMIT 20 OFFSET 0`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+	mock.ExpectQuery(`SELECT * FROM "public"."base"`).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1).AddRow(2))
+
+	stream, err := session.StreamTableRows(ctx, "shop", "public.base", dbdriver.TableQuery{OwnRows: true})
+	require.NoError(t, err)
+	require.NoError(t, stream.Close())
+	_, err = session.TableRows(ctx, "shop", "public.base", dbdriver.TableQuery{OwnRows: true}, dbdriver.Page{Index: 0, Size: 20})
+	require.NoError(t, err)
+	stream, err = session.StreamTableRows(ctx, "shop", "public.base", dbdriver.TableQuery{})
+	require.NoError(t, err)
+	require.NoError(t, stream.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}

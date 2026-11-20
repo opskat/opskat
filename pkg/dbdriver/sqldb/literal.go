@@ -26,12 +26,18 @@ type Literals struct {
 	// （Oracle 带时区的时间戳：TO_TIMESTAMP_TZ('…', '…TZH:TZM')，否则本地时区的列不认表格显示的
 	// 时区、没有小数秒的负时区会丢掉符号）；nil 表示方言由数据库按列的类型转换字符串。
 	Converted func(columnType string) (prefix, suffix string, ok bool)
+	// Formatted 报告这个值写进这种列类型时有方言自己的写法，并给出完整的字面量；text 是值的文本（字节值按
+	// 它的字节）。它先于其余规则；ok 为假时照其余规则写。SQL Server 用它把读出的 16 个原始字节的
+	// uniqueidentifier 写成 GUID 文本（表格里带回的 GUID 文本不是 16 个字节，照字符串写）。nil 表示方言没有
+	// 这种写法。
+	Formatted func(columnType, text string) (literal string, ok bool)
 }
 
 // Literal 把要写进 columnType 列的值写成字面量。nil 是 NULL；二进制列写成方言的十六进制字面量
 // （文本按它的字节）；其余写成字符串字面量——数字、布尔、日期文本也一样，由数据库按列的类型
 // 转换，数字照表格显示它的样子（见 valueText）；方言声明了 Converted 的列类型，字符串字面量再包进
-// 它的转换写法。BinaryBytesOnly 时二进制列只有字节值写成十六进制。
+// 它的转换写法。BinaryBytesOnly 时二进制列只有字节值写成十六进制。方言用 Formatted 给出写法的值，字面量
+// 就是它给的那个。
 // 列类型是驱动目录里给出的写法；不认识的类型（包括空串）照文本写。
 func (l Literals) Literal(value any, columnType string) (string, error) {
 	if value == nil {
@@ -45,6 +51,11 @@ func (l Literals) Literal(value any, columnType string) (string, error) {
 		var err error
 		if text, err = valueText(value); err != nil {
 			return "", err
+		}
+	}
+	if l.Formatted != nil {
+		if literal, ok := l.Formatted(columnType, text); ok {
+			return literal, nil
 		}
 	}
 	if l.Binary != nil && (isBytes || !l.BinaryBytesOnly) {

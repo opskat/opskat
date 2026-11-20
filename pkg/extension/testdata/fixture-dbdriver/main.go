@@ -36,7 +36,11 @@ func main() {}
 // SHOW KERBEROS TICKET probe it); its manifest grants permissions.kerberos for
 // the ticket and network.assetEndpoint / assetRoute for the reach path. It splits
 // and classifies statements itself (split.go), probing the host first when asked
-// to (classifyProbing).
+// to (classifyProbing). Built for hostABI 1.1 — the default build — it also runs
+// SQL files and dumps them (abi11.go), writing a dump's table rows in the guest
+// (table_statements.go, left out with the fixture_cursor_dump tag); built with the
+// fixture_hostabi10 tag it is the same driver as an extension built for hostABI 1.0
+// (abi10.go).
 var descriptor = dbdriver.Descriptor{
 	ID:          "fixturedb",
 	Name:        "FixtureDB",
@@ -50,10 +54,10 @@ var descriptor = dbdriver.Descriptor{
 		}},
 		{Tab: dbdriver.TabTLS, Fields: []dbdriver.FormField{dbdriver.FieldTLSCert}},
 	},
-	Capabilities: []dbdriver.Capability{
-		dbdriver.CapViews, dbdriver.CapViewDDL, dbdriver.CapCreateTable, dbdriver.CapDropTable,
+	Capabilities: append([]dbdriver.Capability{
+		dbdriver.CapViews, dbdriver.CapFunctions, dbdriver.CapViewDDL, dbdriver.CapCreateTable, dbdriver.CapDropTable,
 		dbdriver.CapTruncateTable, dbdriver.CapExportSQL, dbdriver.CapClassifyStatements,
-	},
+	}, abiCapabilities...),
 }
 
 func init() {
@@ -130,6 +134,11 @@ func (d dialect) TableRef(database, table string) string {
 	return d.QuoteIdent(database) + "." + d.QuoteIdent(table)
 }
 
+// OwnRowsRef reads a table's own rows as SELECT * FROM ONLY <table>
+// (sqldb.OwnRowsTable): memdb's tables have no child tables, but the far end
+// sees the ONLY and so whether dbdriver.TableQuery.OwnRows reached the guest.
+func (dialect) OwnRowsRef(tableRef string) string { return "ONLY " + tableRef }
+
 func (dialect) Descriptor() dbdriver.Descriptor { return descriptor }
 
 func (dialect) ListDatabases(ctx context.Context, conn *sql.Conn) ([]string, error) {
@@ -160,12 +169,23 @@ func (d dialect) ListObjects(ctx context.Context, conn *sql.Conn, database strin
 	if err := sqldb.CollectObjects(ctx, conn, "SHOW VIEWS FROM "+d.QuoteIdent(database), dbdriver.ObjectView, &objects.Views); err != nil {
 		return nil, err
 	}
+	if err := sqldb.CollectObjects(ctx, conn, "SHOW FUNCTIONS FROM "+d.QuoteIdent(database), dbdriver.ObjectFunction, &objects.Functions); err != nil {
+		return nil, err
+	}
 	return objects, nil
 }
 
-func (d dialect) ObjectSource(ctx context.Context, conn *sql.Conn, database, _, name, _ string) (string, error) {
+// sourceCommands are the SHOW ... SOURCE statements of the object types fixturedb
+// keeps the source of.
+var sourceCommands = map[string]string{dbdriver.ObjectView: "SHOW VIEW SOURCE ", dbdriver.ObjectFunction: "SHOW FUNCTION SOURCE "}
+
+func (d dialect) ObjectSource(ctx context.Context, conn *sql.Conn, database, objType, name, _ string) (string, error) {
+	command, ok := sourceCommands[objType]
+	if !ok {
+		return "", fmt.Errorf("%w: fixturedb keeps no source of a %s", dbdriver.ErrUnsupported, objType)
+	}
 	var source string
-	err := conn.QueryRowContext(ctx, "SHOW VIEW SOURCE "+d.TableRef(database, name)).Scan(&source)
+	err := conn.QueryRowContext(ctx, command+d.TableRef(database, name)).Scan(&source)
 	return source, err
 }
 
@@ -183,8 +203,15 @@ func (d dialect) TableDDL(ctx context.Context, conn *sql.Conn, database, table s
 	return ddl, err
 }
 
+// Literals writes the bytes of a blob column as X'<hex>'; everything else as a
+// quoted string.
 func (dialect) Literals(context.Context, *sql.Conn) (sqldb.Literals, error) {
-	return sqldb.Literals{}, nil
+	return sqldb.Literals{
+		Binary: func(columnType string) (string, string, bool) {
+			return "X'", "'", columnType == "blob"
+		},
+		BinaryBytesOnly: true,
+	}, nil
 }
 
 func (dialect) UpdateRowSQL(tableRef, set, where string) string {

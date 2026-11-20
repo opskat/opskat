@@ -114,3 +114,63 @@ func TestLiteralRejectsValuesThatAreNotCellValues(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported value")
 }
+
+// 方言按值给出自己的写法（SQL Server 把 16 字节的 uniqueidentifier 写成 GUID 文本）时，字面量就是它给的那个：
+// 先于二进制、N 前缀与转换写法；字节值与文本都按它们的文本交给方言。NULL 不经过它。
+func TestLiteralUsesTheDialectsFormattedValue(t *testing.T) {
+	var asked []string
+	literals := Literals{
+		Formatted: func(columnType, text string) (string, bool) {
+			asked = append(asked, columnType+":"+text)
+			if columnType == "guid" && len(text) == 2 {
+				return "'formatted'", true
+			}
+			return "", false
+		},
+		UnicodeText: func(string) bool { return true },
+		Binary:      func(string) (string, string, bool) { return "0x", "", true },
+		Converted:   func(string) (string, string, bool) { return "CONVERT(", ")", true },
+	}
+
+	got, err := literals.Literal([]byte("AB"), "guid")
+	require.NoError(t, err)
+	assert.Equal(t, "'formatted'", got)
+
+	got, err = literals.Literal("AB", "guid")
+	require.NoError(t, err)
+	assert.Equal(t, "'formatted'", got)
+
+	got, err = literals.Literal(nil, "guid")
+	require.NoError(t, err)
+	assert.Equal(t, "NULL", got)
+	assert.Equal(t, []string{"guid:AB", "guid:AB"}, asked)
+}
+
+// 方言不认的值照原来的写法：二进制列写十六进制、文本列带 N 前缀与转换写法、其余加引号，与没有这个钩子时一样。
+func TestLiteralFallsThroughWhenTheDialectDoesNotFormatTheValue(t *testing.T) {
+	base := Literals{
+		BackslashEscapes: true,
+		UnicodeText:      func(columnType string) bool { return columnType == "nvarchar" },
+		Binary: func(columnType string) (string, string, bool) {
+			return "0x", "", columnType == "varbinary"
+		},
+		Converted: func(columnType string) (string, string, bool) {
+			return "TO_TS(", ")", columnType == "ts"
+		},
+	}
+	withHook := base
+	withHook.Formatted = func(string, string) (string, bool) { return "", false }
+	for _, c := range []struct {
+		value      any
+		columnType string
+	}{
+		{"\xde\xad", "varbinary"}, {[]byte("AB"), "varbinary"}, {"中文 'q' \\", "nvarchar"},
+		{"2026-10-24", "ts"}, {float64(42), "int"}, {true, "bit"}, {"", "varchar"},
+	} {
+		want, err := base.Literal(c.value, c.columnType)
+		require.NoError(t, err)
+		got, err := withHook.Literal(c.value, c.columnType)
+		require.NoError(t, err)
+		assert.Equal(t, want, got, "value %#v in a %s column", c.value, c.columnType)
+	}
+}

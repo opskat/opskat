@@ -35,8 +35,11 @@ var descriptor = dbdriver.Descriptor{
 		dbdriver.CapViews, dbdriver.CapTriggers,
 		dbdriver.CapGridEdit, dbdriver.CapCreateTable, dbdriver.CapAlterTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable,
 		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly,
+		dbdriver.CapRunSQLFile, dbdriver.CapDumpSQL,
 	},
 	CanDisableForeignKeyChecks: true,
+	// 转储文件能在开头关闭外键检查（PRAGMA foreign_keys，见 dump.go 的 DumpSyntax）。
+	DumpDisablesForeignKeyChecks: sqldb.DumpDisablesForeignKeyChecks(dialect{}),
 	// 没有主键的表按 rowid 定位单行。
 	LocatesRowWithoutPrimaryKey: true,
 	AlterTableAttributes:        alterAttributes,

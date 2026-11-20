@@ -21,6 +21,11 @@ func (dialect) QuoteIdent(name string) string { return quoteIdent(name) }
 
 func (dialect) TableRef(_, table string) string { return sqldb.QuoteSchemaTable(table, quoteIdent) }
 
+// 分区表的父表与继承的父表读出的行默认含子表的行；只读表自己的行（转储）用 ONLY。
+var _ sqldb.OwnRowsTable = dialect{}
+
+func (dialect) OwnRowsRef(tableRef string) string { return "ONLY " + tableRef }
+
 func (dialect) PrimaryKeys(ctx context.Context, conn *sql.Conn, _, table string) ([]string, error) {
 	schema, tbl := splitSchemaTable(table)
 	return sqldb.QueryPrimaryKeys(ctx, conn, "column_name",

@@ -1,0 +1,37 @@
+SET NAMES utf8mb4
+@@@@
+SET FOREIGN_KEY_CHECKS = 0
+@@@@
+DROP TABLE IF EXISTS `customers`
+@@@@
+CREATE TABLE `customers`  (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL DEFAULT 'n/a; none' COMMENT '姓名；含分号;',
+  `visits` int NOT NULL DEFAULT 0,
+  PRIMARY KEY (`id`) USING BTREE
+) ENGINE = InnoDB AUTO_INCREMENT = 3 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci ROW_FORMAT = Dynamic
+@@@@
+INSERT INTO `customers` VALUES (1, 'O\'Brien; \"Jr\"', 0)
+@@@@
+INSERT INTO `customers` VALUES (2, '中文；分号; \\ 反斜杠', 5)
+@@@@
+DROP VIEW IF EXISTS `v_customers`
+@@@@
+CREATE ALGORITHM = UNDEFINED SQL SECURITY DEFINER VIEW `v_customers` AS select `customers`.`id` AS `id`,`customers`.`name` AS `name` from `customers`
+@@@@
+DROP PROCEDURE IF EXISTS `add_customer`
+@@@@
+CREATE PROCEDURE `add_customer`(IN p_name VARCHAR(100))
+BEGIN
+  # a hash comment; inside the body
+  INSERT INTO customers (name) VALUES (p_name);
+  SELECT LAST_INSERT_ID();
+END
+@@@@
+DROP TRIGGER IF EXISTS `customers_bi`
+@@@@
+CREATE TRIGGER `customers_bi` BEFORE INSERT ON `customers` FOR EACH ROW BEGIN
+  IF NEW.name = '' THEN SET NEW.name = 'empty;'; END IF;
+END
+@@@@
+SET FOREIGN_KEY_CHECKS = 1

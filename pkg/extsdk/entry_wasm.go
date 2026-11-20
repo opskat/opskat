@@ -27,6 +27,9 @@ const (
 // guest code runs, so a single slot is enough.
 var lastResponse []byte
 
+// heapAfterCall collects the garbage a call leaves behind (see callHeap).
+var heapAfterCall = newCallHeap()
+
 // opskat_call is the single guest entry point.
 //
 // The request is a JSON envelope {"fn":"<name>","input":<raw>}; the reply is a
@@ -36,7 +39,15 @@ var lastResponse []byte
 //
 //go:wasmexport opskat_call
 func opskatCall(reqPtr, reqLen uint32) uint64 {
-	req := copyGuestBytes(reqPtr, reqLen)
+	resp := respond(copyGuestBytes(reqPtr, reqLen))
+	// The reply is packed into lastResponse, so everything else the call
+	// allocated is garbage now, whether it succeeded, failed or panicked.
+	heapAfterCall.afterCall()
+	return resp
+}
+
+// respond runs the request and packs its reply.
+func respond(req []byte) uint64 {
 	result, err := invoke(req)
 	if err != nil {
 		return packResponse(responseTagErr, []byte(err.Error()))

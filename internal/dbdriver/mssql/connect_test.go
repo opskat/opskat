@@ -33,10 +33,20 @@ func TestMSSQLPassesConformance(t *testing.T) {
 		mock.ExpectQuery(dbdrivertest.ConformanceStatement).WillReturnRows(one())
 		mock.ExpectQuery(dbdrivertest.ConformanceStatement).WillReturnRows(one())
 		mock.ExpectQuery(dbdrivertest.ConformanceStatement).WillReturnRows(one())
+		// 运行 conformanceGoScript：第一批成功，第二批失败后停下。
+		mock.ExpectExec(dbdrivertest.ConformanceStatement).WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec(dbdrivertest.ConformanceFailingStatement).WillReturnError(errors.New("Incorrect syntax near the keyword 'NOT'."))
 		mock.ExpectClose()
 		return newSession(db)
-	})
+	}, dbdrivertest.WithScriptCheck(dbdrivertest.ConformanceScriptCheck{
+		Script: conformanceGoScript, FailingNumber: 2, FailingLine: 3,
+	}))
 }
+
+// conformanceGoScript 是 SQL Server 运行的一致性测试文件：分号不分开语句，三个批由 GO 分开，第二批
+// （第 3 行）必然失败。
+const conformanceGoScript = dbdrivertest.ConformanceStatement + "\nGO\n" +
+	dbdrivertest.ConformanceFailingStatement + "\nGO\n" + dbdrivertest.ConformanceStatement + "\nGO\n"
 
 // 给了拨号函数，到数据库的连接就必须经它建立（隧道 / 代理 / 代理链 / .local）。
 // 主机用 IP 字面量：go-mssqldb 在调用 Dialer 之前会先在本机解析主机名。

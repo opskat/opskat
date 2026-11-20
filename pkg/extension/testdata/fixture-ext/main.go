@@ -65,6 +65,14 @@ type blobArgs struct {
 	Bytes int `json:"bytes" desc:"Size of the returned data string"`
 }
 
+type growArgs struct {
+	MB int `json:"mb" desc:"How many MiB to grow a slice to"`
+}
+
+type holdArgs struct {
+	MB int `json:"mb" desc:"How many MiB to hold at once"`
+}
+
 type urlArgs struct {
 	URL string `json:"url" desc:"URL to GET"`
 }
@@ -314,6 +322,30 @@ func init() {
 	// host's result size limit.
 	opskat.Tool("blob", func(_ *opskat.ToolContext, args blobArgs) (any, error) {
 		return map[string]any{"data": strings.Repeat("x", args.Bytes)}, nil
+	}).Policy("read")
+
+	// grow appends to a byte slice until it holds args.MB MiB and drops it, the
+	// way decoding a large value does: each growth copies into a new, larger
+	// allocation, and all of it is garbage once the call returns.
+	opskat.Tool("grow", func(_ *opskat.ToolContext, args growArgs) (any, error) {
+		piece := make([]byte, 64<<10)
+		var buf []byte
+		for len(buf) < args.MB<<20 {
+			buf = append(buf, piece...)
+		}
+		return map[string]any{"bytes": len(buf)}, nil
+	}).Policy("read")
+
+	// hold allocates args.MB MiB in one piece and writes to every page of it, so
+	// all of it is live linear memory before the call returns.
+	opskat.Tool("hold", func(_ *opskat.ToolContext, args holdArgs) (any, error) {
+		buf := make([]byte, args.MB<<20)
+		touched := 0
+		for i := 0; i < len(buf); i += 4 << 10 {
+			buf[i] = 1
+			touched += int(buf[i])
+		}
+		return map[string]any{"bytes": len(buf), "pages": touched}, nil
 	}).Policy("read")
 
 	// The host-only tools are called by host subsystems (extreg.CallHostTool), never

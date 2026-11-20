@@ -74,17 +74,65 @@ var tables = map[string]map[string]*memTable{
 			row:     func(i int) []driver.Value { return []driver.Value{int64(i + 1)} },
 			ddl:     "CREATE TABLE [app].[series] ([n] int PRIMARY KEY)",
 		},
+		// blobs holds the values JSON cannot carry as they are: an integer past
+		// 2^53 and bytes that are not UTF-8.
+		"blobs": {
+			columns: []memColumn{{name: "id", typ: "bigint", primaryKey: true}, {name: "data", typ: "blob", nullable: true}},
+			size:    1,
+			row: func(int) []driver.Value {
+				return []driver.Value{int64(9007199254740993), []byte{0x00, 0xff, 0xfe, 'o', 'k'}}
+			},
+			ddl: "CREATE TABLE [app].[blobs] ([id] bigint PRIMARY KEY, [data] blob)",
+		},
+		// events is partitioned: its rows are all in its partition events_2026,
+		// which SHOW TABLES lists before it (see the dump dialect's DumpObject).
+		"events": {
+			columns: []memColumn{{name: "id", typ: "int", primaryKey: true}},
+			ddl:     "CREATE TABLE [app].[events] ([id] int PRIMARY KEY) PARTITIONED",
+		},
+		"events_2026": {
+			columns: []memColumn{{name: "id", typ: "int", primaryKey: true}},
+			size:    len(events2026),
+			row:     func(i int) []driver.Value { return events2026[i] },
+			ddl:     "CREATE TABLE [app].[events_2026] PARTITION OF [events]",
+		},
+		"lobs": {
+			columns: []memColumn{{name: "id", typ: "int", primaryKey: true}, {name: "body", typ: "text"}},
+			size:    lobsSize,
+			row:     lobRow,
+			ddl:     "CREATE TABLE [app].[lobs] ([id] int PRIMARY KEY, [body] text)",
+		},
 	},
 }
 
+var events2026 = [][]driver.Value{{int64(1)}, {int64(2)}}
+
+// lobs is a table SHOW TABLES does not list, so dumps and the conformance suites
+// never read it: lobsSize rows whose body, the letter 'a'+i, is 1.5 MiB long, and
+// a last one of 6 MiB. Together they are far more than one cursor page may hold,
+// and the last alone is more. The rows are made as they are read.
+const lobsSize = 7
+
+func lobRow(i int) []driver.Value {
+	size := 3 << 19
+	if i == lobsSize-1 {
+		size = 6 << 20
+	}
+	return []driver.Value{int64(i + 1), strings.Repeat(string(rune('a'+i)), size)}
+}
+
 // tableOrder is the order SHOW TABLES lists them in.
-var tableOrder = []string{"users", "series"}
+var tableOrder = []string{"users", "series", "blobs", "events_2026", "events"}
 
 var views = map[string]string{"v_users": "SELECT [id] FROM [app].[users]"}
 
-// seriesProduced counts the rows the most recent read of series has produced so
-// far; SHOW STREAM PROGRESS answers it.
-var seriesProduced int
+// functions are fixturedb's stored functions: SHOW FUNCTIONS lists them and SHOW
+// FUNCTION SOURCE gives their source. users_count reads the view v_users.
+var functions = map[string]string{"users_count": "CREATE FUNCTION [users_count]() RETURNS int AS SELECT COUNT(*) FROM [v_users]"}
+
+// streamProduced counts the rows the most recent whole read of a table has
+// produced so far; SHOW STREAM PROGRESS answers it.
+var streamProduced int
 
 type connector struct {
 	dial     dbdriver.DialFunc
@@ -202,10 +250,22 @@ func (c *conn) ExecContext(_ context.Context, statement string, args []driver.Na
 	if err := c.roundTrip("EXEC " + statement); err != nil {
 		return nil, err
 	}
-	// The catalog is read-only: every statement that is not a query fails, which is
-	// also what the conformance suite's failing batch statement needs.
-	return nil, fmt.Errorf("fixturedb: syntax error near %q", statement)
+	// The catalog is read-only. A write a SQL file or a dump is made of is
+	// accepted and does nothing here — the far end saw it, which is what a test
+	// reads back; a query runs as a query; anything else fails, which is also what
+	// the conformance suite's failing statement needs.
+	if acceptedWrite.MatchString(statement) {
+		return driver.RowsAffected(0), nil
+	}
+	rows, err := c.query(strings.TrimSpace(statement))
+	if err != nil {
+		return nil, fmt.Errorf("fixturedb: syntax error near %q", statement)
+	}
+	return driver.RowsAffected(0), rows.Close()
 }
+
+// acceptedWrite are the statements memdb accepts without changing anything.
+var acceptedWrite = regexp.MustCompile(`(?i)^\s*(SET|CREATE|DROP|INSERT)\s`)
 
 type tx struct{}
 
@@ -215,14 +275,14 @@ func (tx) Rollback() error { return nil }
 var (
 	countOf   = regexp.MustCompile(`^COUNT OF (.+)$`)
 	pageOf    = regexp.MustCompile(`^PAGE (\d+) (\d+) OF (.+)$`)
-	selectAll = regexp.MustCompile(`^SELECT \* FROM (\S+)(?: LIMIT (\d+)(?: OFFSET (\d+))?)?$`)
+	selectAll = regexp.MustCompile(`^SELECT \* FROM (?:ONLY )?(\S+)(?: LIMIT (\d+)(?: OFFSET (\d+))?)?$`)
 	countAll  = regexp.MustCompile(`^SELECT COUNT\(\*\) FROM (\S+)$`)
-	showFrom  = regexp.MustCompile(`^SHOW (TABLES|VIEWS) FROM \[([^\]]*)\]$`)
+	showFrom  = regexp.MustCompile(`^SHOW (TABLES|VIEWS|FUNCTIONS) FROM \[([^\]]*)\]$`)
 	showHost  = regexp.MustCompile(`^SHOW HOST (\w+)(?: (\S+))?$`)
 	// showTicket asks the host for the Kerberos ticket of service on host, as a
 	// login handshake does, whether or not the session uses Kerberos.
 	showTicket = regexp.MustCompile(`^SHOW KERBEROS TICKET (\S+) (\S+)$`)
-	showOf     = regexp.MustCompile(`^SHOW (COLUMNS FROM|PRIMARY KEY FROM|CREATE TABLE|VIEW SOURCE) (\S+)$`)
+	showOf     = regexp.MustCompile(`^SHOW (COLUMNS FROM|PRIMARY KEY FROM|CREATE TABLE|VIEW SOURCE|FUNCTION SOURCE) (\S+)$`)
 	tableRef   = regexp.MustCompile(`^(?:\[([^\]]*)\]\.)?\[([^\]]+)\]$`)
 )
 
@@ -233,7 +293,7 @@ func (c *conn) query(q string) (driver.Rows, error) {
 	case q == "SHOW DATABASES":
 		return values([]string{"name"}, []driver.Value{defaultDatabase}), nil
 	case q == "SHOW STREAM PROGRESS":
-		return values([]string{"produced"}, []driver.Value{int64(seriesProduced)}), nil
+		return values([]string{"produced"}, []driver.Value{int64(streamProduced)}), nil
 	case q == "SHOW OPEN CONFIG":
 		raw, err := json.Marshal(c.config)
 		if err != nil {
@@ -339,12 +399,8 @@ func selectTable(ref, limit, offset string) (driver.Rows, error) {
 	for i, column := range t.columns {
 		columns[i] = column.name
 	}
-	r := &memRows{columns: columns, next: start, end: end, row: t.row}
-	if t == tables[defaultDatabase]["series"] {
-		seriesProduced = 0
-		r.produced = &seriesProduced
-	}
-	return r, nil
+	streamProduced = 0
+	return &memRows{columns: columns, next: start, end: end, row: t.row, produced: &streamProduced}, nil
 }
 
 func showNames(what, database string) (driver.Rows, error) {
@@ -352,12 +408,20 @@ func showNames(what, database string) (driver.Rows, error) {
 		return nil, fmt.Errorf("fixturedb: unknown database %q", database)
 	}
 	var names [][]driver.Value
-	if what == "TABLES" {
+	switch what {
+	case "TABLES": // the tables, then the views (as ListTables gives them)
 		for _, name := range tableOrder {
 			names = append(names, []driver.Value{name})
 		}
-	} else {
 		for name := range views {
+			names = append(names, []driver.Value{name})
+		}
+	case "VIEWS":
+		for name := range views {
+			names = append(names, []driver.Value{name})
+		}
+	default: // FUNCTIONS
+		for name := range functions {
 			names = append(names, []driver.Value{name})
 		}
 	}
@@ -365,16 +429,19 @@ func showNames(what, database string) (driver.Rows, error) {
 }
 
 func show(what, ref string) (driver.Rows, error) {
-	if what == "VIEW SOURCE" {
+	if sources, ok := map[string]map[string]string{"VIEW SOURCE": views, "FUNCTION SOURCE": functions}[what]; ok {
 		_, name, err := splitRef(ref)
 		if err != nil {
 			return nil, err
 		}
-		source, ok := views[name]
+		source, ok := sources[name]
 		if !ok {
-			return nil, fmt.Errorf("fixturedb: no view %s", ref)
+			return nil, fmt.Errorf("fixturedb: no %s for %s", strings.ToLower(what), ref)
 		}
 		return values([]string{"source"}, []driver.Value{source}), nil
+	}
+	if _, name, err := splitRef(ref); err == nil && what == "CREATE TABLE" && views[name] != "" {
+		return values([]string{"ddl"}, []driver.Value{"CREATE VIEW [" + name + "] AS " + views[name]}), nil
 	}
 	t, err := lookup(ref)
 	if err != nil {

@@ -1,4 +1,9 @@
 // Package opskat provides the Go SDK for building OpsKat WASM extensions.
+//
+// An extension instance serves many calls in turn inside at most 1 GiB of WASM
+// linear memory, the module's own static data included. The SDK collects the
+// garbage a call leaves behind before the next call, but what a single call
+// holds at once must fit: stream large data rather than holding all of it.
 package opskat
 
 import (

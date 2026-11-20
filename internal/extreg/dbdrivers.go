@@ -8,6 +8,7 @@ import (
 	dbregistry "github.com/opskat/opskat/internal/dbdriver"
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/extension"
+	"github.com/opskat/opskat/pkg/extmanifest"
 	"github.com/opskat/opskat/pkg/extwire"
 )
 
@@ -17,6 +18,13 @@ type dbDriversPoint struct{ guest guestFunc }
 
 func (dbDriversPoint) Key() string { return extwire.KeyDatabaseDrivers }
 
+// capabilitySince 是扩展驱动要按哪个 hostABI 构建才能声明的功能：它们的线上操作是那个版本加的，
+// 按更早的版本构建的扩展不认识这些操作。
+var capabilitySince = map[dbdriver.Capability]string{
+	dbdriver.CapRunSQLFile: extwire.DriverScriptHostABI,
+	dbdriver.CapDumpSQL:    extwire.DriverScriptHostABI,
+}
+
 // Check validates every driver descriptor on its own (dbdriver validation: known
 // fields, capabilities and tabs, driver fields clear of the built-in ones) and
 // against the extension driver's network rules (fitsNetworkRules), that no id
@@ -25,7 +33,11 @@ func (dbDriversPoint) Key() string { return extwire.KeyDatabaseDrivers }
 // the descriptor is what the code implements, and they may not disagree. It runs
 // for an extension that describes no driver too — the manifest may still declare
 // one. A driver that declares the Kerberos field group (dbdriver.FieldKerberos) asks
-// the host for tickets, which the user audits as permissions.kerberos.
+// the host for tickets, which the user audits as permissions.kerberos. Running SQL
+// files (dbdriver.CapRunSQLFile) and dumping them (dbdriver.CapDumpSQL) have wire
+// operations only since hostABI 1.1 (capabilitySince): an extension built for an
+// earlier hostABI whose driver declares either is refused, naming the extension
+// and the capability.
 func (dbDriversPoint) Check(v extension.ExtensionView) error {
 	var drivers []dbdriver.Descriptor
 	if err := decodeContribution(v, extwire.KeyDatabaseDrivers, &drivers); err != nil {
@@ -40,6 +52,12 @@ func (dbDriversPoint) Check(v extension.ExtensionView) error {
 		id := string(drv.ID)
 		if err := fitsNetworkRules(drv); err != nil {
 			return fmt.Errorf("databaseDrivers[%s]: %w", id, err)
+		}
+		for _, capability := range drv.Capabilities {
+			if since, ok := capabilitySince[capability]; ok && !extmanifest.HostABIAtLeast(m.HostABI, since) {
+				return fmt.Errorf("databaseDrivers[%s]: extension %q is built for hostABI %s, but its database driver %q declares capability %q, which needs hostABI %s",
+					id, v.Name(), m.HostABI, id, capability, since)
+			}
 		}
 		if _, dup := described[id]; dup {
 			return fmt.Errorf("databaseDrivers[%s]: duplicate driver %q", id, id)

@@ -53,9 +53,12 @@
       "import",
       "export_sql",
       "copy_sql",
-      "read_only"
+      "read_only",
+      "run_sql_file",
+      "dump_sql"
     ],
     "canDisableForeignKeyChecks": true,
+    "dumpDisablesForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": false,
     "createDatabaseOptions": [
       { "key": "charset", "default": "utf8mb4" },
@@ -182,7 +185,9 @@
       "import",
       "export_sql",
       "copy_sql",
-      "read_only"
+      "read_only",
+      "run_sql_file",
+      "dump_sql"
     ],
     "canDisableForeignKeyChecks": false,
     "locatesRowWithoutPrimaryKey": true,
@@ -312,7 +317,9 @@
       "import",
       "export_sql",
       "copy_sql",
-      "read_only"
+      "read_only",
+      "run_sql_file",
+      "dump_sql"
     ],
     "canDisableForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": false,
@@ -420,9 +427,12 @@
       "import",
       "export_sql",
       "copy_sql",
-      "read_only"
+      "read_only",
+      "run_sql_file",
+      "dump_sql"
     ],
     "canDisableForeignKeyChecks": true,
+    "dumpDisablesForeignKeyChecks": true,
     "locatesRowWithoutPrimaryKey": true,
     "createDatabaseOptions": null,
     "alterTableAttributes": [],

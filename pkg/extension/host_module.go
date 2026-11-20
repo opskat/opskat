@@ -70,7 +70,7 @@ var hostOps = map[string]hostOpFunc{
 	OpToolEvent:      opToolEvent,
 	OpKerberosTicket: opKerberosTicket,
 	OpToolShouldStop: func(env hostCallEnv, _ json.RawMessage) ([]byte, error) {
-		if env.inv.shouldStop() {
+		if env.inv.shouldStop() || stopSignaled(env.ctx) {
 			return []byte{1}, nil
 		}
 		return []byte{0}, nil

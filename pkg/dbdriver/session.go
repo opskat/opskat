@@ -272,6 +272,17 @@ type Session interface {
 	// 返回 error；此前已经执行过语句的，同时返回记着它们的结果。
 	ExecuteBatch(ctx context.Context, req BatchRequest) (*BatchResult, error)
 
+	// RunScript 运行一个 SQL 文件（见 ScriptRequest）：文件里的语句按文件的次序、在 req.Database 上的同一
+	// 条连接里逐条执行、各自提交，前面设置的会话状态对后面的语句有效。驱动给出切分与执行两个钩子
+	// （ScriptRunner），编排（编码检查、边读边切、按批执行、进度与停下）用 RunScript，各驱动一样。驱动没有
+	// 声明 CapRunSQLFile 时返回包着 ErrUnsupported 的错误，且不执行任何语句。
+	RunScript(ctx context.Context, req ScriptRequest) (*ScriptResult, error)
+
+	// Dump 把 req.Tables 写成一份 SQL 转储（见 DumpRequest）：能在空库上运行还原的文件，写进 req.Writer。
+	// 驱动给出方言部分（DumpDialect），编排（顺序、读定义、边读行边写、进度、取消）用 Dump，各驱动一样。
+	// 驱动没有声明 CapDumpSQL 时返回包着 ErrUnsupported 的错误，且不执行任何语句、不写任何内容。
+	Dump(ctx context.Context, req DumpRequest) (*DumpResult, error)
+
 	// Close 释放会话占用的一切（连接、文件锁、远端文件系统）。
 	io.Closer
 }
@@ -305,6 +316,12 @@ type RowStatementsRequest struct {
 	// PrimaryKeys 是 UPDATE 定位那一行的列（值取自同一行）；为空时按全部 Columns 定位。
 	// INSERT 不用它。
 	PrimaryKeys []string `json:"primaryKeys"`
+	// OmitDatabase 为真时语句里的表引用不带库名（Tables.TableRef 给空库名的写法）：转储文件里用，
+	// 这样文件导入哪个库，数据就写进哪个库。「复制为 INSERT」不设，仍带库名。
+	OmitDatabase bool `json:"omitDatabase,omitempty"`
+	// InsertModifier 非空时写在 INSERT 的列与 VALUES 之间（PostgreSQL 往 GENERATED ALWAYS 身份列写值的
+	// OVERRIDING SYSTEM VALUE）：转储取自方言的 DumpObjectScript.InsertModifier。UPDATE 不用它。
+	InsertModifier string `json:"insertModifier,omitempty"`
 }
 
 // GridEditRequest 是 Session.GridEditStatements 要生成的语句：表格里新增、改动与删除的行。

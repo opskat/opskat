@@ -712,3 +712,56 @@ func TestPluginCallsAfterCloseFailWithErrPluginClosed(t *testing.T) {
 		t.Errorf("Lease after Close: got %v, want ErrPluginClosed", err)
 	}
 }
+
+// An instance serves hundreds of calls inside a fixed linear memory
+// (WithMemoryLimitPages) and is idle between them. A call that grows a large
+// value leaves it all as garbage; unless the guest collects it at the call
+// boundary, the next large allocations grow memory instead, and within a few
+// dozen calls the instance runs out of it and traps (wasm error: unreachable,
+// from runtime.throw in mallocgcLarge).
+func TestPluginReclaimsGarbageBetweenCalls(t *testing.T) {
+	Convey("Given the fixture extension on one instance", t, func() {
+		p := newFixturePlugin(t, newRecordedHost(), t.TempDir(), WithMaxInstances(1))
+
+		Convey("calls that each drop several MiB keep succeeding", func() {
+			for i := 0; i < 50; i++ {
+				for _, mb := range []int{6, 2} {
+					out := callTool(t, p, "grow", map[string]any{"mb": mb})
+					So(out["bytes"], ShouldEqual, mb<<20)
+				}
+			}
+		})
+	})
+}
+
+// A call may hold far more than the 64 MiB an instance used to be capped at:
+// a page of large rows, or one large value read whole, is held at once. Under
+// the old cap the allocation could not grow linear memory and the instance
+// trapped (wasm error: unreachable, from runtime.throw in mallocgcLarge).
+func TestPluginInstanceHoldsMoreThan64MiB(t *testing.T) {
+	Convey("Given the fixture extension", t, func() {
+		p := newFixturePlugin(t, newRecordedHost(), t.TempDir(), WithMaxInstances(1))
+
+		Convey("a call that holds 100 MiB at once succeeds", func() {
+			out := callTool(t, p, "hold", map[string]any{"mb": 100})
+			So(out["bytes"], ShouldEqual, 100<<20)
+			So(out["pages"], ShouldEqual, 100<<20/(4<<10))
+		})
+
+		Convey("a call that holds 300 MiB at once succeeds, which a 256 MiB cap could not", func() {
+			if testing.Short() {
+				t.Skip("allocates 300 MiB of guest memory")
+			}
+			out := callTool(t, p, "hold", map[string]any{"mb": 300})
+			So(out["bytes"], ShouldEqual, 300<<20)
+		})
+
+		Convey("a call that holds 600 MiB at once succeeds, which a 512 MiB cap could not", func() {
+			if testing.Short() {
+				t.Skip("allocates 600 MiB of guest memory")
+			}
+			out := callTool(t, p, "hold", map[string]any{"mb": 600})
+			So(out["bytes"], ShouldEqual, 600<<20)
+		})
+	})
+}
