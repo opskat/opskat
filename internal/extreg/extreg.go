@@ -321,7 +321,7 @@ func execTool(l loaded) permission.ExecFunc {
 // guest 给出的 action 必须属于被调用工具在 describe() 里声明的动作（extwire.Tool.Actions，
 // 不是整个扩展的 policies.actions 并集）。集合外的 action——包括空串、带 ':' 想冒充 "动作:资源" 的串——
 // 是 guest 的缺陷：记一条错误，直接 NeedConfirm，既不撞规则也不查 grant，让用户看见
-// 这次调用本身。check_policy 报错同理。这类结果标为 Unreviewable：没有 action / 资源，
+// 这次调用本身。check_policy 报错同理。这类结果标上 UnreviewableReason（unclassified）：没有 action / 资源，
 // 审核器无从判断，辅助审批问人，Autopilot 拒绝。
 //
 // 工具拒绝这次调用的参数（SDK 的 RejectArgs，guest 答 {"reject"}）则不是缺陷而是结论：
@@ -344,7 +344,7 @@ func policyCheck(l loaded, assetType string) permission.PolicyCheckFunc {
 				Decision: aictx.NeedConfirm,
 				Message: aipolicy.PolicyMsg(ctx, "the extension could not classify this command (its policy check failed or named an action the tool does not declare), so no rule can match it",
 					"扩展没能对这条命令分类（策略检查出错或给出了工具未声明的动作），没有规则能匹配它"),
-				Unreviewable: true,
+				UnreviewableReason: aictx.ReviewReasonUnclassified,
 			}
 		}
 		action, resources := call.action, call.resources

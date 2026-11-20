@@ -22,8 +22,9 @@ import (
 //
 // 规则已经放行或拒绝的结果原样保留。需要审核的命令一次交给审核端口（见 Reviewer）；shell
 // 命令送审前先限长，并判断是否既解码又执行代码，是就不送审（见 reviewRequestFor）。
-// 标为 Unreviewable 的结果和还会从管道读入内容（PipedInput）的命令只能由人判断，不交给
-// 模型：辅助审批照常问人，Autopilot 直接拒绝。
+// 标上 UnreviewableReason 的结果和还会从管道读入内容（PipedInput）的命令只能由人判断，不交给
+// 模型：辅助审批照常问人，Autopilot 直接拒绝。不送审的命令都记为 ReviewSkipped 并写明原因，
+// 审批弹窗与审计据此说明为什么没有模型审核（issue #384）。
 // 没有注入审核端口时，需要审核的命令按审核失败处理（见 SetReviewer）。
 func applyReviews(ctx context.Context, reqs []PermissionRequest, results []aictx.CheckResult) {
 	var idx []int
@@ -37,15 +38,13 @@ func applyReviews(ctx context.Context, reqs []PermissionRequest, results []aictx
 		if !reviewedMode(mode) {
 			continue
 		}
-		if r.Unreviewable {
-			if mode == policyent.PermissionModeAutopilot {
-				results[i] = aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceAutopilotDeny, Message: unreviewableDenyMessage(ctx, r.Message)}
-			}
-			continue
-		}
-		if reqs[i].PipedInput {
-			if mode == policyent.PermissionModeAutopilot {
-				results[i] = aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceAutopilotDeny, Message: pipedInputDenyMessage(ctx)}
+		if reason := skipReason(r, reqs[i]); reason != "" {
+			logger.Ctx(ctx).Info("command not sent for review", zap.Int64("assetID", reqs[i].AssetID),
+				zap.String("assetType", reqs[i].AssetType), zap.String("reason", reason))
+			results[i] = applyReview(ctx, reqs[i], r, &aictx.ReviewInfo{Mode: mode, Outcome: aictx.ReviewSkipped, Reason: reason})
+			if results[i].Decision == aictx.Deny && r.Message != "" {
+				// 规则层的说明（具体的语法错误等）告诉调用方怎么改，放在前面
+				results[i].Message = policy.PolicyFmt(ctx, "%s. %s", "%s。%s", strings.TrimRight(r.Message, ".。"), results[i].Message)
 			}
 			continue
 		}
@@ -70,9 +69,9 @@ func applyReviews(ctx context.Context, reqs []PermissionRequest, results []aictx
 
 // reviewRequestFor 是 req 交给审核端口的请求：原命令原样送审，不改写也不追加。shell 写法的
 // 命令按资产的 shellDialect 定写法（POSIX 为 shell，声明了 PowerShell 的 SSH 资产为 powershell），
-// 并先限长再判断：超过上限（shelldecode / pwshdecode 的 MaxCommandBytes）的不解析，按过长失败；
-// 既解码又执行代码的（DecodesAndRuns）把要执行的内容藏在解码后面，审核器看不到，按 undecodable 失败；
-// 解析不了的按 unparseable 失败。失败时按模式落成结果（辅助审批问人、Autopilot 拒绝），不送审。
+// 并先限长再判断：超过上限（shelldecode / pwshdecode 的 MaxCommandBytes）的不解析，原因为 too_long；
+// 既解码又执行代码的（DecodesAndRuns）把要执行的内容藏在解码后面，审核器看不到，原因为 undecodable；
+// 解析不了的原因为 unparseable。这些都不送审，记为 ReviewSkipped，按模式落成结果（辅助审批问人、Autopilot 拒绝）。
 // send 为假时 final 就是这条命令的结果。
 func reviewRequestFor(ctx context.Context, req PermissionRequest, result aictx.CheckResult, mode string) (review ReviewRequest, final aictx.CheckResult, send bool) {
 	assetType, syntax, reviewRaw := reviewTypeFor(req.AssetType)
@@ -100,7 +99,18 @@ func reviewRequestFor(ctx context.Context, req PermissionRequest, result aictx.C
 	}
 	logger.Ctx(ctx).Warn("command not sent for review", zap.Int64("assetID", req.AssetID), zap.String("assetType", assetType),
 		zap.String("reason", reason), zap.Int("length", len(req.Command)), zap.Error(err))
-	return review, applyReview(ctx, req, result, &aictx.ReviewInfo{Mode: mode, Outcome: aictx.ReviewFail, Reason: reason}), false
+	return review, applyReview(ctx, req, result, &aictx.ReviewInfo{Mode: mode, Outcome: aictx.ReviewSkipped, Reason: reason}), false
+}
+
+// skipReason 是一条原本要问人的命令不送审的原因；为空时送审。规则层给出的原因优先。
+func skipReason(result aictx.CheckResult, req PermissionRequest) string {
+	if result.UnreviewableReason != "" {
+		return result.UnreviewableReason
+	}
+	if req.PipedInput {
+		return aictx.ReviewReasonPipedInput
+	}
+	return ""
 }
 
 // applyReview 把一条审核结果按模式（info.Mode）落成权限结果。
@@ -206,22 +216,6 @@ func autopilotDenyMessage(ctx context.Context, info *aictx.ReviewInfo) string {
 		summary, policy.PolicyMsg(ctx, next.en, next.zh))
 }
 
-// unreviewableDenyMessage 是 Autopilot 拒绝一条只能由人判断的命令时返回给调用方的原因，
-// reason 是规则层给出的说明（如"策略无法逐条校验其中的子命令，请修正命令语法后重试"）。
-func unreviewableDenyMessage(ctx context.Context, reason string) string {
-	return policy.PolicyFmt(ctx,
-		"%s. Autopilot does not send a command the policy cannot check to the model review; the command was not executed.",
-		"%s。Autopilot 不会把规则无法检查的命令交给模型审核，命令没有执行。",
-		reason)
-}
-
-// pipedInputDenyMessage 是 Autopilot 拒绝一条还会从管道读入内容的命令时返回给调用方的原因。
-func pipedInputDenyMessage(ctx context.Context) string {
-	return policy.PolicyMsg(ctx,
-		"The command also reads piped input, which the model review cannot see, so Autopilot does not run it; the command was not executed. If nothing needs to be piped in, redirect stdin from /dev/null (< /dev/null); to upload a file, use opsctl cp; otherwise leave the command to the user.",
-		"命令还会从管道读入内容，模型审核看不到这部分，Autopilot 不会执行，命令没有执行。没有要传的内容就把 stdin 重定向到 /dev/null（< /dev/null）；要上传文件用 opsctl cp；否则把命令留给用户处理。")
-}
-
 // reviewTypeFor 返回交给模型审核的资产类型和命令写法。调用方可能传别名（opsctl exec 传的是
 // 审批类型 exec、sql），这里统一换成注册时的规范类型：模型看到的是真实的资产类型，缓存键也
 // 不会因入口不同而分成几份。没有注册的类型（扩展类型）原样使用，按纯文本处理。
@@ -244,6 +238,8 @@ func ReviewSummary(ctx context.Context, info *aictx.ReviewInfo) string {
 		}
 		return policy.PolicyFmt(ctx, "Model review did not pass (%s)", "模型审核未通过（%s）",
 			strings.Join(labels, policy.PolicyMsg(ctx, ", ", "、")))
+	case aictx.ReviewSkipped:
+		return policy.PolicyFmt(ctx, "Not sent for model review (%s)", "未送模型审核（%s）", reviewFailReason(ctx, info.Reason))
 	default:
 		return policy.PolicyFmt(ctx, "Model review failed (%s)", "模型审核失败（%s）", reviewFailReason(ctx, info.Reason))
 	}
@@ -271,7 +267,7 @@ func reviewFailReason(ctx context.Context, reason string) string {
 // bilingual 是一句中英对照的话，按调用方的语言取（policy.PolicyMsg）。
 type bilingual struct{ en, zh string }
 
-// failReasonText 是一种审核失败原因的说明，以及 Autopilot 拒绝时告诉调用方的下一步。
+// failReasonText 是一种审核失败、不送审原因的说明，以及 Autopilot 拒绝时告诉调用方的下一步。
 type failReasonText struct{ label, next bilingual }
 
 var (
@@ -281,9 +277,10 @@ var (
 		"Retrying will not help until the user fixes the command review settings; leave the command to the user.",
 		"用户修正命令审核的设置之前重试也不会成功，把命令留给用户处理。",
 	}
+	leaveToUser = bilingual{"Only the user can decide on this command; leave it to the user.", "这条命令只能由用户决定，把它留给用户处理。"}
 )
 
-// failReasons 是各种审核失败原因的说明和下一步。只有临时性的原因（超时、服务不可用）才让
+// failReasons 是各种审核失败、不送审原因的说明和下一步。只有临时性的原因（超时、服务不可用）才让
 // 调用方稍后重试；命令过长、无法解析和设置问题原样重试结果一样，要告诉它该怎么改，或者留给用户。
 var failReasons = map[string]failReasonText{
 	aictx.ReviewReasonNoReviewer:    {bilingual{"no command review extension is available", "没有可用的命令审核扩展"}, fixSettings},
@@ -302,6 +299,20 @@ var failReasons = map[string]failReasonText{
 	aictx.ReviewReasonUndecodable: {bilingual{"the command hides the code it runs behind decoding", "命令把要执行的内容藏在解码后面"}, bilingual{
 		"Retrying it as-is gives the same result: send the script itself instead of wrapping it so it can be reviewed, or leave the command to the user.",
 		"原样重试结果一样，把要执行的脚本直接写出来再送审，或者把命令留给用户处理。",
+	}},
+	aictx.ReviewReasonPolicyUnparseable: {bilingual{"the policy cannot split the command into sub-commands", "规则拆不开这条命令"}, bilingual{
+		"Retrying it as-is gives the same result: fix the command syntax first, or leave the command to the user.",
+		"原样重试结果一样，先修正命令语法，或者把命令留给用户处理。",
+	}},
+	aictx.ReviewReasonNoCommand: {bilingual{"no command to run was recognized", "没有识别出要执行的命令"}, bilingual{
+		"Retrying it as-is gives the same result: fix the command first, or leave it to the user.",
+		"原样重试结果一样，先修正命令，或者把命令留给用户处理。",
+	}},
+	aictx.ReviewReasonSecretValue:  {bilingual{"reading a secret value needs the user's confirmation", "读取密文只能由用户确认"}, leaveToUser},
+	aictx.ReviewReasonUnclassified: {bilingual{"the extension could not classify the command", "扩展没能给命令分类"}, leaveToUser},
+	aictx.ReviewReasonPipedInput: {bilingual{"the command also reads piped input, which the review cannot see", "命令还要从管道读入内容，审核器看不到"}, bilingual{
+		"If nothing needs to be piped in, pass -n to opsctl exec or redirect stdin from /dev/null (< /dev/null); to upload a file, use opsctl cp; otherwise leave the command to the user.",
+		"没有要传的内容就给 opsctl exec 加 -n，或把 stdin 重定向到 /dev/null（< /dev/null）；要上传文件用 opsctl cp；否则把命令留给用户处理。",
 	}},
 	aictx.ReviewReasonReviewerUnavailable: {bilingual{"the selected review extension is unavailable", "选中的审核扩展不可用"}, fixSettings},
 	aictx.ReviewReasonInvalidResult: {bilingual{"the review extension returned an invalid result", "审核扩展返回了无效的结果"}, bilingual{

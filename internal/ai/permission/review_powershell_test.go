@@ -74,7 +74,7 @@ func TestPowerShellSSHPermissionAndReview(t *testing.T) {
 		require.Equal(t, aictx.Deny, r.Decision)
 		require.Equal(t, aictx.SourceAutopilotDeny, r.DecisionSource)
 		require.NotNil(t, r.Review)
-		require.Equal(t, aictx.ReviewFail, r.Review.Outcome)
+		require.Equal(t, aictx.ReviewSkipped, r.Review.Outcome)
 		require.Equal(t, aictx.ReviewReasonUndecodable, r.Review.Reason)
 		require.Empty(t, f.calls)
 	})

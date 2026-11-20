@@ -53,9 +53,10 @@ type CheckResult struct {
 	DecisionSource string      // 决策来源（SourcePolicyAllow 等常量）
 	MatchedPattern string      // 匹配的命令模式
 	Review         *ReviewInfo // 模型审核结果；没有审核时为 nil
-	// Unreviewable 表示这条"需要人确认"只能由人判断，不交给模型审核：规则没法逐条检查它
-	// （如拆不出执行单元的 shell 命令），模型放行它就等于绕过了禁止规则。
-	Unreviewable bool
+	// UnreviewableReason 不为空时，这条"需要人确认"只能由人判断，不交给模型审核，值是原因
+	// （ReviewReasonPolicyUnparseable 等）：规则没法逐条检查它（如拆不出执行单元的 shell 命令），
+	// 模型放行它就等于绕过了禁止规则。审核时按这个原因记为没有送审（ReviewSkipped）。
+	UnreviewableReason string
 }
 
 // DecisionString 返回决策的字符串表示（用于审计日志存储）

@@ -67,7 +67,7 @@ func checkGenericPermission(ctx context.Context, assetID int64, subject string) 
 			// 无害，不能据审核结果放行。
 			result := checkPlainGlobPolicy(ctx, asset, subject, matchSecretAllow)
 			if result.Decision == aictx.NeedConfirm {
-				result.Unreviewable = true
+				result.UnreviewableReason = aictx.ReviewReasonSecretValue
 			}
 			return result
 		}

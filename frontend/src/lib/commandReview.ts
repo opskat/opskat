@@ -11,8 +11,8 @@ export type EffectivePermissionMode = Exclude<PermissionMode, "">;
 /** 一次模型审核的结果，对应后端 aictx.ReviewInfo 的 JSON。 */
 export interface ReviewInfo {
   mode: "assisted" | "autopilot"; // 触发审核的权限模式
-  outcome: string; // pass / reject / fail
-  reason?: string; // 审核失败的原因
+  outcome: string; // pass / reject / fail / skipped（没有送审）
+  reason?: string; // 审核失败、没有送审的原因
   failed?: string[]; // 审核未通过时没满足条件的题目
   scores?: Record<string, number>; // 未通过题目回答"是"的概率
   duration_ms?: number;
@@ -34,6 +34,11 @@ const REVIEW_FAIL_REASONS: readonly string[] = [
   "invalid_result",
   "no_reviewer",
   "reviewer_unavailable",
+  "policy_unparseable",
+  "no_command",
+  "secret_value",
+  "unclassified",
+  "piped_input",
 ];
 
 /**
@@ -60,6 +65,8 @@ export function reviewSummary(t: TFunction, review: ReviewInfo, lang: string): s
       .join(t("commandReview.listSeparator"));
     return t("commandReview.summary.reject", { detail });
   }
+  if (review.outcome === "skipped")
+    return t("commandReview.summary.skipped", { detail: failReasonLabel(t, review.reason) });
   return t("commandReview.summary.fail", { detail: failReasonLabel(t, review.reason) });
 }
 

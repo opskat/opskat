@@ -860,6 +860,24 @@ func TestStressInputsFinishQuickly(t *testing.T) {
 		// 同一命令里写入的文件（修正轮 7）：很多写入、很多参数
 		"written files near the cap":      {cmd: writtenFiles("tmux new"), want: true},
 		"written files read near the cap": {cmd: writtenFiles("cat")},
+		// 循环变量（决定 29）：层层嵌套、名字各不相同的循环，每层循环体都要走一遍
+		"nested loop variables near the cap": {cmd: func() string {
+			const inner = "echo aWQ= | docker exec -i $v0 $b | sh"
+			var b strings.Builder
+			n := 0
+			for {
+				head := fmt.Sprintf("for v%d in $(x); do ", n)
+				if b.Len()+len(head)+len(inner)+len("; done")*(n+1) > MaxCommandBytes {
+					break
+				}
+				b.WriteString(head)
+				n++
+			}
+			b.WriteString(inner)
+			b.WriteString(strings.Repeat("; done", n))
+			return b.String()
+		}(), want: true},
+		"many loop variables near the cap": {cmd: strings.Repeat(`for c in $(x); do docker exec $c sh -c 'ls'; done; `, MaxCommandBytes/len(`for c in $(x); do docker exec $c sh -c 'ls'; done; `))},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
