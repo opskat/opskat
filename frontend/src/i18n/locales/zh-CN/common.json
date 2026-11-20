@@ -1062,6 +1062,14 @@
           "name": "Linux 常用只读",
           "desc": "常用 Linux 只读命令"
         },
+        "windows-readonly": {
+          "name": "Windows 常用只读",
+          "desc": "常用 PowerShell 与 Windows 只读命令"
+        },
+        "windows-dangerous-deny": {
+          "name": "Windows 高危命令拒绝",
+          "desc": "拒绝格式化磁盘、关机与重启"
+        },
         "k8s-readonly": {
           "name": "Kubernetes 只读",
           "desc": "Kubernetes 只读操作命令"
@@ -1173,6 +1181,10 @@
     "sshStartupCommand": "连接后执行命令",
     "sshStartupCommandPlaceholder": "cd /",
     "sshStartupCommandHint": "每次连接（含重连）与每个分屏窗格都会执行；同时开启「重连恢复上次目录」时，在恢复目录之后执行。",
+    "sshShell": "远端 Shell",
+    "sshShellPosix": "POSIX (sh / bash)",
+    "sshShellPowerShell": "PowerShell (Windows)",
+    "sshShellHint": "决定命令策略和模型审核按哪种语法理解命令。Windows SSH 主机请选 PowerShell：规则不区分大小写、认内置别名，新建资产默认使用 Windows 只读与高危拒绝两组规则；方法调用、动态调用等拆不清的写法交给模型审核或人工确认。",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
     "addDescription": "添加备注",
@@ -2479,7 +2491,7 @@
     "sessionPatterns": "会话已允许模式",
     "decisionSources": {
       "assisted": "辅助审批",
-      "autopilot": "自动驾驶",
+      "autopilot": "Autopilot",
       "grant": "授权",
       "policy": "策略",
       "user": "手动审批",

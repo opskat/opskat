@@ -18,6 +18,17 @@ type sshHandler struct{}
 func init() {
 	Register(&sshHandler{})
 	policy.RegisterDefaultPolicy("ssh", func() any { return asset_entity.DefaultCommandPolicy() })
+	policy.RegisterAssetDefaultPolicy(asset_entity.AssetTypeSSH, sshDefaultPolicy)
+}
+
+// sshDefaultPolicy 按远端 shell 给出新建资产（与「恢复默认」）的默认命令策略：PowerShell 资产用
+// Windows 组，其余用 Linux 组。
+func sshDefaultPolicy(_ context.Context, assetConfig string) (any, error) {
+	a := &asset_entity.Asset{Type: asset_entity.AssetTypeSSH, Config: assetConfig}
+	if a.IsPowerShellSSH() {
+		return policy.DefaultPowerShellCommandPolicy(), nil
+	}
+	return asset_entity.DefaultCommandPolicy(), nil
 }
 
 func (h *sshHandler) Type() string     { return asset_entity.AssetTypeSSH }
@@ -37,6 +48,9 @@ func (h *sshHandler) SafeView(a *asset_entity.Asset) map[string]any {
 	if cfg.AuthType == asset_entity.AuthTypeAgent {
 		view["agent_source_id"] = cfg.AgentSourceID
 		view["agent_key_fingerprint"] = cfg.AgentKeyFingerprint
+	}
+	if cfg.Shell != "" {
+		view["shell"] = cfg.Shell
 	}
 	return view
 }
@@ -77,11 +91,27 @@ func (h *sshHandler) ValidateCreateArgs(args map[string]any) error {
 	if err := validateRemoteServerArgs(args); err != nil {
 		return err
 	}
+	if err := validateSSHShellArg(args); err != nil {
+		return err
+	}
 	return validateSSHAgentArgs(args)
 }
 
 func (h *sshHandler) ValidateAutomationConfig(args map[string]any) error {
+	if err := validateSSHShellArg(args); err != nil {
+		return err
+	}
 	return validateSSHAgentArgs(args)
+}
+
+func validateSSHShellArg(args map[string]any) error {
+	shell := ArgString(args, "shell")
+	switch shell {
+	case "", asset_entity.SSHShellPOSIX, asset_entity.SSHShellPowerShell:
+		return nil
+	default:
+		return fmt.Errorf("invalid SSH shell %q (must be %q or %q)", shell, asset_entity.SSHShellPOSIX, asset_entity.SSHShellPowerShell)
+	}
 }
 
 // NormalizeAutomationConfig infers Agent auth from its dedicated identity pair
@@ -162,6 +192,7 @@ func (h *sshHandler) ApplyCreateArgs(ctx context.Context, a *asset_entity.Asset,
 		Username:     ArgString(args, "username"),
 		AuthType:     authType,
 		CredentialID: ArgInt64(args, "credential_id"),
+		Shell:        ArgString(args, "shell"),
 	}
 
 	if authType == asset_entity.AuthTypeAgent {
@@ -211,6 +242,12 @@ func (h *sshHandler) ApplyUpdateArgs(ctx context.Context, a *asset_entity.Asset,
 	}
 	if v := ArgString(args, "username"); v != "" {
 		cfg.Username = v
+	}
+	if _, ok := args["shell"]; ok {
+		if err := validateSSHShellArg(args); err != nil {
+			return err
+		}
+		cfg.Shell = ArgString(args, "shell")
 	}
 	if _, ok := args["credential_id"]; ok {
 		cfg.CredentialID = ArgInt64(args, "credential_id")

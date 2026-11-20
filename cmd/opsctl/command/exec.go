@@ -86,12 +86,13 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// --type 是可选断言：不参与派发（协议永远来自 asset.Type），只把方言写错的情况
 	// 提前变成一条点名双方类型的错误。必须在 requireApproval 之前——它会去问桌面端，
 	// 用户不该为一条注定失败的命令点头。
-	declaredType, scope, argv, err := parseExecArgv(args[1:])
+	opts, argv, err := parseExecArgv(args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n\n", err)
 		printExecUsage()
 		return 1
 	}
+	declaredType, scope := opts.declaredType, opts.scope
 	// 注册了流式执行入口的类型（如通用资产）按 argv 执行：command 串逐个加引号拼成（单个词
 	// 也加），canonicalize / 审批 / 审计看到的与 AI exec 写法一致、且能原样切回 argv。其余类型
 	// 拼成一整条命令（joinCommandWords：单个词原样，多词按类型决定引号策略）。
@@ -164,9 +165,10 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	// ssh 资产与注册了流式入口的类型（通用资产：命令方式透传 stdin，HTTP 的 -d @- 读 stdin）
 	// 会把 stdin 交给要执行的命令。在审批之前判断：管道里的内容模型审核看不到，有的话不能
 	// 靠审核放行（PipedInput）。资产没开模型审核时不预读，和原来一样直接转发。
+	// 调用方显式传入 -n / --no-stdin 时不读取也不转发 stdin（避免子进程开着空管道时误判）。
 	var stdin io.Reader
 	var pipedInput bool
-	if asset.IsSSH() || streaming {
+	if (asset.IsSSH() || streaming) && !opts.noStdin {
 		var wait time.Duration
 		if permission.ReviewsCommands(ctx, asset.ID) {
 			wait = stdinPeekWait
@@ -207,8 +209,10 @@ func cmdExec(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 	}
 	if streaming {
 		// 没有管道内容时（终端、空设备）仍交出 os.Stdin：命令方式的自定义命令可能要在终端里
-		// 交互，终端输入是人敲的，不是绕过审核的管道内容。
-		if stdin == nil {
+		// 交互，终端输入是人敲的，不是绕过审核的管道内容；显式 --no-stdin 时改交空输入。
+		if opts.noStdin {
+			stdin = strings.NewReader("")
+		} else if stdin == nil {
 			stdin = os.Stdin
 		}
 		return execRegisteredStream(ctx, auditCtx, asset, stream, argv, stdin, argsJSON, approvalResult)
@@ -344,7 +348,7 @@ func driverTypeNames() string {
 
 func printExecUsage() {
 	fmt.Fprint(os.Stderr, `Usage:
-  opsctl exec <asset> [--type <type>] [--scope <db|host:port>] [--] <command>
+  opsctl exec <asset> [--type <type>] [--scope <db|host:port>] [-n | --no-stdin] [--] <command>
 
 Arguments:
   asset       Asset name or numeric ID
@@ -406,6 +410,9 @@ Flags:
                   ignores scope). Missing/invalid scope on a cluster command
                   that needs one exits 1 and lists the current master
                   addresses on stderr.
+  -n, --no-stdin  Do not read or forward stdin to the remote command (like
+                  ssh -n). Useful when invoking opsctl from a runner that keeps
+                  an open stdin pipe so model review is not bypassed.
 
 Pipe Support (ssh assets only):
   If stdin is not a terminal (i.e., data is piped in), it is forwarded to the

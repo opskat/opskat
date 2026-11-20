@@ -134,6 +134,52 @@ func init() {
 				},
 			}),
 		},
+		// Windows 组给远端 shell 为 PowerShell 的 SSH 资产（DefaultPowerShellCommandPolicy）。规则按
+		// PowerShell 语义匹配（不区分大小写、认内置别名）；ForEach-Object 等接脚本块的命令放行与否取决于
+		// 块里的每条命令，ForEach-Object 按名字调用方法的写法不会被放行（policy.ParsePowerShellCommand）。
+		&PolicyGroup{
+			BuiltinID:   policy.BuiltinWindowsReadOnly,
+			Name:        "Windows Read-Only",
+			Description: "Common PowerShell and Windows read-only commands",
+			PolicyType:  PolicyTypeCommand,
+			Policy: mustMarshal(&policy.CommandPolicy{
+				AllowList: []string{
+					// 文件与注册表
+					"Get-ChildItem *", "Get-Item *", "Get-ItemProperty *", "Get-ItemPropertyValue *",
+					"Get-Content *", "Get-Location", "Get-Acl *", "Get-FileHash *", "Test-Path *",
+					"Select-String *", "Get-PSDrive *", "Get-Volume *", "Get-Disk *", "Get-PhysicalDisk *", "Get-Partition *",
+					// 进程、服务、事件与系统信息
+					"Get-Process *", "Get-Service *", "Get-WinEvent *", "Get-EventLog *", "Get-Counter *",
+					"Get-CimInstance *", "Get-WmiObject *", "Get-ComputerInfo *", "Get-HotFix *",
+					"Get-ScheduledTask *", "Get-ScheduledTaskInfo *", "Get-LocalUser *", "Get-LocalGroup *",
+					"Get-LocalGroupMember *", "Get-Date *", "Get-TimeZone *", "Get-Culture", "Get-Uptime *",
+					"Get-Command *", "Get-Module *", "Get-Host",
+					// 网络
+					"Get-NetIPAddress *", "Get-NetIPConfiguration *", "Get-NetAdapter *", "Get-NetRoute *",
+					"Get-NetTCPConnection *", "Get-NetUDPEndpoint *", "Get-NetFirewallRule *", "Get-DnsClientServerAddress *",
+					"Get-SmbShare *", "Resolve-DnsName *", "Test-Connection *", "Test-NetConnection *",
+					// 管道里的整理与输出
+					"Where-Object *", "ForEach-Object *", "Select-Object *", "Sort-Object *", "Group-Object *",
+					"Measure-Object *", "Compare-Object *", "Format-Table *", "Format-List *", "Format-Wide *",
+					"Out-String *", "ConvertTo-Json *", "ConvertTo-Csv *", "ConvertFrom-Json *", "Write-Output *",
+					// Windows 自带的只读程序
+					"whoami *", "hostname", "ipconfig", "ipconfig /all", "netstat *", "systeminfo *", "tasklist *",
+				},
+			}),
+		},
+		&PolicyGroup{
+			BuiltinID:   policy.BuiltinWindowsDangerousDeny,
+			Name:        "Windows Dangerous Command Deny",
+			Description: "Deny formatting disks and shutting down or restarting Windows",
+			PolicyType:  PolicyTypeCommand,
+			Policy: mustMarshal(&policy.CommandPolicy{
+				DenyList: []string{
+					"Format-Volume *", "Clear-Disk *", "Initialize-Disk *", "Remove-Partition *",
+					"Stop-Computer *", "Restart-Computer *",
+					"format *", "diskpart *", "shutdown *", "bcdedit *",
+				},
+			}),
+		},
 		&PolicyGroup{
 			BuiltinID:   policy.BuiltinK8sReadOnly,
 			Name:        "Kubernetes Read-Only",

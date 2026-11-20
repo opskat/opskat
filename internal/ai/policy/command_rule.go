@@ -277,6 +277,11 @@ func matchGlobPattern(pattern, value string) bool {
 
 // AllSubCommandsAllowed 检查所有子命令是否都匹配 allow 规则，返回是否全部匹配及命中的规则
 func AllSubCommandsAllowed(subCmds []string, allowRules []string) (bool, string) {
+	return AllSubCommandsAllowedWith(subCmds, allowRules, MatchCommandRule)
+}
+
+// AllSubCommandsAllowedWith 同 AllSubCommandsAllowed，按 match 匹配规则。
+func AllSubCommandsAllowedWith(subCmds []string, allowRules []string, match MatchFunc) (bool, string) {
 	if len(allowRules) == 0 {
 		return false, ""
 	}
@@ -284,7 +289,7 @@ func AllSubCommandsAllowed(subCmds []string, allowRules []string) (bool, string)
 	for _, cmd := range subCmds {
 		matched := false
 		for _, rule := range allowRules {
-			if MatchCommandRule(rule, cmd) {
+			if match(rule, cmd) {
 				matched = true
 				matchedRules[rule] = struct{}{}
 				break

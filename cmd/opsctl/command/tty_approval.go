@@ -81,8 +81,8 @@ func envPolicyLangCtx() context.Context {
 // 派生策略串都发生在那里，origin 恒为 GrantOriginSystem）；扩展资产上
 // 分类成功的调用是 <action>[:<resource-glob>] 规则——扩展规则落点只收这种形状，整条
 // 命令写不进去；分类失败的扩展调用没有主体。
-func approvalSubjects(req approval.ApprovalRequest) []string {
-	return permission.ApprovalRuleSubjects(ttyApprovalFace(req), permission.ApprovalItemOfRequest(req))
+func approvalSubjects(ctx context.Context, req approval.ApprovalRequest) []string {
+	return permission.ApprovalRuleSubjects(ctx, ttyApprovalFace(req), permission.ApprovalItemOfRequest(req))
 }
 
 // ttyApprovalFace 返回这次审批的方向化审批面：CheckType 优先（cp 的单端点审批由
@@ -119,9 +119,9 @@ func writeTerminalApprovalRule(ctx context.Context, req approval.ApprovalRequest
 // 供调用方照常落审计；MatchedPattern 记归一化后的主体。
 func runTTYApproval(ctx context.Context, req approval.ApprovalRequest, in io.Reader, out io.Writer) (ApprovalResult, error) {
 	face := ttyApprovalFace(req)
-	patterns := approvalSubjects(req)
+	patterns := approvalSubjects(ctx, req)
 	// 没有规则能落（分类失败的扩展调用）时只给本次允许/拒绝，与桌面端弹窗同一判定。
-	kind := permission.ApprovalKindForItem(face, permission.ApprovalItemOfRequest(req))
+	kind := permission.ApprovalKindForItem(ctx, face, permission.ApprovalItemOfRequest(req))
 	matched := strings.Join(patterns, ", ")
 
 	log := logger.Ctx(ctx).With(
@@ -185,15 +185,15 @@ func runTTYBatchApproval(ctx context.Context, items []approval.BatchItem, in io.
 	return ApprovalResult{
 		Decision:       aictx.Allow,
 		DecisionSource: aictx.SourceUserAllow,
-		MatchedPattern: truncateStr(batchApprovalSubjects(items), 200),
+		MatchedPattern: truncateStr(batchApprovalSubjects(ctx, items), 200),
 	}, nil
 }
 
 // batchApprovalSubjects 汇聚整批的可授权主体，供审计的 MatchedPattern 记录。
-func batchApprovalSubjects(items []approval.BatchItem) string {
+func batchApprovalSubjects(ctx context.Context, items []approval.BatchItem) string {
 	parts := make([]string, 0, len(items))
 	for _, item := range items {
-		parts = append(parts, strings.Join(batchItemSubjects(item), ", "))
+		parts = append(parts, strings.Join(batchItemSubjects(ctx, item), ", "))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -201,8 +201,8 @@ func batchApprovalSubjects(items []approval.BatchItem) string {
 // batchItemSubjects 是批量审批里一条的可授权主体，与单条审批同一个来源
 // （permission.ApprovalRuleSubjects，审批面即条目的审批类型）：内置类型是归一化后的
 // 命令，扩展资产上分类成功的调用是 <action>[:<resource-glob>] 规则。
-func batchItemSubjects(item approval.BatchItem) []string {
-	return permission.ApprovalRuleSubjects(item.Type, permission.ApprovalItemOfBatchItem(item))
+func batchItemSubjects(ctx context.Context, item approval.BatchItem) []string {
+	return permission.ApprovalRuleSubjects(ctx, item.Type, permission.ApprovalItemOfBatchItem(item))
 }
 
 // readTTYChoice 反复渲染提示并读取一行输入，直到得到白名单内的决策或一个终止性
@@ -309,7 +309,7 @@ func renderTTYBatchPrompt(ctx context.Context, items []approval.BatchItem, out i
 	for i, item := range items {
 		fmt.Fprintf(out, "  %d. %s\n", i+1, assetIdentity(item.AssetName, item.AssetID, item.Type)) //nolint:errcheck // 终端呈现尽力而为
 		renderTTYClassification(ctx, "      ", item.Action, item.Resources, out)
-		for _, p := range batchItemSubjects(item) {
+		for _, p := range batchItemSubjects(ctx, item) {
 			fmt.Fprintf(out, "      - %s\n", p) //nolint:errcheck // 终端呈现尽力而为
 		}
 		if item.Detail != "" {

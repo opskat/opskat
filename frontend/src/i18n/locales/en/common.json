@@ -1062,6 +1062,14 @@
           "name": "Linux Read-Only",
           "desc": "Common Linux read-only commands"
         },
+        "windows-readonly": {
+          "name": "Windows Read-Only",
+          "desc": "Common PowerShell and Windows read-only commands"
+        },
+        "windows-dangerous-deny": {
+          "name": "Windows Dangerous Command Deny",
+          "desc": "Deny formatting disks and shutting down or restarting Windows"
+        },
         "k8s-readonly": {
           "name": "Kubernetes Read-Only",
           "desc": "Kubernetes read-only commands"
@@ -1173,6 +1181,10 @@
     "sshStartupCommand": "Run command after connecting",
     "sshStartupCommandPlaceholder": "cd /",
     "sshStartupCommandHint": "Runs on every connect and reconnect, and in every split pane. With “Restore last directory on reconnect” enabled it runs after the directory is restored.",
+    "sshShell": "Remote Shell",
+    "sshShellPosix": "POSIX (sh / bash)",
+    "sshShellPowerShell": "PowerShell (Windows)",
+    "sshShellHint": "Which syntax command policies and model review use to read commands. Pick PowerShell for Windows SSH hosts: rules then ignore case and understand built-in aliases, and new assets start with the Windows read-only and dangerous-command groups. Method calls, dynamic invocation and other code the rules cannot take apart go to model review or to you.",
     "tabSchemaRegistry": "Schema Registry",
     "tabConnect": "Connect",
     "addDescription": "Add description",

@@ -87,7 +87,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
     try {
       const defaultJSON = def?.policy?.loadDefault
         ? await def.policy.loadDefault(asset)
-        : await GetDefaultPolicy(asset.Type);
+        : await GetDefaultPolicy(asset.Type, asset.Config);
       const parsed = JSON.parse(defaultJSON);
       const groups = parsed.groups || [];
       const fields: Record<string, string[]> = {};

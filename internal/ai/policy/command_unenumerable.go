@@ -46,10 +46,19 @@ func DecideUnenumerableShell(ctx context.Context, command string, parseErr error
 			MatchedPattern: denyRules[i],
 		}
 	}
-	if i := slices.IndexFunc(allowRules, isWildcardAll); i >= 0 && len(denyRules) == 0 {
-		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow, MatchedPattern: allowRules[i]}
+	if allow, ok := WildcardAllowWithoutDeny(allowRules, denyRules); ok {
+		return allow
 	}
 	return aictx.CheckResult{Decision: aictx.NeedConfirm, Message: unenumerableShellMessage(ctx, parseErr), Unreviewable: true}
+}
+
+// WildcardAllowWithoutDeny 是子命令没拆全时 allow 侧唯一能下的结论：存在独立 allow "*" 且没有
+// 任何 deny 规则时放行（配置它就是显式选择全权限）。
+func WildcardAllowWithoutDeny(allowRules, denyRules []string) (aictx.CheckResult, bool) {
+	if i := slices.IndexFunc(allowRules, isWildcardAll); i >= 0 && len(denyRules) == 0 {
+		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow, MatchedPattern: allowRules[i]}, true
+	}
+	return aictx.CheckResult{}, false
 }
 
 func unenumerableShellMessage(ctx context.Context, parseErr error) string {

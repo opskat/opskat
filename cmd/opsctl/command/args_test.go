@@ -59,41 +59,47 @@ func TestHoistGlobalFlags(t *testing.T) {
 
 func TestParseExecArgv(t *testing.T) {
 	cases := []struct {
-		name      string
-		args      []string
-		wantType  string
-		wantScope string
-		wantCmd   string
+		name        string
+		args        []string
+		wantType    string
+		wantScope   string
+		wantNoStdin bool
+		wantCmd     string
 	}{
-		{"-- 分隔", []string{"--", "echo", "hi"}, "", "", "echo hi"},
-		{"无 --", []string{"uptime", "-a"}, "", "", "uptime -a"},
-		{"--type 断言", []string{"--type", "ssh", "--", "ls"}, "ssh", "", "ls"},
-		{"--type= 形式", []string{"--type=redis", "GET", "k"}, "redis", "", "GET k"},
-		{"远端命令里的 --type 属于命令（无 --）", []string{"find", "/", "--type", "f"}, "", "", "find / --type f"},
-		{"-- 之后的 -- 属于命令", []string{"--", "echo", "--", "x"}, "", "", "echo -- x"},
-		{"--scope 断言", []string{"--scope", "10.0.0.1:6379", "--", "DBSIZE"}, "", "10.0.0.1:6379", "DBSIZE"},
-		{"--scope= 形式", []string{"--scope=0", "GET", "k"}, "", "0", "GET k"},
-		{"--type 与 --scope 混写", []string{"--type", "redis", "--scope", "1", "--", "GET", "k"}, "redis", "1", "GET k"},
-		{"远端命令里的 --scope 属于命令（无 --）", []string{"find", "/", "--scope", "f"}, "", "", "find / --scope f"},
+		{"-- 分隔", []string{"--", "echo", "hi"}, "", "", false, "echo hi"},
+		{"无 --", []string{"uptime", "-a"}, "", "", false, "uptime -a"},
+		{"--type 断言", []string{"--type", "ssh", "--", "ls"}, "ssh", "", false, "ls"},
+		{"--type= 形式", []string{"--type=redis", "GET", "k"}, "redis", "", false, "GET k"},
+		{"远端命令里的 --type 属于命令（无 --）", []string{"find", "/", "--type", "f"}, "", "", false, "find / --type f"},
+		{"-- 之后的 -- 属于命令", []string{"--", "echo", "--", "x"}, "", "", false, "echo -- x"},
+		{"--scope 断言", []string{"--scope", "10.0.0.1:6379", "--", "DBSIZE"}, "", "10.0.0.1:6379", false, "DBSIZE"},
+		{"--scope= 形式", []string{"--scope=0", "GET", "k"}, "", "0", false, "GET k"},
+		{"--type 与 --scope 混写", []string{"--type", "redis", "--scope", "1", "--", "GET", "k"}, "redis", "1", false, "GET k"},
+		{"远端命令里的 --scope 属于命令（无 --）", []string{"find", "/", "--scope", "f"}, "", "", false, "find / --scope f"},
+		{"--no-stdin 标志", []string{"--no-stdin", "--", "uptime"}, "", "", true, "uptime"},
+		{"-n 短标志", []string{"-n", "--type", "ssh", "--", "uptime"}, "ssh", "", true, "uptime"},
+		{"远端命令里的 -n 属于命令（无 --）", []string{"echo", "-n", "hi"}, "", "", false, "echo -n hi"},
+		{"-- 之后的 --no-stdin 属于命令", []string{"--", "tool", "--no-stdin"}, "", "", false, "tool --no-stdin"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			declared, scope, argv, err := parseExecArgv(tc.args)
+			opts, argv, err := parseExecArgv(tc.args)
 			require.NoError(t, err)
-			require.Equal(t, tc.wantType, declared)
-			require.Equal(t, tc.wantScope, scope)
+			require.Equal(t, tc.wantType, opts.declaredType)
+			require.Equal(t, tc.wantScope, opts.scope)
+			require.Equal(t, tc.wantNoStdin, opts.noStdin)
 			require.Equal(t, tc.wantCmd, strings.Join(argv, " "))
 		})
 	}
 
 	t.Run("命令前的未知 flag 报错，而不是静默丢弃或发往远端", func(t *testing.T) {
-		_, _, _, err := parseExecArgv([]string{"--bogus", "1", "--", "ls"})
+		_, _, err := parseExecArgv([]string{"--bogus", "1", "--", "ls"})
 		require.ErrorContains(t, err, "--bogus")
-		_, _, _, err = parseExecArgv([]string{"--bogus", "ls"})
+		_, _, err = parseExecArgv([]string{"--bogus", "ls"})
 		require.ErrorContains(t, err, "--bogus")
 	})
 	t.Run("--type 缺值报错", func(t *testing.T) {
-		_, _, _, err := parseExecArgv([]string{"--type"})
+		_, _, err := parseExecArgv([]string{"--type"})
 		require.ErrorContains(t, err, "--type")
 	})
 	t.Run("本地 shell 吃掉的词边界在下游重新切分后仍在", func(t *testing.T) {
@@ -121,13 +127,13 @@ func TestParseExecArgv(t *testing.T) {
 		require.Equal(t, "request --path='/x?a=1&b=2'", joinCommandWords([]string{"request --path='/x?a=1&b=2'"}, true))
 	})
 	t.Run("--scope 缺值报错", func(t *testing.T) {
-		_, _, _, err := parseExecArgv([]string{"--scope"})
+		_, _, err := parseExecArgv([]string{"--scope"})
 		require.ErrorContains(t, err, "--scope")
 	})
 	t.Run("没有命令时报错", func(t *testing.T) {
-		_, _, _, err := parseExecArgv([]string{"--"})
+		_, _, err := parseExecArgv([]string{"--"})
 		require.Error(t, err)
-		_, _, _, err = parseExecArgv(nil)
+		_, _, err = parseExecArgv(nil)
 		require.Error(t, err)
 	})
 

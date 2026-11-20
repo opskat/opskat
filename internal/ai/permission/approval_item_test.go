@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -69,7 +70,7 @@ func TestApprovalRuleSubjects(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			registerClassifiedExtType(t, tc.resources...)
 			item := ApprovalItemFor(ctx, 3, "es-logs", extEditTestType, extItemCommand)
-			assert.Equal(t, tc.want, ApprovalRuleSubjects(extEditTestType, item))
+			assert.Equal(t, tc.want, ApprovalRuleSubjects(context.Background(), extEditTestType, item))
 		})
 	}
 
@@ -81,11 +82,13 @@ func TestApprovalRuleSubjects(t *testing.T) {
 			func(context.Context, string) (ExtensionClassification, bool) { return ExtensionClassification{}, false }))
 		t.Cleanup(func() { UnregisterPolicyCheck(extEditTestType) })
 		item := ApprovalItemFor(ctx, 3, "es-logs", extEditTestType, extItemCommand)
-		assert.Empty(t, ApprovalRuleSubjects(extEditTestType, item))
+		assert.Empty(t, ApprovalRuleSubjects(context.Background(), extEditTestType, item))
 	})
 
 	t.Run("built-in types keep their normalized subjects", func(t *testing.T) {
+		_, mockRepo, _ := setupPolicyTest(t)
+		mockRepo.EXPECT().Find(gomock.Any(), int64(3)).Return(&asset_entity.Asset{ID: 3, Type: asset_entity.AssetTypeSSH}, nil).AnyTimes()
 		item := ApprovalItemFor(ctx, 3, "web-1", "exec", "echo hi; echo bye")
-		assert.Equal(t, []string{"echo hi", "echo bye"}, ApprovalRuleSubjects("exec", item))
+		assert.Equal(t, []string{"echo hi", "echo bye"}, ApprovalRuleSubjects(context.Background(), "exec", item))
 	})
 }

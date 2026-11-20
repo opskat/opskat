@@ -168,7 +168,7 @@ func TestGenericGrantPatterns(t *testing.T) {
 		"a system-derived subject is one concrete request; its glob metacharacters are literal")
 	assert.Equal(t, []string{"GET /api/*"}, NormalizeGrantPatterns("generic", "GET /api/*", GrantOriginUser),
 		"a user-written wildcard is the grant scope the user asked for")
-	assert.Equal(t, ApprovalKindSingle, ApprovalKindFor("generic", "GET /api/x"))
+	assert.Equal(t, ApprovalKindSingle, ApprovalKindFor(context.Background(), 0, "generic", "GET /api/x"))
 	assert.True(t, TypeRulesSupported(asset_entity.AssetTypeGeneric), "opsctl policy allow must land generic rules")
 }
 

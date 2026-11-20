@@ -12,7 +12,6 @@ import (
 	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	policyent "github.com/opskat/opskat/internal/model/entity/policy"
-	"github.com/opskat/opskat/internal/pkg/shelldecode"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 )
 
@@ -70,8 +69,9 @@ func applyReviews(ctx context.Context, reqs []PermissionRequest, results []aictx
 }
 
 // reviewRequestFor 是 req 交给审核端口的请求：原命令原样送审，不改写也不追加。shell 写法的
-// 命令先限长再判断：超过 shelldecode.MaxCommandBytes 的不解析，按过长失败；既解码又执行代码的
-// （shelldecode.DecodesAndRuns）把要执行的内容藏在解码后面，审核器看不到，按 undecodable 失败；
+// 命令按资产的 shellDialect 定写法（POSIX 为 shell，声明了 PowerShell 的 SSH 资产为 powershell），
+// 并先限长再判断：超过上限（shelldecode / pwshdecode 的 MaxCommandBytes）的不解析，按过长失败；
+// 既解码又执行代码的（DecodesAndRuns）把要执行的内容藏在解码后面，审核器看不到，按 undecodable 失败；
 // 解析不了的按 unparseable 失败。失败时按模式落成结果（辅助审批问人、Autopilot 拒绝），不送审。
 // send 为假时 final 就是这条命令的结果。
 func reviewRequestFor(ctx context.Context, req PermissionRequest, result aictx.CheckResult, mode string) (review ReviewRequest, final aictx.CheckResult, send bool) {
@@ -80,14 +80,16 @@ func reviewRequestFor(ctx context.Context, req PermissionRequest, result aictx.C
 	if reviewRaw && req.RawCommand != "" {
 		command = req.RawCommand
 	}
-	review = ReviewRequest{AssetType: assetType, Command: command, Syntax: syntax}
 	if syntax != SyntaxShell {
-		return review, result, true
+		return ReviewRequest{AssetType: assetType, Command: command, Syntax: syntax}, result, true
 	}
-	hidden, err := shelldecode.DecodesAndRuns(req.Command)
+	// shell 写法按资产声明的远端 shell 决定送审写法与反混淆判断（见 shellDialect）。
+	dialect := shellDialectFor(resolveAssetForPolicy(ctx, req.AssetID))
+	review = ReviewRequest{AssetType: assetType, Command: command, Syntax: dialect.reviewSyntax}
+	hidden, err := dialect.decodesAndRuns(req.Command)
 	var reason string
 	switch {
-	case errors.Is(err, shelldecode.ErrTooLong):
+	case errors.Is(err, dialect.errTooLong):
 		reason = aictx.ReviewReasonTooLong
 	case err != nil:
 		reason = aictx.ReviewReasonUnparseable

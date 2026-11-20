@@ -621,6 +621,26 @@ export function SSHConfigSection({ editAsset, onValidityChange, ref }: ConfigSec
         {
           kind: "custom",
           render: (s, patchState) => (
+            <Field label={t("asset.sshShell")}>
+              <Select
+                value={s.shell}
+                onValueChange={(v) => patchState({ shell: v === "powershell" ? "powershell" : "posix" })}
+              >
+                <SelectTrigger className="w-56" data-testid="ssh-shell-select">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="posix">{t("asset.sshShellPosix")}</SelectItem>
+                  <SelectItem value="powershell">{t("asset.sshShellPowerShell")}</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">{t("asset.sshShellHint")}</p>
+            </Field>
+          ),
+        },
+        {
+          kind: "custom",
+          render: (s, patchState) => (
             <Field label={t("asset.sshRestoreCwdOnReconnect")}>
               <Switch
                 checked={s.restoreCwdOnReconnect}

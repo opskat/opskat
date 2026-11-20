@@ -35,7 +35,7 @@ export interface PolicyDefinition {
   fields: PolicyFieldDef[];
   /** 策略卡是否提供「规则测试」;缺省 = 提供(需后端 TestPolicyRule 支持该 policyType)。 */
   testable?: boolean;
-  /** 「恢复默认」取的默认策略 JSON;缺省 = 后端 GetDefaultPolicy(asset.Type)。 */
+  /** 「恢复默认」取的默认策略 JSON;缺省 = 后端 GetDefaultPolicy(asset.Type, asset.Config)。 */
   loadDefault?: (asset: asset_entity.Asset) => Promise<string>;
 }
 

@@ -375,4 +375,15 @@ describe("parseSSHConfig (镜像旧 loadSSHConfig)", () => {
       })
     ).toBe(json);
   });
+
+  it("shell=powershell 往返保留，posix 默认省略", () => {
+    const ps = parseSSHConfig('{"host":"h","port":22,"username":"u","auth_type":"password","shell":"powershell"}');
+    expect(ps.shell).toBe("powershell");
+    expect(buildSSHConfig(ps, NO_SECRETS)).toBe(
+      '{"host":"h","port":22,"username":"u","auth_type":"password","shell":"powershell"}'
+    );
+    const posix = parseSSHConfig('{"host":"h","port":22,"username":"u","auth_type":"password","shell":"posix"}');
+    expect(posix.shell).toBe("posix");
+    expect(buildSSHConfig(posix, NO_SECRETS)).toBe('{"host":"h","port":22,"username":"u","auth_type":"password"}');
+  });
 });
