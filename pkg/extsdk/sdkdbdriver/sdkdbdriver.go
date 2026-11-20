@@ -228,7 +228,7 @@ func serve(input []byte) (json.RawMessage, error) {
 // large LOBs) is written into one buffer of the reply's exact size (stringsReply):
 // json.Marshal grows its buffer by doubling and the envelope copies the result
 // again, which together trapped an instance at its memory cap (a dump of a row of
-// three 16 MB LOBs, a 63 MB statement, at 512 MiB).
+// three 16 MB LOBs, a 63 MB statement, at the former 512 MiB cap).
 func encodeReply(result any, opErr error) ([]byte, error) {
 	if statements, ok := result.([]string); ok && opErr == nil {
 		return stringsReply(statements), nil

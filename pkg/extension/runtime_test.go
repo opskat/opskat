@@ -755,5 +755,13 @@ func TestPluginInstanceHoldsMoreThan64MiB(t *testing.T) {
 			out := callTool(t, p, "hold", map[string]any{"mb": 300})
 			So(out["bytes"], ShouldEqual, 300<<20)
 		})
+
+		Convey("a call that holds 600 MiB at once succeeds, which a 512 MiB cap could not", func() {
+			if testing.Short() {
+				t.Skip("allocates 600 MiB of guest memory")
+			}
+			out := callTool(t, p, "hold", map[string]any{"mb": 600})
+			So(out["bytes"], ShouldEqual, 600<<20)
+		})
 	})
 }
