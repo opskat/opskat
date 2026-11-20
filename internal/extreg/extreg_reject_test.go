@@ -135,6 +135,6 @@ func TestExtensionClassificationFaultIsUnreviewableWithMessage(t *testing.T) {
 	got := permission.CheckPermission(ctx, "acme-store", 1, "list_objects --bucket=prod")
 
 	assert.Equal(t, aictx.NeedConfirm, got.Decision)
-	assert.True(t, got.Unreviewable)
+	assert.Equal(t, aictx.ReviewReasonUnclassified, got.UnreviewableReason)
 	assert.NotEmpty(t, got.Message, "the caller is told why a person has to decide")
 }

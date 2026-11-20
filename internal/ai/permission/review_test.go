@@ -105,7 +105,8 @@ func TestApplyReview(t *testing.T) {
 				f := registerFakeReviewer(t, reviewPass)
 				r := CheckPermissions(ctx, []PermissionRequest{{AssetType: asset_entity.AssetTypeSSH, AssetID: 1, Command: cmd, PipedInput: true}})[0]
 				So(r.Decision, ShouldEqual, aictx.NeedConfirm)
-				So(r.Review, ShouldBeNil)
+				So(r.Review.Outcome, ShouldEqual, aictx.ReviewSkipped)
+				So(r.Review.Reason, ShouldEqual, aictx.ReviewReasonPipedInput)
 				So(f.calls, ShouldBeEmpty)
 			})
 
@@ -235,8 +236,8 @@ func TestApplyReview(t *testing.T) {
 					So(f.calls, ShouldBeEmpty)
 					So(r.Decision, ShouldEqual, aictx.Deny)
 					So(r.DecisionSource, ShouldEqual, aictx.SourceAutopilotDeny)
-					So(r.Message, ShouldContainSubstring, "不会把规则无法检查的命令交给模型审核")
-					So(r.Review, ShouldBeNil)
+					So(r.Message, ShouldContainSubstring, "未送模型审核")
+					So(r.Review.Outcome, ShouldEqual, aictx.ReviewSkipped)
 				})
 				Convey("辅助审批仍然问人："+unenumerable, func() {
 					f := registerFakeReviewer(t, reviewPass)
@@ -244,7 +245,7 @@ func TestApplyReview(t *testing.T) {
 					r := CheckPermission(ctx, asset_entity.AssetTypeSSH, 1, unenumerable)
 					So(f.calls, ShouldBeEmpty)
 					So(r.Decision, ShouldEqual, aictx.NeedConfirm)
-					So(r.Review, ShouldBeNil)
+					So(r.Review.Outcome, ShouldEqual, aictx.ReviewSkipped)
 				})
 			}
 		})

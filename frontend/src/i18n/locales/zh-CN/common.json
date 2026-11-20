@@ -4232,7 +4232,8 @@
     "summary": {
       "pass": "模型审核通过",
       "reject": "模型审核未通过（{{detail}}）",
-      "fail": "模型审核失败（{{detail}}）"
+      "fail": "模型审核失败（{{detail}}）",
+      "skipped": "未送模型审核（{{detail}}）"
     },
     "reason": {
       "not_configured": "命令审核器还没配置好",
@@ -4244,7 +4245,12 @@
       "unavailable": "服务不可用",
       "invalid_result": "命令审核器返回了无效结果",
       "reviewer_unavailable": "要用的命令审核器不可用",
-      "no_reviewer": "没有可用的命令审核器"
+      "no_reviewer": "没有可用的命令审核器",
+      "policy_unparseable": "规则拆不开这条命令",
+      "no_command": "没有识别出要执行的命令",
+      "secret_value": "读取密文只能由人确认",
+      "unclassified": "扩展没能给命令分类",
+      "piped_input": "命令还要从管道读入内容，审核器看不到；不需要传入内容时给 opsctl exec 加 -n"
     },
     "settings": {
       "title": "命令审核",

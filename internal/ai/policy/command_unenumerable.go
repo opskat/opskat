@@ -30,13 +30,13 @@ func ShellCommandRules(rules []string) []string {
 //   - 独立 deny "*" 拒绝一切；
 //   - 独立 allow "*" 在没有任何具体 deny 规则时放行一切——配置它就是显式选择全权限。
 //
-// 其余一律 NeedConfirm（标为 Unreviewable，只能由人判断，不交给模型审核），并把原因写进
+// 其余一律 NeedConfirm（标上 UnreviewableReason，只能由人判断，不交给模型审核），并把原因写进
 // Message，引导调用方修正命令。空白命令永不放行。
 //
 // allowRules / denyRules 是资产、组链与策略组合并后的生效 shell 规则（已经过 ShellCommandRules）。
 func DecideUnenumerableShell(ctx context.Context, command string, parseErr error, allowRules, denyRules []string) aictx.CheckResult {
 	if strings.TrimSpace(command) == "" {
-		return aictx.CheckResult{Decision: aictx.NeedConfirm, Unreviewable: true}
+		return aictx.CheckResult{Decision: aictx.NeedConfirm, UnreviewableReason: aictx.ReviewReasonNoCommand}
 	}
 	if i := slices.IndexFunc(denyRules, isWildcardAll); i >= 0 {
 		return aictx.CheckResult{
@@ -49,7 +49,7 @@ func DecideUnenumerableShell(ctx context.Context, command string, parseErr error
 	if allow, ok := WildcardAllowWithoutDeny(allowRules, denyRules); ok {
 		return allow
 	}
-	return aictx.CheckResult{Decision: aictx.NeedConfirm, Message: unenumerableShellMessage(ctx, parseErr), Unreviewable: true}
+	return aictx.CheckResult{Decision: aictx.NeedConfirm, Message: unenumerableShellMessage(ctx, parseErr), UnreviewableReason: unenumerableShellReason(parseErr)}
 }
 
 // WildcardAllowWithoutDeny 是子命令没拆全时 allow 侧唯一能下的结论：存在独立 allow "*" 且没有
@@ -59,6 +59,14 @@ func WildcardAllowWithoutDeny(allowRules, denyRules []string) (aictx.CheckResult
 		return aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourcePolicyAllow, MatchedPattern: allowRules[i]}, true
 	}
 	return aictx.CheckResult{}, false
+}
+
+// unenumerableShellReason 是不送审的原因：解析不了，或解析了却没有要执行的命令。
+func unenumerableShellReason(parseErr error) string {
+	if parseErr != nil {
+		return aictx.ReviewReasonPolicyUnparseable
+	}
+	return aictx.ReviewReasonNoCommand
 }
 
 func unenumerableShellMessage(ctx context.Context, parseErr error) string {

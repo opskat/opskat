@@ -4232,7 +4232,8 @@
     "summary": {
       "pass": "Model review passed",
       "reject": "Model review did not pass ({{detail}})",
-      "fail": "Model review failed ({{detail}})"
+      "fail": "Model review failed ({{detail}})",
+      "skipped": "Not sent for model review ({{detail}})"
     },
     "reason": {
       "not_configured": "the command reviewer is not configured",
@@ -4244,7 +4245,12 @@
       "unavailable": "service unavailable",
       "invalid_result": "the command reviewer returned an invalid result",
       "reviewer_unavailable": "the command reviewer in use is unavailable",
-      "no_reviewer": "no command reviewer is available"
+      "no_reviewer": "no command reviewer is available",
+      "policy_unparseable": "the rules can't split this command into sub-commands",
+      "no_command": "no command to run was found",
+      "secret_value": "reading a secret needs a person to confirm",
+      "unclassified": "the extension couldn't classify the command",
+      "piped_input": "the command also reads piped input the reviewer can't see; pass -n to opsctl exec if nothing needs to be piped in"
     },
     "settings": {
       "title": "Command review",

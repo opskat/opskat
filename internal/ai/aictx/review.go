@@ -8,19 +8,29 @@ type ReviewOutcome string
 const (
 	ReviewPass   ReviewOutcome = "pass"   // 审核通过
 	ReviewReject ReviewOutcome = "reject" // 审核未通过
-	ReviewFail   ReviewOutcome = "fail"   // 审核失败：没能得到判断
+	ReviewFail   ReviewOutcome = "fail"   // 审核失败：送了审核器，没能得到判断
+	// ReviewSkipped 是没有送审：宿主的前置检查判定这条命令只能由人判断（原因见 Reason）。
+	ReviewSkipped ReviewOutcome = "skipped"
 )
 
-// 审核失败的原因（ReviewInfo.Reason）。前四个就是审核器回答 error 时能用的原因（由线上格式
+// 审核失败、没有送审的原因（ReviewInfo.Reason）。前四个就是审核器回答 error 时能用的原因（由线上格式
 // extwire 定义），宿主按同一套说明显示；审核器回答其余原因按 invalid_result 失败。
 const (
 	ReviewReasonNotConfigured = extwire.ReviewReasonNotConfigured
 	ReviewReasonInvalidAPIKey = extwire.ReviewReasonInvalidAPIKey
 	ReviewReasonTimeout       = extwire.ReviewReasonTimeout
 	ReviewReasonUnavailable   = extwire.ReviewReasonUnavailable
-	ReviewReasonTooLong       = "too_long"
-	ReviewReasonUnparseable   = "unparseable" // shell 命令解析不了，分不清有没有解码又执行，不发送
-	ReviewReasonUndecodable   = "undecodable" // shell 命令既解码又执行代码，审核器看不到解码出的内容，不发送
+	// 以下是没有送审（ReviewSkipped）的原因。
+	ReviewReasonTooLong     = "too_long"
+	ReviewReasonUnparseable = "unparseable" // shell 命令解析不了，分不清有没有解码又执行
+	ReviewReasonUndecodable = "undecodable" // shell 命令既解码又执行代码，审核器看不到解码出的内容
+	// ReviewReasonPolicyUnparseable 是规则拆不开这条 shell 命令（解析不了），deny 规则没法逐条检查，
+	// 模型放行它就等于绕过了禁止规则。
+	ReviewReasonPolicyUnparseable = "policy_unparseable"
+	ReviewReasonNoCommand         = "no_command"   // 拆不出要执行的命令（空白、纯赋值），理由同上
+	ReviewReasonSecretValue       = "secret_value" // 读取密文字段：把明文交给调用方，只能由人确认
+	ReviewReasonUnclassified      = "unclassified" // 扩展没能给命令分类，没有动作与资源可判断
+	ReviewReasonPipedInput        = "piped_input"  // 命令还会从管道读入内容，审核器看不到那部分
 	// ReviewReasonInvalidResult 是审核器的回答不合规，或调用审核器出错。
 	ReviewReasonInvalidResult = "invalid_result"
 	// ReviewReasonNoReviewer 是没有可用的审核器：一个都没有，或有多个却没选用哪个；
@@ -48,7 +58,7 @@ type ReviewInfo struct {
 }
 
 // BatchReview 从一次批量确认里各条的审核结果中挑一个，记进这次确认的审计（审计一行只记一个
-// 审核结果）：优先审核未通过的，其次审核失败的，说明为什么要问人；都没审核过时为 nil。
+// 审核结果）：优先审核未通过的，其次审核失败、没有送审的，说明为什么要问人；都没审核过时为 nil。
 func BatchReview(reviews []*ReviewInfo) *ReviewInfo {
 	var failed *ReviewInfo
 	for _, r := range reviews {
@@ -56,7 +66,7 @@ func BatchReview(reviews []*ReviewInfo) *ReviewInfo {
 		case r == nil:
 		case r.Outcome == ReviewReject:
 			return r
-		case r.Outcome == ReviewFail && failed == nil:
+		case (r.Outcome == ReviewFail || r.Outcome == ReviewSkipped) && failed == nil:
 			failed = r
 		}
 	}

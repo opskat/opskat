@@ -14,7 +14,7 @@ import (
 )
 
 // 送审前的命令处理（修正轮 4）：只对 shell 写法、只在需要审核的模式下做。既解码又执行代码的
-// 命令不送审，按 undecodable 失败；超过 16 KiB 的命令不解析，按 too_long 失败；其余命令原样送审。
+// 命令不送审，原因为 undecodable；超过 16 KiB 的命令不解析，原因为 too_long；其余命令原样送审。
 func TestReviewRefusesDecodeAndExecute(t *testing.T) {
 	Convey("既解码又执行代码的命令不送审", t, func() {
 		ctx, mockRepo, _ := setupPolicyTest(t)
@@ -42,7 +42,7 @@ func TestReviewRefusesDecodeAndExecute(t *testing.T) {
 				So(r.DecisionSource, ShouldEqual, aictx.SourceAutopilotDeny)
 				So(r.Message, ShouldContainSubstring, "直接写出来")
 				So(r.Review, ShouldNotBeNil)
-				So(r.Review.Outcome, ShouldEqual, aictx.ReviewFail)
+				So(r.Review.Outcome, ShouldEqual, aictx.ReviewSkipped)
 				So(r.Review.Reason, ShouldEqual, aictx.ReviewReasonUndecodable)
 				So(r.Review.Mode, ShouldEqual, policyent.PermissionModeAutopilot)
 			}
@@ -56,7 +56,7 @@ func TestReviewRefusesDecodeAndExecute(t *testing.T) {
 				r := CheckPermission(ctx, asset_entity.AssetTypeSSH, 1, cmd)
 				So(r.Decision, ShouldEqual, aictx.NeedConfirm)
 				So(r.Review, ShouldNotBeNil)
-				So(r.Review.Outcome, ShouldEqual, aictx.ReviewFail)
+				So(r.Review.Outcome, ShouldEqual, aictx.ReviewSkipped)
 				So(r.Review.Reason, ShouldEqual, aictx.ReviewReasonUndecodable)
 				So(r.Review.Mode, ShouldEqual, policyent.PermissionModeAssisted)
 			}
