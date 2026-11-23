@@ -634,6 +634,10 @@ function attachSession(connectionId: string, sessionId: string) {
   }
 }
 
+// 发起中（connectAsync 尚未返回、标签还没建）的连接，按资产索引：这段窗口里再次
+// connect 同一资产应复用它，而不是再拨一条连接。
+const startingConnects = new Map<number, Promise<string>>();
+
 function watchConnection(connectionId: string, onFinished?: () => void) {
   const conn = useTerminalStore.getState().connections[connectionId];
   setupConnectionListener(
@@ -750,6 +754,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         tabStore.activateTab(existingTab.id);
         return existingTab.id;
       }
+      const starting = startingConnects.get(assetId);
+      if (starting) {
+        const tabId = await starting;
+        useTabStore.getState().activateTab(tabId);
+        return tabId;
+      }
     }
 
     set((state) => ({
@@ -759,7 +769,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     try {
       const transport = transportForAsset(asset.Type);
       const spec = TRANSPORTS[transport];
-      const connectionId = await spec.connectAsync(assetId, { cols: 80, rows: 24, password });
+      const startPromise = spec.connectAsync(assetId, { cols: 80, rows: 24, password });
+      startingConnects.set(assetId, startPromise);
+      let connectionId: string;
+      try {
+        connectionId = await startPromise;
+      } finally {
+        if (startingConnects.get(assetId) === startPromise) startingConnects.delete(assetId);
+      }
 
       // Create tab in tabStore
       tabStore.openTab({

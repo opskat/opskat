@@ -286,23 +286,6 @@ describe("AssetTree double-click → connection flow", () => {
     expect(onSelect).toHaveBeenCalledWith(otherAsset);
   });
 
-  it("double-click SSH asset while connecting does not trigger connect", async () => {
-    const sshAsset = makeAsset(5, "ssh", "Busy Server");
-    useTerminalStore.setState({
-      connectingAssetIds: new Set([5]),
-    });
-
-    const onConnect = vi.fn();
-    const onSelect = vi.fn();
-
-    const user = userEvent.setup();
-    render(<AssetList assets={[sshAsset]} onConnectAsset={onConnect} onSelectAsset={onSelect} />);
-
-    await user.dblClick(screen.getByTestId("asset-5"));
-    // Should not call connect because isConnecting is true
-    expect(onConnect).not.toHaveBeenCalled();
-  });
-
   it("multiple different assets can each open their own tab", async () => {
     vi.mocked(ConnectSSHAsync).mockResolvedValueOnce("conn-1").mockResolvedValueOnce("conn-2");
     const ssh1 = makeAsset(1, "ssh", "Server 1");
@@ -439,6 +422,50 @@ describe("AssetTree ungrouped virtual folder", () => {
     await user.click(screen.getByText("asset.ungrouped"));
 
     expect(screen.getByText("Ungrouped Server")).toBeTruthy();
+  });
+});
+
+describe("AssetTree double-click on a connecting asset (#380)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useAssetStore.setState({
+      assets: [],
+      groups: [],
+      selectedAssetId: null,
+      selectedGroupId: null,
+      collapsedGroupIds: [],
+      loading: false,
+      initialized: false,
+    });
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    vi.mocked(ListAssets).mockResolvedValue([makeAsset(5, "ssh", "Busy Server")]);
+    vi.mocked(ListGroups).mockResolvedValue([]);
+  });
+
+  it("still asks to connect so the existing connecting tab gets focused", async () => {
+    useTerminalStore.setState({ tabData: {}, connections: {}, connectingAssetIds: new Set([5]) });
+    const onConnect = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <TooltipProvider>
+        <AssetTree
+          collapsed={false}
+          onAddAsset={() => {}}
+          onAddGroup={() => {}}
+          onEditGroup={() => {}}
+          onGroupDetail={() => {}}
+          onEditAsset={() => {}}
+          onCopyAsset={() => {}}
+          onConnectAsset={onConnect}
+          onSelectAsset={() => {}}
+        />
+      </TooltipProvider>
+    );
+
+    await user.dblClick(await screen.findByText("Busy Server"));
+
+    expect(onConnect).toHaveBeenCalledTimes(1);
+    expect(onConnect.mock.calls[0][0].ID).toBe(5);
   });
 });
 

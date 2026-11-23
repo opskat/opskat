@@ -290,6 +290,30 @@ describe("terminalStore.connect", () => {
     resolveConnect!("conn-5");
     await promise;
   });
+
+  it("a second connect while the first is still starting reuses it and focuses its tab (#380)", async () => {
+    let resolveConnect: (val: string) => void;
+    vi.mocked(ConnectSSHAsync).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveConnect = resolve;
+        })
+    );
+    useTabStore.setState({
+      tabs: [{ id: "other", type: "page", label: "Other", meta: { type: "page", pageId: "settings" } }],
+      activeTabId: "other",
+    });
+
+    const first = useTerminalStore.getState().connect(makeSSHAsset(5));
+    const second = useTerminalStore.getState().connect(makeSSHAsset(5));
+    resolveConnect!("conn-5");
+
+    expect(await first).toBe("conn-5");
+    expect(await second).toBe("conn-5");
+    expect(ConnectSSHAsync).toHaveBeenCalledTimes(1);
+    expect(useTabStore.getState().tabs.filter((t) => t.type === "terminal")).toHaveLength(1);
+    expect(useTabStore.getState().activeTabId).toBe("conn-5");
+  });
 });
 
 describe("terminalStore.reconnect", () => {
