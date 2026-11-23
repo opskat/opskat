@@ -2,17 +2,20 @@ package command
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/policy"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/model/entity/audit_entity"
-	"github.com/opskat/opskat/internal/repository/audit_repo"
+	"github.com/opskat/opskat/internal/service/audit_svc"
 )
 
 func cmdList(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args []string) int {
@@ -63,14 +66,23 @@ func cmdList(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, args
 
 	case "audit":
 		fs := flag.NewFlagSet("list audit", flag.ExitOnError)
-		asset := fs.String("asset", "", "Filter by asset (name, group/name, or numeric ID)")
-		limit := fs.Int("limit", 0, fmt.Sprintf("Maximum rows to show (default %d)", defaultAuditListLimit))
+		var f auditListFlags
+		fs.Var(&f.assets, "asset", "Filter by asset (name, group/name, or numeric ID); repeatable")
+		fs.StringVar(&f.query.Source, "source", "", "Filter by source: "+strings.Join(audit_svc.Sources, ", "))
+		fs.StringVar(&f.query.ToolName, "tool", "", "Filter by tool name")
+		fs.StringVar(&f.query.Result, "result", "", "Filter by result: "+strings.Join(audit_svc.Results, ", "))
+		fs.StringVar(&f.query.Decision, "decision", "", "Filter by decision: "+strings.Join(audit_svc.Decisions, ", "))
+		fs.StringVar(&f.query.Decider, "decider", "", "Filter by who decided: "+strings.Join(aictx.DeciderGroups, ", "))
+		fs.StringVar(&f.query.SessionID, "session", "", "Filter by session ID")
+		fs.StringVar(&f.query.Keyword, "grep", "", "Filter by a literal, case-insensitive substring of the command or asset name")
+		fs.StringVar(&f.since, "since", "", "Only rows newer than this, e.g. 30m, 6h, 7d")
+		fs.IntVar(&f.query.Limit, "limit", 0, fmt.Sprintf("Maximum rows to show (default %d)", defaultAuditListLimit))
 		fs.Usage = func() { printListAuditUsage() }
 		_ = fs.Parse(args[1:])
 		if rejectExtraArgs(fs.Args()) {
 			return 1
 		}
-		return cmdListAudit(ctx, *asset, *limit)
+		return cmdListAudit(ctx, f)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: assets, groups, credentials, audit\n", resource)
@@ -88,21 +100,34 @@ const auditCommandSummaryWidth = 60
 // cmdListAudit 只读列出 audit_logs 中已存储的行，不需要 TTY。行内容原样呈现：
 // 不解密、不脱敏、不补充字段、不引入占位近似值（哪些字段该进库由各 producer
 // 写入侧的字段白名单决定）。排序沿用 repo 的默认（时间倒序）。
-func cmdListAudit(ctx context.Context, asset string, limit int) int {
-	if limit <= 0 {
-		limit = defaultAuditListLimit
+func cmdListAudit(ctx context.Context, f auditListFlags) int {
+	q := f.query
+	if q.Limit <= 0 {
+		q.Limit = defaultAuditListLimit
 	}
-	opts := audit_repo.ListOptions{Limit: limit}
-	if asset != "" {
+	if f.since != "" {
+		window, err := parseSince(f.since)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: invalid --since %q: use a positive duration such as 30m, 6h or 7d\n", f.since)
+			return 1
+		}
+		q.StartTime = time.Now().Add(-window).Unix()
+	}
+	for _, asset := range f.assets {
 		id, err := resolveAssetID(ctx, asset)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 1
 		}
-		opts.AssetIDs = []int64{id}
+		q.AssetIDs = append(q.AssetIDs, id)
 	}
 
-	logs, _, err := audit_repo.Audit().List(ctx, opts)
+	logs, _, err := audit_svc.List(ctx, q)
+	var invalid *audit_svc.InvalidFilterError
+	if errors.As(err, &invalid) {
+		fmt.Fprintf(os.Stderr, "Error: invalid --%s %q: must be one of %s\n", invalid.Field, invalid.Value, strings.Join(invalid.Allowed, ", "))
+		return 1
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
@@ -129,6 +154,44 @@ func cmdListAudit(ctx context.Context, asset string, limit int) int {
 	}
 	fmt.Print(sb.String())
 	return 0
+}
+
+// auditListFlags 收集 list audit 的参数；资产引用在执行时解析成 ID。
+type auditListFlags struct {
+	query  audit_svc.Query
+	assets repeatedFlag
+	since  string
+}
+
+// repeatedFlag 是可重复出现的字符串参数。
+type repeatedFlag []string
+
+func (r *repeatedFlag) String() string { return strings.Join(*r, ",") }
+
+func (r *repeatedFlag) Set(v string) error {
+	*r = append(*r, v)
+	return nil
+}
+
+// parseSince 解析 --since：Go 时长（30m、6h）或天数（7d），必须为正。
+func parseSince(s string) (time.Duration, error) {
+	var d time.Duration
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		n, err := strconv.Atoi(days)
+		if err != nil {
+			return 0, err
+		}
+		d = time.Duration(n) * 24 * time.Hour
+	} else {
+		var err error
+		if d, err = time.ParseDuration(s); err != nil {
+			return 0, err
+		}
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("non-positive duration %q", s)
+	}
+	return d, nil
 }
 
 // auditAssetCell 资产列：存量字段（AssetName / AssetID）的展示组合。
@@ -244,13 +307,27 @@ Read-only listing of stored audit log rows (time, source, asset, tool, command
 summary, decision source), newest first. No TTY required. Rows are presented
 exactly as stored.
 
-Flags:
-  --asset <asset>       Filter by asset (name, group/name, or numeric ID)
+Flags (combine freely; each narrows the result):
+  --asset <asset>       Filter by asset (name, group/name, or numeric ID).
+                        Repeat to match any of several assets.
+  --source <source>     ai | opsctl | desktop
+  --tool <name>         Tool name, e.g. exec, cp, exec_sql
+  --result <result>     success | failed
+  --decision <d>        allow | deny
+  --decider <who>       Who decided: policy | user | grant | assisted |
+                        autopilot | exec_gate (blocked before the permission
+                        check) | batch | none (no approval involved)
+  --session <id>        Session ID
+  --grep <text>         Literal, case-insensitive substring of the command or
+                        asset name
+  --since <duration>    Only rows newer than this: 30m, 6h, 7d
   --limit <int>         Maximum rows to show. Default 20.
 
 Examples:
   opsctl list audit
   opsctl list audit --asset web-01 --limit 50
+  opsctl list audit --decision deny --decider user --since 7d
+  opsctl list audit --asset web-01 --asset web-02 --result failed --grep nginx
 `)
 }
 

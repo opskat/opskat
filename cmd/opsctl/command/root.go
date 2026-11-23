@@ -282,6 +282,7 @@ Examples:
   opsctl policy show web-server                   Show effective rules (read-only, no TTY)
   opsctl policy allow web-server -- 'systemctl restart *'   Pre-approve commands (terminal only)
   opsctl list audit --asset web-server --limit 50 Read stored audit rows (read-only)
+  opsctl list audit --decision deny --since 7d    Denied operations of the last 7 days
   opsctl ext list                                 List installed extensions
   opsctl ext search elastic                       Search the official extension store
   opsctl ext install es                           Install from the store (the app asks to confirm)

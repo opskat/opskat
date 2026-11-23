@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	. "github.com/smartystreets/goconvey/convey"
 	"go.uber.org/mock/gomock"
@@ -54,6 +55,22 @@ func runListAudit(ctx context.Context, args ...string) (int, string) {
 
 	So(w.Close(), ShouldBeNil)
 	os.Stdout = origStdout
+	data, readErr := io.ReadAll(r)
+	So(readErr, ShouldBeNil)
+	return code, string(data)
+}
+
+// runListAuditStderr 捕获 stderr 后跑 cmdList audit，返回退出码与错误输出。
+func runListAuditStderr(ctx context.Context, args ...string) (int, string) {
+	r, w, err := os.Pipe()
+	So(err, ShouldBeNil)
+	origStderr := os.Stderr
+	os.Stderr = w
+
+	code := cmdList(ctx, nil, args)
+
+	So(w.Close(), ShouldBeNil)
+	os.Stderr = origStderr
 	data, readErr := io.ReadAll(r)
 	So(readErr, ShouldBeNil)
 	return code, string(data)
@@ -128,6 +145,84 @@ func TestCmdListAudit(t *testing.T) {
 			code, _ = runListAudit(context.Background(), "audit", "--limit", "0")
 			So(code, ShouldEqual, 0)
 			So(stub.opts[2].Limit, ShouldEqual, defaultAuditListLimit)
+		})
+
+		Convey("--asset can be repeated and the assets are unioned", func() {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+			mockAsset.EXPECT().Find(gomock.Any(), int64(7)).Return(&asset_entity.Asset{ID: 7, Name: "web-01"}, nil).AnyTimes()
+			mockAsset.EXPECT().Find(gomock.Any(), int64(8)).Return(&asset_entity.Asset{ID: 8, Name: "web-02"}, nil).AnyTimes()
+			origAsset := asset_repo.Asset()
+			asset_repo.RegisterAsset(mockAsset)
+			defer asset_repo.RegisterAsset(origAsset)
+
+			code, _ := runListAudit(context.Background(), "audit", "--asset", "7", "--asset", "8")
+
+			So(code, ShouldEqual, 0)
+			So(stub.opts[0].AssetIDs, ShouldResemble, []int64{7, 8})
+		})
+
+		Convey("filter flags map to the same query the desktop audit page uses", func() {
+			code, _ := runListAudit(context.Background(), "audit",
+				"--source", "ai", "--tool", "exec", "--result", "failed", "--decision", "deny",
+				"--decider", "exec_gate", "--session", "s1", "--grep", "nginx")
+
+			So(code, ShouldEqual, 0)
+			opts := stub.opts[0]
+			So(opts.Source, ShouldEqual, "ai")
+			So(opts.ToolName, ShouldEqual, "exec")
+			So(opts.Success, ShouldNotBeNil)
+			So(*opts.Success, ShouldBeFalse)
+			So(opts.Decision, ShouldEqual, "deny")
+			So(opts.DecisionSources, ShouldContain, aictx.SourceExecGateBlocked)
+			So(opts.DecisionSources, ShouldContain, aictx.SourceExecInvalidInput)
+			So(opts.SessionID, ShouldEqual, "s1")
+			So(opts.Keyword, ShouldEqual, "nginx")
+		})
+
+		Convey("--since limits rows to the recent window", func() {
+			for _, c := range []struct {
+				arg  string
+				span int64
+			}{{"30m", 1800}, {"6h", 6 * 3600}, {"7d", 7 * 86400}} {
+				stub.opts = nil
+				before := time.Now().Unix()
+				code, _ := runListAudit(context.Background(), "audit", "--since", c.arg)
+				after := time.Now().Unix()
+
+				So(code, ShouldEqual, 0)
+				So(stub.opts[0].StartTime, ShouldBeGreaterThanOrEqualTo, before-c.span)
+				So(stub.opts[0].StartTime, ShouldBeLessThanOrEqualTo, after-c.span)
+			}
+		})
+
+		Convey("invalid enum values fail before querying and list the allowed values", func() {
+			for _, c := range []struct {
+				args    []string
+				allowed string
+			}{
+				{[]string{"--result", "maybe"}, "success, failed"},
+				{[]string{"--decision", "perhaps"}, "allow, deny"},
+				{[]string{"--decider", "robot"}, "policy, user, grant"},
+				{[]string{"--source", "cron"}, "ai, opsctl, desktop"},
+			} {
+				stub.opts = nil
+				code, stderr := runListAuditStderr(context.Background(), append([]string{"audit"}, c.args...)...)
+
+				So(code, ShouldEqual, 1)
+				So(stub.opts, ShouldBeEmpty)
+				So(stderr, ShouldContainSubstring, c.args[0])
+				So(stderr, ShouldContainSubstring, c.allowed)
+			}
+		})
+
+		Convey("an unparsable --since fails before querying", func() {
+			code, stderr := runListAuditStderr(context.Background(), "audit", "--since", "7x")
+
+			So(code, ShouldEqual, 1)
+			So(stub.opts, ShouldBeEmpty)
+			So(stderr, ShouldContainSubstring, "--since")
 		})
 
 		Convey("table header follows the policy lang in ctx", func() {
