@@ -2509,7 +2509,35 @@
     "decisions": {
       "allow": "Allowed",
       "deny": "Denied"
-    }
+    },
+    "all": "All",
+    "refresh": "Refresh",
+    "sources": {
+      "opsctl": "opsctl",
+      "ai": "AI",
+      "desktop": "Desktop"
+    },
+    "filterBy": "Filter by {{column}}",
+    "filterThis": "Filter by this value",
+    "decider": "Decided by",
+    "deciders": {
+      "policy": "Policy",
+      "user": "You",
+      "grant": "Grant",
+      "assisted": "Assisted",
+      "autopilot": "Autopilot",
+      "exec_gate": "Blocked before check",
+      "batch": "Batch",
+      "none": "No approval needed"
+    },
+    "searchPlaceholder": "Search commands or asset names",
+    "clearSearch": "Clear search",
+    "searchAssets": "Search assets or groups",
+    "assetsMore": "{{names}} and {{count}} total",
+    "removeCondition": "Remove {{name}} filter",
+    "clearConditions": "Clear",
+    "clearAllFilters": "Clear filters",
+    "emptyFiltered": "No records match these filters"
   },
   "zmodem": {
     "downloadComplete": "Received {{name}}",

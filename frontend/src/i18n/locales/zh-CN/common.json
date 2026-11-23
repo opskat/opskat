@@ -2509,7 +2509,35 @@
     "decisions": {
       "allow": "已放行",
       "deny": "已拒绝"
-    }
+    },
+    "all": "全部",
+    "refresh": "刷新",
+    "sources": {
+      "opsctl": "opsctl",
+      "ai": "AI",
+      "desktop": "桌面端"
+    },
+    "filterBy": "筛选{{column}}",
+    "filterThis": "按此筛选",
+    "decider": "决策方",
+    "deciders": {
+      "policy": "策略",
+      "user": "手动审批",
+      "grant": "授权",
+      "assisted": "辅助审批",
+      "autopilot": "Autopilot",
+      "exec_gate": "执行前拦截",
+      "batch": "批量执行",
+      "none": "无需审批"
+    },
+    "searchPlaceholder": "搜索命令或资产名",
+    "clearSearch": "清除搜索",
+    "searchAssets": "搜索资产或分组",
+    "assetsMore": "{{names}} 等 {{count}} 个",
+    "removeCondition": "移除「{{name}}」条件",
+    "clearConditions": "清空",
+    "clearAllFilters": "清空筛选",
+    "emptyFiltered": "没有符合筛选条件的记录"
   },
   "zmodem": {
     "downloadComplete": "{{name}} 接收完成",

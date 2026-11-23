@@ -160,6 +160,22 @@ func SessionGrants(ctx context.Context, sessionID string) ([]SessionGrant, error
 	return grants, nil
 }
 
+// DeciderGroup 决策方分组及其包含的决策来源，前端据此把行内的决策来源归到分组
+type DeciderGroup struct {
+	ID      string   `json:"id"`
+	Sources []string `json:"sources"`
+}
+
+// DeciderGroups 按展示顺序返回全部决策方分组
+func DeciderGroups() []DeciderGroup {
+	groups := make([]DeciderGroup, 0, len(aictx.DeciderGroups))
+	for _, id := range aictx.DeciderGroups {
+		sources, _ := aictx.DeciderSources(id)
+		groups = append(groups, DeciderGroup{ID: id, Sources: sources})
+	}
+	return groups
+}
+
 // SessionInfo 会话摘要
 type SessionInfo = audit_repo.SessionInfo
 

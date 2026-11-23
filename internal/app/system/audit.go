@@ -37,6 +37,11 @@ func (s *System) ListAuditSessionGrants(sessionID string) ([]audit_svc.SessionGr
 	return audit_svc.SessionGrants(i18n.Ctx(s.ctx, s.Lang()), sessionID)
 }
 
+// ListAuditDeciderGroups 返回决策方分组及各自包含的决策来源
+func (s *System) ListAuditDeciderGroups() []audit_svc.DeciderGroup {
+	return audit_svc.DeciderGroups()
+}
+
 // ListAuditSessions 查询审计日志中的会话列表
 func (s *System) ListAuditSessions(startTime int64) ([]audit_svc.SessionInfo, error) {
 	return audit_svc.ListSessions(i18n.Ctx(s.ctx, s.Lang()), startTime)

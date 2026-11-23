@@ -1,10 +1,31 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuditLogPage } from "@/components/audit/AuditLogPage";
-import { ListAuditLogs, ListAuditSessions } from "../../wailsjs/go/system/System";
+import { useAssetStore } from "@/stores/assetStore";
+import {
+  ListAuditDeciderGroups,
+  ListAuditFacets,
+  ListAuditLogs,
+  ListAuditSessions,
+} from "../../wailsjs/go/system/System";
 import { GetSSHPoolConnections } from "../../wailsjs/go/ssh/SSH";
+import type { audit_svc } from "../../wailsjs/go/models";
+
+// 每个用例都要的后端：筛选项与决策方分组（分组定义在后端，前端只按它反查）
+beforeEach(() => {
+  vi.mocked(ListAuditFacets).mockResolvedValue({
+    tools: ["exec", "cp"],
+    deciders: ["policy", "user", "exec_gate"],
+  } as never);
+  vi.mocked(ListAuditDeciderGroups).mockResolvedValue([
+    { id: "policy", sources: ["policy_allow", "policy_deny"] },
+    { id: "user", sources: ["user_allow", "user_deny"] },
+    { id: "exec_gate", sources: ["exec_gate_blocked"] },
+    { id: "none", sources: [""] },
+  ] as never);
+});
 
 describe("AuditLogPage result status", () => {
   beforeEach(() => {
@@ -77,7 +98,7 @@ describe("AuditLogPage result status", () => {
     const row = tool.closest("tr");
     expect(row?.parentElement).toHaveClass("select-text");
 
-    await user.click(within(row as HTMLTableRowElement).getByRole("button"));
+    await user.click(within(row as HTMLTableRowElement).getByRole("button", { name: "audit.detail" }));
 
     const request = screen.getByText('{"request":"selectable"}');
     const detail = request.closest('[role="dialog"]')?.querySelector(".select-text");
@@ -123,7 +144,7 @@ describe("AuditLogPage result status", () => {
     const row = tool.closest("tr") as HTMLTableRowElement;
     expect(within(row).getByText("✗ audit.decisionSources.autopilot")).toBeInTheDocument();
 
-    await user.click(within(row).getByRole("button"));
+    await user.click(within(row).getByRole("button", { name: "audit.detail" }));
     expect(screen.getByTestId("review-notice")).toHaveTextContent("commandReview.withMode");
 
     // 只列未通过题目的评分
@@ -173,7 +194,7 @@ describe("AuditLogPage result status", () => {
     render(<AuditLogPage />);
 
     const tool = await screen.findByText("ext-reviewed-tool");
-    await user.click(within(tool.closest("tr") as HTMLTableRowElement).getByRole("button"));
+    await user.click(within(tool.closest("tr") as HTMLTableRowElement).getByRole("button", { name: "audit.detail" }));
     expect(screen.getByTestId("review-reviewer")).toHaveTextContent("commandReview.reviewedBy");
     expect(within(screen.getByTestId("review-scores")).getByText(/Loses data/)).toBeInTheDocument();
   });
@@ -334,5 +355,174 @@ describe("AuditLogPage load states", () => {
     expect(within(await rowOf("tool-1")).getByText("✗ audit.decisionSources.execGateBlocked")).toBeInTheDocument();
     expect(within(await rowOf("tool-2")).getByText("✓ audit.decisionSources.batchComplete")).toBeInTheDocument();
     expect(within(await rowOf("tool-3")).getByText("✗ audit.decisionSources.batchPartialFailure")).toBeInTheDocument();
+  });
+});
+
+describe("AuditLogPage filters", () => {
+  const log = (id: number, over: Record<string, unknown> = {}) => ({
+    ID: id,
+    Source: "opsctl",
+    ToolName: "exec",
+    AssetID: 9,
+    AssetName: "web-01",
+    Command: `cmd-${id}`,
+    Request: "{}",
+    Result: "",
+    Error: "",
+    Success: 1,
+    SessionID: "",
+    Decision: "allow",
+    DecisionSource: "policy_allow",
+    MatchedPattern: "",
+    Createtime: id,
+    ...over,
+  });
+  const lastQuery = () => vi.mocked(ListAuditLogs).mock.calls.at(-1)![0] as audit_svc.Query;
+
+  beforeEach(() => {
+    vi.mocked(ListAuditLogs).mockReset();
+    vi.mocked(ListAuditSessions).mockResolvedValue([]);
+    vi.mocked(ListAuditLogs).mockResolvedValue({
+      items: [log(1), log(2, { AssetID: 12, AssetName: "db-01" })],
+      total: 2,
+    } as never);
+  });
+
+  it("filters by a header option and shows it as a removable condition", async () => {
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await screen.findByText("cmd-1");
+
+    await user.click(screen.getByTestId("audit-filter-source"));
+    await user.click(await screen.findByRole("button", { name: "audit.sources.ai" }));
+
+    await waitFor(() => expect(lastQuery().source).toBe("ai"));
+    const conditions = screen.getByTestId("audit-conditions");
+    expect(conditions).toHaveTextContent("audit.source:audit.sources.ai");
+    expect(screen.getByTestId("audit-filter-source")).toHaveAttribute("aria-pressed", "true");
+
+    await user.click(within(conditions).getByRole("button", { name: "audit.removeCondition" }));
+    await waitFor(() => expect(lastQuery().source).toBe(""));
+    expect(screen.queryByTestId("audit-conditions")).not.toBeInTheDocument();
+  });
+
+  it("offers the tools and deciders that occur in the time range", async () => {
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await screen.findByText("cmd-1");
+
+    await user.click(screen.getByTestId("audit-filter-tool"));
+    await user.click(await screen.findByRole("button", { name: "cp" }));
+    await waitFor(() => expect(lastQuery().tool_name).toBe("cp"));
+
+    await user.click(screen.getByTestId("audit-filter-decision"));
+    await user.click(await screen.findByRole("button", { name: "audit.decisions.deny" }));
+    await user.click(await screen.findByRole("button", { name: "audit.deciders.user" }));
+    await waitFor(() => expect(lastQuery()).toMatchObject({ decision: "deny", decider: "user", tool_name: "cp" }));
+  });
+
+  it("shows the failure with retry inside the popover when the options fail to load", async () => {
+    vi.mocked(ListAuditFacets).mockRejectedValueOnce(new Error("facets down"));
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await screen.findByText("cmd-1");
+
+    await user.click(screen.getByTestId("audit-filter-tool"));
+    expect(await screen.findByText(/facets down/)).toBeInTheDocument();
+    await user.click(screen.getByTestId("async-state-retry"));
+    expect(await within(await screen.findByRole("dialog")).findByRole("button", { name: "exec" })).toBeInTheDocument();
+  });
+
+  it("adds a condition when a cell value is clicked", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({
+      items: [
+        log(1),
+        log(2, { AssetID: 12, AssetName: "db-01", Success: 0, Decision: "deny", DecisionSource: "user_deny" }),
+      ],
+      total: 2,
+    } as never);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    const row1 = (await screen.findByText("cmd-1")).closest("tr") as HTMLTableRowElement;
+    const row2 = screen.getByText("cmd-2").closest("tr") as HTMLTableRowElement;
+
+    await user.click(within(row1).getByRole("button", { name: "web-01" }));
+    await waitFor(() => expect(lastQuery().asset_ids).toEqual([9]));
+    // 资产是追加，不是替换
+    await user.click(within(row2).getByRole("button", { name: "db-01" }));
+    await waitFor(() => expect(lastQuery().asset_ids).toEqual([9, 12]));
+
+    // 决策标签同时设置放行/拒绝与它所属的决策方分组
+    await user.click(within(row2).getByText("✗ audit.decisionSources.user"));
+    await waitFor(() => expect(lastQuery()).toMatchObject({ decision: "deny", decider: "user" }));
+
+    await user.click(within(row2).getByRole("button", { name: "audit.failed" }));
+    await waitFor(() => expect(lastQuery().result).toBe("failed"));
+
+    await user.click(within(row1).getByRole("button", { name: "audit.sources.opsctl" }));
+    await user.click(within(row1).getByRole("button", { name: "exec" }));
+    await waitFor(() => expect(lastQuery()).toMatchObject({ source: "opsctl", tool_name: "exec" }));
+    expect(screen.getByTestId("audit-conditions")).toHaveTextContent("web-01, db-01");
+  });
+
+  it("selects every asset of a group from the asset header", async () => {
+    useAssetStore.setState({
+      assets: [
+        { ID: 11, Name: "web-a", Type: "ssh", GroupID: 1, Status: 1 },
+        { ID: 12, Name: "web-b", Type: "ssh", GroupID: 1, Status: 1 },
+        { ID: 21, Name: "db-a", Type: "ssh", GroupID: 0, Status: 1 },
+      ],
+      groups: [{ ID: 1, Name: "prod", ParentID: 0 }],
+    } as unknown as Parameters<typeof useAssetStore.setState>[0]);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await screen.findByText("cmd-1");
+
+    await user.click(screen.getByTestId("audit-filter-asset"));
+    await user.click(await screen.findByRole("checkbox", { name: "prod" }));
+
+    await waitFor(() => expect([...lastQuery().asset_ids].sort()).toEqual([11, 12]));
+    expect(screen.getByTestId("audit-conditions")).toHaveTextContent("web-a, web-b");
+  });
+
+  it("searches the keyword only after typing pauses", async () => {
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await screen.findByText("cmd-1");
+    const calls = vi.mocked(ListAuditLogs).mock.calls.length;
+
+    await user.type(screen.getByRole("textbox", { name: "audit.searchPlaceholder" }), "nginx");
+    // 逐字输入期间不查询
+    expect(vi.mocked(ListAuditLogs).mock.calls.length).toBe(calls);
+    await waitFor(() => expect(lastQuery().keyword).toBe("nginx"));
+    expect(vi.mocked(ListAuditLogs).mock.calls.length).toBe(calls + 1);
+  });
+
+  it("returns to the first page when a condition changes", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [log(1)], total: 45 } as never);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await screen.findByText("cmd-1");
+
+    await user.click(document.querySelector(".lucide-chevron-right")!.closest("button")!);
+    await waitFor(() => expect(lastQuery().offset).toBe(20));
+
+    await user.click(within(screen.getByText("cmd-1").closest("tr")!).getByRole("button", { name: "exec" }));
+    await waitFor(() => expect(lastQuery()).toMatchObject({ tool_name: "exec", offset: 0 }));
+  });
+
+  it("explains an empty filtered result and clears every condition, including the keyword", async () => {
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await screen.findByText("cmd-1");
+
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [], total: 0 } as never);
+    await user.type(screen.getByRole("textbox", { name: "audit.searchPlaceholder" }), "zzz");
+    expect(await screen.findByText("audit.emptyFiltered")).toBeInTheDocument();
+    expect(screen.queryByText("audit.empty")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "audit.clearAllFilters" }));
+    await waitFor(() => expect(lastQuery().keyword).toBe(""));
+    expect(screen.getByRole("textbox", { name: "audit.searchPlaceholder" })).toHaveValue("");
   });
 });
