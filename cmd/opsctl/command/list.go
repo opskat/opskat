@@ -99,7 +99,7 @@ func cmdListAudit(ctx context.Context, asset string, limit int) int {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return 1
 		}
-		opts.AssetID = id
+		opts.AssetIDs = []int64{id}
 	}
 
 	logs, _, err := audit_repo.Audit().List(ctx, opts)

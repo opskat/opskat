@@ -39,6 +39,10 @@ func (s *listAuditRepoStub) ListSessions(context.Context, int64) ([]audit_repo.S
 	return nil, nil
 }
 
+func (*listAuditRepoStub) Facets(context.Context, int64, int64) (*audit_repo.Facets, error) {
+	return &audit_repo.Facets{}, nil
+}
+
 // runListAudit 捕获 stdout 后跑 cmdList audit，返回退出码与输出。
 func runListAudit(ctx context.Context, args ...string) (int, string) {
 	r, w, err := os.Pipe()
@@ -76,7 +80,7 @@ func TestCmdListAudit(t *testing.T) {
 
 			So(code, ShouldEqual, 0)
 			So(stub.opts, ShouldHaveLength, 1)
-			So(stub.opts[0].AssetID, ShouldEqual, 7)
+			So(stub.opts[0].AssetIDs, ShouldResemble, []int64{7})
 		})
 
 		Convey("--asset resolves an asset name to its ID", func() {
@@ -93,7 +97,7 @@ func TestCmdListAudit(t *testing.T) {
 
 			So(code, ShouldEqual, 0)
 			So(stub.opts, ShouldHaveLength, 1)
-			So(stub.opts[0].AssetID, ShouldEqual, 5)
+			So(stub.opts[0].AssetIDs, ShouldResemble, []int64{5})
 		})
 
 		Convey("--asset that matches nothing fails before querying audit rows", func() {

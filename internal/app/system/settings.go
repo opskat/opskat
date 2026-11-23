@@ -15,9 +15,7 @@ import (
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/buildinfo"
 	"github.com/opskat/opskat/internal/embedded"
-	"github.com/opskat/opskat/internal/model/entity/audit_entity"
 	"github.com/opskat/opskat/internal/pkg/executil"
-	"github.com/opskat/opskat/internal/repository/audit_repo"
 	"github.com/opskat/opskat/internal/service/backup_svc"
 	"github.com/opskat/opskat/internal/service/credential_svc"
 	"github.com/opskat/opskat/internal/service/import_svc"
@@ -1829,39 +1827,6 @@ func (s *System) GetSkillPreview() string {
 	return "--- skills/opsctl/SKILL.md ---\n\n" + s.skillMDWithDataDir() +
 		"\n\n--- commands/init.md ---\n\n" + s.skillContent.InitMD +
 		"\n\n--- skills/opsctl/references/commands.md ---\n\n" + s.skillContent.CommandsMD
-}
-
-// --- 审计日志 ---
-
-// AuditLogListResult 审计日志列表结果
-type AuditLogListResult struct {
-	Items []*audit_entity.AuditLog `json:"items"`
-	Total int64                    `json:"total"`
-}
-
-// ListAuditLogs 查询审计日志
-func (s *System) ListAuditLogs(source string, assetID int64, startTime, endTime int64, offset, limit int, sessionID string) (*AuditLogListResult, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-	items, total, err := audit_repo.Audit().List(i18n.Ctx(s.ctx, s.Lang()), audit_repo.ListOptions{
-		Source:    source,
-		AssetID:   assetID,
-		SessionID: sessionID,
-		StartTime: startTime,
-		EndTime:   endTime,
-		Offset:    offset,
-		Limit:     limit,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &AuditLogListResult{Items: items, Total: total}, nil
-}
-
-// ListAuditSessions 查询审计日志中的会话列表
-func (s *System) ListAuditSessions(startTime int64) ([]audit_repo.SessionInfo, error) {
-	return audit_repo.Audit().ListSessions(i18n.Ctx(s.ctx, s.Lang()), startTime)
 }
 
 // --- 更新 ---

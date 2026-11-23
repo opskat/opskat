@@ -938,6 +938,10 @@ func (r *fakeAuditRepo) ListSessions(_ context.Context, _ int64) ([]audit_repo.S
 	return nil, nil
 }
 
+func (*fakeAuditRepo) Facets(context.Context, int64, int64) (*audit_repo.Facets, error) {
+	return &audit_repo.Facets{}, nil
+}
+
 func setupFakeAuditRepo(t *testing.T) *fakeAuditRepo {
 	t.Helper()
 	repo := &fakeAuditRepo{}

@@ -38,6 +38,10 @@ func (m *memAuditRepo) ListSessions(_ context.Context, _ int64) ([]audit_repo.Se
 	return nil, nil
 }
 
+func (*memAuditRepo) Facets(context.Context, int64, int64) (*audit_repo.Facets, error) {
+	return &audit_repo.Facets{}, nil
+}
+
 // setupAssetAudit 装好资产仓库 mock 与内存审计仓库，返回一个 ctx 已就绪的 System。
 // System 直接构造而不走 New + Startup：Startup 会触发自动更新检查与 Wails 事件推送，
 // 测试环境里没有 Wails runtime。

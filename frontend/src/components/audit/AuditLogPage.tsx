@@ -27,7 +27,7 @@ import {
 import { ListAuditLogs } from "../../../wailsjs/go/system/System";
 import { ListAuditSessions } from "../../../wailsjs/go/system/System";
 import { GetSSHPoolConnections } from "../../../wailsjs/go/ssh/SSH";
-import { audit_entity, audit_repo, sshpool } from "../../../wailsjs/go/models";
+import { audit_entity, audit_repo, audit_svc, sshpool } from "../../../wailsjs/go/models";
 import { ReviewMark, ReviewNotice, ReviewScores } from "@/components/approval/ReviewNotice";
 import { parseReviewInfo } from "@/lib/commandReview";
 
@@ -164,7 +164,15 @@ export function AuditLogPage() {
   const loadLogs = useCallback(() => {
     const startTime = computeStartTime();
     const endTime = computeEndTime();
-    return ListAuditLogs("", 0, startTime, endTime, page * PAGE_SIZE, PAGE_SIZE, sessionFilter)
+    return ListAuditLogs(
+      audit_svc.Query.createFrom({
+        session_id: sessionFilter,
+        start_time: startTime,
+        end_time: endTime,
+        offset: page * PAGE_SIZE,
+        limit: PAGE_SIZE,
+      })
+    )
       .then((result) => {
         setLogs(result?.items || []);
         setTotal(result?.total || 0);

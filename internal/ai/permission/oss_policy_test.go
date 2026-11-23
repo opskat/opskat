@@ -37,6 +37,10 @@ func (r *stubAuditRepo) ListSessions(context.Context, int64) ([]audit_repo.Sessi
 	return nil, nil
 }
 
+func (*stubAuditRepo) Facets(context.Context, int64, int64) (*audit_repo.Facets, error) {
+	return &audit_repo.Facets{}, nil
+}
+
 func withStubAudit(t *testing.T) *stubAuditRepo {
 	t.Helper()
 	stub := &stubAuditRepo{}
