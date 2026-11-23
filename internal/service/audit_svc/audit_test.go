@@ -120,4 +120,9 @@ func TestSessionGrantsCoverTheWholeSession(t *testing.T) {
 	none, err := SessionGrants(context.Background(), "nope")
 	require.NoError(t, err)
 	require.Empty(t, none)
+
+	// 空会话 ID 不是「不限会话」：不能把所有会话的授权混在一起返回
+	all, err := SessionGrants(context.Background(), "")
+	require.Error(t, err)
+	require.Nil(t, all)
 }

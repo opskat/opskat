@@ -2478,7 +2478,6 @@
     "timeStart": "开始时间",
     "timeEnd": "结束时间",
     "decision": "决策",
-    "decisionSource": "决策来源",
     "matchedPattern": "匹配模式",
     "sessionID": "会话 ID",
     "sessionAll": "全部会话",

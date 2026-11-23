@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw, SearchX } from "lucide-react";
 import { Button } from "@opskat/ui";
@@ -39,6 +39,14 @@ export function AuditLogsView({ tabs, query }: { tabs: ReactNode; query: AuditQu
   const selected = selectedIndex >= 0 ? items[selectedIndex] : null;
   const total = logs.data.total;
   const filtered = hasAnyFilter(filters);
+
+  // 相对时间范围每次查询都按当前时刻换算，翻页或刷新时旧记录可能已滑出窗口、总数变少：
+  // 当前页落到末页之后就回到新的末页，免得显示空表和「41–30 / 30」这样的区间
+  const lastPage = Math.max(0, Math.ceil(total / pageSize) - 1);
+  const pastEnd = logs.status === "ready" && !logs.loading && page > lastPage;
+  useEffect(() => {
+    if (pastEnd) setPage(lastPage);
+  }, [pastEnd, lastPage, setPage]);
 
   const placeholder =
     logs.status === "error" || items.length === 0 ? (

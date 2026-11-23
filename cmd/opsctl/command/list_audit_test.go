@@ -225,6 +225,15 @@ func TestCmdListAudit(t *testing.T) {
 			So(stderr, ShouldContainSubstring, "--since")
 		})
 
+		Convey("a day count too large for a duration fails instead of wrapping to a short window", func() {
+			// 213504 天的纳秒数比 2^64 只多约 25 分钟：溢出回绕后会悄悄变成「最近 25 分钟」
+			code, stderr := runListAuditStderr(context.Background(), "audit", "--since", "213504d")
+
+			So(code, ShouldEqual, 1)
+			So(stub.opts, ShouldBeEmpty)
+			So(stderr, ShouldContainSubstring, "--since")
+		})
+
 		Convey("table header follows the policy lang in ctx", func() {
 			stub.rows = []*audit_entity.AuditLog{{
 				ID: 1, Source: "opsctl", ToolName: "exec", AssetID: 7, AssetName: "web-01",

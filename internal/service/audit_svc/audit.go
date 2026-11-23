@@ -4,6 +4,7 @@ package audit_svc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -125,9 +126,6 @@ func Facets(ctx context.Context, startTime, endTime int64) (*FacetsResult, error
 		}
 	}
 	res := &FacetsResult{Tools: f.ToolNames, Deciders: []string{}}
-	if res.Tools == nil {
-		res.Tools = []string{}
-	}
 	for _, g := range aictx.DeciderGroups {
 		if present[g] {
 			res.Deciders = append(res.Deciders, g)
@@ -146,6 +144,10 @@ type SessionGrant struct {
 
 // SessionGrants 返回会话的全部授权记录（新到旧），与分页、其它筛选无关
 func SessionGrants(ctx context.Context, sessionID string) ([]SessionGrant, error) {
+	// 空会话 ID 在仓储里表示「不按会话过滤」，查出来会是所有会话的授权
+	if sessionID == "" {
+		return nil, errors.New("session id is required")
+	}
 	logs, _, err := audit_repo.Audit().List(ctx, audit_repo.ListOptions{SessionID: sessionID, ToolName: grantSubmitTool})
 	if err != nil {
 		return nil, err

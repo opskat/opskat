@@ -745,6 +745,27 @@ describe("AuditLogPage paging, loading and context", () => {
     await waitFor(() => expect(lastQuery().offset).toBe(61 * 20));
   });
 
+  it("moves back to the new last page when the current page falls past the end", async () => {
+    // 相对时间范围每次查询都按当前时刻换算：翻到末页时旧记录已滑出窗口，总数变少
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [log(1)], total: 45 } as never);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await screen.findByText("cmd-1");
+
+    vi.mocked(ListAuditLogs).mockImplementation((q) =>
+      Promise.resolve(
+        (q.offset >= 30
+          ? { items: [], total: 30 }
+          : { items: [log(2, { Command: "back-on-last-page" })], total: 30 }) as never
+      )
+    );
+    await user.click(screen.getByRole("button", { name: "audit.lastPage" }));
+
+    expect(await screen.findByText("back-on-last-page")).toBeInTheDocument();
+    expect(lastQuery().offset).toBe(20);
+    expect(screen.getByRole("textbox", { name: "audit.pageNumber" })).toHaveValue("2");
+  });
+
   it("changing the page size goes back to the first page", async () => {
     vi.mocked(ListAuditLogs).mockResolvedValue({ items: [log(1)], total: 1234 } as never);
     const user = userEvent.setup();

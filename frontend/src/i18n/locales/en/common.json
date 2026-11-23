@@ -2478,7 +2478,6 @@
     "timeStart": "Start time",
     "timeEnd": "End time",
     "decision": "Decision",
-    "decisionSource": "Decision Source",
     "matchedPattern": "Matched Pattern",
     "sessionID": "Session ID",
     "sessionAll": "All sessions",

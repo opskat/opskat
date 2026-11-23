@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -177,9 +178,13 @@ func (r *repeatedFlag) Set(v string) error {
 func parseSince(s string) (time.Duration, error) {
 	var d time.Duration
 	if days, ok := strings.CutSuffix(s, "d"); ok {
-		n, err := strconv.Atoi(days)
+		n, err := strconv.ParseInt(days, 10, 64)
 		if err != nil {
 			return 0, err
+		}
+		// 超出 Duration 可表示的范围时乘法会回绕成任意值（甚至很短的正时长）
+		if n > math.MaxInt64/int64(24*time.Hour) {
+			return 0, fmt.Errorf("duration %q out of range", s)
 		}
 		d = time.Duration(n) * 24 * time.Hour
 	} else {
