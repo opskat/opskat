@@ -526,6 +526,39 @@ describe("AuditLogPage filters", () => {
     await waitFor(() => expect(lastQuery().keyword).toBe(""));
     expect(screen.getByRole("textbox", { name: "audit.searchPlaceholder" })).toHaveValue("");
   });
+
+  it("keeps the conditions and time range when switching to the pool tab and back", async () => {
+    vi.mocked(GetSSHPoolConnections).mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await screen.findByText("cmd-1");
+
+    await user.click(screen.getByTestId("audit-filter-source"));
+    await user.click(await screen.findByRole("button", { name: "audit.sources.ai" }));
+    await user.click(screen.getByRole("button", { name: "audit.time1d" }));
+    await user.click(await screen.findByRole("button", { name: "audit.time7d" }));
+    await waitFor(() => expect(lastQuery().source).toBe("ai"));
+
+    await user.click(screen.getByRole("tab", { name: /audit.tabPool/ }));
+    await user.click(await screen.findByRole("tab", { name: /audit.tabLogs/ }));
+
+    expect(await screen.findByTestId("audit-conditions")).toHaveTextContent("audit.source:audit.sources.ai");
+    expect(screen.getByRole("button", { name: "audit.time7d" })).toBeInTheDocument();
+    await waitFor(() => expect(lastQuery().source).toBe("ai"));
+  });
+
+  it("hints that a decision label filters, next to the matched rule", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({
+      items: [log(1, { MatchedPattern: "systemctl *" })],
+      total: 1,
+    } as never);
+    render(<AuditLogPage />);
+    const row = (await screen.findByText("cmd-1")).closest("tr") as HTMLTableRowElement;
+
+    const badge = within(row).getByRole("button", { name: "✓ audit.decisionSources.policy" });
+    expect(badge.title).toContain("systemctl *");
+    expect(badge.title).toContain("audit.filterThis");
+  });
 });
 
 describe("AuditLogPage detail drawer", () => {
@@ -631,10 +664,31 @@ describe("AuditLogPage detail drawer", () => {
     expect(drawer()).not.toBeInTheDocument();
   });
 
-  it("shows the error summary when hovering a failed result", async () => {
+  it("shows the error summary and the filter hint when hovering a failed result", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({
+      items: [log(2, { Success: 0, Error: "exit status 1\n  at stack frame 1\n  at stack frame 2" })],
+      total: 1,
+    } as never);
     render(<AuditLogPage />);
     const row2 = (await screen.findByText("cmd-2")).closest("tr") as HTMLTableRowElement;
-    expect(within(row2).getByRole("button", { name: "audit.failed" })).toHaveAttribute("title", "exit status 1");
+    expect(within(row2).getByRole("button", { name: "audit.failed" })).toHaveAttribute(
+      "title",
+      "exit status 1\naudit.filterThis"
+    );
+  });
+
+  it("names who decided next to the detailed reason", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({
+      items: [log(4, { Success: 0, Decision: "deny", DecisionSource: "exec_gate_blocked" })],
+      total: 1,
+    } as never);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await user.click(await screen.findByText("cmd-4"));
+
+    expect(await within(drawer()!).findByText(/audit\.deciders\.exec_gate/)).toBeInTheDocument();
+    expect(drawer()).toHaveTextContent("audit.decisions.deny");
+    expect(drawer()).toHaveTextContent("audit.decisionSources.execGateBlocked");
   });
 });
 
@@ -763,6 +817,26 @@ describe("AuditLogPage paging, loading and context", () => {
     expect(ListAuditSessionGrants).toHaveBeenLastCalledWith("s-1");
     expect(grants).toHaveTextContent("web-01:systemctl status *");
     expect(grants).toHaveTextContent("db-01:SELECT *");
+  });
+
+  it("refreshing also reloads the session grants", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [log(1)], total: 1 } as never);
+    vi.mocked(ListAuditSessionGrants).mockResolvedValue([
+      { asset_id: 9, asset_name: "web-01", patterns: "uptime", createtime: 1 },
+    ] as never);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await user.click(await screen.findByText("cmd-1"));
+    await user.click(
+      within(screen.getByRole("complementary", { name: "audit.detail" })).getByRole("button", { name: "s-1" })
+    );
+    expect(await screen.findByTestId("audit-session-grants")).toHaveTextContent("uptime");
+
+    vi.mocked(ListAuditSessionGrants).mockResolvedValue([
+      { asset_id: 9, asset_name: "web-01", patterns: "df -h", createtime: 2 },
+    ] as never);
+    await user.click(screen.getByRole("button", { name: "audit.refresh" }));
+    await waitFor(() => expect(screen.getByTestId("audit-session-grants")).toHaveTextContent("df -h"));
   });
 
   it("shows a retry when the session grants fail to load", async () => {

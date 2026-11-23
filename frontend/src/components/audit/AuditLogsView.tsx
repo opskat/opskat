@@ -1,4 +1,4 @@
-import { useCallback, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCw, SearchX } from "lucide-react";
 import { Button } from "@opskat/ui";
@@ -8,48 +8,28 @@ import { AuditLogTable } from "./AuditLogTable";
 import { AuditDetailDrawer } from "./AuditDetailDrawer";
 import { AuditPager } from "./AuditPager";
 import { AuditSessionGrants } from "./AuditSessionGrants";
-import {
-  AUDIT_PAGE_SIZES,
-  DEFAULT_TIME_RANGE,
-  EMPTY_FILTERS,
-  hasAnyFilter,
-  type AuditFilters,
-  type AuditTimeRange,
-} from "./auditFilters";
+import { hasAnyFilter } from "./auditFilters";
 import { useAuditFacets, useAuditLogs, useAuditSessions, useDeciderOfSource } from "./useAuditData";
+import type { AuditQuery } from "./useAuditQuery";
 
 /** 审计日志页签：顶栏筛选 + 表头筛选 + 列表 */
-export function AuditLogsView({ tabs }: { tabs: ReactNode }) {
+export function AuditLogsView({ tabs, query }: { tabs: ReactNode; query: AuditQuery }) {
   const { t } = useTranslation();
-  const [filters, setFilters] = useState<AuditFilters>(EMPTY_FILTERS);
-  const [range, setRange] = useState<AuditTimeRange>(DEFAULT_TIME_RANGE);
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState<number>(AUDIT_PAGE_SIZES[0]);
+  const { filters, range, page, pageSize, patchFilters, clearFilters, changeRange, setPage, changePageSize } = query;
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // 刷新按钮递增，会话授权汇总据此重新拉取
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const logs = useAuditLogs(filters, range, page, pageSize);
   const facets = useAuditFacets(range);
   const sessions = useAuditSessions(range);
   const deciderOf = useDeciderOfSource();
 
-  // 任一条件变化都回到第 1 页
-  const patchFilters = useCallback((patch: Partial<AuditFilters>) => {
-    setFilters((prev) => ({ ...prev, ...patch }));
-    setPage(0);
-  }, []);
-  const clearFilters = useCallback(() => {
-    setFilters(EMPTY_FILTERS);
-    setPage(0);
-  }, []);
-  const changeRange = useCallback((next: AuditTimeRange) => {
-    setRange(next);
-    setPage(0);
-  }, []);
-
   const refresh = () => {
     logs.reload();
     facets.reload();
     sessions.reload();
+    setRefreshKey((k) => k + 1);
   };
 
   const items = logs.data.items;
@@ -111,7 +91,7 @@ export function AuditLogsView({ tabs }: { tabs: ReactNode }) {
         />
       </div>
 
-      {filters.session && <AuditSessionGrants sessionId={filters.session} />}
+      {filters.session && <AuditSessionGrants sessionId={filters.session} refreshKey={refreshKey} />}
 
       <div className="relative flex-1 min-h-0 flex flex-col">
         <div className="flex-1 overflow-auto">
@@ -131,6 +111,7 @@ export function AuditLogsView({ tabs }: { tabs: ReactNode }) {
           <AuditDetailDrawer
             log={selected}
             filters={filters}
+            deciderOf={deciderOf}
             onPatch={patchFilters}
             onClose={() => setSelectedId(null)}
             onPrev={selectedIndex > 0 ? () => setSelectedId(items[selectedIndex - 1].ID) : undefined}
@@ -145,10 +126,7 @@ export function AuditLogsView({ tabs }: { tabs: ReactNode }) {
         total={total}
         loading={logs.loading}
         onPage={setPage}
-        onPageSize={(size) => {
-          setPageSize(size);
-          setPage(0);
-        }}
+        onPageSize={changePageSize}
       />
     </>
   );

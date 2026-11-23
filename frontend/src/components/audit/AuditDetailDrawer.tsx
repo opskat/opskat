@@ -115,6 +115,7 @@ interface AuditDetailDrawerProps {
   log: audit_entity.AuditLog;
   filters: AuditFilters;
   onPatch: (patch: Partial<AuditFilters>) => void;
+  deciderOf: (source: string) => string | undefined;
   onClose: () => void;
   onPrev?: () => void;
   onNext?: () => void;
@@ -127,7 +128,15 @@ function fromEditable(e: KeyboardEvent): boolean {
 }
 
 /** 表格右侧的非模态详情面板；↑ / ↓ 切换当前页内的记录，Esc 关闭 */
-export function AuditDetailDrawer({ log, filters, onPatch, onClose, onPrev, onNext }: AuditDetailDrawerProps) {
+export function AuditDetailDrawer({
+  log,
+  filters,
+  onPatch,
+  deciderOf,
+  onClose,
+  onPrev,
+  onNext,
+}: AuditDetailDrawerProps) {
   const { t } = useTranslation();
   const copy = useCopy();
   const handlers = useRef({ onClose, onPrev, onNext });
@@ -151,6 +160,9 @@ export function AuditDetailDrawer({ log, filters, onPatch, onClose, onPrev, onNe
   }, []);
 
   const badge = decisionSourceBadge(log.DecisionSource, t);
+  // 决策方取分组名；细分原因（如执行前拦截的具体理由）与分组名不同时一并列出，未归组的来源只显示原因
+  const decider = deciderOf(log.DecisionSource);
+  const deciderName = decider ? deciderLabel(decider, t) : badge.label;
   const addAsset = () => {
     if (filters.assets.some((a) => a.id === log.AssetID)) return;
     onPatch({ assets: [...filters.assets, { id: log.AssetID, name: log.AssetName || `#${log.AssetID}` }] });
@@ -220,9 +232,12 @@ export function AuditDetailDrawer({ log, filters, onPatch, onClose, onPrev, onNe
           </Meta>
           <Meta label={t("audit.decision")}>
             {log.DecisionSource ? (
-              <span className={cn("inline-block px-1.5 py-0.5 rounded font-mono", badge.className)}>
-                {log.Decision === "allow" ? "✓" : "✗"} {decisionLabel(log.Decision, t)} · {badge.label}
-              </span>
+              <>
+                <span className={cn("inline-block px-1.5 py-0.5 rounded font-mono", badge.className)}>
+                  {log.Decision === "allow" ? "✓" : "✗"} {decisionLabel(log.Decision, t)} · {deciderName}
+                </span>
+                {deciderName !== badge.label && <span className="ml-1.5 text-muted-foreground">{badge.label}</span>}
+              </>
             ) : (
               <span className="text-muted-foreground">{deciderLabel("none", t)}</span>
             )}

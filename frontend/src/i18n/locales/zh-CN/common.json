@@ -2487,7 +2487,7 @@
     "sessionGroupThisWeek": "本周",
     "sessionGroupEarlier": "更早",
     "sessionOps": "{{count}} 条操作",
-    "sessionPatterns": "会话已允许模式",
+    "sessionPatterns": "此会话已授权的命令模式",
     "decisionSources": {
       "assisted": "辅助审批",
       "autopilot": "Autopilot",

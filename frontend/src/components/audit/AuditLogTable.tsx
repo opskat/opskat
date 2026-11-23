@@ -37,6 +37,13 @@ interface AuditLogTableProps {
 
 const COLUMN_COUNT = 7;
 
+/** 悬停用的错误摘要：首行，过长截断 */
+const ERROR_SUMMARY_MAX = 200;
+function errorSummary(error: string): string {
+  const line = error.trim().split("\n")[0];
+  return line.length > ERROR_SUMMARY_MAX ? `${line.slice(0, ERROR_SUMMARY_MAX)}…` : line;
+}
+
 /** 可点的单元格内容：点了即按该值筛选 */
 function FilterCell({
   children,
@@ -259,13 +266,16 @@ export function AuditLogTable({
                 </FilterCell>
               </td>
               <td className="px-4 py-2 whitespace-nowrap">
-                {log.AssetID > 0 ? (
-                  <FilterCell title={filterThis} onClick={() => addAsset(log)}>
-                    {log.AssetName || `#${log.AssetID}`}
-                  </FilterCell>
-                ) : (
-                  log.AssetName || <span className="text-muted-foreground">-</span>
-                )}
+                {/* 限宽：资产名再长也不把表格撑出横向滚动，全名在详情里 */}
+                <div className="max-w-40 truncate">
+                  {log.AssetID > 0 ? (
+                    <FilterCell title={filterThis} onClick={() => addAsset(log)}>
+                      {log.AssetName || `#${log.AssetID}`}
+                    </FilterCell>
+                  ) : (
+                    log.AssetName || <span className="text-muted-foreground">-</span>
+                  )}
+                </div>
               </td>
               <td className="px-4 py-2 font-mono text-xs truncate w-full max-w-0" title={log.Command}>
                 {log.Command || "-"}
@@ -274,12 +284,16 @@ export function AuditLogTable({
                 {log.DecisionSource ? (
                   <button
                     type="button"
-                    title={log.MatchedPattern ? `${t("audit.matchedPattern")}: ${log.MatchedPattern}` : filterThis}
+                    title={
+                      log.MatchedPattern
+                        ? `${t("audit.matchedPattern")}: ${log.MatchedPattern}\n${filterThis}`
+                        : filterThis
+                    }
                     onClick={(e) => {
                       e.stopPropagation();
                       onPatch({ decision: log.Decision as AuditFilters["decision"], decider: decider ?? "" });
                     }}
-                    className={`inline-block px-1.5 py-0.5 text-xs rounded font-mono cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${badge.className}`}
+                    className={`inline-block px-1.5 py-0.5 text-xs rounded font-mono cursor-pointer hover:underline underline-offset-2 decoration-dotted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${badge.className}`}
                   >
                     {log.Decision === "allow" ? "✓" : "✗"} {badge.label}
                   </button>
@@ -295,7 +309,7 @@ export function AuditLogTable({
               <td className="px-2 py-2 text-center">
                 <button
                   type="button"
-                  title={log.Success === 1 ? filterThis : log.Error || filterThis}
+                  title={log.Success !== 1 && log.Error ? `${errorSummary(log.Error)}\n${filterThis}` : filterThis}
                   onClick={(e) => {
                     e.stopPropagation();
                     onPatch({ result: log.Success === 1 ? "success" : "failed" });

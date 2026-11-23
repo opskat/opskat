@@ -4,11 +4,14 @@ import { RefreshCw, Unplug } from "lucide-react";
 import { Button, Tabs, TabsList, TabsTrigger } from "@opskat/ui";
 import { AuditLogsView } from "./AuditLogsView";
 import { AuditPoolView } from "./AuditPoolView";
+import { useAuditQuery } from "./useAuditQuery";
 
 export function AuditLogPage() {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState("logs");
   const [poolRefreshKey, setPoolRefreshKey] = useState(0);
+  // 查询条件放在页面上，切到连接池再切回时保留
+  const auditQuery = useAuditQuery();
 
   const tabs = (
     <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -27,7 +30,7 @@ export function AuditLogPage() {
   return (
     <div className="flex flex-col h-full">
       {activeTab === "logs" ? (
-        <AuditLogsView tabs={tabs} />
+        <AuditLogsView tabs={tabs} query={auditQuery} />
       ) : (
         <>
           <div className="px-4 py-3 border-b flex items-center justify-between gap-4">

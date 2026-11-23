@@ -2487,7 +2487,7 @@
     "sessionGroupThisWeek": "This week",
     "sessionGroupEarlier": "Earlier",
     "sessionOps": "{{count}} ops",
-    "sessionPatterns": "Session approved patterns",
+    "sessionPatterns": "Command patterns granted in this session",
     "decisionSources": {
       "assisted": "Assisted",
       "autopilot": "Autopilot",

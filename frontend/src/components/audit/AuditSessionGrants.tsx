@@ -7,10 +7,14 @@ import { useLatestFetch } from "./useAuditData";
 
 const NO_GRANTS: audit_svc.SessionGrant[] = [];
 
-/** 选中会话时：该会话全部「始终允许」授权，与当前页与其它筛选无关 */
-export function AuditSessionGrants({ sessionId }: { sessionId: string }) {
+/** 选中会话时：该会话全部「始终允许」授权，与当前页与其它筛选无关；refreshKey 变化时重新拉取 */
+export function AuditSessionGrants({ sessionId, refreshKey }: { sessionId: string; refreshKey: number }) {
   const { t } = useTranslation();
-  const grants = useLatestFetch(`grants-${sessionId}`, () => ListAuditSessionGrants(sessionId), NO_GRANTS);
+  const grants = useLatestFetch(
+    `grants-${sessionId}-${refreshKey}`,
+    () => ListAuditSessionGrants(sessionId),
+    NO_GRANTS
+  );
 
   if (grants.status !== "ready") {
     return (
