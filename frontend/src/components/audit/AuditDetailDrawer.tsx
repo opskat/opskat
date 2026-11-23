@@ -5,6 +5,7 @@ import { CheckCircle2, ChevronDown, ChevronUp, Copy, X, XCircle } from "lucide-r
 import { Button, cn } from "@opskat/ui";
 import { ReviewNotice, ReviewScores } from "@/components/approval/ReviewNotice";
 import { parseReviewInfo } from "@/lib/commandReview";
+import { errorMessage } from "@/lib/errorMessage";
 import { notifyCopied } from "@/lib/notify";
 import { audit_entity } from "../../../wailsjs/go/models";
 import { ClipboardSetText } from "../../../wailsjs/runtime/runtime";
@@ -43,13 +44,16 @@ function prettyJSON(raw: string): string {
   }
 }
 
-/** 复制走 Wails 原生剪贴板（与终端复制同源）；它返回 false 表示没写进去 */
+/** 复制走 Wails 原生剪贴板（与终端复制同源）；系统剪贴板写入出错时它 reject，resolve false 同样视为没写进去 */
 function useCopy() {
   const { t } = useTranslation();
-  return async (text: string) => {
-    if (await ClipboardSetText(text)) notifyCopied(t("action.copied"));
-    else toast.error(t("audit.copyFailed"));
-  };
+  return (text: string) =>
+    ClipboardSetText(text)
+      .then((written) => {
+        if (written) notifyCopied(t("action.copied"));
+        else toast.error(t("audit.copyFailed"));
+      })
+      .catch((e) => toast.error(`${t("audit.copyFailed")}: ${errorMessage(e)}`));
 }
 
 function CopyBlock({ title, body, tone }: { title: string; body: string; tone?: "error" }) {

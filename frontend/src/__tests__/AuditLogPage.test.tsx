@@ -666,6 +666,20 @@ describe("AuditLogPage detail drawer", () => {
     error.mockRestore();
   });
 
+  it("reports a copy the native clipboard rejected", async () => {
+    // Wails 在系统剪贴板写入出错时 reject（而不是 resolve false）
+    vi.mocked(ClipboardSetText).mockRejectedValueOnce(new Error("pasteboard unavailable"));
+    const error = vi.spyOn(toast, "error");
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await user.click(await screen.findByText("cmd-3"));
+
+    const commandBlock = within(drawer()!).getByText("cmd-3").closest("section") as HTMLElement;
+    await user.click(within(commandBlock).getByRole("button", { name: "audit.copyField" }));
+    await waitFor(() => expect(error).toHaveBeenCalledWith("audit.copyFailed: pasteboard unavailable"));
+    error.mockRestore();
+  });
+
   it("closes when the selected record is no longer in the results", async () => {
     const user = userEvent.setup();
     render(<AuditLogPage />);
