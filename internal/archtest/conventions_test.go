@@ -34,7 +34,6 @@ var importBans = []importBanRule{
 		exempt: map[string]bool{
 			"internal/app/opsctl/approval.go":     true,
 			"internal/app/ssh/forward_manager.go": true,
-			"internal/app/system/settings.go":     true,
 		},
 		message: "internal/app 不得直接调用 repository，经对应域服务取数（AGENTS.md → 依赖接口、调 getter）",
 	},

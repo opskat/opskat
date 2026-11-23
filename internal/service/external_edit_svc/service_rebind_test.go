@@ -216,6 +216,10 @@ func (r *rebindAuditRepo) ListSessions(context.Context, int64) ([]audit_repo.Ses
 	return nil, nil
 }
 
+func (*rebindAuditRepo) Facets(context.Context, int64, int64) (*audit_repo.Facets, error) {
+	return &audit_repo.Facets{}, nil
+}
+
 func (r *rebindAuditRepo) lastTool() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

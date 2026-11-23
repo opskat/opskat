@@ -32,6 +32,10 @@ func (m *mockAuditRepo) ListSessions(_ context.Context, _ int64) ([]audit_repo.S
 	return nil, nil
 }
 
+func (*mockAuditRepo) Facets(context.Context, int64, int64) (*audit_repo.Facets, error) {
+	return &audit_repo.Facets{}, nil
+}
+
 // stubLocalTool 是测试用 local 工具桩,复刻自 tool/local_tool_gate_test.go。
 type stubLocalTool struct {
 	name   string

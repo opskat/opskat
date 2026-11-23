@@ -167,6 +167,10 @@ func (m *memAuditRepo) ListSessions(_ context.Context, _ int64) ([]audit_repo.Se
 	return nil, nil
 }
 
+func (*memAuditRepo) Facets(context.Context, int64, int64) (*audit_repo.Facets, error) {
+	return &audit_repo.Facets{}, nil
+}
+
 func setupAuditRepo(t *testing.T) *memAuditRepo {
 	t.Helper()
 	m := &memAuditRepo{}

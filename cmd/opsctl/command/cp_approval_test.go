@@ -46,6 +46,10 @@ func (r *recordingAuditRepo) ListSessions(context.Context, int64) ([]audit_repo.
 	return nil, nil
 }
 
+func (*recordingAuditRepo) Facets(context.Context, int64, int64) (*audit_repo.Facets, error) {
+	return &audit_repo.Facets{}, nil
+}
+
 // cpTestRemoteType 是一个只在测试二进制里存在的传输端点类型（同一套路的先例：
 // internal/ai/tool/file_transfer_approval_test.go 的 cptest）。
 //

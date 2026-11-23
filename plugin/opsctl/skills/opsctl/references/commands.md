@@ -27,13 +27,25 @@ opsctl list groups
 
 Read-only listing of stored audit log rows: time, source, asset, tool, command summary, and decision source, newest first. **AI-usable read-only entry point** — no TTY required. Rows are presented exactly as stored, no re-redaction.
 
-**Flags**:
-- `--asset <asset>` — Filter by asset (name, group/name, or numeric ID)
+**Flags** (combine freely; each narrows the result):
+- `--asset <asset>` — Filter by asset (name, group/name, or numeric ID); repeat to match any of several assets
+- `--source <ai|opsctl|desktop>` — Filter by source
+- `--tool <name>` — Filter by tool name (e.g. `exec`, `cp`, `exec_sql`)
+- `--result <success|failed>` — Filter by result
+- `--decision <allow|deny>` — Filter by decision
+- `--decider <who>` — Filter by who decided: `policy`, `user`, `grant`, `assisted`, `autopilot`, `exec_gate` (blocked before the permission check), `batch`, `none` (no approval involved)
+- `--session <id>` — Filter by session ID
+- `--grep <text>` — Literal, case-insensitive substring of the command or asset name
+- `--since <duration>` — Only rows newer than this (`30m`, `6h`, `7d`)
 - `--limit <int>` — Maximum rows to show (default 20)
+
+An unknown enum value or unparsable `--since` exits 1 and names the allowed values.
 
 ```bash
 opsctl list audit
 opsctl list audit --asset web-01 --limit 50
+opsctl list audit --decision deny --decider user --since 7d
+opsctl list audit --asset web-01 --asset web-02 --result failed --grep nginx
 ```
 
 ## get
