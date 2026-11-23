@@ -43,7 +43,10 @@ func classifyStmt(stmt ast.StmtNode) StatementInfo {
 	info := StatementInfo{Raw: stmt.Text()}
 	switch s := stmt.(type) {
 	case *ast.SelectStmt:
-		info.Type = "SELECT"
+		info.Type = selectType(s)
+	case *ast.SetOprStmt:
+		// UNION / INTERSECT / EXCEPT：每个分支都按单独的 SELECT 归类。
+		info.Type = setOprType(s.SelectList)
 	case *ast.InsertStmt:
 		info.Type = "INSERT"
 	case *ast.UpdateStmt:
@@ -95,13 +98,47 @@ func classifyStmt(stmt ast.StmtNode) StatementInfo {
 	case *ast.ShowStmt:
 		info.Type = "SHOW"
 	case *ast.ExplainStmt:
-		info.Type = "EXPLAIN"
+		if s.Analyze {
+			// EXPLAIN ANALYZE 会执行里面的语句（TiDB 上 UPDATE/DELETE 真的改数据；MySQL 8.0/9.7 不落写），
+			// 所以按里面的语句归类，原文仍是整条。
+			inner := classifyStmt(s.Stmt)
+			info.Type, info.Dangerous, info.Reason = inner.Type, inner.Dangerous, inner.Reason
+		} else {
+			info.Type = "EXPLAIN"
+		}
 	case *ast.UseStmt:
 		info.Type = "USE"
 	default:
 		info.Type = "OTHER"
 	}
 	return info
+}
+
+// selectType 给出一条 SELECT 的类型：INTO OUTFILE 会在数据库服务器上写文件，不算只读的 SELECT。
+func selectType(s *ast.SelectStmt) string {
+	if s.SelectIntoOpt != nil && s.SelectIntoOpt.Tp == ast.SelectIntoOutfile {
+		return "SELECT INTO OUTFILE"
+	}
+	return "SELECT"
+}
+
+// setOprType 给出集合查询的类型：所有分支都是 SELECT 才算 SELECT，否则取第一个不是 SELECT 的分支的类型。
+func setOprType(list *ast.SetOprSelectList) string {
+	for _, n := range list.Selects {
+		var t string
+		switch sel := n.(type) {
+		case *ast.SelectStmt:
+			t = selectType(sel)
+		case *ast.SetOprSelectList:
+			t = setOprType(sel)
+		default:
+			t = "OTHER"
+		}
+		if t != "SELECT" {
+			return t
+		}
+	}
+	return "SELECT"
 }
 
 // CheckQueryPolicy 检查 SQL 语句是否符合策略（合并默认策略后检查）
