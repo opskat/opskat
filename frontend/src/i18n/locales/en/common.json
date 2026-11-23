@@ -2549,7 +2549,8 @@
     "nextPage": "Next page",
     "lastPage": "Last page",
     "reloading": "Refreshing",
-    "poolDeletedAsset": "Deleted asset"
+    "poolDeletedAsset": "Deleted asset",
+    "copyFailed": "Couldn't copy"
   },
   "zmodem": {
     "downloadComplete": "Received {{name}}",

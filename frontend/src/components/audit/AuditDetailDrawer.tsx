@@ -5,9 +5,9 @@ import { CheckCircle2, ChevronDown, ChevronUp, Copy, X, XCircle } from "lucide-r
 import { Button, cn } from "@opskat/ui";
 import { ReviewNotice, ReviewScores } from "@/components/approval/ReviewNotice";
 import { parseReviewInfo } from "@/lib/commandReview";
-import { errorMessage } from "@/lib/errorMessage";
 import { notifyCopied } from "@/lib/notify";
 import { audit_entity } from "../../../wailsjs/go/models";
+import { ClipboardSetText } from "../../../wailsjs/runtime/runtime";
 import { decisionLabel, decisionSourceBadge, deciderLabel, sourceLabel } from "./auditLabels";
 import { formatAuditTimeFull, type AuditFilters } from "./auditFilters";
 
@@ -43,15 +43,12 @@ function prettyJSON(raw: string): string {
   }
 }
 
+/** 复制走 Wails 原生剪贴板（与终端复制同源）；它返回 false 表示没写进去 */
 function useCopy() {
   const { t } = useTranslation();
   return async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      notifyCopied(t("action.copied"));
-    } catch (e) {
-      toast.error(errorMessage(e));
-    }
+    if (await ClipboardSetText(text)) notifyCopied(t("action.copied"));
+    else toast.error(t("audit.copyFailed"));
   };
 }
 

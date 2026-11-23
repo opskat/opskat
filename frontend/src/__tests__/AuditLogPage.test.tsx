@@ -12,6 +12,8 @@ import {
   ListAuditSessions,
 } from "../../wailsjs/go/system/System";
 import { GetSSHPoolConnections } from "../../wailsjs/go/ssh/SSH";
+import { ClipboardSetText } from "../../wailsjs/runtime/runtime";
+import { toast } from "sonner";
 import type { audit_svc } from "../../wailsjs/go/models";
 
 // 每个用例都要的后端：筛选项与决策方分组（分组定义在后端，前端只按它反查）
@@ -644,11 +646,24 @@ describe("AuditLogPage detail drawer", () => {
 
     const commandBlock = within(drawer()!).getByText("cmd-3").closest("section") as HTMLElement;
     await user.click(within(commandBlock).getByRole("button", { name: "audit.copyField" }));
-    // userEvent.setup() 装了自己的剪贴板替身，读回来即可
-    expect(await navigator.clipboard.readText()).toBe("cmd-3");
+    // 走 Wails 原生剪贴板（与终端复制同源），不用浏览器 navigator.clipboard
+    expect(ClipboardSetText).toHaveBeenLastCalledWith("cmd-3");
 
     await user.click(within(drawer()!).getByRole("button", { name: "session-3" }));
     await waitFor(() => expect(lastQuery().session_id).toBe("session-3"));
+  });
+
+  it("reports a failed copy instead of claiming it was copied", async () => {
+    vi.mocked(ClipboardSetText).mockResolvedValueOnce(false);
+    const error = vi.spyOn(toast, "error");
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await user.click(await screen.findByText("cmd-3"));
+
+    const commandBlock = within(drawer()!).getByText("cmd-3").closest("section") as HTMLElement;
+    await user.click(within(commandBlock).getByRole("button", { name: "audit.copyField" }));
+    await waitFor(() => expect(error).toHaveBeenCalledWith("audit.copyFailed"));
+    error.mockRestore();
   });
 
   it("closes when the selected record is no longer in the results", async () => {
