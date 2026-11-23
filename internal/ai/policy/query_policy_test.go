@@ -167,6 +167,60 @@ func TestCheckQueryPolicy(t *testing.T) {
 	})
 }
 
+// 语句按它实际做的事归类：只读的集合查询算 SELECT；写服务器文件的 SELECT ... INTO
+// OUTFILE/DUMPFILE 不算 SELECT；EXPLAIN ANALYZE 会真正执行里面的语句，按里面的语句归类。
+// 默认策略（只读组 + 危险拒绝组）下的决定是对外的契约。
+func TestClassifyStatementsByEffect(t *testing.T) {
+	ctx := context.Background()
+
+	cases := []struct {
+		name         string
+		sql          string
+		wantType     string
+		wantReason   string
+		wantDecision aictx.Decision
+	}{
+		{"UNION ALL of grouped counts",
+			"SELECT 'hr_gender' dt, gender v, COUNT(*) n FROM `znzt-hrm`.hr_employee_profile WHERE deleted=0 GROUP BY gender UNION ALL SELECT 'hr_ethnicity', ethnicity_code, COUNT(*) FROM `znzt-hrm`.hr_employee_profile WHERE deleted=0 GROUP BY ethnicity_code UNION ALL SELECT 'hr_talent_category', category, COUNT(*) FROM `znzt-hrm`.hr_talent WHERE deleted=0 GROUP BY category",
+			"SELECT", "", aictx.Allow},
+		{"WITH then UNION", "WITH c AS (SELECT 1 a) SELECT * FROM c UNION ALL SELECT 2", "SELECT", "", aictx.Allow},
+		{"braced UNION with ORDER BY and LIMIT", "(SELECT a FROM t) UNION (SELECT b FROM u) ORDER BY 1 LIMIT 5", "SELECT", "", aictx.Allow},
+		{"INTERSECT", "SELECT a FROM t INTERSECT SELECT b FROM u", "SELECT", "", aictx.Allow},
+		{"EXCEPT", "SELECT a FROM t EXCEPT SELECT b FROM u", "SELECT", "", aictx.Allow},
+
+		{"SELECT INTO OUTFILE", "SELECT * FROM t INTO OUTFILE '/tmp/x'", "SELECT INTO OUTFILE", "", aictx.NeedConfirm},
+		{"UNION INTO OUTFILE", "SELECT a FROM t UNION SELECT b FROM u INTO OUTFILE '/tmp/x'", "SELECT INTO OUTFILE", "", aictx.NeedConfirm},
+
+		{"EXPLAIN ANALYZE DELETE", "EXPLAIN ANALYZE DELETE FROM t WHERE id = 1", "DELETE", "", aictx.NeedConfirm},
+		{"EXPLAIN ANALYZE DELETE without WHERE", "EXPLAIN ANALYZE DELETE FROM t", "DELETE", "no_where_delete", aictx.Deny},
+		{"EXPLAIN ANALYZE multi-table UPDATE", "EXPLAIN ANALYZE UPDATE t, u SET t.a = u.a WHERE t.id = u.id", "UPDATE", "", aictx.NeedConfirm},
+		{"EXPLAIN ANALYZE SELECT", "EXPLAIN ANALYZE SELECT * FROM t", "SELECT", "", aictx.Allow},
+		{"EXPLAIN ANALYZE SELECT INTO OUTFILE", "EXPLAIN ANALYZE SELECT * FROM t INTO OUTFILE '/tmp/x'", "SELECT INTO OUTFILE", "", aictx.NeedConfirm},
+		{"plain EXPLAIN DELETE only plans", "EXPLAIN DELETE FROM t", "EXPLAIN", "", aictx.Allow},
+	}
+
+	Convey("ClassifyStatements by effect", t, func() {
+		for _, tc := range cases {
+			Convey(tc.name, func() {
+				stmts, err := ClassifyStatements(tc.sql)
+				So(err, ShouldBeNil)
+				So(stmts, ShouldHaveLength, 1)
+				So(stmts[0].Type, ShouldEqual, tc.wantType)
+				So(stmts[0].Raw, ShouldEqual, tc.sql)
+				So(stmts[0].Reason, ShouldEqual, tc.wantReason)
+				So(CheckQueryPolicy(ctx, nil, stmts).Decision, ShouldEqual, tc.wantDecision)
+			})
+		}
+
+		// TiDB 语法不认 INTO DUMPFILE，解析失败即拒绝执行。解析器哪天开始接受它，
+		// 这里会失败，提醒给它像 INTO OUTFILE 一样的独立类型，而不是落成 SELECT。
+		Convey("SELECT INTO DUMPFILE is rejected by the parser", func() {
+			_, err := ClassifyStatements("SELECT a FROM t LIMIT 1 INTO DUMPFILE '/tmp/x'")
+			So(err, ShouldNotBeNil)
+		})
+	})
+}
+
 func TestAppendUnique_CaseSensitive(t *testing.T) {
 	Convey("AppendUnique 必须保留大小写不同的模式（Redis key / Kafka resource 都是大小写敏感的）", t, func() {
 		Convey("Redis key 模式大小写不同时不能合并", func() {
