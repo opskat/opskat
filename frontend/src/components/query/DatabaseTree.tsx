@@ -18,6 +18,8 @@ import {
   Trash2,
   Eraser,
   Columns3,
+  FileInput,
+  FileOutput,
 } from "lucide-react";
 import {
   Button,
@@ -29,6 +31,9 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ConfirmDialog,
   DropdownMenu,
   DropdownMenuContent,
@@ -47,8 +52,10 @@ import { useShallow } from "zustand/shallow";
 import { useQueryStore } from "@/stores/queryStore";
 import { useTabStore, type QueryTabMeta } from "@/stores/tabStore";
 import { CreateDatabaseDialog } from "./CreateDatabaseDialog";
+import { RunSqlFileDialog } from "./RunSqlFileDialog";
+import { DumpSqlFileDialog, type DumpTarget } from "./DumpSqlFileDialog";
 import { ObjectBrowserSection } from "./ObjectBrowserSection";
-import { useCanCreateTable, useDesignerAccess } from "./designer/access";
+import { useAssetReadOnly, useCanCreateTable, useDesignerAccess } from "./designer/access";
 import { defaultCreateTarget, targetLabel, targetOfTable, type CreateTableTarget } from "./designer/createTarget";
 import {
   OBJECT_BROWSER_CAPABILITIES,
@@ -130,6 +137,35 @@ function buildUngroupedTables(tables: string[], filterLower: string, dbMatch: bo
   });
 }
 
+/** 「转储 SQL 文件 ›」子菜单:结构和数据(驱动能生成行语句时)/ 仅结构;没有 onPick 时置灰、不展开。 */
+function DumpSubmenu({
+  testId,
+  canDumpData,
+  onPick,
+}: {
+  testId: string;
+  canDumpData: boolean;
+  onPick?: (withData: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <ContextMenuSub>
+      <ContextMenuSubTrigger data-testid={testId} disabled={!onPick}>
+        <FileOutput className="h-3.5 w-3.5" />
+        {t("query.dumpSqlFile")}
+      </ContextMenuSubTrigger>
+      {onPick && (
+        <ContextMenuSubContent>
+          {canDumpData && (
+            <ContextMenuItem onClick={() => onPick(true)}>{t("query.dumpSqlFileStructureAndDataItem")}</ContextMenuItem>
+          )}
+          <ContextMenuItem onClick={() => onPick(false)}>{t("query.dumpSqlFileStructureOnlyItem")}</ContextMenuItem>
+        </ContextMenuSubContent>
+      )}
+    </ContextMenuSub>
+  );
+}
+
 /** 资产的驱动没有注册时的提示(侧栏与右侧内容区共用)。 */
 export function DriverUnavailableNotice({ driver }: { driver: string | undefined }) {
   const { t } = useTranslation();
@@ -170,6 +206,12 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   );
   const treeRef = useRef<HTMLDivElement>(null);
   const [showCreateDatabase, setShowCreateDatabase] = useState(false);
+  // 正在「运行 SQL 文件」的库;null 表示对话框没开。
+  const [runSqlFileDatabase, setRunSqlFileDatabase] = useState<string | null>(null);
+  // 要「转储 SQL 文件」的库与对象(选中的表、整个库或整个 schema;内容取自所选的子菜单项);null 表示对话框没开。
+  const [dumpTarget, setDumpTarget] = useState<{ database: string; target: DumpTarget; withData: boolean } | null>(
+    null
+  );
   const [confirmAction, setConfirmAction] = useState<{
     type: "drop" | "truncate";
     targets: TableRef[];
@@ -191,6 +233,11 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
   const access = useDesignerAccess(driverDescriptor, tabMeta?.assetId);
   // 驱动没声明建表或资产是只读连接时,新建表的入口一个都不出现。
   const canCreateTable = useCanCreateTable(driverDescriptor, tabMeta?.assetId);
+  // 资产设为只读连接时「运行 SQL 文件…」仍显示但置灰:有的驱动的连接级只读并不生效。
+  const assetReadOnly = useAssetReadOnly(tabMeta?.assetId);
+  // 「转储 SQL 文件」:仅结构要驱动能给出定义,结构和数据还要能生成行语句。转储不受只读连接影响。
+  const canDump = can("dump_sql") && can("view_ddl");
+  const canDumpData = canDump && (can("export_sql") || can("copy_sql"));
   const defaultDatabase = tabMeta?.defaultDatabase ?? "";
   const openNewTable = (target: CreateTableTarget) => openCreateTableTab(tabId, target.database, target.schema);
 
@@ -456,6 +503,11 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
     // 所以这里按当前选中集算出的作用范围就是菜单实际生效的范围。
     const targets = contextTargets(db, tbl);
     const isBatch = targets.length > 1;
+    // 转储针对一个库:选中的表都在同一个库时才有(null 表示跨了库)。
+    const dumpDatabase = targets.every((target) => target.database === targets[0].database)
+      ? targets[0].database
+      : null;
+    const dumpTables = targets.map((target) => target.table);
     return (
       <ContextMenu key={tbl}>
         <ContextMenuTrigger className="block w-full">
@@ -523,6 +575,28 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                 {t("query.newMenu.in", { name: targetLabel(targetOfTable(db, tbl, schemaAware)) })}
               </ContextMenuShortcut>
             </ContextMenuItem>
+          )}
+          {canDump && (
+            <>
+              <ContextMenuSeparator />
+              {/* 一次转储针对一个库:选中的表跨了库时置灰。 */}
+              <div title={dumpDatabase === null ? t("query.dumpSqlFileOneDatabaseHint") : undefined}>
+                <DumpSubmenu
+                  testId="table-dump-sql-file"
+                  canDumpData={canDumpData}
+                  onPick={
+                    dumpDatabase === null
+                      ? undefined
+                      : (withData) =>
+                          setDumpTarget({
+                            database: dumpDatabase,
+                            target: { kind: "tables", tables: dumpTables },
+                            withData,
+                          })
+                  }
+                />
+              </div>
+            </>
           )}
           {(can("truncate_table") || can("drop_table")) && <ContextMenuSeparator />}
           {can("truncate_table") && (
@@ -719,6 +793,25 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                           {t("query.newTable")}
                         </ContextMenuItem>
                       )}
+                      {canDump && (
+                        <DumpSubmenu
+                          testId="database-dump-sql-file"
+                          canDumpData={canDumpData}
+                          onPick={(withData) => setDumpTarget({ database: db, target: { kind: "database" }, withData })}
+                        />
+                      )}
+                      {can("run_sql_file") && (
+                        <div title={assetReadOnly ? t("query.runSqlFileReadOnlyHint") : undefined}>
+                          <ContextMenuItem
+                            data-testid="database-run-sql-file"
+                            disabled={assetReadOnly}
+                            onClick={() => setRunSqlFileDatabase(db)}
+                          >
+                            <FileInput className="h-3.5 w-3.5" />
+                            {t("query.runSqlFile")}
+                          </ContextMenuItem>
+                        </div>
+                      )}
                       <ContextMenuSeparator />
                       <ContextMenuItem
                         onClick={() => {
@@ -830,24 +923,49 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
                                     const isSchemaExpanded = filterLower
                                       ? true
                                       : expandedSchemas.includes(group.schema);
+                                    const schemaRow = (
+                                      <div
+                                        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
+                                        onClick={() => {
+                                          if (filterLower) return;
+                                          if (isSchemaExpanded) dropSelectionUnder(`${db}.${group.schema}.`);
+                                          toggleSchemaExpand(tabId, db, group.schema);
+                                        }}
+                                      >
+                                        {isSchemaExpanded ? (
+                                          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                        ) : (
+                                          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                        )}
+                                        <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                        <span className="truncate">{group.schema}</span>
+                                      </div>
+                                    );
                                     return (
                                       <div key={group.schema}>
-                                        <div
-                                          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs cursor-pointer hover:bg-accent transition-colors duration-150"
-                                          onClick={() => {
-                                            if (filterLower) return;
-                                            if (isSchemaExpanded) dropSelectionUnder(`${db}.${group.schema}.`);
-                                            toggleSchemaExpand(tabId, db, group.schema);
-                                          }}
-                                        >
-                                          {isSchemaExpanded ? (
-                                            <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                          ) : (
-                                            <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                          )}
-                                          <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                          <span className="truncate">{group.schema}</span>
-                                        </div>
+                                        {/* schema 节点的右键菜单:转储这个 schema 下的全部对象。 */}
+                                        {canDump ? (
+                                          <ContextMenu>
+                                            <ContextMenuTrigger className="block w-full">
+                                              {schemaRow}
+                                            </ContextMenuTrigger>
+                                            <ContextMenuContent>
+                                              <DumpSubmenu
+                                                testId="schema-dump-sql-file"
+                                                canDumpData={canDumpData}
+                                                onPick={(withData) =>
+                                                  setDumpTarget({
+                                                    database: db,
+                                                    target: { kind: "schema", schema: group.schema },
+                                                    withData,
+                                                  })
+                                                }
+                                              />
+                                            </ContextMenuContent>
+                                          </ContextMenu>
+                                        ) : (
+                                          schemaRow
+                                        )}
                                         {isSchemaExpanded && (
                                           <div className="ml-3">
                                             {group.tables.map((tbl) =>
@@ -886,6 +1004,38 @@ export function DatabaseTree({ tabId }: DatabaseTreeProps) {
         options={driverDescriptor?.createDatabaseOptions ?? []}
         onSuccess={() => loadDatabases(tabId)}
       />
+
+      {dumpTarget !== null && tabMeta && (
+        <DumpSqlFileDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setDumpTarget(null);
+          }}
+          assetId={tabMeta.assetId}
+          assetName={tabMeta.assetName}
+          database={dumpTarget.database}
+          target={dumpTarget.target}
+          withData={dumpTarget.withData}
+          canDumpData={canDumpData}
+          canDisableForeignKeyChecks={!!driverDescriptor?.dumpDisablesForeignKeyChecks}
+        />
+      )}
+
+      {runSqlFileDatabase !== null && tabMeta && (
+        <RunSqlFileDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setRunSqlFileDatabase(null);
+          }}
+          assetId={tabMeta.assetId}
+          assetName={tabMeta.assetName}
+          database={runSqlFileDatabase}
+          onFinished={() => {
+            dropSelectionUnder(`${runSqlFileDatabase}.`);
+            refreshTables(tabId, runSqlFileDatabase);
+          }}
+        />
+      )}
 
       <ConfirmDialog
         open={!!confirmAction}

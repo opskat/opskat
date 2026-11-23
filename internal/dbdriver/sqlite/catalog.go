@@ -41,13 +41,16 @@ func (dialect) ListDatabases(ctx context.Context, conn *sql.Conn) ([]string, err
 	return names, nil
 }
 
+// ListTables 列出库里的表与视图，不含 SQLite 的内部表，也不含虚表（如 FTS5）的影子表：影子表由 CREATE VIRTUAL
+// TABLE 自己建、自己维护，单独转储会在还原时撞上虚表建出的同名表。
 func (dialect) ListTables(ctx context.Context, conn *sql.Conn, database string) ([]string, error) {
 	schema := "main"
 	if database != "" {
-		schema = quoteIdent(database)
+		schema = database
 	}
 	return sqldb.QueryNames(ctx, conn,
-		"SELECT name FROM "+schema+".sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name")
+		"SELECT name FROM "+quoteIdent(schema)+".sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' "+
+			"AND name NOT IN (SELECT name FROM pragma_table_list WHERE schema = ? AND type = 'shadow') ORDER BY name", schema)
 }
 
 func (d dialect) TableMetadata(ctx context.Context, conn *sql.Conn, database, table string) (*dbdriver.TableMetadata, error) {

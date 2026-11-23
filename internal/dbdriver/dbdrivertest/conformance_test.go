@@ -54,7 +54,8 @@ func TestConformanceReportsIncompleteDescriptors(t *testing.T) {
 		"read-only switch without the capability": {func(d *dbdriver.Descriptor) {
 			d.Capabilities = []dbdriver.Capability{dbdriver.CapViews}
 		}, "read_only"},
-		"foreign key toggle without import": {func(d *dbdriver.Descriptor) { d.CanDisableForeignKeyChecks = true }, "canDisableForeignKeyChecks"},
+		"foreign key toggle without import":    {func(d *dbdriver.Descriptor) { d.CanDisableForeignKeyChecks = true }, "canDisableForeignKeyChecks"},
+		"dump foreign key toggle without dump": {func(d *dbdriver.Descriptor) { d.DumpDisablesForeignKeyChecks = true }, "dumpDisablesForeignKeyChecks"},
 		"exact row location without grid edit": {func(d *dbdriver.Descriptor) {
 			d.LocatesRowWithoutPrimaryKey = true
 		}, "locatesRowWithoutPrimaryKey"},

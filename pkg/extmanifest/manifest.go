@@ -15,14 +15,24 @@ import (
 	"strings"
 )
 
-// HostABIVersion is the host ABI contract this app speaks. An extension declares
-// the hostABI it was built for in manifest.json; this is the version the history
-// restarts from.
-const HostABIVersion = "1.0"
+// HostABIVersion is the newest host ABI contract this app speaks. An extension
+// declares the hostABI it was built for in manifest.json. 1.0 is the version the
+// history restarts from; 1.1 adds the database driver hooks for running SQL files
+// and dumping them (dbdriver.CapRunSQLFile, dbdriver.CapDumpSQL) and changes
+// nothing a 1.0 extension relies on.
+const HostABIVersion = "1.1"
 
-// SupportedHostABIs lists every hostABI this app loads. The nightly-era 2.x
-// contracts are not among them: a 2.x extension is incompatible, not upgraded.
-var SupportedHostABIs = []string{HostABIVersion}
+// SupportedHostABIs lists every hostABI this app loads, oldest first. The
+// nightly-era 2.x contracts are not among them: a 2.x extension is incompatible,
+// not upgraded.
+var SupportedHostABIs = []string{"1.0", HostABIVersion}
+
+// HostABIAtLeast reports whether an extension built for hostABI has what version
+// added: both are supported and hostABI is version or a later one.
+func HostABIAtLeast(hostABI, version string) bool {
+	have, want := slices.Index(SupportedHostABIs, hostABI), slices.Index(SupportedHostABIs, version)
+	return have >= 0 && want >= 0 && have >= want
+}
 
 // CredentialAccessNone means the extension receives only opaque credential handles (default).
 // CredentialAccessRead means the extension may request plaintext credentials (discouraged).

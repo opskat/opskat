@@ -127,16 +127,27 @@ type FixtureDBServer struct {
 	statements []FixtureStatement
 	conns      int
 	open       int
-	held       chan *HeldStatement
-	done       chan struct{}
+	// ended are the connections, by number, the server has stopped serving: the
+	// driver closed them (or the server's answer to them failed).
+	ended map[int]bool
+	held  chan *HeldStatement
+	done  chan struct{}
 }
 
 // NewFixtureDBServer starts a server; whatever it still holds is dropped when the
 // test ends.
 func NewFixtureDBServer(t testing.TB) *FixtureDBServer {
-	s := &FixtureDBServer{held: make(chan *HeldStatement, 16), done: make(chan struct{})}
+	s := &FixtureDBServer{held: make(chan *HeldStatement, 16), done: make(chan struct{}), ended: map[int]bool{}}
 	t.Cleanup(func() { close(s.done) })
 	return s
+}
+
+// Ended reports whether connection conn (numbered as in FixtureStatement) is no
+// longer served. One whose statement is held ends only once it is released.
+func (s *FixtureDBServer) Ended(conn int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ended[conn]
 }
 
 // Dial is the reach path's dial.
@@ -157,6 +168,7 @@ func (s *FixtureDBServer) serve(id int, c net.Conn) {
 		_ = c.Close()
 		s.mu.Lock()
 		s.open--
+		s.ended[id] = true
 		s.mu.Unlock()
 	}()
 	r := bufio.NewReader(c)

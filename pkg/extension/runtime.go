@@ -54,6 +54,14 @@ const (
 	// result over it fails the call: a truncated result would be read as a
 	// complete one by the model or page that asked.
 	defaultMaxResultBytes = 16 << 20
+	// instanceMemoryPages caps each instance's WASM linear memory: 16384 pages
+	// of 64 KiB, 1 GiB, the module's static data included. Memory is not
+	// reserved up front; an instance grows it only as its Go heap needs, so a
+	// typical one stays at a few tens of MiB, and the cap is what a single call
+	// holding a large page or value at once may reach. An extension can have up
+	// to defaultMaxInstances in its pool and up to three per database driver
+	// session (extdriver), each with its own memory.
+	instanceMemoryPages = 16384
 )
 
 // Plugin represents a loaded WASM extension.
@@ -149,7 +157,7 @@ func LoadPlugin(ctx context.Context, manifest *Manifest, wasmBytes []byte, host 
 	// wazero never checks the context once the guest is running, so a spinning
 	// extension would hold its pool slot until it decided to return.
 	cfg := wazero.NewRuntimeConfig().
-		WithMemoryLimitPages(1024).
+		WithMemoryLimitPages(instanceMemoryPages).
 		WithCloseOnContextDone(true)
 	if cache != nil {
 		cfg = cfg.WithCompilationCache(cache)

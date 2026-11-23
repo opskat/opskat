@@ -9,10 +9,12 @@ package extensiontest
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -26,7 +28,9 @@ const FixtureName = "fixture-ext"
 
 // DBDriverFixtureName is the database driver fixture's name. It provides one
 // driver, DBDriverFixtureDriver, over an in-memory database that logs in to
-// whatever the session's reach path dials (see testdata/fixture-dbdriver).
+// whatever the session's reach path dials (see testdata/fixture-dbdriver). It is
+// built for hostABI 1.1 and runs and dumps SQL files; DBDriverFixtureBuild builds
+// it otherwise.
 const DBDriverFixtureName = "fixture-dbdriver"
 
 // DBDriverFixtureDriver is the id of the driver the database driver fixture provides.
@@ -104,14 +108,78 @@ func InstallBadKindsFixture(t testing.TB, root string) string {
 	return install(t, root, BadKindsFixtureName)
 }
 
+// DBDriverFixtureBuild is how the database driver fixture is built. The zero value
+// is the fixture as it is: built for hostABI 1.1, declaring and serving running SQL
+// files and dumping them, a dump's table rows written into their statements in the
+// guest.
+type DBDriverFixtureBuild struct {
+	// HostABI10 builds the driver the way an extension built for hostABI 1.0 is: it
+	// neither declares nor serves running SQL files and dumping them, and its
+	// manifest declares hostABI 1.0.
+	HostABI10 bool
+	// ManifestHostABI, when set, is the hostABI the manifest declares in place of
+	// the build's own — for a manifest that does not match its code.
+	ManifestHostABI string
+	// CursorDump builds the driver without writing a dump's table rows itself
+	// (sqldb.TableStatementsWriter): the host reads them through the cursor and has
+	// the row writer write them, as for an extension built before the hook existed.
+	CursorDump bool
+}
+
+// dbDriverFixtureABI10Tag is the build tag of DBDriverFixtureBuild.HostABI10
+// (testdata/fixture-dbdriver/abi10.go).
+const dbDriverFixtureABI10Tag = "fixture_hostabi10"
+
+// dbDriverFixtureCursorDumpTag is the build tag of DBDriverFixtureBuild.CursorDump
+// (testdata/fixture-dbdriver/table_statements.go).
+const dbDriverFixtureCursorDumpTag = "fixture_cursor_dump"
+
+// InstallDBDriverFixtureBuild is InstallDBDriverFixture for a build of the database
+// driver fixture other than its own.
+func InstallDBDriverFixtureBuild(t testing.TB, root string, b DBDriverFixtureBuild) string {
+	t.Helper()
+	var tags []string
+	hostABI := b.ManifestHostABI
+	if b.HostABI10 {
+		tags = append(tags, dbDriverFixtureABI10Tag)
+		if hostABI == "" {
+			hostABI = "1.0"
+		}
+	}
+	if b.CursorDump {
+		tags = append(tags, dbDriverFixtureCursorDumpTag)
+	}
+	return installBuild(t, root, DBDriverFixtureName, tags, hostABI)
+}
+
+// LoadDBDriverFixtureBuild builds the database driver fixture as b says and loads
+// it through the real extension.Manager with contributions judging its describe()
+// answer — the host's contribution points, for a test of what the host accepts.
+// It returns the error loading failed with.
+func LoadDBDriverFixtureBuild(t testing.TB, b DBDriverFixtureBuild, contributions *extension.ContributionRegistry) (*extension.Extension, error) {
+	t.Helper()
+	return loadExtensionWith(t, func(t testing.TB, root string) string { return InstallDBDriverFixtureBuild(t, root, b) }, contributions)
+}
+
 func install(t testing.TB, root, name string) string {
+	t.Helper()
+	return installBuild(t, root, name, nil, "")
+}
+
+// installBuild builds fixture name with the build tags and lays it out under root;
+// a non-empty hostABI replaces the one its manifest declares.
+func installBuild(t testing.TB, root, name string, tags []string, hostABI string) string {
 	t.Helper()
 	src := fixtureSrc(t, name)
 	dir := filepath.Join(root, name)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	build := exec.Command("go", "build", "-buildmode=c-shared", "-o", filepath.Join(dir, "main.wasm"), ".") //nolint:gosec // fixed argv, only the temp output path varies
+	args := []string{"build", "-buildmode=c-shared", "-o", filepath.Join(dir, "main.wasm")}
+	if len(tags) > 0 {
+		args = append(args, "-tags", strings.Join(tags, ","))
+	}
+	build := exec.Command("go", append(args, ".")...) //nolint:gosec // fixed argv, only the temp output path and the fixture's own tags vary
 	build.Dir = src
 	build.Env = append(os.Environ(), "GOOS=wasip1", "GOARCH=wasm")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -120,6 +188,18 @@ func install(t testing.TB, root, name string) string {
 	manifest, err := os.ReadFile(filepath.Join(src, "manifest.json")) //nolint:gosec // the fixture's own manifest
 	if err != nil {
 		t.Fatal(err)
+	}
+	if hostABI != "" {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(manifest, &fields); err != nil {
+			t.Fatalf("parse fixture manifest %s: %v", name, err)
+		}
+		if fields["hostABI"], err = json.Marshal(hostABI); err != nil {
+			t.Fatal(err)
+		}
+		if manifest, err = json.Marshal(fields); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifest, 0o600); err != nil { //nolint:gosec // dir is this test's own temp dir
 		t.Fatal(err)
@@ -161,12 +241,17 @@ func load(t testing.TB, install func(testing.TB, string) string) *extension.Exte
 
 func loadExtension(t testing.TB, install func(testing.TB, string) string) (*extension.Extension, error) {
 	t.Helper()
+	return loadExtensionWith(t, install, AcceptingContributions())
+}
+
+func loadExtensionWith(t testing.TB, install func(testing.TB, string) string, contributions *extension.ContributionRegistry) (*extension.Extension, error) {
+	t.Helper()
 	root := t.TempDir()
 	dir := install(t, root)
 
 	mgr := extension.NewManager(root, func(string) extension.HostProvider {
 		return extension.NewDefaultHostProvider(extension.DefaultHostConfig{})
-	}, AcceptingContributions(), zap.NewNop())
+	}, contributions, zap.NewNop())
 	t.Cleanup(func() { mgr.Close(context.Background()) })
 	m, err := mgr.LoadExtension(context.Background(), dir)
 	if err != nil {

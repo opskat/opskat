@@ -125,7 +125,7 @@ func TestSelectInstallable(t *testing.T) {
 			require.True(t, errors.As(reason, &inc), "want IncompatibleError, got %v", reason)
 			assert.Equal(t, extmanifest.ReasonHostABI, inc.Reason)
 			assert.Equal(t, "2.5", inc.HostABI)
-			assert.Equal(t, []string{"1.0"}, inc.SupportedHostABIs)
+			assert.Equal(t, []string{"1.0", "1.1"}, inc.SupportedHostABIs)
 		}
 	})
 

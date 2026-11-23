@@ -130,6 +130,45 @@ func TestExtensionDatabaseDriverSessions(t *testing.T) {
 		assert.Equal(t, 1000, read)
 	})
 
+	// memdb's lobs table: six rows of 1.5 MiB and a last one of 6 MiB, the letter
+	// 'a'+i repeated. A page of up to extwire.DriverStreamRows rows would hold all of it at
+	// once in the guest.
+	t.Run("a cursor over large rows reads them in pages bounded by size, each row once", func(t *testing.T) {
+		const lobs = 7
+		d := newDriver()
+		s := d.open(t)
+		defer func() { assert.NoError(t, s.Close()) }()
+
+		first, err := s.StreamTableRows(ctx, "app", "lobs", dbdriver.TableQuery{})
+		require.NoError(t, err)
+		require.True(t, first.Next())
+		require.NoError(t, first.Close())
+		progress, err := s.Execute(ctx, "SHOW STREAM PROGRESS")
+		require.NoError(t, err)
+		require.Len(t, d.server.Logins(), 1)
+		produced, err := strconv.Atoi(fmt.Sprint(progress.Rows.Rows[0][0]))
+		require.NoError(t, err)
+		assert.True(t, produced >= 1 && produced < lobs,
+			"the first page must stop once it holds a few MiB, not take every row (produced %d)", produced)
+
+		stream, err := s.StreamTableRows(ctx, "app", "lobs", dbdriver.TableQuery{})
+		require.NoError(t, err)
+		read := 0
+		for stream.Next() {
+			read++
+			require.Equal(t, fmt.Sprint(read), fmt.Sprint(stream.Row()[0]), "rows arrive in order, each once")
+			size := 3 << 19
+			if read == lobs {
+				size = 6 << 20
+			}
+			body, _ := stream.Row()[1].(string)
+			require.True(t, body == strings.Repeat(string(rune('a'+read-1)), size), "row %d's body arrives whole (%d bytes)", read, len(body))
+		}
+		require.NoError(t, stream.Err())
+		require.NoError(t, stream.Close())
+		assert.Equal(t, lobs, read, "the cursor ends only after its last row, the one larger than a page")
+	})
+
 	// The fixture declares none of the table designer's column features, like
 	// an extension built before they existed, which would ignore the fields.
 	t.Run("a request using a column feature the driver does not declare is refused, not sent", func(t *testing.T) {

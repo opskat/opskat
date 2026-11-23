@@ -7,12 +7,16 @@
 package sdkdbdriver
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"unicode/utf8"
 
 	"github.com/opskat/opskat/pkg/dbdriver"
 	"github.com/opskat/opskat/pkg/dbdriver/sqldb"
@@ -77,6 +81,63 @@ type driverEntry struct {
 // the optional dialect interfaces); declare in the descriptor exactly the
 // capabilities the dialect implements. Parts that are not session operations
 // come as options (WithStatementClassifier), each matching a capability of its own.
+//
+// Running SQL files and dumping them (the database tree's "Run SQL File…" and
+// "Dump SQL File" menus) need an extension built for hostABI 1.1 — manifest.json
+// "hostABI": "1.1"; the host refuses to load an extension built for 1.0 whose
+// driver declares either capability. The host does everything users see the
+// same as for a built-in driver: it reads and writes the file, checks it is UTF-8,
+// orders the objects, reports progress, stops and cancels. The dialect only
+// answers the hooks:
+//
+//   - Run SQL File, declared with dbdriver.CapRunSQLFile: the dialect splits the
+//     file into statements, either by describing its lexical syntax
+//     (sqldb.ScriptDialect: quotes, comments, DELIMITER, GO batches, ...) or, when a
+//     syntax cannot say it — Oracle's PL/SQL blocks ending in a line holding only
+//     "/" — by splitting itself (dbdriver.ScriptSplitter, which then takes the place
+//     of a ScriptSyntax). The host hands the splitter one chunk of the file at a time
+//     (dbdriver.ScriptChunk): it answers the complete statements, how much text it
+//     used and a state string of its own choosing that comes back with the next
+//     chunk (the current delimiter, say); a construct the file cannot be run with
+//     here is answered as ScriptSplit.Unsupported, naming the tool to use instead.
+//     The statements of one run go, in batches, to a single database connection the
+//     SDK takes from the session for the length of the run, so a setting a
+//     statement makes holds for the ones after it; each statement commits on its
+//     own. The SDK runs a batch a statement at a time and asks the host's stop
+//     check (ShouldStop) before each, so a stopped run ends after the statement in
+//     flight; the host closes the connection's instance when the run is canceled or
+//     the guest fails.
+//   - Dump, declared with dbdriver.CapDumpSQL together with dbdriver.CapViewDDL
+//     (the definitions are what TableDDL and ObjectSource give) and, for structure
+//     and data, a capability that generates row statements (dbdriver.CapExportSQL):
+//     the dialect implements sqldb.DumpDialect, whose DumpSyntax is what every file
+//     starts and ends with — and, when the database can turn foreign key checks off
+//     for a session, the statements doing so, declared as
+//     dbdriver.Descriptor.DumpDisablesForeignKeyChecks
+//     (sqldb.DumpDisablesForeignKeyChecks); sqldb.DumpFileWriter and
+//     sqldb.DumpObjectWriter optionally change the file's and each object's
+//     statements on a connection (drop statements for a database without IF EXISTS,
+//     wrapping a definition in "/", index and foreign key statements and the
+//     foreign key drops, the columns an INSERT writes, ...). Each object carries the
+//     user's export options (dbdriver.DumpOptions): the dialect writes indexes only
+//     with Options.Indexes and leaves foreign keys inside a definition out without
+//     Options.ForeignKeys; the host decides whether drops and the deferred foreign
+//     keys are written. A view's, function's or procedure's script may name the
+//     views, functions and procedures it uses (Dependencies with their kind, written
+//     before it in one section and dropped after it). A table's script may name the
+//     tables it is created from (Dependencies of kind dbdriver.DumpTable, written
+//     first) and, for a partitioned table, its partitions (Partitions, dumped along
+//     with it). The rows
+//     are read with the session's cursor and written with its row statements, the
+//     INSERTs "copy as INSERT" makes, binary values as bytes; the cursor is asked
+//     for each table's own rows (dbdriver.TableQuery.OwnRows), which a dialect whose
+//     tables can have child tables reads through sqldb.OwnRowsTable. A dialect may
+//     instead write a table's rows itself (sqldb.TableStatementsWriter): it gives
+//     the statements one at a time, a row's last one marked, and the SDK serves
+//     them to the host in pages of about dbdriver.DumpPageBytes, so the values never
+//     cross to the host — what a row of large LOBs needs, read in pieces and
+//     written as several statements. The statements are then the dialect's own;
+//     table.RowInsertStatements gives the ones the host would write.
 func DatabaseDriver(d dbdriver.Descriptor, open DriverOpen, opts ...DriverOption) {
 	entry := &driverEntry{desc: d, open: open}
 	for _, opt := range opts {
@@ -112,26 +173,46 @@ func checkDriver(entry *driverEntry) error {
 var drivers []*driverEntry
 
 // driverHandleTable holds what the host refers to by id in this instance: open
-// sessions, open cursors (with the session they read from) and prepared row
-// statement writers, which outlive their session until the host releases them
+// sessions, open cursors (of rows or of a dump's statements) and SQL file
+// executors (with the session they belong to) and prepared row statement writers,
+// which outlive their session until the host releases them
 // (extwire.DriverCall.ReleaseWriters).
 type driverHandleTable struct {
-	next     uint64
-	sessions map[uint64]dbdriver.Session
-	streams  map[uint64]driverStream
-	writers  map[uint64]dbdriver.RowStatementWriter
+	next      uint64
+	sessions  map[uint64]*sqldb.Session
+	streams   map[uint64]driverStream
+	executors map[uint64]driverExecutor
+	writers   map[uint64]dbdriver.RowStatementWriter
 }
 
+// driverStream is a cursor the host reads over: the rows of a table
+// (extwire.DriverOpStreamTableRows) or a dump's statements of one
+// (extwire.DriverOpTableStatements), one of the two.
 type driverStream struct {
-	session uint64
-	rows    dbdriver.RowStream
+	session    uint64
+	rows       dbdriver.RowStream
+	statements dbdriver.TableStatementPages
+}
+
+func (s driverStream) close() error {
+	if s.rows != nil {
+		return s.rows.Close()
+	}
+	return s.statements.Close()
+}
+
+// driverExecutor is the connection a SQL file runs on (extwire.DriverOpOpenScriptExecutor).
+type driverExecutor struct {
+	session  uint64
+	executor dbdriver.ScriptExecutor
 }
 
 func newDriverHandleTable() *driverHandleTable {
 	return &driverHandleTable{
-		sessions: map[uint64]dbdriver.Session{},
-		streams:  map[uint64]driverStream{},
-		writers:  map[uint64]dbdriver.RowStatementWriter{},
+		sessions:  map[uint64]*sqldb.Session{},
+		streams:   map[uint64]driverStream{},
+		executors: map[uint64]driverExecutor{},
+		writers:   map[uint64]dbdriver.RowStatementWriter{},
 	}
 }
 
@@ -154,11 +235,34 @@ func serve(input []byte) (json.RawMessage, error) {
 		delete(driverHandles.writers, id)
 	}
 	result, opErr := runDriverOp(context.Background(), call)
+	reply, err := encodeReply(result, opErr)
+	if err != nil {
+		return nil, fmt.Errorf("encode %s result: %w", call.Op, err)
+	}
+	return reply, nil
+}
+
+// encodeReply is the extwire.DriverReply of an operation's result and failure.
+// A list of strings (row statements, which may be tens of MB: an Oracle row of
+// large LOBs) and a page of a dump's statements are written into one buffer of
+// the reply's exact size (stringsReply, statementPageReply): json.Marshal grows
+// its buffer by doubling and the envelope copies the result again, which together
+// trapped an instance at its memory cap (a dump of a row of three 16 MB LOBs, a
+// 63 MB statement, at the former 512 MiB cap).
+func encodeReply(result any, opErr error) ([]byte, error) {
+	if opErr == nil {
+		switch result := result.(type) {
+		case []string:
+			return stringsReply(result), nil
+		case *dbdriver.TableStatementPage:
+			return statementPageReply(result), nil
+		}
+	}
 	var reply extwire.DriverReply
 	if result != nil {
 		raw, err := json.Marshal(result)
 		if err != nil {
-			return nil, fmt.Errorf("encode %s result: %w", call.Op, err)
+			return nil, err
 		}
 		if string(raw) != "null" {
 			reply.Result = raw
@@ -173,6 +277,119 @@ func serve(input []byte) (json.RawMessage, error) {
 	return json.Marshal(reply)
 }
 
+// stringsReply is {"result":[…]} of list, each string written as json.Marshal
+// writes it as far as reading it back goes (invalid UTF-8 as U+FFFD), sized first
+// so that it is written once into a buffer of its size.
+func stringsReply(list []string) []byte {
+	const prefix, suffix = `{"result":`, `}`
+	out := make([]byte, 0, len(prefix)+stringListSize(list)+len(suffix))
+	out = append(out, prefix...)
+	out = appendStringList(out, list)
+	return append(out, suffix...)
+}
+
+// statementPageReply is {"result":<page>} of a page of a dump's statements
+// (dbdriver.TableStatementPage), written the way stringsReply writes its list.
+func statementPageReply(page *dbdriver.TableStatementPage) []byte {
+	const rows, done, statements, tail = `{"result":{"rows":`, `,"done":`, `,"statements":`, `}}`
+	doneText := strconv.FormatBool(page.Done)
+	out := make([]byte, 0, len(rows)+decimalSize(page.Rows)+len(done)+len(doneText)+len(statements)+stringListSize(page.Statements)+len(tail))
+	out = strconv.AppendInt(append(out, rows...), int64(page.Rows), 10)
+	out = append(append(append(out, done...), doneText...), statements...)
+	out = appendStringList(out, page.Statements)
+	return append(out, tail...)
+}
+
+// decimalSize is the length of n written in decimal.
+func decimalSize(n int) int {
+	size := 1
+	if n < 0 {
+		size, n = size+1, -n
+	}
+	for ; n >= 10; n /= 10 {
+		size++
+	}
+	return size
+}
+
+// stringListSize is the size of list written as a JSON array (appendStringList).
+func stringListSize(list []string) int {
+	size := len("[]") + max(len(list)-1, 0)
+	for _, text := range list {
+		size += quotedSize(text)
+	}
+	return size
+}
+
+// appendStringList appends list as a JSON array of strings (appendQuoted).
+func appendStringList(out []byte, list []string) []byte {
+	out = append(out, '[')
+	for i, text := range list {
+		if i > 0 {
+			out = append(out, ',')
+		}
+		out = appendQuoted(out, text)
+	}
+	return append(out, ']')
+}
+
+// jsonEscapes is how a byte of ASCII is written inside a JSON string when it is
+// not written as it is.
+var jsonEscapes = func() (escapes [utf8.RuneSelf]string) {
+	for c := range 0x20 {
+		escapes[c] = fmt.Sprintf(`\u%04x`, c)
+	}
+	escapes['\n'], escapes['\r'], escapes['\t'], escapes['"'], escapes['\\'] = `\n`, `\r`, `\t`, `\"`, `\\`
+	return escapes
+}()
+
+// invalidUTF8 is how a byte that is not part of valid UTF-8 is written (U+FFFD).
+const invalidUTF8 = `\ufffd`
+
+// quotedSize is the size of text written as a JSON string (appendQuoted).
+func quotedSize(text string) int {
+	size := 2
+	for i := 0; i < len(text); {
+		c := text[i]
+		if c < utf8.RuneSelf {
+			size, i = size+max(len(jsonEscapes[c]), 1), i+1
+			continue
+		}
+		r, n := utf8.DecodeRuneInString(text[i:])
+		if r == utf8.RuneError && n == 1 {
+			size += len(invalidUTF8)
+		} else {
+			size += n
+		}
+		i += n
+	}
+	return size
+}
+
+// appendQuoted appends text as a JSON string, runs of bytes written as they are
+// copied whole.
+func appendQuoted(out []byte, text string) []byte {
+	out = append(out, '"')
+	start := 0
+	for i := 0; i < len(text); {
+		c := text[i]
+		escape, n := "", 1
+		if c < utf8.RuneSelf {
+			escape = jsonEscapes[c]
+		} else if r, size := utf8.DecodeRuneInString(text[i:]); r == utf8.RuneError && size == 1 {
+			escape = invalidUTF8
+		} else {
+			n = size
+		}
+		if escape != "" {
+			out = append(append(out, text[start:i]...), escape...)
+			start = i + n
+		}
+		i += n
+	}
+	return append(append(out, text[start:]...), '"')
+}
+
 func runDriverOp(ctx context.Context, call extwire.DriverCall) (any, error) {
 	a := call.Args
 	switch call.Op {
@@ -182,23 +399,45 @@ func runDriverOp(ctx context.Context, call extwire.DriverCall) (any, error) {
 		return classifyStatements(ctx, a)
 	case extwire.DriverOpStreamNext:
 		return streamNext(a)
+	case extwire.DriverOpStatementsNext:
+		stream, ok := driverHandles.streams[a.Stream]
+		if !ok || stream.statements == nil {
+			return nil, fmt.Errorf("no database driver statement stream %d", a.Stream)
+		}
+		return stream.statements.Next()
 	case extwire.DriverOpStreamClose:
 		stream, ok := driverHandles.streams[a.Stream]
 		if !ok {
 			return nil, fmt.Errorf("no database driver cursor %d", a.Stream)
 		}
 		delete(driverHandles.streams, a.Stream)
-		return nil, stream.rows.Close()
+		return nil, stream.close()
 	case extwire.DriverOpRowStatements:
 		writer, ok := driverHandles.writers[a.Writer]
 		if !ok {
 			return nil, fmt.Errorf("no database driver row statement writer %d", a.Writer)
 		}
-		req, err := decodeDriverRequest[dbdriver.RowStatementsRequest](a.Request)
+		req, err := decodeRowStatementsRequest(a)
 		if err != nil {
 			return nil, err
 		}
 		return writer.RowStatements(req)
+	case extwire.DriverOpExecuteScriptBatch:
+		executor, ok := driverHandles.executors[a.Executor]
+		if !ok {
+			return nil, fmt.Errorf("no database driver SQL file executor %d", a.Executor)
+		}
+		return withDriverRequest(a.Request, func(batch dbdriver.ScriptBatch) (*dbdriver.BatchResult, error) {
+			// The host's stop check of this call (ShouldStop) turns true once the run is stopped.
+			return executeScriptBatch(ctx, executor.executor, batch, new(opskat.ToolContext).ShouldStop)
+		})
+	case extwire.DriverOpCloseScriptExecutor:
+		executor, ok := driverHandles.executors[a.Executor]
+		if !ok {
+			return nil, fmt.Errorf("no database driver SQL file executor %d", a.Executor)
+		}
+		delete(driverHandles.executors, a.Executor)
+		return nil, executor.executor.Close()
 	}
 
 	s, ok := driverHandles.sessions[call.Session]
@@ -254,13 +493,64 @@ func runDriverOp(ctx context.Context, call extwire.DriverCall) (any, error) {
 		return s.TruncateTableStatements(ctx, a.Database, a.Table)
 	case extwire.DriverOpAlterTableModel:
 		return s.AlterTableModel(ctx, a.Database, a.Table)
+	case extwire.DriverOpOpenScriptExecutor:
+		runner, err := s.ScriptRunner()
+		if err != nil {
+			return nil, err
+		}
+		executor, err := runner.OpenScriptExecutor(ctx, a.Database)
+		if err != nil {
+			return nil, err
+		}
+		id := driverHandles.id()
+		driverHandles.executors[id] = driverExecutor{session: call.Session, executor: executor}
+		return extwire.DriverScriptExecutorOpened{Executor: id}, nil
 	}
-	return runDriverRequestOp(ctx, s, call.Op, a)
+	return runDriverRequestOp(ctx, call.Session, s, call.Op, a)
 }
 
-// runDriverRequestOp runs the operations whose input is a request type.
-func runDriverRequestOp(ctx context.Context, s dbdriver.Session, op string, a extwire.DriverArgs) (any, error) {
+// runDriverRequestOp runs the operations whose input is a request type, on
+// session s (id session).
+func runDriverRequestOp(ctx context.Context, session uint64, s *sqldb.Session, op string, a extwire.DriverArgs) (any, error) {
 	switch op {
+	case extwire.DriverOpSplitScript:
+		runner, err := s.ScriptRunner()
+		if err != nil {
+			return nil, err
+		}
+		return withDriverRequest(a.Request, func(chunk dbdriver.ScriptChunk) (*dbdriver.ScriptSplit, error) {
+			return runner.SplitScript(ctx, chunk)
+		})
+	case extwire.DriverOpDumpFile:
+		dialect, err := s.DumpDialect()
+		if err != nil {
+			return nil, err
+		}
+		return withDriverRequest(a.Request, func(scope dbdriver.DumpScope) (*dbdriver.DumpFileScript, error) {
+			return dialect.DumpFile(ctx, scope)
+		})
+	case extwire.DriverOpDumpObject:
+		dialect, err := s.DumpDialect()
+		if err != nil {
+			return nil, err
+		}
+		return withDriverRequest(a.Request, func(object dbdriver.DumpObject) (*dbdriver.DumpObjectScript, error) {
+			return dialect.DumpObject(ctx, object)
+		})
+	case extwire.DriverOpTableStatements:
+		source, err := s.TableStatements()
+		if err != nil {
+			return nil, err
+		}
+		return withDriverRequest(a.Request, func(req dbdriver.TableStatementsRequest) (*extwire.DriverStreamOpened, error) {
+			pages, err := source.TableStatements(ctx, a.Database, a.Table, req)
+			if err != nil {
+				return nil, err
+			}
+			id := driverHandles.id()
+			driverHandles.streams[id] = driverStream{session: session, statements: pages}
+			return &extwire.DriverStreamOpened{Stream: id}, nil
+		})
 	case extwire.DriverOpGridEditStatements:
 		return withDriverRequest(a.Request, func(req dbdriver.GridEditRequest) (*dbdriver.GridEditStatements, error) {
 			return s.GridEditStatements(ctx, a.Database, a.Table, req)
@@ -353,9 +643,11 @@ func openDriverSession(ctx context.Context, a extwire.DriverArgs) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	session := sqldb.NewSession(db, dialect)
 	id := driverHandles.id()
-	driverHandles.sessions[id] = sqldb.NewSession(db, dialect)
-	return extwire.DriverOpened{Session: id}, nil
+	driverHandles.sessions[id] = session
+	_, noTableStatements := session.TableStatements()
+	return extwire.DriverOpened{Session: id, TableStatements: noTableStatements == nil}, nil
 }
 
 // hostKerberosTicket is OpenRequest.Kerberos.Ticket in the guest: the host's
@@ -364,14 +656,32 @@ func hostKerberosTicket(_ context.Context, spn string) ([]byte, error) {
 	return opskat.KerberosTicket(spn)
 }
 
-// closeDriverSession closes the session's cursors, then the session. Its prepared
-// writers stay: they no longer touch the database.
+// executeScriptBatch runs a batch the host sent (extwire.DriverOpExecuteScriptBatch)
+// on executor a statement at a time (dbdriver.ExecuteScriptStatements), asking
+// shouldStop before each: the batch's Stop does not cross the ABI, so a run stopped
+// while the batch is in flight ends after the statement running then, as it does
+// for a built-in driver — not at the end of the batch. Executed indexes are the
+// batch's.
+func executeScriptBatch(ctx context.Context, executor dbdriver.ScriptExecutor, batch dbdriver.ScriptBatch, shouldStop func() bool) (*dbdriver.BatchResult, error) {
+	return dbdriver.ExecuteScriptStatements(ctx, batch, shouldStop, func(ctx context.Context, statement string) (*dbdriver.BatchResult, error) {
+		return executor.ExecuteScriptBatch(ctx, dbdriver.ScriptBatch{Statements: []string{statement}, ContinueOnError: batch.ContinueOnError})
+	})
+}
+
+// closeDriverSession closes the session's cursors and SQL file executors, then the
+// session. Its prepared writers stay: they no longer touch the database.
 func closeDriverSession(id uint64, s dbdriver.Session) error {
 	var errs []error
 	for streamID, stream := range driverHandles.streams {
 		if stream.session == id {
-			errs = append(errs, stream.rows.Close())
+			errs = append(errs, stream.close())
 			delete(driverHandles.streams, streamID)
+		}
+	}
+	for executorID, executor := range driverHandles.executors {
+		if executor.session == id {
+			errs = append(errs, executor.executor.Close())
+			delete(driverHandles.executors, executorID)
 		}
 	}
 	delete(driverHandles.sessions, id)
@@ -379,23 +689,76 @@ func closeDriverSession(id uint64, s dbdriver.Session) error {
 	return errors.Join(errs...)
 }
 
-// streamNext reads up to a.Max rows; fewer means the cursor is done. A read error
-// is answered together with the rows read before it.
+// streamNext reads up to a.Max rows, stopping early once the page holds about
+// extwire.DriverRowsBytes of values; a page always has a row unless the cursor has
+// ended. Done is set only when the cursor has ended, so a short page is not the
+// end. A read error is answered together with the rows read before it.
 func streamNext(a extwire.DriverArgs) (any, error) {
 	stream, ok := driverHandles.streams[a.Stream]
-	if !ok {
+	if !ok || stream.rows == nil {
 		return nil, fmt.Errorf("no database driver cursor %d", a.Stream)
 	}
 	if a.Max <= 0 {
 		return nil, fmt.Errorf("read cursor %d: max must be positive, got %d", a.Stream, a.Max)
 	}
-	page := extwire.DriverStreamPage{Rows: make([][]any, 0, a.Max)}
-	for len(page.Rows) < a.Max && stream.rows.Next() {
-		page.Rows = append(page.Rows, stream.rows.Row())
-	}
-	page.Done = len(page.Rows) < a.Max
-	if page.Done {
-		return page, stream.rows.Err()
+	page := extwire.DriverStreamPage{Rows: [][]any{}}
+	for size := 0; len(page.Rows) < a.Max && size < extwire.DriverRowsBytes; {
+		if !stream.rows.Next() {
+			page.Done = true
+			return page, stream.rows.Err()
+		}
+		row := stream.rows.Row()
+		for _, value := range row {
+			size += extwire.ValueBytes(value)
+		}
+		if a.AcceptBytes {
+			for column, value := range row {
+				// sqldb reads a binary column into a string of its bytes; JSON would
+				// replace the ones that are not UTF-8.
+				if text, ok := value.(string); ok && !utf8.ValidString(text) {
+					row[column] = []byte(text)
+					page.Bytes = append(page.Bytes, extwire.DriverCell{Row: len(page.Rows), Column: column})
+				}
+			}
+		}
+		page.Rows = append(page.Rows, row)
 	}
 	return page, nil
+}
+
+// decodeRowStatementsRequest reads a DriverOpRowStatements request as the host
+// sent it: the values a.RowBytes names back into bytes, and numbers as written —
+// an integer as int64, so one past 2^53 keeps its digits, any other number as
+// float64 — which is how sqldb's literals take them.
+func decodeRowStatementsRequest(a extwire.DriverArgs) (dbdriver.RowStatementsRequest, error) {
+	var req dbdriver.RowStatementsRequest
+	dec := json.NewDecoder(bytes.NewReader(a.Request))
+	dec.UseNumber()
+	if err := dec.Decode(&req); err != nil {
+		return req, fmt.Errorf("parse %T: %w", req, err)
+	}
+	for _, row := range req.Rows {
+		for column, value := range row {
+			number, err := dbdriver.ExactNumbers(value)
+			if err != nil {
+				return req, fmt.Errorf("parse %T: column %q: %w", req, column, err)
+			}
+			row[column] = number
+		}
+	}
+	for _, ref := range a.RowBytes {
+		if ref.Row < 0 || ref.Row >= len(req.Rows) {
+			return req, fmt.Errorf("parse %T: binary value of row %d of %d", req, ref.Row, len(req.Rows))
+		}
+		text, ok := req.Rows[ref.Row][ref.Column].(string)
+		if !ok {
+			return req, fmt.Errorf("parse %T: binary value of row %d column %q is not base64 text", req, ref.Row, ref.Column)
+		}
+		raw, err := base64.StdEncoding.DecodeString(text)
+		if err != nil {
+			return req, fmt.Errorf("parse %T: binary value of row %d column %q: %w", req, ref.Row, ref.Column, err)
+		}
+		req.Rows[ref.Row][ref.Column] = raw
+	}
+	return req, nil
 }

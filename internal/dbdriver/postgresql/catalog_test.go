@@ -157,10 +157,8 @@ func TestTriggersCarryTheirTable(t *testing.T) {
 	const systemSchemas = "('pg_catalog','information_schema')"
 	mock.ExpectQuery("SELECT table_schema || '.' || table_name FROM information_schema.views WHERE table_schema NOT IN " + systemSchemas + " ORDER BY 1").
 		WillReturnRows(names("v", "public.v_users"))
-	mock.ExpectQuery("SELECT routine_schema || '.' || routine_name FROM information_schema.routines WHERE routine_schema NOT IN " + systemSchemas + " AND routine_type = 'PROCEDURE' ORDER BY 1").
-		WillReturnRows(names("r"))
-	mock.ExpectQuery("SELECT routine_schema || '.' || routine_name FROM information_schema.routines WHERE routine_schema NOT IN " + systemSchemas + " AND routine_type = 'FUNCTION' ORDER BY 1").
-		WillReturnRows(names("r", "public.f_total"))
+	mock.ExpectQuery(proceduresSQL).WillReturnRows(names("r"))
+	mock.ExpectQuery(functionsSQL).WillReturnRows(names("r", "public.f_total"))
 	mock.ExpectQuery("SELECT DISTINCT trigger_schema, trigger_name, event_object_table " +
 		"FROM information_schema.triggers " +
 		"WHERE trigger_schema NOT IN " + systemSchemas + " " +
@@ -196,13 +194,61 @@ func TestObjectSource(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "CREATE TRIGGER trg_audit ...", source)
 
-	mock.ExpectQuery("SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "+
-		"WHERE n.nspname = $1 AND p.proname = $2 LIMIT 1").WithArgs("public", "f_total").WillReturnRows(names("def", "CREATE FUNCTION f_total ..."))
+	mock.ExpectQuery(routinesQuery).WithArgs("public", "f_total", "f").
+		WillReturnRows(routineRows([2]string{"", "CREATE OR REPLACE FUNCTION public.f_total()\n RETURNS integer\nAS $function$SELECT 1$function$\n"}))
 	source, err = session.ObjectSource(ctx, "admdb", "function", "public.f_total", "")
 	require.NoError(t, err)
-	assert.Equal(t, "CREATE FUNCTION f_total ...", source)
+	assert.Equal(t, "CREATE OR REPLACE FUNCTION public.f_total()\n RETURNS integer\nAS $function$SELECT 1$function$;", source)
 
 	_, err = session.ObjectSource(ctx, "admdb", "sequence", "public.s", "")
 	require.ErrorIs(t, err, dbdriver.ErrUnsupported)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// 过程与函数的 SQL：同名的重载在 information_schema.routines 里各占一行，列出的名字去重。
+const (
+	proceduresSQL = "SELECT DISTINCT routine_schema || '.' || routine_name FROM information_schema.routines WHERE routine_schema NOT IN " +
+		systemSchemas + " AND routine_type = 'PROCEDURE' ORDER BY 1"
+	functionsSQL = "SELECT DISTINCT routine_schema || '.' || routine_name FROM information_schema.routines WHERE routine_schema NOT IN " +
+		systemSchemas + " AND routine_type = 'FUNCTION' ORDER BY 1"
+)
+
+func routineRows(overloads ...[2]string) *sqlmock.Rows {
+	rows := sqlmock.NewRows([]string{"args", "def"})
+	for _, o := range overloads {
+		rows.AddRow(o[0], o[1])
+	}
+	return rows
+}
+
+// 同名重载的函数是树上的一个对象，查看源码时每个重载都给出（各自以分号结束）；过程只取过程的重载。
+func TestObjectSourceGivesEveryOverload(t *testing.T) {
+	session, mock := newMock(t)
+	ctx := context.Background()
+	mock.ExpectQuery("SELECT table_schema || '.' || table_name FROM information_schema.views WHERE table_schema NOT IN " + systemSchemas + " ORDER BY 1").
+		WillReturnRows(names("v"))
+	mock.ExpectQuery(proceduresSQL).WillReturnRows(names("r", "app.cleanup"))
+	mock.ExpectQuery(functionsSQL).WillReturnRows(names("r", "public.touch"))
+	mock.ExpectQuery("SELECT DISTINCT trigger_schema, trigger_name, event_object_table " +
+		"FROM information_schema.triggers WHERE trigger_schema NOT IN " + systemSchemas + " ORDER BY trigger_schema, trigger_name").
+		WillReturnRows(sqlmock.NewRows([]string{"s", "n", "t"}))
+	objects, err := session.ListObjects(ctx, "admdb")
+	require.NoError(t, err)
+	assert.Equal(t, []dbdriver.ObjectMeta{{Name: "public.touch", Type: "function"}}, objects.Functions)
+	assert.Equal(t, []dbdriver.ObjectMeta{{Name: "app.cleanup", Type: "procedure"}}, objects.Procedures)
+
+	mock.ExpectQuery(routinesQuery).WithArgs("public", "touch", "f").WillReturnRows(routineRows(
+		[2]string{"n integer", "CREATE OR REPLACE FUNCTION public.touch(n integer)\n RETURNS integer\n"},
+		[2]string{"t text", "CREATE OR REPLACE FUNCTION public.touch(t text)\n RETURNS text\n"}))
+	source, err := session.ObjectSource(ctx, "admdb", "function", "public.touch", "")
+	require.NoError(t, err)
+	assert.Equal(t, "CREATE OR REPLACE FUNCTION public.touch(n integer)\n RETURNS integer;\n\n"+
+		"CREATE OR REPLACE FUNCTION public.touch(t text)\n RETURNS text;", source)
+
+	mock.ExpectQuery(routinesQuery).WithArgs("app", "cleanup", "p").WillReturnRows(routineRows(
+		[2]string{"", "CREATE OR REPLACE PROCEDURE app.cleanup()\n LANGUAGE sql\n"}))
+	source, err = session.ObjectSource(ctx, "admdb", "procedure", "app.cleanup", "")
+	require.NoError(t, err)
+	assert.Equal(t, "CREATE OR REPLACE PROCEDURE app.cleanup()\n LANGUAGE sql;", source)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

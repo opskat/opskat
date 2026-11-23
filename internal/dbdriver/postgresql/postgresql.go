@@ -29,7 +29,7 @@ var descriptor = dbdriver.Descriptor{
 		dbdriver.CapSchemas, dbdriver.CapCreateDatabase, dbdriver.CapViewDDL,
 		dbdriver.CapViews, dbdriver.CapProcedures, dbdriver.CapFunctions, dbdriver.CapTriggers,
 		dbdriver.CapGridEdit, dbdriver.CapCreateTable, dbdriver.CapAlterTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable,
-		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly,
+		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly, dbdriver.CapRunSQLFile, dbdriver.CapDumpSQL,
 	},
 	// 没有主键的表按 (tableoid, ctid) 定位单行。
 	LocatesRowWithoutPrimaryKey: true,
@@ -61,3 +61,8 @@ func init() {
 }
 
 func (driver) Descriptor() dbdriver.Descriptor { return descriptor }
+
+// 转储的文件没有共用的开头结尾与批分隔符，也不能在会话里关闭外键检查；其余写法见 dump.go。
+var _ sqldb.DumpDialect = dialect{}
+
+func (dialect) DumpSyntax() sqldb.DumpSyntax { return sqldb.DumpSyntax{} }

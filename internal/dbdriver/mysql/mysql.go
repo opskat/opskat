@@ -29,9 +29,11 @@ var descriptor = dbdriver.Descriptor{
 		dbdriver.CapCreateDatabase, dbdriver.CapViewDDL,
 		dbdriver.CapViews, dbdriver.CapProcedures, dbdriver.CapFunctions, dbdriver.CapTriggers,
 		dbdriver.CapGridEdit, dbdriver.CapCreateTable, dbdriver.CapAlterTable, dbdriver.CapDropTable, dbdriver.CapTruncateTable,
-		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly,
+		dbdriver.CapImport, dbdriver.CapExportSQL, dbdriver.CapCopySQL, dbdriver.CapReadOnly, dbdriver.CapRunSQLFile, dbdriver.CapDumpSQL,
 	},
 	CanDisableForeignKeyChecks: true,
+	// 转储文件能在开头关闭外键检查（SET FOREIGN_KEY_CHECKS，见 dump.go 的 DumpSyntax）。
+	DumpDisablesForeignKeyChecks: sqldb.DumpDisablesForeignKeyChecks(dialect{}),
 	CreateDatabaseOptions: []dbdriver.DatabaseOption{
 		{Key: dbdriver.OptionCharset, Default: "utf8mb4"},
 		{Key: dbdriver.OptionCollation, Default: "utf8mb4_0900_ai_ci"},

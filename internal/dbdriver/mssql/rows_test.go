@@ -44,6 +44,30 @@ func TestRowStatementsInsertWritesUnicodeTextAndBinaryForSQLServer(t *testing.T)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// 读出的 uniqueidentifier 是 16 个原始字节（前三段按小端存放）：写成 SQL Server 显示的 GUID 文本，转储
+// 还原出的才是同一个值。表格编辑与导入带来的 GUID 文本（36 或 38 个字符）照字符串写；别的列里的 16 个字节不动。
+func TestRowStatementsWriteRawUniqueidentifierBytesAsAGUID(t *testing.T) {
+	session, mock := newMock(t)
+	expectColumns(mock, "dbo", "users",
+		[2]string{"id", "uniqueidentifier"}, [2]string{"typed", "UNIQUEIDENTIFIER"}, [2]string{"braced", "uniqueidentifier"},
+		[2]string{"bin", "binary"}, [2]string{"v", "varchar"})
+
+	statements, err := dbdrivertest.RowStatements(context.Background(), session, "appdb", "dbo.users", dbdriver.RowStatementsRequest{
+		Kind:    dbdriver.RowInsert,
+		Columns: []string{"id", "typed", "braced", "bin", "v"},
+		Rows: []map[string]any{{
+			"id": []byte(guidRaw), "typed": "6f9619ff-8b86-d011-b42d-00c04fc964ff", "braced": "{6F9619FF-8B86-D011-B42D-00C04FC964FF}",
+			"bin": []byte(guidRaw), "v": "0123456789abcdef",
+		}},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"INSERT INTO [dbo].[users] ([id], [typed], [braced], [bin], [v]) VALUES ('6F9619FF-8B86-D011-B42D-00C04FC964FF', " +
+			"'6f9619ff-8b86-d011-b42d-00c04fc964ff', '{6F9619FF-8B86-D011-B42D-00C04FC964FF}', 0xff19966f868b11d0b42d00c04fc964ff, '0123456789abcdef');",
+	}, statements)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // 复制为 UPDATE：只改一行用 UPDATE TOP (1)；按 nvarchar 列定位时同样带 N 前缀，否则 WHERE 会
 // 匹配到被写坏的行。
 func TestRowStatementsUpdateLocatesUnicodeKeysForSQLServer(t *testing.T) {

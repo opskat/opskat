@@ -75,9 +75,9 @@ func TestParseRejectsOldHostABIsAsIncompatible(t *testing.T) {
 			require.True(t, errors.As(err, &inc), "want IncompatibleError, got %v", err)
 			assert.Equal(t, ReasonHostABI, inc.Reason)
 			assert.Equal(t, abi, inc.HostABI)
-			assert.Equal(t, []string{"1.0"}, inc.SupportedHostABIs)
+			assert.Equal(t, []string{"1.0", "1.1"}, inc.SupportedHostABIs)
 			assert.Contains(t, err.Error(), "hostABI "+abi)
-			assert.Contains(t, err.Error(), "1.0")
+			assert.Contains(t, err.Error(), "1.0, 1.1")
 			assert.Contains(t, err.Error(), `"oracle"`)
 		})
 	}
@@ -203,8 +203,28 @@ func TestParseAcceptsMinimalManifest(t *testing.T) {
 	assert.Empty(t, m.Contributes.DatabaseDrivers)
 }
 
+// The host loads extensions built for hostABI 1.0 and for 1.1 (which adds the
+// database driver hooks for running and dumping SQL files) alike.
+func TestParseAcceptsEverySupportedHostABI(t *testing.T) {
+	for _, abi := range []string{"1.0", "1.1"} {
+		m, err := Parse([]byte(`{"name":"x","version":"1.0.0","hostABI":"` + abi + `","backend":{"binary":"main.wasm"}}`))
+		require.NoError(t, err, abi)
+		assert.Equal(t, abi, m.HostABI)
+	}
+}
+
+// HostABIAtLeast orders the supported versions: what a version added is there in
+// every later one.
+func TestHostABIAtLeast(t *testing.T) {
+	assert.True(t, HostABIAtLeast("1.1", "1.1"))
+	assert.True(t, HostABIAtLeast("1.1", "1.0"))
+	assert.False(t, HostABIAtLeast("1.0", "1.1"))
+	assert.False(t, HostABIAtLeast("", "1.0"), "a manifest without a hostABI has none of them")
+	assert.False(t, HostABIAtLeast("9.0", "1.0"), "a version this app does not speak has none of them")
+}
+
 func TestParseRejectsNewerHostABI(t *testing.T) {
-	for _, abi := range []string{"1.1", "3.0"} {
+	for _, abi := range []string{"1.2", "3.0"} {
 		_, err := Parse([]byte(`{"name":"x","version":"1.0.0","hostABI":"` + abi + `","backend":{"binary":"main.wasm"}}`))
 		var inc *IncompatibleError
 		require.True(t, errors.As(err, &inc), "%s: %v", abi, err)
