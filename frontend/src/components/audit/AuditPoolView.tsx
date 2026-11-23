@@ -1,5 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { AsyncState } from "@/components/common/AsyncState";
+import { AssetIcon } from "@/components/asset/AssetIcon";
+import { useAssetStore } from "@/stores/assetStore";
 import { GetSSHPoolConnections } from "../../../wailsjs/go/ssh/SSH";
 import { sshpool } from "../../../wailsjs/go/models";
 import { formatAuditTimeFull } from "./auditFilters";
@@ -12,6 +14,7 @@ export function AuditPoolView({ refreshKey }: { refreshKey: number }) {
   const { t } = useTranslation();
   const pool = useLatestFetch(`pool-${refreshKey}`, () => GetSSHPoolConnections(), EMPTY_POOL);
   const entries = pool.data;
+  const assets = useAssetStore((s) => s.assets);
 
   return (
     <div className="flex-1 overflow-auto">
@@ -40,7 +43,20 @@ export function AuditPoolView({ refreshKey }: { refreshKey: number }) {
           {pool.status !== "error" &&
             entries.map((entry) => (
               <tr key={entry.asset_id} className="border-b hover:bg-muted/50 transition-colors">
-                <td className="px-4 py-2 font-mono">{entry.asset_id}</td>
+                <td className="px-4 py-2">
+                  <span className="inline-flex items-center gap-2 min-w-0">
+                    <AssetIcon
+                      assets={assets}
+                      assetId={entry.asset_id}
+                      className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                      aria-hidden
+                    />
+                    {assets.find((a) => a.ID === entry.asset_id)?.Name ?? (
+                      <span className="text-muted-foreground">{t("audit.poolDeletedAsset")}</span>
+                    )}
+                    <span className="text-xs text-muted-foreground font-mono">#{entry.asset_id}</span>
+                  </span>
+                </td>
                 <td className="px-4 py-2">
                   <span
                     className={`inline-block px-1.5 py-0.5 text-xs rounded font-mono ${

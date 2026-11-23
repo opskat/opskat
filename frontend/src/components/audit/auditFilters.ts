@@ -49,6 +49,9 @@ export function hasAnyFilter(f: AuditFilters): boolean {
   return f.keyword !== "" || activeConditionKeys(f).length > 0;
 }
 
+/** 每页条数可选值，第一项为默认 */
+export const AUDIT_PAGE_SIZES = [20, 50, 100] as const;
+
 // 时间范围预设（秒）
 export const TIME_PRESETS = [
   { value: "1h", seconds: 3600 },

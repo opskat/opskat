@@ -26,6 +26,8 @@ interface AuditLogTableProps {
   onPatch: (patch: Partial<AuditFilters>) => void;
   facets: AuditFacetsLoad;
   deciderOf: (source: string) => string | undefined;
+  /** 有旧行时重新查询中：旧行半透明、表头下出现进度条 */
+  loading: boolean;
   /** 详情抽屉里正在看的记录 */
   selectedId: number | null;
   onSelect: (log: audit_entity.AuditLog) => void;
@@ -77,6 +79,7 @@ export function AuditLogTable({
   onPatch,
   facets,
   deciderOf,
+  loading,
   selectedId,
   onSelect,
   placeholder,
@@ -202,8 +205,20 @@ export function AuditLogTable({
             )}
           </AuditHeaderFilter>
         </tr>
+        {loading && (
+          <tr>
+            <td colSpan={COLUMN_COUNT} className="p-0">
+              <div role="progressbar" aria-label={t("audit.reloading")} className="h-0.5 overflow-hidden bg-primary/15">
+                <div className="h-full w-1/3 bg-primary animate-indeterminate-progress motion-reduce:w-full motion-reduce:animate-none" />
+              </div>
+            </td>
+          </tr>
+        )}
       </thead>
-      <tbody className="select-text">
+      <tbody
+        aria-busy={loading}
+        className={cn("select-text transition-opacity", loading && "opacity-50 pointer-events-none")}
+      >
         {placeholder && (
           <tr>
             <td colSpan={COLUMN_COUNT}>{placeholder}</td>

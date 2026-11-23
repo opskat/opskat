@@ -8,6 +8,7 @@ import {
   ListAuditDeciderGroups,
   ListAuditFacets,
   ListAuditLogs,
+  ListAuditSessionGrants,
   ListAuditSessions,
 } from "../../wailsjs/go/system/System";
 import { GetSSHPoolConnections } from "../../wailsjs/go/ssh/SSH";
@@ -504,7 +505,7 @@ describe("AuditLogPage filters", () => {
     render(<AuditLogPage />);
     await screen.findByText("cmd-1");
 
-    await user.click(document.querySelector(".lucide-chevron-right")!.closest("button")!);
+    await user.click(screen.getByRole("button", { name: "audit.nextPage" }));
     await waitFor(() => expect(lastQuery().offset).toBe(20));
 
     await user.click(within(screen.getByText("cmd-1").closest("tr")!).getByRole("button", { name: "exec" }));
@@ -634,5 +635,171 @@ describe("AuditLogPage detail drawer", () => {
     render(<AuditLogPage />);
     const row2 = (await screen.findByText("cmd-2")).closest("tr") as HTMLTableRowElement;
     expect(within(row2).getByRole("button", { name: "audit.failed" })).toHaveAttribute("title", "exit status 1");
+  });
+});
+
+describe("AuditLogPage paging, loading and context", () => {
+  const log = (id: number, over: Record<string, unknown> = {}) => ({
+    ID: id,
+    Source: "opsctl",
+    ToolName: "exec",
+    AssetID: 9,
+    AssetName: "web-01",
+    Command: `cmd-${id}`,
+    Request: "{}",
+    Result: "",
+    Error: "",
+    Success: 1,
+    SessionID: "s-1",
+    Decision: "allow",
+    DecisionSource: "policy_allow",
+    MatchedPattern: "",
+    Createtime: id,
+    ...over,
+  });
+  const lastQuery = () => vi.mocked(ListAuditLogs).mock.calls.at(-1)![0] as audit_svc.Query;
+  const deferred = <T,>() => {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  };
+
+  beforeEach(() => {
+    vi.mocked(ListAuditLogs).mockReset();
+    vi.mocked(ListAuditSessions).mockResolvedValue([]);
+    vi.mocked(ListAuditSessionGrants).mockResolvedValue([]);
+  });
+
+  it("shows the record range and jumps to a typed page, clamped to the last one", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [log(1)], total: 1234 } as never);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await screen.findByText("cmd-1");
+    expect(screen.getByTestId("audit-range")).toHaveTextContent("audit.range");
+    expect(screen.getByRole("button", { name: "audit.firstPage" })).toBeDisabled();
+
+    const pageInput = screen.getByRole("textbox", { name: "audit.pageNumber" });
+    await user.clear(pageInput);
+    await user.type(pageInput, "999{Enter}");
+    // 1234 条 / 每页 20 = 62 页，越界钳到最后一页
+    await waitFor(() => expect(lastQuery()).toMatchObject({ offset: 61 * 20, limit: 20 }));
+    expect(pageInput).toHaveValue("62");
+
+    await user.click(screen.getByRole("button", { name: "audit.firstPage" }));
+    await waitFor(() => expect(lastQuery().offset).toBe(0));
+    await user.click(screen.getByRole("button", { name: "audit.lastPage" }));
+    await waitFor(() => expect(lastQuery().offset).toBe(61 * 20));
+  });
+
+  it("changing the page size goes back to the first page", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [log(1)], total: 1234 } as never);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await screen.findByText("cmd-1");
+    await user.click(screen.getByRole("button", { name: "audit.nextPage" }));
+    await waitFor(() => expect(lastQuery().offset).toBe(20));
+
+    await user.click(screen.getByRole("combobox", { name: "audit.pageSize" }));
+    // 选项依次是 20 / 50 / 100 条每页
+    await user.click((await screen.findAllByRole("option", { name: "audit.perPage" }))[1]);
+    await waitFor(() => expect(lastQuery()).toMatchObject({ offset: 0, limit: 50 }));
+  });
+
+  it("keeps the current rows dimmed with a progress bar while the next query runs", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValueOnce({ items: [log(1)], total: 1 } as never);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    const row = (await screen.findByText("cmd-1")).closest("tr") as HTMLTableRowElement;
+
+    const pending = deferred<unknown>();
+    vi.mocked(ListAuditLogs).mockReturnValueOnce(pending.promise as never);
+    await user.click(within(row).getByRole("button", { name: "exec" }));
+
+    expect(screen.getByText("cmd-1")).toBeInTheDocument();
+    expect(row.closest("tbody")).toHaveAttribute("aria-busy", "true");
+    expect(screen.getByRole("progressbar")).toBeInTheDocument();
+
+    pending.resolve({ items: [log(2)], total: 1 });
+    expect(await screen.findByText("cmd-2")).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("never lets an earlier query that answers late replace the latest result", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValueOnce({ items: [log(1)], total: 1 } as never);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    const row = (await screen.findByText("cmd-1")).closest("tr") as HTMLTableRowElement;
+
+    const slow = deferred<unknown>();
+    const fast = deferred<unknown>();
+    vi.mocked(ListAuditLogs)
+      .mockReturnValueOnce(slow.promise as never)
+      .mockReturnValueOnce(fast.promise as never);
+    await user.click(within(row).getByRole("button", { name: "exec" }));
+    await user.click(within(row).getByRole("button", { name: "audit.sources.opsctl" }));
+
+    fast.resolve({ items: [log(3, { Command: "latest" })], total: 1 });
+    expect(await screen.findByText("latest")).toBeInTheDocument();
+    slow.resolve({ items: [log(2, { Command: "stale" })], total: 1 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText("stale")).not.toBeInTheDocument();
+    expect(screen.getByText("latest")).toBeInTheDocument();
+  });
+
+  it("summarises every grant of the selected session, not just the current page", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [log(1)], total: 1 } as never);
+    vi.mocked(ListAuditSessionGrants).mockResolvedValue([
+      { asset_id: 9, asset_name: "web-01", patterns: "systemctl status *", createtime: 1 },
+      { asset_id: 12, asset_name: "db-01", patterns: "SELECT *", createtime: 2 },
+    ] as never);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await user.click(await screen.findByText("cmd-1"));
+    await user.click(
+      within(screen.getByRole("complementary", { name: "audit.detail" })).getByRole("button", { name: "s-1" })
+    );
+
+    const grants = await screen.findByTestId("audit-session-grants");
+    expect(ListAuditSessionGrants).toHaveBeenLastCalledWith("s-1");
+    expect(grants).toHaveTextContent("web-01:systemctl status *");
+    expect(grants).toHaveTextContent("db-01:SELECT *");
+  });
+
+  it("shows a retry when the session grants fail to load", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [log(1)], total: 1 } as never);
+    vi.mocked(ListAuditSessionGrants).mockRejectedValueOnce(new Error("grants down"));
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await user.click(await screen.findByText("cmd-1"));
+    await user.click(
+      within(screen.getByRole("complementary", { name: "audit.detail" })).getByRole("button", { name: "s-1" })
+    );
+
+    expect(await screen.findByText(/grants down/)).toBeInTheDocument();
+    vi.mocked(ListAuditSessionGrants).mockResolvedValue([
+      { asset_id: 9, asset_name: "web-01", patterns: "uptime", createtime: 1 },
+    ] as never);
+    await user.click(screen.getByTestId("async-state-retry"));
+    expect(await screen.findByTestId("audit-session-grants")).toHaveTextContent("uptime");
+  });
+
+  it("names the pooled assets, and marks ones that no longer exist", async () => {
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [], total: 0 } as never);
+    useAssetStore.setState({
+      assets: [{ ID: 11, Name: "web-a", Type: "ssh", GroupID: 0, Status: 1 }],
+      groups: [],
+    } as unknown as Parameters<typeof useAssetStore.setState>[0]);
+    vi.mocked(GetSSHPoolConnections).mockResolvedValue([
+      { asset_id: 11, ref_count: 2, last_used: 1 },
+      { asset_id: 99, ref_count: 0, last_used: 1 },
+    ] as never);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await user.click(await screen.findByRole("tab", { name: /audit.tabPool/ }));
+
+    const live = (await screen.findByText("web-a")).closest("tr") as HTMLTableRowElement;
+    expect(live).toHaveTextContent("#11");
+    const gone = screen.getByText("audit.poolDeletedAsset").closest("tr") as HTMLTableRowElement;
+    expect(gone).toHaveTextContent("#99");
   });
 });
