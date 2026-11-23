@@ -57,15 +57,13 @@ function formatDatetimeCompact(s: string): string {
   return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** 关键字搜索框：输入停止 KEYWORD_DEBOUNCE_MS 后提交；外部清空时同步 */
+/**
+ * 关键字搜索框：输入停止 KEYWORD_DEBOUNCE_MS 后提交。关键字只由这里提交、由清空条件重置，
+ * 清空时父组件换 key 重新挂载，连同尚未提交的输入一起丢掉
+ */
 function KeywordSearch({ value, onCommit }: { value: string; onCommit: (keyword: string) => void }) {
   const { t } = useTranslation();
   const [input, setInput] = useState(value);
-  const [prevValue, setPrevValue] = useState(value);
-  if (prevValue !== value) {
-    setPrevValue(value);
-    setInput(value);
-  }
   // 父组件每次渲染都传新的 onCommit；放进 ref，免得父组件重渲染时把计时器重置
   const onCommitRef = useRef(onCommit);
   useEffect(() => {

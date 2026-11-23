@@ -7,8 +7,20 @@ import { useLatestFetch } from "./useAuditData";
 
 const NO_GRANTS: audit_svc.SessionGrant[] = [];
 
-/** 选中会话时：该会话全部「始终允许」授权，与当前页与其它筛选无关；refreshKey 变化时重新拉取 */
-export function AuditSessionGrants({ sessionId, refreshKey }: { sessionId: string; refreshKey: number }) {
+interface AuditSessionGrantsProps {
+  sessionId: string;
+  refreshKey: number;
+}
+
+/**
+ * 选中会话时：该会话全部「始终允许」授权，与当前页与其它筛选无关；refreshKey 变化时重新拉取。
+ * 按会话重新挂载：换会话时不沿用上一个会话的授权，刷新同一会话时才保留旧数据。
+ */
+export function AuditSessionGrants({ sessionId, refreshKey }: AuditSessionGrantsProps) {
+  return <SessionGrants key={sessionId} sessionId={sessionId} refreshKey={refreshKey} />;
+}
+
+function SessionGrants({ sessionId, refreshKey }: AuditSessionGrantsProps) {
   const { t } = useTranslation();
   const grants = useLatestFetch(
     `grants-${sessionId}-${refreshKey}`,

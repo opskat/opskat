@@ -111,10 +111,7 @@ export function AuditLogsView({ tabs, query }: { tabs: ReactNode; query: AuditQu
         />
       </div>
 
-      {/* 按会话重新挂载：换会话时不沿用上一个会话的授权 */}
-      {filters.session && (
-        <AuditSessionGrants key={filters.session} sessionId={filters.session} refreshKey={refreshKey} />
-      )}
+      {filters.session && <AuditSessionGrants sessionId={filters.session} refreshKey={refreshKey} />}
 
       <div className="relative flex-1 min-h-0 flex flex-col">
         <div className="flex-1 overflow-auto">
