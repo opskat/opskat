@@ -16,6 +16,8 @@ export function useAuditQuery() {
   const [range, setRange] = useState<AuditTimeRange>(DEFAULT_TIME_RANGE);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<number>(AUDIT_PAGE_SIZES[0]);
+  // 每次清空加一：搜索框据此丢掉还在防抖中、尚未提交的关键字
+  const [clearGeneration, setClearGeneration] = useState(0);
 
   const patchFilters = useCallback((patch: Partial<AuditFilters>) => {
     setFilters((prev) => ({ ...prev, ...patch }));
@@ -24,6 +26,7 @@ export function useAuditQuery() {
   const clearFilters = useCallback(() => {
     setFilters(EMPTY_FILTERS);
     setPage(0);
+    setClearGeneration((n) => n + 1);
   }, []);
   const changeRange = useCallback((next: AuditTimeRange) => {
     setRange(next);
@@ -34,7 +37,18 @@ export function useAuditQuery() {
     setPage(0);
   }, []);
 
-  return { filters, range, page, pageSize, patchFilters, clearFilters, changeRange, setPage, changePageSize };
+  return {
+    filters,
+    range,
+    page,
+    pageSize,
+    clearGeneration,
+    patchFilters,
+    clearFilters,
+    changeRange,
+    setPage,
+    changePageSize,
+  };
 }
 
 export type AuditQuery = ReturnType<typeof useAuditQuery>;

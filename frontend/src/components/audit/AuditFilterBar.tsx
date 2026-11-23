@@ -251,7 +251,9 @@ function conditionValue(key: AuditConditionKey, f: AuditFilters, t: TFunction): 
         .slice(0, 2)
         .map((a) => a.name)
         .join(", ");
-      return f.assets.length > 2 ? t("audit.assetsMore", { names, count: f.assets.length }) : names;
+      return f.assets.length > 2
+        ? t("audit.assetsMore", { names, count: f.assets.length, more: f.assets.length - 2 })
+        : names;
     }
     case "result":
       return f.result === "success" ? t("audit.success") : t("audit.failed");
@@ -263,6 +265,8 @@ function conditionValue(key: AuditConditionKey, f: AuditFilters, t: TFunction): 
 }
 
 interface AuditFilterBarProps {
+  /** 条件被清空的次数；变化时重置搜索框（含尚未提交的输入） */
+  clearGeneration: number;
   filters: AuditFilters;
   onPatch: (patch: Partial<AuditFilters>) => void;
   onClear: () => void;
@@ -272,13 +276,21 @@ interface AuditFilterBarProps {
 }
 
 /** 顶栏：关键字、会话、时间范围；下方为已生效条件标签行 */
-export function AuditFilterBar({ filters, onPatch, onClear, range, onRangeChange, sessions }: AuditFilterBarProps) {
+export function AuditFilterBar({
+  clearGeneration,
+  filters,
+  onPatch,
+  onClear,
+  range,
+  onRangeChange,
+  sessions,
+}: AuditFilterBarProps) {
   const { t } = useTranslation();
   const keys = activeConditionKeys(filters);
   return (
     <>
       <div className="px-4 pb-2 flex items-center gap-2">
-        <KeywordSearch value={filters.keyword} onCommit={(keyword) => onPatch({ keyword })} />
+        <KeywordSearch key={clearGeneration} value={filters.keyword} onCommit={(keyword) => onPatch({ keyword })} />
         <SessionSelect value={filters.session} sessions={sessions} onChange={(session) => onPatch({ session })} />
         <TimeRangePicker range={range} onChange={onRangeChange} />
       </div>

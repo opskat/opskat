@@ -15,7 +15,18 @@ import type { AuditQuery } from "./useAuditQuery";
 /** 审计日志页签：顶栏筛选 + 表头筛选 + 列表 */
 export function AuditLogsView({ tabs, query }: { tabs: ReactNode; query: AuditQuery }) {
   const { t } = useTranslation();
-  const { filters, range, page, pageSize, patchFilters, clearFilters, changeRange, setPage, changePageSize } = query;
+  const {
+    filters,
+    range,
+    page,
+    pageSize,
+    clearGeneration,
+    patchFilters,
+    clearFilters,
+    changeRange,
+    setPage,
+    changePageSize,
+  } = query;
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // 刷新按钮递增，会话授权汇总据此重新拉取
   const [refreshKey, setRefreshKey] = useState(0);
@@ -90,6 +101,7 @@ export function AuditLogsView({ tabs, query }: { tabs: ReactNode; query: AuditQu
           </div>
         </div>
         <AuditFilterBar
+          clearGeneration={clearGeneration}
           filters={filters}
           onPatch={patchFilters}
           onClear={clearFilters}
@@ -99,7 +111,10 @@ export function AuditLogsView({ tabs, query }: { tabs: ReactNode; query: AuditQu
         />
       </div>
 
-      {filters.session && <AuditSessionGrants sessionId={filters.session} refreshKey={refreshKey} />}
+      {/* 按会话重新挂载：换会话时不沿用上一个会话的授权 */}
+      {filters.session && (
+        <AuditSessionGrants key={filters.session} sessionId={filters.session} refreshKey={refreshKey} />
+      )}
 
       <div className="relative flex-1 min-h-0 flex flex-col">
         <div className="flex-1 overflow-auto">

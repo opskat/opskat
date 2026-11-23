@@ -48,7 +48,7 @@ export function AuditPager({ page, pageSize, total, loading, onPage, onPageSize 
       </span>
       <div className="ml-auto flex items-center gap-1">
         <Select value={String(pageSize)} onValueChange={(v) => onPageSize(Number(v))}>
-          <SelectTrigger className="h-7 w-[92px] text-xs" aria-label={t("audit.pageSize")}>
+          <SelectTrigger className="h-7 w-auto whitespace-nowrap text-xs" aria-label={t("audit.pageSize")}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

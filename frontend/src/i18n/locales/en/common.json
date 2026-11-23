@@ -2531,7 +2531,7 @@
     "searchPlaceholder": "Search commands or asset names",
     "clearSearch": "Clear search",
     "searchAssets": "Search assets or groups",
-    "assetsMore": "{{names}} and {{count}} total",
+    "assetsMore": "{{names}} +{{more}}",
     "removeCondition": "Remove {{name}} filter",
     "clearConditions": "Clear",
     "clearAllFilters": "Clear filters",

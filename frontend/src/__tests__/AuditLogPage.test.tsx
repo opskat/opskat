@@ -898,3 +898,69 @@ describe("AuditLogPage paging, loading and context", () => {
     expect(gone).toHaveTextContent("#99");
   });
 });
+
+describe("AuditLogPage edge cases", () => {
+  const log = (id: number, over: Record<string, unknown> = {}) => ({
+    ID: id,
+    Source: "opsctl",
+    ToolName: "exec",
+    AssetID: 9,
+    AssetName: "web-01",
+    Command: `cmd-${id}`,
+    Request: "{}",
+    Result: "",
+    Error: "",
+    Success: 1,
+    SessionID: `s-${id}`,
+    Decision: "allow",
+    DecisionSource: "policy_allow",
+    MatchedPattern: "",
+    Createtime: id,
+    ...over,
+  });
+  const lastQuery = () => vi.mocked(ListAuditLogs).mock.calls.at(-1)![0] as audit_svc.Query;
+
+  beforeEach(() => {
+    vi.mocked(ListAuditLogs).mockReset();
+    vi.mocked(ListAuditSessions).mockResolvedValue([]);
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [log(1), log(2)], total: 2 } as never);
+  });
+
+  it("does not show the previous session's grants while another session's grants load", async () => {
+    vi.mocked(ListAuditSessionGrants).mockResolvedValueOnce([
+      { asset_id: 9, asset_name: "web-01", patterns: "first-session-pattern", createtime: 1 },
+    ] as never);
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await user.click(await screen.findByText("cmd-1"));
+    const drawer = () => screen.getByRole("complementary", { name: "audit.detail" });
+    await user.click(within(drawer()).getByRole("button", { name: "s-1" }));
+    expect(await screen.findByTestId("audit-session-grants")).toHaveTextContent("first-session-pattern");
+
+    // 换到另一个会话：它的授权还没返回时，不能继续显示上一个会话的
+    vi.mocked(ListAuditSessionGrants).mockReturnValueOnce(new Promise(() => {}) as never);
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [log(2)], total: 1 } as never);
+    await user.click(screen.getByText("cmd-2"));
+    await user.click(within(drawer()).getByRole("button", { name: "s-2" }));
+    await waitFor(() => expect(ListAuditSessionGrants).toHaveBeenLastCalledWith("s-2"));
+    expect(screen.queryByText("first-session-pattern")).not.toBeInTheDocument();
+  });
+
+  it("drops a keyword still waiting to be applied when the conditions are cleared", async () => {
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    const row = (await screen.findByText("cmd-1")).closest("tr") as HTMLTableRowElement;
+    await user.click(within(row).getByRole("button", { name: "exec" }));
+    await waitFor(() => expect(lastQuery().tool_name).toBe("exec"));
+
+    const search = screen.getByRole("textbox", { name: "audit.searchPlaceholder" });
+    await user.type(search, "abc");
+    await user.click(
+      within(screen.getByTestId("audit-conditions")).getByRole("button", { name: "audit.clearConditions" })
+    );
+
+    await new Promise((r) => setTimeout(r, 500));
+    expect(lastQuery()).toMatchObject({ tool_name: "", keyword: "" });
+    expect(screen.getByRole("textbox", { name: "audit.searchPlaceholder" })).toHaveValue("");
+  });
+});
