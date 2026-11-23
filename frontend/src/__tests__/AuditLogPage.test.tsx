@@ -98,14 +98,14 @@ describe("AuditLogPage result status", () => {
     const row = tool.closest("tr");
     expect(row?.parentElement).toHaveClass("select-text");
 
-    await user.click(within(row as HTMLTableRowElement).getByRole("button", { name: "audit.detail" }));
+    await user.click(within(row as HTMLTableRowElement).getByText("echo selectable-command"));
 
-    const request = screen.getByText('{"request":"selectable"}');
-    const detail = request.closest('[role="dialog"]')?.querySelector(".select-text");
-    expect(detail).toBeInTheDocument();
+    const detail = screen.getByRole("complementary", { name: "audit.detail" });
+    // 请求是 JSON 时缩进显示
+    const request = within(detail).getByText((_, el) => el?.textContent === '{\n  "request": "selectable"\n}');
     expect(request).toHaveClass("select-text");
-    expect(screen.getByText('{"response":"selectable"}')).toHaveClass("select-text");
-    expect(screen.getByText("selectable-error")).toHaveClass("select-text");
+    expect(within(detail).getByText('{"response":"selectable"}')).toHaveClass("select-text");
+    expect(within(detail).getByText("selectable-error")).toHaveClass("select-text");
   });
 
   it("shows Autopilot rejections with their model review", async () => {
@@ -144,7 +144,7 @@ describe("AuditLogPage result status", () => {
     const row = tool.closest("tr") as HTMLTableRowElement;
     expect(within(row).getByText("✗ audit.decisionSources.autopilot")).toBeInTheDocument();
 
-    await user.click(within(row).getByRole("button", { name: "audit.detail" }));
+    await user.click(within(row).getByText("systemctl stop nginx"));
     expect(screen.getByTestId("review-notice")).toHaveTextContent("commandReview.withMode");
 
     // 只列未通过题目的评分
@@ -194,7 +194,7 @@ describe("AuditLogPage result status", () => {
     render(<AuditLogPage />);
 
     const tool = await screen.findByText("ext-reviewed-tool");
-    await user.click(within(tool.closest("tr") as HTMLTableRowElement).getByRole("button", { name: "audit.detail" }));
+    await user.click(within(tool.closest("tr") as HTMLTableRowElement).getByText("rm -rf /data"));
     expect(screen.getByTestId("review-reviewer")).toHaveTextContent("commandReview.reviewedBy");
     expect(within(screen.getByTestId("review-scores")).getByText(/Loses data/)).toBeInTheDocument();
   });
@@ -524,5 +524,115 @@ describe("AuditLogPage filters", () => {
     await user.click(screen.getByRole("button", { name: "audit.clearAllFilters" }));
     await waitFor(() => expect(lastQuery().keyword).toBe(""));
     expect(screen.getByRole("textbox", { name: "audit.searchPlaceholder" })).toHaveValue("");
+  });
+});
+
+describe("AuditLogPage detail drawer", () => {
+  const log = (id: number, over: Record<string, unknown> = {}) => ({
+    ID: id,
+    Source: "opsctl",
+    ToolName: "exec",
+    AssetID: 9,
+    AssetName: "web-01",
+    Command: `cmd-${id}`,
+    Request: `{"n":${id}}`,
+    Result: `out-${id}`,
+    Error: "",
+    Success: 1,
+    SessionID: `session-${id}`,
+    Decision: "allow",
+    DecisionSource: "policy_allow",
+    MatchedPattern: "",
+    Createtime: id,
+    ...over,
+  });
+  const drawer = () => screen.queryByRole("complementary", { name: "audit.detail" });
+  const lastQuery = () => vi.mocked(ListAuditLogs).mock.calls.at(-1)![0] as audit_svc.Query;
+
+  beforeEach(() => {
+    vi.mocked(ListAuditLogs).mockReset();
+    vi.mocked(ListAuditSessions).mockResolvedValue([]);
+    vi.mocked(ListAuditLogs).mockResolvedValue({
+      items: [log(3), log(2, { Success: 0, Error: "exit status 1" }), log(1)],
+      total: 3,
+    } as never);
+  });
+
+  it("opens from a row click, highlights the row, and steps through the page with the arrow keys", async () => {
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    const row3 = (await screen.findByText("cmd-3")).closest("tr") as HTMLTableRowElement;
+
+    await user.click(within(row3).getByText("cmd-3"));
+    expect(within(drawer()!).getByText("out-3")).toBeInTheDocument();
+    expect(row3).toHaveAttribute("aria-selected", "true");
+    expect(within(drawer()!).getByRole("button", { name: "audit.prevRecord" })).toBeDisabled();
+
+    await user.keyboard("{ArrowDown}");
+    expect(within(drawer()!).getByText("exit status 1")).toBeInTheDocument();
+    await user.keyboard("{ArrowDown}");
+    expect(within(drawer()!).getByText("out-1")).toBeInTheDocument();
+    // 到本页末尾就停住，不翻页
+    expect(within(drawer()!).getByRole("button", { name: "audit.nextRecord" })).toBeDisabled();
+    await user.keyboard("{ArrowDown}");
+    expect(within(drawer()!).getByText("out-1")).toBeInTheDocument();
+
+    await user.keyboard("{ArrowUp}");
+    expect(within(drawer()!).getByText("exit status 1")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(drawer()).not.toBeInTheDocument();
+  });
+
+  it("ignores the arrow keys while typing in the search box", async () => {
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await user.click(await screen.findByText("cmd-3"));
+
+    await user.click(screen.getByRole("textbox", { name: "audit.searchPlaceholder" }));
+    await user.keyboard("{ArrowDown}");
+    expect(within(drawer()!).getByText("out-3")).toBeInTheDocument();
+  });
+
+  it("does not open when a filterable value in the row is clicked", async () => {
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    const row = (await screen.findByText("cmd-3")).closest("tr") as HTMLTableRowElement;
+
+    await user.click(within(row).getByRole("button", { name: "web-01" }));
+    expect(drawer()).not.toBeInTheDocument();
+  });
+
+  it("turns detail values into filters and copies blocks", async () => {
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await user.click(await screen.findByText("cmd-3"));
+
+    const commandBlock = within(drawer()!).getByText("cmd-3").closest("section") as HTMLElement;
+    await user.click(within(commandBlock).getByRole("button", { name: "audit.copyField" }));
+    // userEvent.setup() 装了自己的剪贴板替身，读回来即可
+    expect(await navigator.clipboard.readText()).toBe("cmd-3");
+
+    await user.click(within(drawer()!).getByRole("button", { name: "session-3" }));
+    await waitFor(() => expect(lastQuery().session_id).toBe("session-3"));
+  });
+
+  it("closes when the selected record is no longer in the results", async () => {
+    const user = userEvent.setup();
+    render(<AuditLogPage />);
+    await user.click(await screen.findByText("cmd-3"));
+    expect(drawer()).toBeInTheDocument();
+
+    vi.mocked(ListAuditLogs).mockResolvedValue({ items: [log(1)], total: 1 } as never);
+    await user.click(within(screen.getByText("cmd-1").closest("tr")!).getByRole("button", { name: "exec" }));
+    await waitFor(() => expect(lastQuery().tool_name).toBe("exec"));
+    await waitFor(() => expect(screen.queryByText("cmd-3")).not.toBeInTheDocument());
+    expect(drawer()).not.toBeInTheDocument();
+  });
+
+  it("shows the error summary when hovering a failed result", async () => {
+    render(<AuditLogPage />);
+    const row2 = (await screen.findByText("cmd-2")).closest("tr") as HTMLTableRowElement;
+    expect(within(row2).getByRole("button", { name: "audit.failed" })).toHaveAttribute("title", "exit status 1");
   });
 });

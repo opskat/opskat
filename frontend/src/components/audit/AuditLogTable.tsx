@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { CheckCircle2, Info, XCircle } from "lucide-react";
-import { Button, cn } from "@opskat/ui";
+import { CheckCircle2, XCircle } from "lucide-react";
+import { cn } from "@opskat/ui";
 import { AsyncState, type AsyncStatus } from "@/components/common/AsyncState";
 import { AssetMultiSelect } from "@/components/asset/AssetMultiSelect";
 import { ReviewMark } from "@/components/approval/ReviewNotice";
@@ -26,12 +26,14 @@ interface AuditLogTableProps {
   onPatch: (patch: Partial<AuditFilters>) => void;
   facets: AuditFacetsLoad;
   deciderOf: (source: string) => string | undefined;
-  onOpenDetail: (log: audit_entity.AuditLog) => void;
+  /** 详情抽屉里正在看的记录 */
+  selectedId: number | null;
+  onSelect: (log: audit_entity.AuditLog) => void;
   /** 无行可显示时占满表格宽度的一行（加载 / 错误 / 空态） */
   placeholder?: ReactNode;
 }
 
-const COLUMN_COUNT = 8;
+const COLUMN_COUNT = 7;
 
 /** 可点的单元格内容：点了即按该值筛选 */
 function FilterCell({
@@ -49,7 +51,10 @@ function FilterCell({
     <button
       type="button"
       title={title}
-      onClick={onClick}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
       className={cn(
         "text-left max-w-full truncate cursor-pointer hover:underline underline-offset-2 decoration-dotted hover:text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm",
         mono && "font-mono"
@@ -72,7 +77,8 @@ export function AuditLogTable({
   onPatch,
   facets,
   deciderOf,
-  onOpenDetail,
+  selectedId,
+  onSelect,
   placeholder,
 }: AuditLogTableProps) {
   const { t } = useTranslation();
@@ -195,7 +201,6 @@ export function AuditLogTable({
               />
             )}
           </AuditHeaderFilter>
-          <th className="w-9 pl-0 pr-2 py-2" />
         </tr>
       </thead>
       <tbody className="select-text">
@@ -209,7 +214,19 @@ export function AuditLogTable({
           const review = log.Review ? parseReviewInfo(log.Review) : null;
           const decider = deciderOf(log.DecisionSource);
           return (
-            <tr key={log.ID} className="border-b hover:bg-muted/50 transition-colors">
+            <tr
+              key={log.ID}
+              aria-selected={selectedId === log.ID}
+              onClick={() => {
+                // 拖选文字复制时不打开详情
+                if (window.getSelection()?.toString()) return;
+                onSelect(log);
+              }}
+              className={cn(
+                "border-b cursor-pointer transition-colors",
+                selectedId === log.ID ? "bg-primary/10" : "hover:bg-muted/50"
+              )}
+            >
               <td
                 className="px-4 py-2 text-xs text-muted-foreground whitespace-nowrap tabular-nums"
                 title={formatAuditTimeFull(log.Createtime)}
@@ -243,9 +260,10 @@ export function AuditLogTable({
                   <button
                     type="button"
                     title={log.MatchedPattern ? `${t("audit.matchedPattern")}: ${log.MatchedPattern}` : filterThis}
-                    onClick={() =>
-                      onPatch({ decision: log.Decision as AuditFilters["decision"], decider: decider ?? "" })
-                    }
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPatch({ decision: log.Decision as AuditFilters["decision"], decider: decider ?? "" });
+                    }}
                     className={`inline-block px-1.5 py-0.5 text-xs rounded font-mono cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${badge.className}`}
                   >
                     {log.Decision === "allow" ? "✓" : "✗"} {badge.label}
@@ -263,7 +281,10 @@ export function AuditLogTable({
                 <button
                   type="button"
                   title={log.Success === 1 ? filterThis : log.Error || filterThis}
-                  onClick={() => onPatch({ result: log.Success === 1 ? "success" : "failed" })}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onPatch({ result: log.Success === 1 ? "success" : "failed" });
+                  }}
                   className="cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                 >
                   {log.Success === 1 ? (
@@ -272,17 +293,6 @@ export function AuditLogTable({
                     <XCircle aria-label={t("audit.failed")} className="h-4 w-4 text-destructive" />
                   )}
                 </button>
-              </td>
-              <td className="pl-0 pr-2 py-2">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-7 w-7"
-                  aria-label={t("audit.detail")}
-                  onClick={() => onOpenDetail(log)}
-                >
-                  <Info className="h-3.5 w-3.5" />
-                </Button>
               </td>
             </tr>
           );

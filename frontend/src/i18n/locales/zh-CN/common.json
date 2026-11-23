@@ -2537,7 +2537,11 @@
     "removeCondition": "移除「{{name}}」条件",
     "clearConditions": "清空",
     "clearAllFilters": "清空筛选",
-    "emptyFiltered": "没有符合筛选条件的记录"
+    "emptyFiltered": "没有符合筛选条件的记录",
+    "copyField": "复制{{name}}",
+    "prevRecord": "上一条",
+    "nextRecord": "下一条",
+    "closeDetail": "关闭详情"
   },
   "zmodem": {
     "downloadComplete": "{{name}} 接收完成",

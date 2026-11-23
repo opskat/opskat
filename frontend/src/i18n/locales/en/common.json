@@ -2537,7 +2537,11 @@
     "removeCondition": "Remove {{name}} filter",
     "clearConditions": "Clear",
     "clearAllFilters": "Clear filters",
-    "emptyFiltered": "No records match these filters"
+    "emptyFiltered": "No records match these filters",
+    "copyField": "Copy {{name}}",
+    "prevRecord": "Previous record",
+    "nextRecord": "Next record",
+    "closeDetail": "Close details"
   },
   "zmodem": {
     "downloadComplete": "Received {{name}}",

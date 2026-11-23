@@ -3,10 +3,9 @@ import { useTranslation } from "react-i18next";
 import { ChevronLeft, ChevronRight, RefreshCw, SearchX } from "lucide-react";
 import { Button } from "@opskat/ui";
 import { AsyncState } from "@/components/common/AsyncState";
-import { audit_entity } from "../../../wailsjs/go/models";
 import { AuditFilterBar } from "./AuditFilterBar";
 import { AuditLogTable } from "./AuditLogTable";
-import { AuditDetailDialog } from "./AuditDetailDialog";
+import { AuditDetailDrawer } from "./AuditDetailDrawer";
 import {
   DEFAULT_TIME_RANGE,
   EMPTY_FILTERS,
@@ -24,7 +23,7 @@ export function AuditLogsView({ tabs }: { tabs: ReactNode }) {
   const [filters, setFilters] = useState<AuditFilters>(EMPTY_FILTERS);
   const [range, setRange] = useState<AuditTimeRange>(DEFAULT_TIME_RANGE);
   const [page, setPage] = useState(0);
-  const [detailLog, setDetailLog] = useState<audit_entity.AuditLog | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const logs = useAuditLogs(filters, range, page, PAGE_SIZE);
   const facets = useAuditFacets(range);
@@ -52,6 +51,10 @@ export function AuditLogsView({ tabs }: { tabs: ReactNode }) {
   };
 
   const items = logs.data.items;
+  // 换页 / 换筛选后所选记录不在新结果里，就关掉详情
+  const selectedIndex = selectedId === null ? -1 : items.findIndex((l) => l.ID === selectedId);
+  if (selectedId !== null && selectedIndex < 0 && !logs.loading) setSelectedId(null);
+  const selected = selectedIndex >= 0 ? items[selectedIndex] : null;
   const total = logs.data.total;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const filtered = hasAnyFilter(filters);
@@ -133,16 +136,29 @@ export function AuditLogsView({ tabs }: { tabs: ReactNode }) {
         </div>
       )}
 
-      <div className="flex-1 overflow-auto">
-        <AuditLogTable
-          logs={items}
-          filters={filters}
-          onPatch={patchFilters}
-          facets={facets}
-          deciderOf={deciderOf}
-          onOpenDetail={setDetailLog}
-          placeholder={placeholder}
-        />
+      <div className="relative flex-1 min-h-0 flex flex-col">
+        <div className="flex-1 overflow-auto">
+          <AuditLogTable
+            logs={items}
+            filters={filters}
+            onPatch={patchFilters}
+            facets={facets}
+            deciderOf={deciderOf}
+            selectedId={selected?.ID ?? null}
+            onSelect={(log) => setSelectedId(log.ID)}
+            placeholder={placeholder}
+          />
+        </div>
+        {selected && (
+          <AuditDetailDrawer
+            log={selected}
+            filters={filters}
+            onPatch={patchFilters}
+            onClose={() => setSelectedId(null)}
+            onPrev={selectedIndex > 0 ? () => setSelectedId(items[selectedIndex - 1].ID) : undefined}
+            onNext={selectedIndex < items.length - 1 ? () => setSelectedId(items[selectedIndex + 1].ID) : undefined}
+          />
+        )}
       </div>
 
       {totalPages > 1 && (
@@ -170,8 +186,6 @@ export function AuditLogsView({ tabs }: { tabs: ReactNode }) {
           </Button>
         </div>
       )}
-
-      <AuditDetailDialog log={detailLog} onClose={() => setDetailLog(null)} />
     </>
   );
 }
