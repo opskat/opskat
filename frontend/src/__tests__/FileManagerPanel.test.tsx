@@ -2952,6 +2952,20 @@ describe("FileManagerPanel", () => {
       expect(treeNames()).not.toContain("/srv/app/logs");
     });
 
+    it("keeps the open branches on screen while a refresh is still loading them", async () => {
+      mockDirListings({
+        "/": [[dirEntry("srv")], new Promise<sftp_svc.FileEntry[]>(() => {})],
+        "/srv": [[dirEntry("app")], new Promise<sftp_svc.FileEntry[]>(() => {})],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+
+      fireEvent.click(screen.getByTitle("sftp.refresh"));
+
+      await waitFor(() => expect(listDirCalls("/srv")).toHaveLength(2));
+      expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]);
+    });
+
     it("shows a directory created by refresh in the tree without collapsing it", async () => {
       mockDirListings({
         "/": [[dirEntry("srv")], [dirEntry("opt"), dirEntry("srv")]],

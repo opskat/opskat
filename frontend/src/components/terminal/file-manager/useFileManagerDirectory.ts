@@ -38,6 +38,8 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
   const currentPathRef = useRef(currentPath);
   const expandedRef = useRef(expanded);
   const folderExpandedRef = useRef(folderExpanded);
+  // 屏幕上正显示着条目的目录层(见 refreshTree),随渲染行更新。
+  const visibleLayersRef = useRef<Set<string>>(new Set());
 
   const loadDir = useCallback(
     async (dirPath: string) => {
@@ -144,14 +146,25 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
     [fetchLayer]
   );
 
-  /** 刷新:丢掉每个目录的条目缓存并重拉根层,已展开层随后由下面的补拉 effect 重新请求。 */
-  // 传入 nextPath 时刷新后落到那个目录:当前目录自己被删/被改名后,原路径已不存在。
+  /**
+   * 刷新:使所有目录的条目缓存失效。屏幕上正显示着的层(列表与目录树里展开着的目录)保留旧条目
+   * 并在后台重拉——否则每次移动/删除/重命名之后,目录树都会先塌成只剩 / 再逐层长回来;其余层
+   * 直接丢弃,下次展开时重新请求。传入 nextPath 时刷新后落到那个目录:当前目录自己被删/被改名
+   * 后,原路径已不存在。
+   */
   const refreshTree = useCallback(
     async (nextPath?: string) => {
-      setTree({});
-      return loadDir(nextPath ?? currentPathRef.current);
+      const target = nextPath ?? currentPathRef.current;
+      const visible = visibleLayersRef.current;
+      setTree((prev) => {
+        const kept: Record<string, SftpTreeNode> = {};
+        for (const path of visible) if (prev[path]) kept[path] = prev[path];
+        return kept;
+      });
+      for (const path of visible) if (path !== target) void fetchLayer(path);
+      return loadDir(target);
     },
-    [loadDir]
+    [fetchLayer, loadDir]
   );
 
   const setSelected = useCallback((next: string[] | ((prev: string[]) => string[])) => {
@@ -188,6 +201,13 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
   // 否则面板收起或会话未就绪时也会对着远端发请求。
   const folderTreeActive = !!tree[currentPath];
   const folderRows = useMemo(() => flattenFolderTree(tree, folderExpanded), [folderExpanded, tree]);
+
+  useEffect(() => {
+    const layers = new Set<string>([currentPath]);
+    for (const row of rows) if (row.state === "entry" && row.expanded) layers.add(row.path);
+    for (const row of folderRows) if (row.state === "dir" && row.expanded) layers.add(row.path);
+    visibleLayersRef.current = layers;
+  }, [currentPath, folderRows, rows]);
 
   // 展开态记忆比缓存活得久(刷新清空缓存、换根后才重新可见):补拉这些「记得展开、
   // 但这一轮还没有条目」的层,否则它们会停在加载中占位上等一个永远不会发出的请求。
