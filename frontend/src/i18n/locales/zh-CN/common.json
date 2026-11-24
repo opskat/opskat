@@ -2700,7 +2700,8 @@
       "label": "目录树",
       "toggle": "目录树",
       "caption": "{{name}} · {{files}} 个文件，{{dirs}} 个文件夹",
-      "resize": "调整目录树大小"
+      "resize": "调整目录树大小",
+      "dropHint": "移动 {{count}} 项到 {{target}}"
     }
   },
   "error": {

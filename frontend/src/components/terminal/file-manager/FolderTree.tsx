@@ -19,6 +19,11 @@ interface FolderTreeProps {
   onNavigate: (path: string) => void;
   onToggle: (path: string) => void;
   onRetry: (path: string) => void;
+  /** 拖动经过的目录(由面板判定合法后才会落到这里)。 */
+  dropTargetPath: string | null;
+  onDirDragOver: (event: React.DragEvent, path: string) => void;
+  onDirDragLeave: (event: React.DragEvent, path: string) => void;
+  onDirDrop: (event: React.DragEvent, path: string) => void;
   className?: string;
 }
 
@@ -26,7 +31,18 @@ interface FolderTreeProps {
  * 文件面板里的目录树:根恒为 /、只列目录。它不持有当前目录,只高亮面板的当前目录;
  * 单击行等价于在列表里双击进入该目录,箭头只展开/收起。
  */
-export function FolderTree({ rows, currentPath, onNavigate, onToggle, onRetry, className }: FolderTreeProps) {
+export function FolderTree({
+  rows,
+  currentPath,
+  onNavigate,
+  onToggle,
+  onRetry,
+  dropTargetPath,
+  onDirDragOver,
+  onDirDragLeave,
+  onDirDrop,
+  className,
+}: FolderTreeProps) {
   const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const revealedRef = useRef<string | null>(null);
@@ -119,6 +135,10 @@ export function FolderTree({ rows, currentPath, onNavigate, onToggle, onRetry, c
               row={row}
               isCurrent={row.path === currentPath}
               isTabStop={row.path === tabStopPath}
+              isDropTarget={row.path === dropTargetPath}
+              onDragOver={onDirDragOver}
+              onDragLeave={onDirDragLeave}
+              onDrop={onDirDrop}
               onFocusRow={setFocusedPath}
               onNavigate={onNavigate}
               onToggle={onToggle}
@@ -154,6 +174,10 @@ interface FolderTreeDirRowProps {
   row: FolderTreeRow;
   isCurrent: boolean;
   isTabStop: boolean;
+  isDropTarget: boolean;
+  onDragOver: (event: React.DragEvent, path: string) => void;
+  onDragLeave: (event: React.DragEvent, path: string) => void;
+  onDrop: (event: React.DragEvent, path: string) => void;
   onFocusRow: (path: string) => void;
   onNavigate: (path: string) => void;
   onToggle: (path: string) => void;
@@ -165,6 +189,10 @@ const FolderTreeDirRow = memo(function FolderTreeDirRow({
   row,
   isCurrent,
   isTabStop,
+  isDropTarget,
+  onDragOver,
+  onDragLeave,
+  onDrop,
   onFocusRow,
   onNavigate,
   onToggle,
@@ -177,6 +205,7 @@ const FolderTreeDirRow = memo(function FolderTreeDirRow({
       data-testid={`sftp-tree-row-${row.path}`}
       data-sftp-tree-path={row.path}
       data-sftp-tree-current={isCurrent ? "true" : undefined}
+      data-sftp-tree-drop={isDropTarget ? "true" : undefined}
       role="treeitem"
       aria-label={row.name}
       aria-level={row.depth + 1}
@@ -186,10 +215,14 @@ const FolderTreeDirRow = memo(function FolderTreeDirRow({
       title={row.path}
       className={cn(
         "relative flex cursor-pointer items-center gap-1 rounded-sm py-1 pr-2 outline-none focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset",
-        isCurrent ? "bg-primary/15 font-medium text-primary" : "hover:bg-muted/50"
+        isCurrent ? "bg-primary/15 font-medium text-primary" : "hover:bg-muted/50",
+        isDropTarget && "bg-primary/10 ring-1 ring-primary/30"
       )}
       style={{ paddingLeft: indentOf(row.depth) }}
       onFocus={() => onFocusRow(row.path)}
+      onDragOver={(e) => onDragOver(e, row.path)}
+      onDragLeave={(e) => onDragLeave(e, row.path)}
+      onDrop={(e) => onDrop(e, row.path)}
       onClick={() => onNavigate(row.path)}
     >
       <TreeGuides depth={row.depth} />

@@ -3124,4 +3124,107 @@ describe("FileManagerPanel", () => {
       expect(item("etc")).toHaveAttribute("aria-selected", "true");
     });
   });
+
+  describe("dropping list entries onto the folder tree", () => {
+    const treeRow = (path: string) => screen.getByTestId(`sftp-tree-row-${path}`);
+    const statusBar = () => screen.getByTestId("sftp-status-bar");
+
+    beforeEach(() => {
+      useSFTPStore.setState({ folderTreeVisible: true, folderTreeWidth: 180, folderTreeHeight: null });
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app"), dirEntry("www")],
+        "/srv/app": [dirEntry("logs"), fileEntry("a.txt"), fileEntry("b.txt")],
+      });
+      vi.mocked(SFTPRename).mockResolvedValue(undefined as never);
+    });
+
+    async function renderReady() {
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a.txt");
+      await waitFor(() => expect(treeRow("/srv/www")).toBeInTheDocument());
+    }
+
+    function pointerDrag(source: HTMLElement, target: HTMLElement) {
+      const elementFromPoint = vi.spyOn(document, "elementFromPoint").mockReturnValue(target);
+      fireEvent.pointerDown(source, { button: 0, buttons: 1, clientX: 10, clientY: 10, pointerId: 1 });
+      fireEvent.pointerMove(source, { buttons: 1, clientX: 48, clientY: 48, pointerId: 1 });
+      return {
+        release: () => {
+          fireEvent.pointerUp(source, { button: 0, clientX: 48, clientY: 48, pointerId: 1 });
+          elementFromPoint.mockRestore();
+        },
+      };
+    }
+
+    it("highlights a tree directory under a pointer drag, names the full target in the status bar, and moves on release", async () => {
+      await renderReady();
+
+      const drag = pointerDrag(rowOf("a.txt"), treeRow("/srv/www"));
+
+      expect(treeRow("/srv/www")).toHaveAttribute("data-sftp-tree-drop", "true");
+      expect(within(statusBar()).getByText("sftp.folderTree.dropHint")).toBeInTheDocument();
+      // 悬停在收起的目录上不会自动展开它。
+      expect(listDirCalls("/srv/www")).toHaveLength(0);
+
+      drag.release();
+
+      await waitFor(() => expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/a.txt", "/srv/www/a.txt"));
+      expect(treeRow("/srv/www")).not.toHaveAttribute("data-sftp-tree-drop");
+    });
+
+    it("moves every selected entry when a multi-selection is dropped on a tree directory", async () => {
+      await renderReady();
+      fireEvent.click(rowOf("a.txt"));
+      fireEvent.click(rowOf("b.txt"), { ctrlKey: true });
+
+      pointerDrag(rowOf("b.txt"), treeRow("/srv/www")).release();
+
+      await waitFor(() => expect(SFTPRename).toHaveBeenCalledTimes(2));
+      expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/a.txt", "/srv/www/a.txt");
+      expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/b.txt", "/srv/www/b.txt");
+    });
+
+    it("accepts an HTML5 drag from the list onto a tree directory", async () => {
+      await renderReady();
+      const dataTransfer = createDragDataTransfer();
+
+      fireEvent.dragStart(rowOf("a.txt"), { dataTransfer });
+      fireEvent.dragOver(treeRow("/srv/www"), { dataTransfer });
+      expect(treeRow("/srv/www")).toHaveAttribute("data-sftp-tree-drop", "true");
+      fireEvent.drop(treeRow("/srv/www"), { dataTransfer });
+
+      await waitFor(() => expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/a.txt", "/srv/www/a.txt"));
+    });
+
+    it("refuses the entry's own directory and a directory onto itself", async () => {
+      await renderReady();
+
+      const ownDir = pointerDrag(rowOf("a.txt"), treeRow("/srv/app"));
+      expect(treeRow("/srv/app")).not.toHaveAttribute("data-sftp-tree-drop");
+      expect(within(statusBar()).queryByText("sftp.folderTree.dropHint")).toBeNull();
+      ownDir.release();
+
+      fireEvent.click(screen.getByTestId("sftp-tree-toggle-/srv/app"));
+      await waitFor(() => expect(screen.getByTestId("sftp-tree-row-/srv/app/logs")).toBeInTheDocument());
+      const listLogs = document.querySelector<HTMLElement>(
+        '[data-sftp-entry-row][data-sftp-entry-path="/srv/app/logs"]'
+      ) as HTMLElement;
+      const self = pointerDrag(listLogs, treeRow("/srv/app/logs"));
+      expect(treeRow("/srv/app/logs")).not.toHaveAttribute("data-sftp-tree-drop");
+      self.release();
+
+      expect(SFTPRename).not.toHaveBeenCalled();
+    });
+
+    it("asks about a same-name target before moving onto a tree directory", async () => {
+      mockTargetStats({ "/srv/www/a.txt": existingFile("/srv/www/a.txt", "/srv/www/a (1).txt") });
+      await renderReady();
+
+      pointerDrag(rowOf("a.txt"), treeRow("/srv/www")).release();
+
+      expect(await screen.findByTestId("file-conflict-dialog")).toBeInTheDocument();
+      expect(SFTPRename).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -2700,7 +2700,8 @@
       "label": "Folder tree",
       "toggle": "Folder tree",
       "caption": "{{name}} · Files: {{files}} · Folders: {{dirs}}",
-      "resize": "Resize folder tree"
+      "resize": "Resize folder tree",
+      "dropHint": "Move {{count}} item(s) to {{target}}"
     }
   },
   "error": {

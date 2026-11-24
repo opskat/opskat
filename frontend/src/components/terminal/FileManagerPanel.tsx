@@ -56,6 +56,7 @@ import { PropertiesDialog } from "./file-manager/PropertiesDialog";
 import { TransferSection } from "./file-manager/TransferSection";
 import { type ClipboardState, type DeleteTarget, type CtxMenuState, type PermissionTarget } from "./file-manager/types";
 import { useFileManagerDirectory } from "./file-manager/useFileManagerDirectory";
+import { movableDraggedPaths, useSftpDragState } from "./file-manager/dragDrop";
 import { FileManagerSplit } from "./file-manager/FileManagerSplit";
 import { FolderTree } from "./file-manager/FolderTree";
 import { useNativeFileDrop } from "./file-manager/useNativeFileDrop";
@@ -273,6 +274,7 @@ export function FileManagerPanel({
   }, [clipboard, sessionId]);
 
   const { resolveTargets, conflictDialog } = useSFTPTargetResolver(sessionId);
+  const { draggedPathsRef, dropTarget, setDropTarget } = useSftpDragState();
 
   const uploadLocalPaths = useCallback(
     async (localPaths: string[], remoteDir: string) => {
@@ -767,6 +769,38 @@ export function FileManagerPanel({
     [entryByPath, refreshTree, resolveTargets, sessionId, setSelected]
   );
 
+  // 目录树行上的 HTML5 拖放(指针拖动由列表自己命中,见 FileList 的 getPointerDropTarget)。
+  const handleTreeDragOver = useCallback(
+    (event: React.DragEvent, dirPath: string) => {
+      const movable = movableDraggedPaths(event, draggedPathsRef.current, dirPath);
+      if (!movable.length) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      setDropTarget({ path: dirPath, count: movable.length });
+    },
+    [draggedPathsRef, setDropTarget]
+  );
+  const handleTreeDragLeave = useCallback(
+    (event: React.DragEvent, dirPath: string) => {
+      const next = event.relatedTarget;
+      if (next instanceof Node && event.currentTarget.contains(next)) return;
+      if (dropTarget?.path === dirPath) setDropTarget(null);
+    },
+    [dropTarget, setDropTarget]
+  );
+  const handleTreeDrop = useCallback(
+    (event: React.DragEvent, dirPath: string) => {
+      const movable = movableDraggedPaths(event, draggedPathsRef.current, dirPath);
+      if (!movable.length) return;
+      event.preventDefault();
+      event.stopPropagation();
+      draggedPathsRef.current = [];
+      setDropTarget(null);
+      void moveEntriesToDirectory(movable, dirPath);
+    },
+    [draggedPathsRef, moveEntriesToDirectory, setDropTarget]
+  );
+
   const openPermission = useCallback(
     (path: string) => {
       const entry = entryByPath.get(path);
@@ -1041,6 +1075,10 @@ export function FileManagerPanel({
                   onNavigate={(path) => void navigateToPath(path)}
                   onToggle={toggleFolderExpand}
                   onRetry={retryExpand}
+                  dropTargetPath={dropTarget?.path ?? null}
+                  onDirDragOver={handleTreeDragOver}
+                  onDirDragLeave={handleTreeDragLeave}
+                  onDirDrop={handleTreeDrop}
                 />
               }
               list={
@@ -1082,6 +1120,9 @@ export function FileManagerPanel({
                   rows={rows}
                   selected={selected}
                   setSelected={setSelected}
+                  draggedPathsRef={draggedPathsRef}
+                  dropTarget={dropTarget}
+                  setDropTarget={setDropTarget}
                 />
               }
             />
@@ -1090,13 +1131,15 @@ export function FileManagerPanel({
               data-testid="sftp-status-bar"
             >
               <span className="min-w-0 truncate">
-                {selected.length > 1
-                  ? t("sftp.selectedItems", { count: selected.length, size: formatBytes(selectedTotalSize) })
-                  : clipboard?.items.length
-                    ? clipboard.mode === "cut"
-                      ? t("sftp.clipboardCut", { count: clipboard.items.length })
-                      : t("sftp.clipboardCopy", { count: clipboard.items.length })
-                    : t("sftp.ready")}
+                {dropTarget
+                  ? t("sftp.folderTree.dropHint", { count: dropTarget.count, target: dropTarget.path })
+                  : selected.length > 1
+                    ? t("sftp.selectedItems", { count: selected.length, size: formatBytes(selectedTotalSize) })
+                    : clipboard?.items.length
+                      ? clipboard.mode === "cut"
+                        ? t("sftp.clipboardCut", { count: clipboard.items.length })
+                        : t("sftp.clipboardCopy", { count: clipboard.items.length })
+                      : t("sftp.ready")}
               </span>
               <span className="flex shrink-0 items-center gap-0.5">
                 <DropdownMenu>
