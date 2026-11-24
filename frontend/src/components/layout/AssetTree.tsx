@@ -1153,10 +1153,8 @@ const AssetRowContent = React.memo(function AssetRowContent({
           onClick={() => onSelectAsset(asset)}
           onDoubleClick={() => {
             onSelectAsset(asset);
-            const def = getAssetType(asset.Type);
-            if (def?.canConnect && (def.connectAction === "query" || !isConnecting)) {
-              onConnectAsset(asset);
-            }
+            // 连接中也照常发起：已有标签（含连接中）由打开逻辑切过去，不会重复连接（#380）
+            if (getAssetType(asset.Type)?.canConnect) onConnectAsset(asset);
           }}
         >
           {isConnecting ? (
