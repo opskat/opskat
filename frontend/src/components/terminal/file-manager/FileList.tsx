@@ -124,12 +124,6 @@ function middleEllipsisName(name: string, depth: number, panelWidth: number, chr
   return `${name.slice(0, head)}…${name.slice(name.length - tail)}`;
 }
 
-/**
- * 拖拽事件的实际落点:从事件目标向上找最近的目录标记 —— 折叠链的每一段都各自携带这份标记
- * (仅当它自己是目录时才带 dir="true"),因此深层目录与链上的某一段都能被精确命中,而不是
- * 永远退回外层行代表的最深一段。命中不到目录就是 null,调用方必须当作"这里不能放"处理,
- * 不能退回行的路径 —— 否则会把文件行也当成合法落点。
- */
 interface FileListProps {
   canExternalEdit?: (entry: sftp_svc.FileEntry) => boolean;
   clipboardCutPaths: Set<string>;

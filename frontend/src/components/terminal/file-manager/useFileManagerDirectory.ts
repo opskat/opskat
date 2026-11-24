@@ -6,7 +6,6 @@ import {
   flattenFolderTree,
   flattenSftpTree,
   folderRevealPaths,
-  FOLDER_TREE_ROOT,
   type SftpTreeNode,
 } from "@/lib/sftpDirTree";
 import { useSFTPStore } from "@/stores/sftpStore";
@@ -14,6 +13,11 @@ import { normalizeRemotePath } from "./utils";
 import { errorMessage } from "@/lib/errorMessage";
 
 const EMPTY_ENTRIES: sftp_svc.FileEntry[] = [];
+
+interface RefreshTreeOptions {
+  nextPath?: string;
+  removedPaths?: string[];
+}
 
 function loadedNode(entries: sftp_svc.FileEntry[]): SftpTreeNode {
   return { entries, loaded: true, loading: false, error: null };
@@ -23,12 +27,13 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
   const storedPath = useSFTPStore((s) => s.fileManagerPaths[tabId]);
   const currentPath = storedPath || "/";
   const setCurrentPath = useSFTPStore((s) => s.setFileManagerPath);
+  const folderTreeVisible = useSFTPStore((s) => s.folderTreeVisible);
   const [pathInput, setPathInput] = useState(currentPath);
   // 每个目录一份条目缓存:根层由 loadDir 写入,子层由 fetchLayer 懒填。
   const [tree, setTree] = useState<Record<string, SftpTreeNode>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-  // 目录树的展开集合：与列表的 expanded 独立，只共用上面的条目缓存。
-  const [folderExpanded, setFolderExpanded] = useState<Set<string>>(() => new Set([FOLDER_TREE_ROOT]));
+  // 目录树的展开集合：与列表的 expanded 独立，只共用上面的条目缓存。一开始就展开到当前目录。
+  const [folderExpanded, setFolderExpanded] = useState<Set<string>>(() => new Set(folderRevealPaths(currentPath)));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelectedState] = useState<string[]>([]);
@@ -150,12 +155,15 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
    * 刷新:使所有目录的条目缓存失效。屏幕上正显示着的层(列表与目录树里展开着的目录)保留旧条目
    * 并在后台重拉——否则每次移动/删除/重命名之后,目录树都会先塌成只剩 / 再逐层长回来;其余层
    * 直接丢弃,下次展开时重新请求。传入 nextPath 时刷新后落到那个目录:当前目录自己被删/被改名
-   * 后,原路径已不存在。
+   * 后,原路径已不存在。removedPaths 是刚被删除/改名/移走的路径:它们及其下层已不存在,同样丢弃、
+   * 不再重拉——否则每个展开着的被删目录都会白发一次注定失败的请求。
    */
   const refreshTree = useCallback(
-    async (nextPath?: string) => {
+    async ({ nextPath, removedPaths = [] }: RefreshTreeOptions = {}) => {
       const target = nextPath ?? currentPathRef.current;
-      const visible = visibleLayersRef.current;
+      const isRemoved = (path: string) =>
+        removedPaths.some((removed) => path === removed || path.startsWith(`${removed}/`));
+      const visible = [...visibleLayersRef.current].filter((path) => !isRemoved(path));
       setTree((prev) => {
         const kept: Record<string, SftpTreeNode> = {};
         for (const path of visible) if (prev[path]) kept[path] = prev[path];
@@ -174,13 +182,9 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
   // currentPath 变化时重置路径输入框:渲染期对比上次值,替代 effect 里的同步 setState
   // 同一处顺带把当前目录的祖先并进目录树的展开集合(只增不减,不收起用户展开的其它分支)。
   const [prevPath, setPrevPath] = useState(currentPath);
-  const [revealedPath, setRevealedPath] = useState<string | null>(null);
   if (currentPath !== prevPath) {
     setPrevPath(currentPath);
     setPathInput(currentPath);
-  }
-  if (currentPath !== revealedPath) {
-    setRevealedPath(currentPath);
     let next = folderExpanded;
     for (const path of folderRevealPaths(currentPath)) {
       if (!next.has(path)) next = addExpandedPath(next, path);
@@ -197,17 +201,17 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
   }, [folderExpanded]);
 
   const rows = useMemo(() => flattenSftpTree(tree, expanded, currentPath), [currentPath, expanded, tree]);
-  // 面板真正载入过当前目录(打开着、会话可用)之后,目录树才开始自己拉层;
-  // 否则面板收起或会话未就绪时也会对着远端发请求。
-  const folderTreeActive = !!tree[currentPath];
+  // 目录树显示着、且面板真正载入过当前目录(打开着、会话可用)之后,目录树才开始自己拉层;
+  // 否则树被收起、面板收起或会话未就绪时也会对着远端发请求。
+  const folderTreeActive = folderTreeVisible && !!tree[currentPath];
   const folderRows = useMemo(() => flattenFolderTree(tree, folderExpanded), [folderExpanded, tree]);
 
   useEffect(() => {
     const layers = new Set<string>([currentPath]);
     for (const row of rows) if (row.state === "entry" && row.expanded) layers.add(row.path);
-    for (const row of folderRows) if (row.state === "dir" && row.expanded) layers.add(row.path);
+    if (folderTreeVisible) for (const row of folderRows) if (row.state === "dir" && row.expanded) layers.add(row.path);
     visibleLayersRef.current = layers;
-  }, [currentPath, folderRows, rows]);
+  }, [currentPath, folderRows, folderTreeVisible, rows]);
 
   // 展开态记忆比缓存活得久(刷新清空缓存、换根后才重新可见):补拉这些「记得展开、
   // 但这一轮还没有条目」的层,否则它们会停在加载中占位上等一个永远不会发出的请求。

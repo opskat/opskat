@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn, useResizeHandle } from "@opskat/ui";
 import { useSFTPStore } from "@/stores/sftpStore";
@@ -41,7 +41,24 @@ export function FileManagerSplit({ panelWidth, sideBySide, tree, list, caption }
   const setFolderTreeWidth = useSFTPStore((s) => s.setFolderTreeWidth);
   const setFolderTreeHeight = useSFTPStore((s) => s.setFolderTreeHeight);
   const [boxRef, box] = useElementSize<HTMLDivElement>(SPLIT_SIZE_FALLBACK);
-  const treeRef = useRef<HTMLDivElement>(null);
+  // 拖分隔条途中的尺寸。不走共享 hook 的 targetRef(拖动中直接写 DOM):它松手时把 inline 尺寸清空,
+  // 指望随后的重渲染写回——尺寸没变(只点了一下、或拖回原处)时不会重渲染,树就丢了宽/高。
+  // 这里重渲染的只有本组件,tree/list 是父级传入的同一份元素,不会跟着重渲染。
+  const [liveSize, setLiveSize] = useState<number | null>(null);
+  const commitWidth = useCallback(
+    (size: number) => {
+      setLiveSize(null);
+      setFolderTreeWidth(size);
+    },
+    [setFolderTreeWidth]
+  );
+  const commitHeight = useCallback(
+    (size: number) => {
+      setLiveSize(null);
+      setFolderTreeHeight(size);
+    },
+    [setFolderTreeHeight]
+  );
 
   // 拖宽途中刚跨进左右排列时 panelWidth 还是旧值,但左右排列本身就意味着面板至少有阈值宽。
   const sideWidth = Math.max(panelWidth, SIDE_BY_SIDE_MIN_PANEL_PX);
@@ -60,8 +77,8 @@ export function FileManagerSplit({ panelWidth, sideBySide, tree, list, caption }
     currentSize: treeWidth,
     minSize: TREE_MIN_WIDTH_PX,
     maxSize: maxTreeWidth,
-    targetRef: treeRef,
-    onResizeEnd: setFolderTreeWidth,
+    onResize: setLiveSize,
+    onResizeEnd: commitWidth,
   });
   const heightHandle = useResizeHandle({
     axis: "y",
@@ -69,8 +86,8 @@ export function FileManagerSplit({ panelWidth, sideBySide, tree, list, caption }
     currentSize: treeHeight,
     minSize: TREE_MIN_HEIGHT_PX,
     maxSize: maxTreeHeight,
-    targetRef: treeRef,
-    onResizeEnd: setFolderTreeHeight,
+    onResize: setLiveSize,
+    onResizeEnd: commitHeight,
   });
   const handle = sideBySide ? widthHandle : heightHandle;
 
@@ -84,9 +101,8 @@ export function FileManagerSplit({ panelWidth, sideBySide, tree, list, caption }
       {visible && (
         <>
           <div
-            ref={treeRef}
             className="flex min-h-0 min-w-0 shrink-0 flex-col"
-            style={sideBySide ? { width: treeWidth } : { height: treeHeight }}
+            style={sideBySide ? { width: liveSize ?? treeWidth } : { height: liveSize ?? treeHeight }}
           >
             {tree}
           </div>

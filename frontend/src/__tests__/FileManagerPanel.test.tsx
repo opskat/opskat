@@ -2978,6 +2978,47 @@ describe("FileManagerPanel", () => {
 
       await waitFor(() => expect(treeNames()).toEqual(["/", "/opt", "/srv", "/srv/app"]));
     });
+
+    it("does not list the current directory's ancestors while the tree is hidden, and loads them once shown", async () => {
+      useSFTPStore.setState({ folderTreeVisible: false });
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app")],
+        "/srv/app": [fileEntry("a.txt")],
+      });
+      renderPanel();
+      await screen.findByText("a.txt");
+      await act(async () => {});
+
+      expect(listDirCalls("/")).toHaveLength(0);
+      expect(listDirCalls("/srv")).toHaveLength(0);
+
+      fireEvent.click(screen.getByRole("button", { name: "sftp.folderTree.toggle" }));
+
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+    });
+
+    it("does not re-list an open directory that a delete just removed", async () => {
+      vi.mocked(SFTPDelete).mockResolvedValue(undefined as never);
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [[dirEntry("app"), dirEntry("www")], [dirEntry("app")]],
+        "/srv/app": [fileEntry("a.txt")],
+        "/srv/www": [dirEntry("html")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toContain("/srv/www"));
+      fireEvent.click(treeToggle("/srv/www"));
+      await waitFor(() => expect(treeNames()).toContain("/srv/www/html"));
+      fireEvent.contextMenu(treeRow("/srv/www"), { clientX: 24, clientY: 24 });
+      await screen.findByRole("button", { name: "sftp.menu.delete" });
+      await new Promise((resolve) => window.setTimeout(resolve, 175));
+      fireEvent.click(screen.getByRole("button", { name: "sftp.menu.delete" }));
+      fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+      expect(listDirCalls("/srv/www")).toHaveLength(1);
+    });
   });
 
   describe("folder tree layout", () => {
@@ -3045,6 +3086,25 @@ describe("FileManagerPanel", () => {
 
       expect(useSFTPStore.getState().folderTreeWidth).toBe(220);
     });
+
+    it.each([
+      ["side", 520, "width", "180px"],
+      ["stacked", 280, "height", "200px"],
+    ] as const)(
+      "keeps the %s tree size when its splitter is clicked without dragging",
+      async (_, width, prop, size) => {
+        useSFTPStore.setState({ folderTreeHeight: 200 });
+        render(panelAt(width));
+        const splitter = await screen.findByTestId("sftp-tree-splitter");
+        const tree = splitter.previousElementSibling as HTMLElement;
+        expect(tree.style[prop]).toBe(size);
+
+        fireEvent.mouseDown(splitter, { clientX: 300, clientY: 300 });
+        fireEvent(document, new MouseEvent("mouseup"));
+
+        expect(tree.style[prop]).toBe(size);
+      }
+    );
 
     it("never lets the side-by-side tree squeeze the list below its minimum", async () => {
       render(panelAt(520));
@@ -3198,7 +3258,7 @@ describe("FileManagerPanel", () => {
       const drag = pointerDrag(rowOf("a.txt"), treeRow("/srv/www"));
 
       expect(treeRow("/srv/www")).toHaveAttribute("data-sftp-tree-drop", "true");
-      expect(within(statusBar()).getByText("sftp.folderTree.dropHint")).toBeInTheDocument();
+      expect(within(statusBar()).getByText("sftp.tree.dropHint")).toBeInTheDocument();
       // 悬停在收起的目录上不会自动展开它。
       expect(listDirCalls("/srv/www")).toHaveLength(0);
 
@@ -3237,7 +3297,7 @@ describe("FileManagerPanel", () => {
 
       const ownDir = pointerDrag(rowOf("a.txt"), treeRow("/srv/app"));
       expect(treeRow("/srv/app")).not.toHaveAttribute("data-sftp-tree-drop");
-      expect(within(statusBar()).queryByText("sftp.folderTree.dropHint")).toBeNull();
+      expect(within(statusBar()).queryByText("sftp.tree.dropHint")).toBeNull();
       ownDir.release();
 
       fireEvent.click(screen.getByTestId("sftp-tree-toggle-/srv/app"));

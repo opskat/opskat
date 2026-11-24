@@ -448,12 +448,13 @@ export function FileManagerPanel({
   // 删除、重命名或移走之后:当前目录(或其祖先)被动到了,就换到仍然存在的目录,否则原地刷新。
   const settleAfterPathChanges = useCallback(
     async (changes: PathChange[]) => {
+      const removedPaths = changes.map((change) => change.from);
       const next = rebaseCurrentPath(currentPathRef.current, changes);
       if (next === null) {
-        await refreshTree();
+        await refreshTree({ removedPaths });
         return;
       }
-      const loaded = await refreshTree(next);
+      const loaded = await refreshTree({ nextPath: next, removedPaths });
       if (loaded && directoryFollowMode === "always") void syncTerminalToPath(next);
     },
     [currentPathRef, directoryFollowMode, refreshTree, syncTerminalToPath]
@@ -808,12 +809,12 @@ export function FileManagerPanel({
           await SFTPRename(sessionId, move.from, move.to);
         }
         setSelected([]);
-        await refreshTree();
+        await settleAfterPathChanges(accepted);
       } catch (e) {
         toast.error(errorMessage(e));
       }
     },
-    [entryByPath, refreshTree, resolveTargets, sessionId, setSelected]
+    [entryByPath, resolveTargets, sessionId, setSelected, settleAfterPathChanges]
   );
 
   // 目录树行上的 HTML5 拖放(指针拖动由列表自己命中,见 FileList 的 getPointerDropTarget)。
@@ -1188,7 +1189,7 @@ export function FileManagerPanel({
             >
               <span className="min-w-0 truncate">
                 {dropTarget
-                  ? t("sftp.folderTree.dropHint", { count: dropTarget.count, target: dropTarget.path })
+                  ? t("sftp.tree.dropHint", { count: dropTarget.count, target: dropTarget.path })
                   : selected.length > 1
                     ? t("sftp.selectedItems", { count: selected.length, size: formatBytes(selectedTotalSize) })
                     : clipboard?.items.length
