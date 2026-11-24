@@ -6,6 +6,7 @@ import {
   flattenFolderTree,
   flattenSftpTree,
   folderRevealPaths,
+  staleRevealLayers,
   type SftpTreeNode,
 } from "@/lib/sftpDirTree";
 import { useSFTPStore } from "@/stores/sftpStore";
@@ -45,6 +46,8 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
   const folderExpandedRef = useRef(folderExpanded);
   // 屏幕上正显示着条目的目录层(见 refreshTree),随渲染行更新。
   const visibleLayersRef = useRef<Set<string>>(new Set());
+  // 定位当前目录时已为它补拉过的过期祖先层(见 staleRevealLayers),换当前目录时清空。
+  const revealRefetchRef = useRef({ path: "", layers: new Set<string>() });
 
   const loadDir = useCallback(
     async (dirPath: string) => {
@@ -226,6 +229,19 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
       for (const path of folderRevealPaths(currentPath)) pending.add(path);
     }
     for (const path of pending) if (!tree[path]) void fetchLayer(path);
+    if (!folderTreeActive) return;
+    // 缓存早于远端新建的祖先层:每个当前目录只补拉一次——重拉后仍不含它(比如经由未列出的
+    // 路径进入)时不再反复请求。
+    const checked = revealRefetchRef.current;
+    if (checked.path !== currentPath) {
+      checked.path = currentPath;
+      checked.layers.clear();
+    }
+    for (const path of staleRevealLayers(tree, currentPath)) {
+      if (checked.layers.has(path)) continue;
+      checked.layers.add(path);
+      void fetchLayer(path);
+    }
   }, [currentPath, fetchLayer, folderRows, folderTreeActive, rows, tree]);
 
   return {

@@ -2952,6 +2952,45 @@ describe("FileManagerPanel", () => {
       expect(treeNames()).not.toContain("/srv/app/logs");
     });
 
+    it("shows and highlights a current directory created after its parent was cached", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [[dirEntry("app")], [dirEntry("app"), dirEntry("new")]],
+        "/srv/app": [fileEntry("a.txt")],
+        "/srv/new": [fileEntry("b.txt")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+
+      const input = screen.getByTestId("sftp-path-input");
+      fireEvent.change(input, { target: { value: "/srv/new" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await screen.findByText("b.txt");
+      await waitFor(() => expect(treeRow("/srv/new")).toHaveAttribute("data-sftp-tree-current", "true"));
+      expect(listDirCalls("/srv")).toHaveLength(2);
+    });
+
+    it("re-reads a stale ancestor only once when the current directory still is not listed there", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app")],
+        "/srv/app": [fileEntry("a.txt")],
+        "/srv/hidden": [fileEntry("b.txt")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+
+      const input = screen.getByTestId("sftp-path-input");
+      fireEvent.change(input, { target: { value: "/srv/hidden" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await screen.findByText("b.txt");
+      await waitFor(() => expect(listDirCalls("/srv")).toHaveLength(2));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(listDirCalls("/srv")).toHaveLength(2);
+    });
+
     it("keeps the open branches on screen while a refresh is still loading them", async () => {
       mockDirListings({
         "/": [[dirEntry("srv")], new Promise<sftp_svc.FileEntry[]>(() => {})],

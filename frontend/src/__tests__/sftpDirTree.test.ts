@@ -7,6 +7,7 @@ import {
   flattenSftpTree,
   folderRevealPaths,
   rebaseCurrentPath,
+  staleRevealLayers,
   SFTP_EXPANDED_PATH_LIMIT,
   type SftpTreeNode,
 } from "../lib/sftpDirTree";
@@ -365,5 +366,35 @@ describe("rebaseCurrentPath", () => {
   it("follows a renamed or moved current directory or ancestor to its new place", () => {
     expect(rebaseCurrentPath("/srv/app", [{ from: "/srv/app", to: "/srv/api" }])).toBe("/srv/api");
     expect(rebaseCurrentPath("/srv/app/logs", [{ from: "/srv", to: "/opt/srv" }])).toBe("/opt/srv/app/logs");
+  });
+});
+
+describe("staleRevealLayers", () => {
+  it("names a loaded ancestor whose listing lacks the next directory on the way to the current one", () => {
+    const tree = {
+      "/": node([entry("srv", true)]),
+      "/srv": node([entry("app", true)]),
+    };
+
+    expect(staleRevealLayers(tree, "/srv/new")).toEqual(["/srv"]);
+  });
+
+  it("ignores ancestors that already list the next directory, and layers not loaded yet", () => {
+    const tree = {
+      "/": node([entry("srv", true)]),
+      "/srv": node([], { loaded: false, loading: true }),
+    };
+
+    expect(staleRevealLayers(tree, "/srv/app")).toEqual([]);
+  });
+
+  it("treats a same-named file as missing the directory", () => {
+    const tree = { "/": node([entry("srv")]) };
+
+    expect(staleRevealLayers(tree, "/srv")).toEqual(["/"]);
+  });
+
+  it("has nothing to check when / is the current directory", () => {
+    expect(staleRevealLayers({ "/": node([]) }, "/")).toEqual([]);
   });
 });

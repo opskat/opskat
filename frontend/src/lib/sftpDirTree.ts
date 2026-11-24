@@ -272,6 +272,26 @@ export function folderRevealPaths(currentPath: string): string[] {
   return paths;
 }
 
+/**
+ * 定位当前目录时,已加载却不含下一级目录的祖先层:它们的缓存早于远端新建了这一级(例如终端里
+ * `mkdir x && cd x` 后面板跟过去),不重拉的话树上永远没有当前目录这一行。只看已加载完的层;
+ * 还在加载或从未加载的层本来就会被请求。
+ */
+export function staleRevealLayers(tree: Record<string, SftpTreeNode>, currentPath: string): string[] {
+  if (currentPath === FOLDER_TREE_ROOT) return [];
+  const parts = currentPath.split("/").filter(Boolean);
+  const stale: string[] = [];
+  let parent = FOLDER_TREE_ROOT;
+  for (const name of parts) {
+    const node = tree[parent];
+    if (node?.loaded && !node.loading && !node.entries.some((entry) => entry.isDir && entry.name === name)) {
+      stale.push(parent);
+    }
+    parent = getChildPath(parent, name);
+  }
+  return stale;
+}
+
 /** 一次已经成功的路径变更:to 为 null 表示删除或移走(剪切粘贴到别处),否则是重命名后的新路径。 */
 export interface PathChange {
   from: string;
