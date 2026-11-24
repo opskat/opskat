@@ -3068,6 +3068,26 @@ describe("FileManagerPanel", () => {
 
       expect(useSFTPStore.getState().folderTreeHeight).toBe(150);
     });
+
+    it("switches the arrangement the moment a panel drag crosses 440px, before the width is committed", async () => {
+      const onWidthChange = vi.fn();
+      const { container } = render(
+        <FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={onWidthChange} />
+      );
+      await screen.findByTestId("sftp-folder-tree");
+      expect(split()).toHaveAttribute("data-layout", "stacked");
+      const panelHandle = container.querySelector(".cursor-col-resize") as HTMLElement;
+
+      fireEvent.mouseDown(panelHandle, { clientX: 300 });
+      fireEvent(document, new MouseEvent("mousemove", { clientX: 100 }));
+      expect(split()).toHaveAttribute("data-layout", "side");
+      expect(onWidthChange).not.toHaveBeenCalled();
+
+      fireEvent(document, new MouseEvent("mousemove", { clientX: 250 }));
+      expect(split()).toHaveAttribute("data-layout", "stacked");
+      fireEvent(document, new MouseEvent("mouseup"));
+      expect(onWidthChange).toHaveBeenCalledWith(330);
+    });
   });
 
   describe("folder tree keyboard and accessibility", () => {
@@ -3323,6 +3343,35 @@ describe("FileManagerPanel", () => {
 
       await waitFor(() => expect(SFTPDelete).toHaveBeenCalledWith("s1", "/srv", true));
       await waitFor(() => expect(pathInput()).toHaveValue("/"));
+    });
+
+    it("pastes into the directory of the tree row the menu was opened on", async () => {
+      const open = await openTreeMenu("/srv/www");
+      fireEvent.contextMenu(rowOf("a.txt"), { clientX: 24, clientY: 24 });
+      await choose("sftp.menu.cut");
+
+      open();
+      await choose("sftp.menu.paste");
+
+      await waitFor(() => expect(SFTPPaste).toHaveBeenCalledTimes(1));
+      const req = vi.mocked(SFTPPaste).mock.calls[0][0];
+      expect(req.targetDir).toBe("/srv/www");
+      expect(req.items).toEqual([{ sessionId: "s1", path: "/srv/app/a.txt", isDir: false, targetName: "a.txt" }]);
+      expect(pathInput()).toHaveValue("/srv/app");
+    });
+
+    it("moves to the nearest surviving ancestor after moving the current directory away from the tree", async () => {
+      const open = await openTreeMenu("/srv/app");
+      open();
+      await choose("sftp.menu.cut");
+
+      fireEvent.contextMenu(treeRow("/srv/www"), { clientX: 24, clientY: 24 });
+      await choose("sftp.menu.paste");
+
+      await waitFor(() => expect(SFTPPaste).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(SFTPPaste).mock.calls[0][0].targetDir).toBe("/srv/www");
+      await waitFor(() => expect(pathInput()).toHaveValue("/srv"));
+      expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv");
     });
 
     it("stays put and reports the error when deleting the current directory fails", async () => {

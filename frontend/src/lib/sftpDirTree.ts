@@ -272,7 +272,7 @@ export function folderRevealPaths(currentPath: string): string[] {
   return paths;
 }
 
-/** 一次已经成功的路径变更:to 为 null 表示删除,否则是重命名/移动后的新路径。 */
+/** 一次已经成功的路径变更:to 为 null 表示删除或移走(剪切粘贴到别处),否则是重命名后的新路径。 */
 export interface PathChange {
   from: string;
   to: string | null;
@@ -280,7 +280,7 @@ export interface PathChange {
 
 /**
  * 当前目录或其祖先被删除、重命名或移走之后,面板应当换到的目录;当前目录不受影响时返回 null。
- * 删除换到被删目录的父目录(它仍然存在);重命名/移动换到同一相对位置的新路径。多项变更按
+ * 删除或移走换到原位置的父目录(它仍然存在);重命名换到同一相对位置的新路径。多项变更按
  * 发生顺序依次套用——嵌套的几个目录一起被删时会逐级往上退。
  */
 export function rebaseCurrentPath(currentPath: string, changes: PathChange[]): string | null {

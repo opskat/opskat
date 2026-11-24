@@ -3,9 +3,8 @@ import { useTranslation } from "react-i18next";
 import { cn, useResizeHandle } from "@opskat/ui";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { useElementSize } from "./useElementSize";
+import { SIDE_BY_SIDE_MIN_PANEL_PX } from "./utils";
 
-/** 面板宽到这个值才把目录树放到列表左边;更窄时放上面——默认 280px 放不下两列。 */
-export const SIDE_BY_SIDE_MIN_PANEL_PX = 440;
 const TREE_MIN_WIDTH_PX = 120;
 const LIST_MIN_WIDTH_PX = 200;
 /** 上下排列时两边都至少要能放下一个完整行(28px)外加余量。 */
@@ -20,8 +19,10 @@ function clamp(value: number, min: number, max: number) {
 }
 
 interface FileManagerSplitProps {
-  /** 面板宽度(与面板自身的拖宽同源),决定左右还是上下排列。 */
+  /** 面板最近一次提交的宽度;面板拖宽途中它还停在拖动前的值。 */
   panelWidth: number;
+  /** 左右还是上下排列:由面板按实时宽度判定,拖宽途中跨过阈值就即时切换。 */
+  sideBySide: boolean;
   tree: ReactNode;
   list: ReactNode;
   /** 上下排列时列表上方的小标题,标明列表显示的是哪个目录。 */
@@ -32,7 +33,7 @@ interface FileManagerSplitProps {
  * 文件面板里目录树与文件列表的排列:宽面板左右、窄面板上下,各有一条可拖的分隔条;
  * 树可整个收起。开合与两种排列下的分隔条位置是全局偏好,放在 sftpStore 里跨重启保留。
  */
-export function FileManagerSplit({ panelWidth, tree, list, caption }: FileManagerSplitProps) {
+export function FileManagerSplit({ panelWidth, sideBySide, tree, list, caption }: FileManagerSplitProps) {
   const { t } = useTranslation();
   const visible = useSFTPStore((s) => s.folderTreeVisible);
   const storedWidth = useSFTPStore((s) => s.folderTreeWidth);
@@ -42,8 +43,9 @@ export function FileManagerSplit({ panelWidth, tree, list, caption }: FileManage
   const [boxRef, box] = useElementSize<HTMLDivElement>(SPLIT_SIZE_FALLBACK);
   const treeRef = useRef<HTMLDivElement>(null);
 
-  const sideBySide = panelWidth >= SIDE_BY_SIDE_MIN_PANEL_PX;
-  const maxTreeWidth = Math.max(TREE_MIN_WIDTH_PX, panelWidth - LIST_MIN_WIDTH_PX);
+  // 拖宽途中刚跨进左右排列时 panelWidth 还是旧值,但左右排列本身就意味着面板至少有阈值宽。
+  const sideWidth = Math.max(panelWidth, SIDE_BY_SIDE_MIN_PANEL_PX);
+  const maxTreeWidth = Math.max(TREE_MIN_WIDTH_PX, sideWidth - LIST_MIN_WIDTH_PX);
   const treeWidth = clamp(storedWidth, TREE_MIN_WIDTH_PX, maxTreeWidth);
   const maxTreeHeight = Math.max(TREE_MIN_HEIGHT_PX, box.height - LIST_MIN_HEIGHT_PX);
   const treeHeight = clamp(

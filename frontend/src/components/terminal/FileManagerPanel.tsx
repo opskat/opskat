@@ -70,6 +70,7 @@ import {
   getParentPath,
   getPathBaseName,
   HANDLE_PX,
+  isSideBySidePanel,
   joinRemotePath,
 } from "./file-manager/utils";
 import { errorMessage } from "@/lib/errorMessage";
@@ -318,7 +319,19 @@ export function FileManagerPanel({
     panelRef,
     uploadLocalPaths,
   });
-  const { handleResizeStart, isResizing, outerRef } = useResizeHandle({ onWidthChange, panelRef, width });
+  // 面板拖宽时 width 要到松手才提交(拖动中只改 DOM,不重渲染面板),目录树的排列却要在跨过
+  // 阈值的那一刻就换:拖动中另记一份排列,它只在跨过阈值时变化,不会每帧重渲染整个面板。
+  const [resizingSideBySide, setResizingSideBySide] = useState<boolean | null>(null);
+  const handleLiveWidth = useCallback(
+    (liveWidth: number | null) => setResizingSideBySide(liveWidth === null ? null : isSideBySidePanel(liveWidth)),
+    []
+  );
+  const { handleResizeStart, isResizing, outerRef } = useResizeHandle({
+    onWidthChange,
+    onLiveWidth: handleLiveWidth,
+    panelRef,
+    width,
+  });
 
   useEffect(() => {
     if (!sessionId) return;
@@ -432,52 +445,74 @@ export function FileManagerPanel({
     [t]
   );
 
-  const paste = useCallback(async () => {
-    if (!clipboard?.items.length) return;
-    const targetDir = currentPathRef.current;
-    // 剪切到它本来所在的目录是空操作，不做同名检查。
-    const items = clipboard.items.filter(
-      (item) => !(clipboard.mode === "cut" && item.sessionId === sessionId && getParentPath(item.path) === targetDir)
-    );
-    if (!items.length) return;
-    const destinations = await resolveTargets(
-      items.map((item): SFTPWriteTarget => {
-        const targetPath = joinRemotePath(targetDir, item.name);
-        return {
-          targetPath,
-          incoming: sftpEntrySide(item),
-          duplicateInPlace: clipboard.mode === "copy" && item.sessionId === sessionId && item.path === targetPath,
-        };
-      })
-    );
-    const pasteItems = items.flatMap((item, index) => {
-      const destination = destinations[index];
-      if (!destination) return [];
-      return [
-        new sftp_svc.PasteItem({
-          sessionId: item.sessionId,
-          path: item.path,
-          isDir: item.isDir,
-          targetName: getPathBaseName(destination),
-        }),
-      ];
-    });
-    if (!pasteItems.length) return;
-    try {
-      await SFTPPaste(
-        new sftp_svc.PasteRequest({
-          targetSessionId: sessionId,
-          targetDir,
-          mode: clipboard.mode,
-          items: pasteItems,
+  // 删除、重命名或移走之后:当前目录(或其祖先)被动到了,就换到仍然存在的目录,否则原地刷新。
+  const settleAfterPathChanges = useCallback(
+    async (changes: PathChange[]) => {
+      const next = rebaseCurrentPath(currentPathRef.current, changes);
+      if (next === null) {
+        await refreshTree();
+        return;
+      }
+      const loaded = await refreshTree(next);
+      if (loaded && directoryFollowMode === "always") void syncTerminalToPath(next);
+    },
+    [currentPathRef, directoryFollowMode, refreshTree, syncTerminalToPath]
+  );
+
+  /** 粘贴到 targetDir;不传时是当前目录(目录树行的菜单传入那一行的目录)。 */
+  const paste = useCallback(
+    async (targetDir: string = currentPathRef.current) => {
+      if (!clipboard?.items.length) return;
+      // 剪切到它本来所在的目录是空操作，不做同名检查。
+      const items = clipboard.items.filter(
+        (item) => !(clipboard.mode === "cut" && item.sessionId === sessionId && getParentPath(item.path) === targetDir)
+      );
+      if (!items.length) return;
+      const destinations = await resolveTargets(
+        items.map((item): SFTPWriteTarget => {
+          const targetPath = joinRemotePath(targetDir, item.name);
+          return {
+            targetPath,
+            incoming: sftpEntrySide(item),
+            duplicateInPlace: clipboard.mode === "copy" && item.sessionId === sessionId && item.path === targetPath,
+          };
         })
       );
-      if (clipboard.mode === "cut") setGlobalClipboard(null);
-      await refreshTree();
-    } catch (e) {
-      toast.error(errorMessage(e));
-    }
-  }, [clipboard, currentPathRef, refreshTree, resolveTargets, sessionId]);
+      const pasteItems = items.flatMap((item, index) => {
+        const destination = destinations[index];
+        if (!destination) return [];
+        return [
+          new sftp_svc.PasteItem({
+            sessionId: item.sessionId,
+            path: item.path,
+            isDir: item.isDir,
+            targetName: getPathBaseName(destination),
+          }),
+        ];
+      });
+      if (!pasteItems.length) return;
+      try {
+        await SFTPPaste(
+          new sftp_svc.PasteRequest({
+            targetSessionId: sessionId,
+            targetDir,
+            mode: clipboard.mode,
+            items: pasteItems,
+          })
+        );
+        if (clipboard.mode === "cut") setGlobalClipboard(null);
+        // 剪切走的若是当前目录或其祖先(只有目录树能这样动它们),面板退回最近仍存在的祖先。
+        const movedAway: PathChange[] =
+          clipboard.mode === "cut"
+            ? pasteItems.filter((item) => item.sessionId === sessionId).map((item) => ({ from: item.path, to: null }))
+            : [];
+        await settleAfterPathChanges(movedAway);
+      } catch (e) {
+        toast.error(errorMessage(e));
+      }
+    },
+    [clipboard, currentPathRef, resolveTargets, sessionId, settleAfterPathChanges]
+  );
 
   const goUp = useCallback(() => {
     if (currentPath === "/") return;
@@ -504,20 +539,6 @@ export function FileManagerPanel({
     await toggleFollowMode();
     setActiveSyncMode((current) => (directoryFollowMode === "always" ? null : current));
   }, [directoryFollowMode, toggleFollowMode]);
-
-  // 删除/重命名之后:当前目录(或其祖先)被动到了,就换到仍然存在的目录,否则原地刷新。
-  const settleAfterPathChanges = useCallback(
-    async (changes: PathChange[]) => {
-      const next = rebaseCurrentPath(currentPathRef.current, changes);
-      if (next === null) {
-        await refreshTree();
-        return;
-      }
-      const loaded = await refreshTree(next);
-      if (loaded && directoryFollowMode === "always") void syncTerminalToPath(next);
-    },
-    [currentPathRef, directoryFollowMode, refreshTree, syncTerminalToPath]
-  );
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return;
@@ -894,7 +915,7 @@ export function FileManagerPanel({
           copyFilePaths(multiPaths);
           break;
         case "paste":
-          void paste();
+          void paste(fromTree && targetPath ? targetPath : undefined);
           break;
         case "copyCurrentPath":
           void navigator.clipboard
@@ -1082,6 +1103,7 @@ export function FileManagerPanel({
 
             <FileManagerSplit
               panelWidth={width}
+              sideBySide={resizingSideBySide ?? isSideBySidePanel(width)}
               caption={
                 <div
                   className="shrink-0 truncate px-2 py-1 text-[11px] font-medium text-muted-foreground"
