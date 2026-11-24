@@ -3,6 +3,8 @@ import { useTranslation } from "react-i18next";
 import { AlertTriangle, ChevronDown, ChevronRight, Folder, FolderOpen, Loader2 } from "lucide-react";
 import { cn, ScrollArea } from "@opskat/ui";
 import type { FolderTreeRow } from "@/lib/sftpDirTree";
+import { sftp_svc } from "../../../../wailsjs/go/models";
+import { RenameInput } from "./RenameInput";
 
 const ROW_PADDING_PX = 6;
 const INDENT_STEP_PX = 12;
@@ -24,6 +26,12 @@ interface FolderTreeProps {
   onDirDragOver: (event: React.DragEvent, path: string) => void;
   onDirDragLeave: (event: React.DragEvent, path: string) => void;
   onDirDrop: (event: React.DragEvent, path: string) => void;
+  /** 右键目录行:菜单与列表里的目录行相同,作用对象只是这一行。 */
+  onDirContextMenu: (x: number, y: number, path: string, entry: sftp_svc.FileEntry) => void;
+  /** 正在树行内重命名的目录。 */
+  renamingPath: string | null;
+  onRenameCommit: (path: string, nextName: string) => void;
+  onRenameCancel: () => void;
   className?: string;
 }
 
@@ -41,6 +49,10 @@ export function FolderTree({
   onDirDragOver,
   onDirDragLeave,
   onDirDrop,
+  onDirContextMenu,
+  renamingPath,
+  onRenameCommit,
+  onRenameCancel,
   className,
 }: FolderTreeProps) {
   const { t } = useTranslation();
@@ -63,6 +75,8 @@ export function FolderTree({
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
+      // 行内重命名的输入框自己处理回车/方向键,不能再被当成树的导航。
+      if ((event.target as HTMLElement).tagName === "INPUT") return;
       const path = (event.target as HTMLElement).closest<HTMLElement>("[data-sftp-tree-path]")?.dataset.sftpTreePath;
       const index = dirRows.findIndex((row) => row.path === path);
       if (index < 0) return;
@@ -139,6 +153,10 @@ export function FolderTree({
               onDragOver={onDirDragOver}
               onDragLeave={onDirDragLeave}
               onDrop={onDirDrop}
+              onContextMenu={onDirContextMenu}
+              isRenaming={row.path === renamingPath}
+              onRenameCommit={onRenameCommit}
+              onRenameCancel={onRenameCancel}
               onFocusRow={setFocusedPath}
               onNavigate={onNavigate}
               onToggle={onToggle}
@@ -178,6 +196,10 @@ interface FolderTreeDirRowProps {
   onDragOver: (event: React.DragEvent, path: string) => void;
   onDragLeave: (event: React.DragEvent, path: string) => void;
   onDrop: (event: React.DragEvent, path: string) => void;
+  onContextMenu: (x: number, y: number, path: string, entry: sftp_svc.FileEntry) => void;
+  isRenaming: boolean;
+  onRenameCommit: (path: string, nextName: string) => void;
+  onRenameCancel: () => void;
   onFocusRow: (path: string) => void;
   onNavigate: (path: string) => void;
   onToggle: (path: string) => void;
@@ -193,6 +215,10 @@ const FolderTreeDirRow = memo(function FolderTreeDirRow({
   onDragOver,
   onDragLeave,
   onDrop,
+  onContextMenu,
+  isRenaming,
+  onRenameCommit,
+  onRenameCancel,
   onFocusRow,
   onNavigate,
   onToggle,
@@ -223,7 +249,15 @@ const FolderTreeDirRow = memo(function FolderTreeDirRow({
       onDragOver={(e) => onDragOver(e, row.path)}
       onDragLeave={(e) => onDragLeave(e, row.path)}
       onDrop={(e) => onDrop(e, row.path)}
-      onClick={() => onNavigate(row.path)}
+      onClick={() => {
+        if (!isRenaming) onNavigate(row.path);
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        // 根 / 没有可操作的条目(不能重命名、删除或移动它)。
+        if (row.entry) onContextMenu(e.clientX, e.clientY, row.path, row.entry);
+      }}
     >
       <TreeGuides depth={row.depth} />
       {row.leaf ? (
@@ -251,7 +285,15 @@ const FolderTreeDirRow = memo(function FolderTreeDirRow({
         </button>
       )}
       <Icon className={cn("h-3.5 w-3.5 shrink-0", isCurrent ? "text-primary" : "text-primary/70")} />
-      <span className="min-w-0 flex-1 truncate">{row.name}</span>
+      {isRenaming ? (
+        <RenameInput
+          initialName={row.name}
+          onCommit={(name) => onRenameCommit(row.path, name)}
+          onCancel={onRenameCancel}
+        />
+      ) : (
+        <span className="min-w-0 flex-1 truncate">{row.name}</span>
+      )}
     </div>
   );
 });

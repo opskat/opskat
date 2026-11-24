@@ -145,10 +145,14 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
   );
 
   /** 刷新:丢掉每个目录的条目缓存并重拉根层,已展开层随后由下面的补拉 effect 重新请求。 */
-  const refreshTree = useCallback(async () => {
-    setTree({});
-    await loadDir(currentPathRef.current);
-  }, [loadDir]);
+  // 传入 nextPath 时刷新后落到那个目录:当前目录自己被删/被改名后,原路径已不存在。
+  const refreshTree = useCallback(
+    async (nextPath?: string) => {
+      setTree({});
+      return loadDir(nextPath ?? currentPathRef.current);
+    },
+    [loadDir]
+  );
 
   const setSelected = useCallback((next: string[] | ((prev: string[]) => string[])) => {
     setSelectedState(next);

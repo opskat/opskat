@@ -1,7 +1,7 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight, File, Folder, Loader2 } from "lucide-react";
-import { Button, cn, Input, ScrollArea } from "@opskat/ui";
+import { Button, cn, ScrollArea } from "@opskat/ui";
 import { sftp_svc } from "../../../../wailsjs/go/models";
 import {
   collapseSingleChildChains,
@@ -20,10 +20,10 @@ import {
   getPathBaseName,
   indentForDepth,
   planChainRender,
-  splitNameForRename,
   treeGuideLines,
 } from "./utils";
 import { dropTargetPathOf, readDraggedPaths, SFTP_DRAG_PATHS_MIME, type SftpDropTarget } from "./dragDrop";
+import { RenameInput } from "./RenameInput";
 import { useElementSize } from "./useElementSize";
 
 function indentStyle(depth: number, panelWidth: number) {
@@ -130,40 +130,6 @@ function middleEllipsisName(name: string, depth: number, panelWidth: number, chr
  * 永远退回外层行代表的最深一段。命中不到目录就是 null,调用方必须当作"这里不能放"处理,
  * 不能退回行的路径 —— 否则会把文件行也当成合法落点。
  */
-interface RenameInputProps {
-  initialName: string;
-  onCommit: (name: string) => void;
-  onCancel: () => void;
-}
-
-function RenameInput({ initialName, onCommit, onCancel }: RenameInputProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [value, setValue] = useState(initialName);
-
-  useEffect(() => {
-    const input = inputRef.current;
-    if (!input) return;
-    const range = splitNameForRename(initialName);
-    input.focus();
-    input.setSelectionRange(0, range.stemLength);
-  }, [initialName]);
-
-  return (
-    <Input
-      ref={inputRef}
-      value={value}
-      className="h-5 flex-1 border-0 bg-background px-1 text-xs shadow-none focus-visible:ring-1"
-      onChange={(e) => setValue(e.target.value)}
-      onBlur={onCancel}
-      onClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") onCommit(value);
-        if (e.key === "Escape") onCancel();
-      }}
-    />
-  );
-}
-
 interface FileListProps {
   canExternalEdit?: (entry: sftp_svc.FileEntry) => boolean;
   clipboardCutPaths: Set<string>;

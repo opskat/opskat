@@ -6,6 +6,7 @@ import {
   flattenFolderTree,
   flattenSftpTree,
   folderRevealPaths,
+  rebaseCurrentPath,
   SFTP_EXPANDED_PATH_LIMIT,
   type SftpTreeNode,
 } from "../lib/sftpDirTree";
@@ -337,5 +338,32 @@ describe("folderRevealPaths", () => {
 
   it("expands only / for a top-level directory", () => {
     expect(folderRevealPaths("/srv")).toEqual(["/"]);
+  });
+});
+
+describe("rebaseCurrentPath", () => {
+  it("leaves the current directory alone when the change is elsewhere or below it", () => {
+    expect(rebaseCurrentPath("/srv/app", [{ from: "/srv/www", to: null }])).toBeNull();
+    expect(rebaseCurrentPath("/srv/app", [{ from: "/srv/app/logs", to: "/srv/app/old" }])).toBeNull();
+    expect(rebaseCurrentPath("/srv/app", [{ from: "/srv/ap", to: null }])).toBeNull();
+  });
+
+  it("moves to the parent of a deleted current directory or ancestor", () => {
+    expect(rebaseCurrentPath("/srv/app", [{ from: "/srv/app", to: null }])).toBe("/srv");
+    expect(rebaseCurrentPath("/srv/app/logs", [{ from: "/srv", to: null }])).toBe("/");
+  });
+
+  it("keeps climbing when several deleted directories are nested", () => {
+    expect(
+      rebaseCurrentPath("/a/b/c", [
+        { from: "/a/b", to: null },
+        { from: "/a", to: null },
+      ])
+    ).toBe("/");
+  });
+
+  it("follows a renamed or moved current directory or ancestor to its new place", () => {
+    expect(rebaseCurrentPath("/srv/app", [{ from: "/srv/app", to: "/srv/api" }])).toBe("/srv/api");
+    expect(rebaseCurrentPath("/srv/app/logs", [{ from: "/srv", to: "/opt/srv" }])).toBe("/opt/srv/app/logs");
   });
 });

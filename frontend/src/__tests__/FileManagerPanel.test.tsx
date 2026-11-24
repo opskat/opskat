@@ -18,6 +18,7 @@ import {
 } from "../lib/externalEditApi";
 import {
   ChangeSSHDirectory,
+  SFTPDelete,
   SFTPListDir,
   SFTPPaste,
   SFTPRename,
@@ -3225,6 +3226,100 @@ describe("FileManagerPanel", () => {
 
       expect(await screen.findByTestId("file-conflict-dialog")).toBeInTheDocument();
       expect(SFTPRename).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("folder tree context menu", () => {
+    const treeRow = (path: string) => screen.getByTestId(`sftp-tree-row-${path}`);
+    const menuItem = (name: string) => screen.findByRole("button", { name });
+    const pathInput = () => screen.getByTestId("sftp-path-input");
+
+    beforeEach(() => {
+      useSFTPStore.setState({ folderTreeVisible: true, folderTreeWidth: 180, folderTreeHeight: null });
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app"), dirEntry("www")],
+        "/srv/app": [fileEntry("a.txt"), fileEntry("b.txt")],
+        "/srv/api": [fileEntry("a.txt")],
+      });
+      vi.mocked(SFTPRename).mockResolvedValue(undefined as never);
+      vi.mocked(SFTPDelete).mockResolvedValue(undefined as never);
+    });
+
+    async function openTreeMenu(path: string) {
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a.txt");
+      await waitFor(() => expect(treeRow(path)).toBeInTheDocument());
+      return () => fireEvent.contextMenu(treeRow(path), { clientX: 24, clientY: 24 });
+    }
+
+    async function choose(name: string) {
+      await menuItem(name);
+      await new Promise((resolve) => window.setTimeout(resolve, 175));
+      fireEvent.click(screen.getByRole("button", { name }));
+    }
+
+    it("offers the single-directory menu for the clicked tree row regardless of the list selection", async () => {
+      const open = await openTreeMenu("/srv/www");
+      fireEvent.click(rowOf("a.txt"));
+      fireEvent.click(rowOf("b.txt"), { ctrlKey: true });
+
+      open();
+
+      expect(await menuItem("sftp.menu.downloadFolder")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "sftp.menu.deleteSelected" })).toBeNull();
+      await choose("sftp.menu.delete");
+      fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+
+      await waitFor(() => expect(SFTPDelete).toHaveBeenCalledWith("s1", "/srv/www", true));
+      expect(SFTPDelete).toHaveBeenCalledTimes(1);
+    });
+
+    it("renames a directory inline in its tree row", async () => {
+      const open = await openTreeMenu("/srv/www");
+      open();
+      await choose("sftp.menu.rename");
+
+      const input = within(treeRow("/srv/www")).getByRole("textbox");
+      fireEvent.change(input, { target: { value: "web" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/www", "/srv/web"));
+      expect(pathInput()).toHaveValue("/srv/app");
+    });
+
+    it("follows the current directory to its new name after renaming it from the tree", async () => {
+      const open = await openTreeMenu("/srv/app");
+      open();
+      await choose("sftp.menu.rename");
+
+      const input = within(treeRow("/srv/app")).getByRole("textbox");
+      fireEvent.change(input, { target: { value: "api" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => expect(pathInput()).toHaveValue("/srv/api"));
+      expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv/api");
+    });
+
+    it("moves to the nearest surviving ancestor after deleting an ancestor of the current directory", async () => {
+      const open = await openTreeMenu("/srv");
+      open();
+      await choose("sftp.menu.delete");
+      fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+
+      await waitFor(() => expect(SFTPDelete).toHaveBeenCalledWith("s1", "/srv", true));
+      await waitFor(() => expect(pathInput()).toHaveValue("/"));
+    });
+
+    it("stays put and reports the error when deleting the current directory fails", async () => {
+      vi.mocked(SFTPDelete).mockRejectedValue(new Error("directory not empty"));
+      const open = await openTreeMenu("/srv/app");
+      open();
+      await choose("sftp.menu.delete");
+      fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+
+      expect(await screen.findByText(/directory not empty/)).toBeInTheDocument();
+      expect(pathInput()).toHaveValue("/srv/app");
     });
   });
 });

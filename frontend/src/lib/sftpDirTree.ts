@@ -2,7 +2,7 @@
 // tree + expanded 展平成带缩进的渲染行（借 ossPrefixTree.flattenPrefixTree 的
 // 「tree record + expanded set + 每节点 loaded」范式，不像 redisKeyTree 那样一次性全量建树）。
 import { sftp_svc } from "../../wailsjs/go/models";
-import { getChildPath, sortEntries } from "@/components/terminal/file-manager/utils";
+import { getChildPath, getParentPath, sortEntries } from "@/components/terminal/file-manager/utils";
 
 export interface SftpTreeNode {
   entries: sftp_svc.FileEntry[];
@@ -193,6 +193,8 @@ export interface FolderTreeRow {
   depth: number;
   path: string;
   name: string;
+  /** 目录行在父层里的条目(右键菜单、重命名要用);根 / 与占位行没有。 */
+  entry: sftp_svc.FileEntry | null;
   state: FolderTreeRowState;
   expanded: boolean;
   /** 目录行的子层正在请求（含后台刷新）。 */
@@ -205,7 +207,7 @@ export interface FolderTreeRow {
 export const FOLDER_TREE_ROOT = "/";
 
 function folderPlaceholder(dirPath: string, depth: number, state: FolderTreeRowState, message: string | null) {
-  return { depth, path: dirPath, name: "", state, expanded: true, loading: false, leaf: false, message };
+  return { depth, path: dirPath, name: "", entry: null, state, expanded: true, loading: false, leaf: false, message };
 }
 
 function hasSubdirectories(node: SftpTreeNode): boolean {
@@ -216,13 +218,20 @@ function hasSubdirectories(node: SftpTreeNode): boolean {
 export function flattenFolderTree(tree: Record<string, SftpTreeNode>, expanded: Set<string>): FolderTreeRow[] {
   const rows: FolderTreeRow[] = [];
 
-  const pushDir = (path: string, name: string, depth: number, ancestors: Set<string>) => {
+  const pushDir = (
+    path: string,
+    name: string,
+    entry: sftp_svc.FileEntry | null,
+    depth: number,
+    ancestors: Set<string>
+  ) => {
     const node = tree[path];
     const isExpanded = expanded.has(path);
     rows.push({
       depth,
       path,
       name,
+      entry,
       state: "dir",
       expanded: isExpanded,
       loading: isExpanded && !!node?.loading,
@@ -235,7 +244,7 @@ export function flattenFolderTree(tree: Record<string, SftpTreeNode>, expanded: 
     if (node?.loaded) {
       const nextAncestors = new Set([...ancestors, path]);
       for (const entry of sortEntries(node.entries)) {
-        if (entry.isDir) pushDir(getChildPath(path, entry.name), entry.name, childDepth, nextAncestors);
+        if (entry.isDir) pushDir(getChildPath(path, entry.name), entry.name, entry, childDepth, nextAncestors);
       }
       if (node.error) rows.push(folderPlaceholder(path, childDepth, "error", node.error));
       return;
@@ -247,7 +256,7 @@ export function flattenFolderTree(tree: Record<string, SftpTreeNode>, expanded: 
     rows.push(folderPlaceholder(path, childDepth, "loading", null));
   };
 
-  pushDir(FOLDER_TREE_ROOT, FOLDER_TREE_ROOT, 0, new Set());
+  pushDir(FOLDER_TREE_ROOT, FOLDER_TREE_ROOT, null, 0, new Set());
   return rows;
 }
 
@@ -261,4 +270,24 @@ export function folderRevealPaths(currentPath: string): string[] {
   const paths = [FOLDER_TREE_ROOT];
   for (let i = 1; i < parts.length; i++) paths.push(`/${parts.slice(0, i).join("/")}`);
   return paths;
+}
+
+/** 一次已经成功的路径变更:to 为 null 表示删除,否则是重命名/移动后的新路径。 */
+export interface PathChange {
+  from: string;
+  to: string | null;
+}
+
+/**
+ * 当前目录或其祖先被删除、重命名或移走之后,面板应当换到的目录;当前目录不受影响时返回 null。
+ * 删除换到被删目录的父目录(它仍然存在);重命名/移动换到同一相对位置的新路径。多项变更按
+ * 发生顺序依次套用——嵌套的几个目录一起被删时会逐级往上退。
+ */
+export function rebaseCurrentPath(currentPath: string, changes: PathChange[]): string | null {
+  let path = currentPath;
+  for (const { from, to } of changes) {
+    if (path !== from && !path.startsWith(`${from}/`)) continue;
+    path = to === null ? getParentPath(from) : `${to}${path.slice(from.length)}`;
+  }
+  return path === currentPath ? null : path;
 }

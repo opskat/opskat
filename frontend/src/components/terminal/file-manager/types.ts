@@ -6,6 +6,8 @@ export interface CtxMenuState {
   entry: sftp_svc.FileEntry | null;
   canExternalEdit?: boolean;
   selectedEntries: sftp_svc.FileEntry[];
+  /** 菜单从哪里打开:目录树上打开时只作用于被点的那一行,与列表的选中项无关。 */
+  scope?: "list" | "tree";
 }
 
 export interface DeleteTarget {

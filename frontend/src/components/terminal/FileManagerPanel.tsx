@@ -57,6 +57,7 @@ import { TransferSection } from "./file-manager/TransferSection";
 import { type ClipboardState, type DeleteTarget, type CtxMenuState, type PermissionTarget } from "./file-manager/types";
 import { useFileManagerDirectory } from "./file-manager/useFileManagerDirectory";
 import { movableDraggedPaths, useSftpDragState } from "./file-manager/dragDrop";
+import { rebaseCurrentPath, type PathChange } from "@/lib/sftpDirTree";
 import { FileManagerSplit } from "./file-manager/FileManagerSplit";
 import { FolderTree } from "./file-manager/FolderTree";
 import { useNativeFileDrop } from "./file-manager/useNativeFileDrop";
@@ -172,7 +173,10 @@ export function FileManagerPanel({
   // 右键命中行的绝对路径:树里同名条目可能分布在不同层,不能再由 currentPath 拼回去。
   const ctxEntryPathRef = useRef<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
-  const [renamePath, setRenamePath] = useState<string | null>(null);
+  // 同一个目录可能同时出现在列表与目录树里:记住从哪边发起,只在那一边出现输入框。
+  const [rename, setRename] = useState<{ path: string; scope: "list" | "tree" } | null>(null);
+  const renamePath = rename?.scope === "list" ? rename.path : null;
+  const treeRenamePath = rename?.scope === "tree" ? rename.path : null;
   const [permissionTarget, setPermissionTarget] = useState<PermissionTarget | null>(null);
   const [propertiesTarget, setPropertiesTarget] = useState<PermissionTarget | null>(null);
   const [nameDialog, setNameDialog] = useState<null | "file" | "folder">(null);
@@ -251,8 +255,10 @@ export function FileManagerPanel({
   const entryByPath = useMemo(() => {
     const map = new Map<string, sftp_svc.FileEntry>();
     for (const row of rows) if (row.entry) map.set(row.path, row.entry);
+    // 目录树上的目录同样可以被右键/重命名/删除。
+    for (const row of folderRows) if (row.entry && !map.has(row.path)) map.set(row.path, row.entry);
     return map;
-  }, [rows]);
+  }, [folderRows, rows]);
   // 上下排列时列表标题里的数量:只数当前目录这一层,不含列表里就地展开的子层。
   const currentLayerCounts = useMemo(() => {
     let files = 0;
@@ -382,7 +388,7 @@ export function FileManagerPanel({
   useEffect(() => {
     const handler = (event: Event) => {
       const path = (event as CustomEvent<{ path: string }>).detail?.path;
-      if (path) setRenamePath(path);
+      if (path) setRename({ path, scope: "list" });
     };
     window.addEventListener("sftp:rename-request", handler);
     return () => window.removeEventListener("sftp:rename-request", handler);
@@ -499,17 +505,37 @@ export function FileManagerPanel({
     setActiveSyncMode((current) => (directoryFollowMode === "always" ? null : current));
   }, [directoryFollowMode, toggleFollowMode]);
 
+  // 删除/重命名之后:当前目录(或其祖先)被动到了,就换到仍然存在的目录,否则原地刷新。
+  const settleAfterPathChanges = useCallback(
+    async (changes: PathChange[]) => {
+      const next = rebaseCurrentPath(currentPathRef.current, changes);
+      if (next === null) {
+        await refreshTree();
+        return;
+      }
+      const loaded = await refreshTree(next);
+      if (loaded && directoryFollowMode === "always") void syncTerminalToPath(next);
+    },
+    [currentPathRef, directoryFollowMode, refreshTree, syncTerminalToPath]
+  );
+
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return;
+    // 逐项删除:中途失败时已删掉的那些照样要反映出来(包括当前目录被删的情形)。
+    const deleted: PathChange[] = [];
     try {
-      for (const item of deleteTarget.paths) await SFTPDelete(sessionId, item.path, item.isDir);
-      await refreshTree();
+      for (const item of deleteTarget.paths) {
+        await SFTPDelete(sessionId, item.path, item.isDir);
+        deleted.push({ from: item.path, to: null });
+      }
+      await settleAfterPathChanges(deleted);
     } catch (e) {
+      if (deleted.length) await settleAfterPathChanges(deleted);
       setError(errorMessage(e));
     } finally {
       setDeleteTarget(null);
     }
-  }, [deleteTarget, refreshTree, sessionId, setError]);
+  }, [deleteTarget, sessionId, setError, settleAfterPathChanges]);
 
   const canExternalEdit = useCallback((entry: sftp_svc.FileEntry) => !entry.isDir, []);
 
@@ -691,9 +717,9 @@ export function FileManagerPanel({
   );
 
   const startRename = useCallback(
-    (path?: string) => {
+    (path?: string, scope: "list" | "tree" = "list") => {
       const targetPath = path ?? selected[0];
-      if (targetPath) setRenamePath(targetPath);
+      if (targetPath) setRename({ path: targetPath, scope });
     },
     [selected]
   );
@@ -702,7 +728,7 @@ export function FileManagerPanel({
     async (oldPath: string, nextName: string) => {
       const entry = entryByPath.get(oldPath);
       if (!entry || nextName === entry.name) {
-        setRenamePath(null);
+        setRename(null);
         return;
       }
       const [destination] = await resolveTargets(
@@ -717,13 +743,13 @@ export function FileManagerPanel({
       if (!destination) return;
       try {
         await SFTPRename(sessionId, oldPath, destination);
-        setRenamePath(null);
-        await refreshTree();
+        setRename(null);
+        await settleAfterPathChanges([{ from: oldPath, to: destination }]);
       } catch (e) {
         toast.error(errorMessage(e));
       }
     },
-    [entryByPath, refreshTree, resolveTargets, sessionId]
+    [entryByPath, resolveTargets, sessionId, settleAfterPathChanges]
   );
 
   const moveEntriesToDirectory = useCallback(
@@ -821,8 +847,9 @@ export function FileManagerPanel({
     (action: string) => {
       if (!ctxMenu) return;
       const entry = ctxMenu.entry;
+      const fromTree = ctxMenu.scope === "tree";
       const targetPath = entry ? ctxEntryPathRef.current : selected[0];
-      const multiPaths = selected.length > 1 ? selected : targetPath ? [targetPath] : [];
+      const multiPaths = !fromTree && selected.length > 1 ? selected : targetPath ? [targetPath] : [];
       setCtxMenu(null);
       switch (action) {
         case "open":
@@ -876,7 +903,7 @@ export function FileManagerPanel({
             .catch((e) => toast.error(errorMessage(e)));
           break;
         case "rename":
-          if (targetPath) startRename(targetPath);
+          if (targetPath) startRename(targetPath, fromTree ? "tree" : "list");
           break;
         case "permission":
           if (targetPath) openPermission(targetPath);
@@ -1079,6 +1106,13 @@ export function FileManagerPanel({
                   onDirDragOver={handleTreeDragOver}
                   onDirDragLeave={handleTreeDragLeave}
                   onDirDrop={handleTreeDrop}
+                  onDirContextMenu={(x, y, path, entry) => {
+                    ctxEntryPathRef.current = path;
+                    setCtxMenu({ x, y, entry, selectedEntries: [], scope: "tree" });
+                  }}
+                  renamingPath={treeRenamePath}
+                  onRenameCommit={commitRename}
+                  onRenameCancel={() => setRename(null)}
                 />
               }
               list={
@@ -1111,7 +1145,7 @@ export function FileManagerPanel({
                       selectedEntries: menuSelectedEntries,
                     });
                   }}
-                  onRenameCancel={() => setRenamePath(null)}
+                  onRenameCancel={() => setRename(null)}
                   onRenameCommit={commitRename}
                   onRetry={() => void refreshTree()}
                   onRetryExpand={retryExpand}
