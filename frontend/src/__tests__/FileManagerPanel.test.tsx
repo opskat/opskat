@@ -3054,4 +3054,74 @@ describe("FileManagerPanel", () => {
       expect(useSFTPStore.getState().folderTreeHeight).toBe(150);
     });
   });
+
+  describe("folder tree keyboard and accessibility", () => {
+    beforeEach(() => {
+      useSFTPStore.setState({ folderTreeVisible: true, folderTreeWidth: 180, folderTreeHeight: null });
+      mockDirListings({
+        "/": [dirEntry("etc"), dirEntry("srv")],
+        "/etc": [dirEntry("nginx"), fileEntry("hosts")],
+        "/srv": [dirEntry("app"), dirEntry("www")],
+        "/srv/app": [fileEntry("a.txt")],
+        "/srv/www": [dirEntry("html")],
+      });
+    });
+
+    const item = (name: string) => within(screen.getByRole("tree")).getByRole("treeitem", { name });
+
+    it("exposes a tree whose items report expansion and the current directory as selected", async () => {
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+      await waitFor(() => expect(item("app")).toHaveAttribute("aria-selected", "true"));
+      expect(item("srv")).toHaveAttribute("aria-expanded", "true");
+      expect(item("etc")).toHaveAttribute("aria-expanded", "false");
+      expect(item("srv")).toHaveAttribute("aria-selected", "false");
+      expect(item("app")).toHaveAttribute("aria-level", "3");
+      // 只有一个可 Tab 进入的项:当前目录。
+      expect(
+        within(screen.getByRole("tree"))
+          .getAllByRole("treeitem")
+          .filter((el) => el.tabIndex === 0)
+      ).toEqual([item("app")]);
+    });
+
+    it("moves focus with up/down and expands, enters, collapses and climbs with right/left", async () => {
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await waitFor(() => expect(item("www")).toBeInTheDocument());
+      act(() => item("app").focus());
+
+      fireEvent.keyDown(item("app"), { key: "ArrowDown" });
+      expect(item("www")).toHaveFocus();
+
+      fireEvent.keyDown(item("www"), { key: "ArrowRight" });
+      await waitFor(() => expect(item("www")).toHaveAttribute("aria-expanded", "true"));
+      await waitFor(() => expect(item("html")).toBeInTheDocument());
+      expect(item("www")).toHaveFocus();
+
+      fireEvent.keyDown(item("www"), { key: "ArrowRight" });
+      expect(item("html")).toHaveFocus();
+
+      fireEvent.keyDown(item("html"), { key: "ArrowLeft" });
+      expect(item("www")).toHaveFocus();
+
+      fireEvent.keyDown(item("www"), { key: "ArrowLeft" });
+      expect(item("www")).toHaveAttribute("aria-expanded", "false");
+
+      fireEvent.keyDown(item("www"), { key: "ArrowUp" });
+      fireEvent.keyDown(item("app"), { key: "ArrowUp" });
+      expect(item("srv")).toHaveFocus();
+      expect(screen.getByTestId("sftp-path-input")).toHaveValue("/srv/app");
+    });
+
+    it("switches the current directory with Enter on the focused item", async () => {
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await waitFor(() => expect(item("etc")).toBeInTheDocument());
+      act(() => item("etc").focus());
+
+      fireEvent.keyDown(item("etc"), { key: "Enter" });
+
+      await waitFor(() => expect(screen.getByTestId("sftp-path-input")).toHaveValue("/etc"));
+      expect(item("etc")).toHaveAttribute("aria-selected", "true");
+    });
+  });
 });
