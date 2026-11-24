@@ -3558,6 +3558,52 @@ describe("FileManagerPanel", () => {
         expect(screen.queryByText("sftp.loadError")).toBeNull();
         expect(pathInput()).toHaveValue("/srv/api");
       });
+
+      it("turns follow off and still moves the panel when the terminal cannot cd out of the deleted directory", async () => {
+        vi.mocked(ChangeSSHDirectory).mockRejectedValue(new Error("terminal busy"));
+        const open = await openTreeMenu("/srv/app");
+        const markGone = goneAfterChange("/srv/app");
+        vi.mocked(SFTPDelete).mockImplementation(async () => markGone());
+        open();
+        await choose("sftp.menu.delete");
+        fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+
+        await waitFor(() => expect(pathInput()).toHaveValue("/srv"));
+        expect(ChangeSSHDirectory).toHaveBeenCalledWith("s1", "/srv");
+        expect(useTerminalStore.getState().tabData.tab1.directoryFollowMode).toBe("off");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(screen.queryByText("sftp.loadError")).toBeNull();
+        expect(pathInput()).toHaveValue("/srv");
+      });
+
+      it("moves the terminal too when follow is turned on while deleting the current directory is still running", async () => {
+        useTerminalStore.getState().setDirectoryFollowMode("tab1", "off");
+        const open = await openTreeMenu("/srv/app");
+        const markGone = goneAfterChange("/srv/app");
+        let finishDelete!: () => void;
+        vi.mocked(SFTPDelete).mockImplementation(
+          () =>
+            new Promise<void>((resolve) => {
+              finishDelete = () => {
+                markGone();
+                resolve();
+              };
+            })
+        );
+        open();
+        await choose("sftp.menu.delete");
+        fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+        await waitFor(() => expect(SFTPDelete).toHaveBeenCalledWith("s1", "/srv/app", true));
+
+        act(() => useTerminalStore.getState().setDirectoryFollowMode("tab1", "always"));
+        await act(async () => finishDelete());
+
+        await waitFor(() => expect(ChangeSSHDirectory).toHaveBeenCalledWith("s1", "/srv"));
+        await waitFor(() => expect(pathInput()).toHaveValue("/srv"));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(screen.queryByText("sftp.loadError")).toBeNull();
+        expect(pathInput()).toHaveValue("/srv");
+      });
     });
 
     it("stays put and reports the error when deleting the current directory fails", async () => {

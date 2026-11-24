@@ -93,6 +93,21 @@ export function useTerminalDirectorySync({
     [currentPathRef, directoryFollowMode, loadDir, syncTerminalToPath]
   );
 
+  /**
+   * 当前目录被删/改名/移走之后换到仍存在的 targetPath,由 load 载入(如顺带让缓存失效的 refreshTree)。
+   * 与 navigateToPath 同序:跟随时先让终端 cd 过去,否则跟随 effect 会把面板拉回终端还停着的旧 cwd、
+   * 再载入一次注定失败的目录。不同在于面板不能留在原地:终端 cd 失败(已报错)就关掉跟随再换过去。
+   * 跟随态在调用时现读——删除等操作可能持续很久,期间切换过跟随就按切换后的来。
+   */
+  const relocateFromRemovedPath = useCallback(
+    async (targetPath: string, load: (dirPath: string) => Promise<boolean>) => {
+      const following = useTerminalStore.getState().tabData[tabId]?.directoryFollowMode === "always";
+      if (following && !(await syncTerminalToPath(targetPath))) setDirectoryFollowMode(tabId, "off");
+      return load(targetPath);
+    },
+    [setDirectoryFollowMode, syncTerminalToPath, tabId]
+  );
+
   const toggleFollowMode = useCallback(async () => {
     if (directoryFollowMode === "always") {
       setDirectoryFollowMode(tabId, "off");
@@ -113,6 +128,7 @@ export function useTerminalDirectorySync({
     directoryFollowMode,
     navigateToPath,
     paneConnected,
+    relocateFromRemovedPath,
     sessionSync,
     syncPanelFromTerminal,
     syncTerminalToPath,
