@@ -3507,6 +3507,59 @@ describe("FileManagerPanel", () => {
       expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv");
     });
 
+    describe("with terminal follow enabled", () => {
+      beforeEach(() => {
+        useTerminalStore.getState().setDirectoryFollowMode("tab1", "always");
+        // 真实后端在终端 cd 完成后才回报新的 cwd:ChangeSSHDirectory 这里同步更新 sessionSync。
+        vi.mocked(ChangeSSHDirectory).mockImplementation(async (_sessionId: string, path: string) => {
+          useTerminalStore.getState().setSessionSyncState("s1", makeSyncState({ cwd: path }));
+        });
+      });
+
+      function goneAfterChange(path: string) {
+        let gone = false;
+        const listing = vi.mocked(SFTPListDir).getMockImplementation()!;
+        vi.mocked(SFTPListDir).mockImplementation((sessionId: string, dir: string) =>
+          gone && dir === path ? Promise.reject(new Error("file does not exist")) : listing(sessionId, dir)
+        );
+        return () => {
+          gone = true;
+        };
+      }
+
+      it("moves the terminal and the panel to the parent without a failed reload after deleting the current directory", async () => {
+        const open = await openTreeMenu("/srv/app");
+        const markGone = goneAfterChange("/srv/app");
+        vi.mocked(SFTPDelete).mockImplementation(async () => markGone());
+        open();
+        await choose("sftp.menu.delete");
+        fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+
+        await waitFor(() => expect(pathInput()).toHaveValue("/srv"));
+        expect(ChangeSSHDirectory).toHaveBeenCalledWith("s1", "/srv");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(screen.queryByText("sftp.loadError")).toBeNull();
+        expect(pathInput()).toHaveValue("/srv");
+      });
+
+      it("moves the terminal and the panel to the new name without a failed reload after renaming the current directory", async () => {
+        const open = await openTreeMenu("/srv/app");
+        const markGone = goneAfterChange("/srv/app");
+        vi.mocked(SFTPRename).mockImplementation(async () => markGone());
+        open();
+        await choose("sftp.menu.rename");
+        const input = within(treeRow("/srv/app")).getByRole("textbox");
+        fireEvent.change(input, { target: { value: "api" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        await waitFor(() => expect(pathInput()).toHaveValue("/srv/api"));
+        expect(ChangeSSHDirectory).toHaveBeenCalledWith("s1", "/srv/api");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(screen.queryByText("sftp.loadError")).toBeNull();
+        expect(pathInput()).toHaveValue("/srv/api");
+      });
+    });
+
     it("stays put and reports the error when deleting the current directory fails", async () => {
       vi.mocked(SFTPDelete).mockRejectedValue(new Error("directory not empty"));
       const open = await openTreeMenu("/srv/app");

@@ -454,8 +454,11 @@ export function FileManagerPanel({
         await refreshTree({ removedPaths });
         return;
       }
-      const loaded = await refreshTree({ nextPath: next, removedPaths });
-      if (loaded && directoryFollowMode === "always") void syncTerminalToPath(next);
+      // 跟随开启时先让终端 cd 过去再载入面板(与 navigateToPath 同序):否则面板先到 next、终端还停在
+      // 已不存在的旧目录,跟随 effect 会把面板拉回那个旧 cwd 再载入一次,失败的错误就留在列表上。
+      // 终端 cd 失败已由 syncTerminalToPath 报错;面板照样换到仍存在的目录。
+      if (directoryFollowMode === "always") await syncTerminalToPath(next);
+      await refreshTree({ nextPath: next, removedPaths });
     },
     [currentPathRef, directoryFollowMode, refreshTree, syncTerminalToPath]
   );
