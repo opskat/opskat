@@ -229,14 +229,14 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
       for (const path of folderRevealPaths(currentPath)) pending.add(path);
     }
     for (const path of pending) if (!tree[path]) void fetchLayer(path);
-    if (!folderTreeActive) return;
-    // 缓存早于远端新建的祖先层:每个当前目录只补拉一次——重拉后仍不含它(比如经由未列出的
-    // 路径进入)时不再反复请求。
+    // 缓存早于远端新建的祖先层:每进入一次当前目录只补拉一次——重拉后仍不含它(比如经由未列出的
+    // 路径进入)时不再反复请求。树收起期间换目录也要清空,否则回到原目录时沿用上一次的记录。
     const checked = revealRefetchRef.current;
     if (checked.path !== currentPath) {
       checked.path = currentPath;
       checked.layers.clear();
     }
+    if (!folderTreeActive) return;
     for (const path of staleRevealLayers(tree, currentPath)) {
       if (checked.layers.has(path)) continue;
       checked.layers.add(path);

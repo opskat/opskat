@@ -2991,6 +2991,40 @@ describe("FileManagerPanel", () => {
       expect(listDirCalls("/srv")).toHaveLength(2);
     });
 
+    it("re-reads a stale ancestor again when the current directory is revisited after navigating while the tree was hidden", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [
+          [dirEntry("app")],
+          [dirEntry("app"), dirEntry("new")],
+          [dirEntry("app")],
+          [dirEntry("app"), dirEntry("new")],
+        ],
+        "/srv/app": [fileEntry("a.txt")],
+        "/srv/new": [fileEntry("b.txt")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+      const input = screen.getByTestId("sftp-path-input");
+      const navigate = async (path: string, shows: string) => {
+        fireEvent.change(input, { target: { value: path } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        await screen.findByText(shows);
+      };
+
+      await navigate("/srv/new", "b.txt");
+      await waitFor(() => expect(treeRow("/srv/new")).toHaveAttribute("data-sftp-tree-current", "true"));
+
+      // 树收起期间:/srv/new 被删、面板换到 /srv(这次列表里没有 new),之后 new 又被建回来并进入。
+      fireEvent.click(screen.getByRole("button", { name: "sftp.folderTree.toggle" }));
+      await navigate("/srv", "app");
+      await navigate("/srv/new", "b.txt");
+      fireEvent.click(screen.getByRole("button", { name: "sftp.folderTree.toggle" }));
+
+      await waitFor(() => expect(treeRow("/srv/new")).toHaveAttribute("data-sftp-tree-current", "true"));
+      expect(listDirCalls("/srv")).toHaveLength(4);
+    });
+
     it("keeps the open branches on screen while a refresh is still loading them", async () => {
       mockDirListings({
         "/": [[dirEntry("srv")], new Promise<sftp_svc.FileEntry[]>(() => {})],

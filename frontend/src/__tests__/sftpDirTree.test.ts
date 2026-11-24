@@ -388,6 +388,15 @@ describe("staleRevealLayers", () => {
     expect(staleRevealLayers(tree, "/srv/app")).toEqual([]);
   });
 
+  it("skips a loaded ancestor whose background refresh is still in flight", () => {
+    const tree = {
+      "/": node([entry("srv", true)]),
+      "/srv": node([entry("app", true)], { loading: true }),
+    };
+
+    expect(staleRevealLayers(tree, "/srv/new")).toEqual([]);
+  });
+
   it("treats a same-named file as missing the directory", () => {
     const tree = { "/": node([entry("srv")]) };
 
