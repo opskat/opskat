@@ -36,13 +36,55 @@ const DEFAULT_FILE_MANAGER_WIDTH = 280;
 const MIN_FILE_MANAGER_WIDTH = 200;
 const MAX_FILE_MANAGER_WIDTH = 600;
 
+// 文件面板目录树的开合与两种排列下的分隔条位置:全局一份(不分标签页),跨重启保留。
+const FOLDER_TREE_STORAGE_KEY = "opskat:sftp-folder-tree";
+const DEFAULT_FOLDER_TREE_WIDTH = 180;
+
+interface FolderTreeLayout {
+  folderTreeVisible: boolean;
+  /** 左右排列时树的宽度(px)。 */
+  folderTreeWidth: number;
+  /** 上下排列时树的高度(px);null 表示用户还没拖过,按可用高度的默认比例显示。 */
+  folderTreeHeight: number | null;
+}
+
+function loadFolderTreeLayout(): FolderTreeLayout {
+  const defaults: FolderTreeLayout = {
+    folderTreeVisible: true,
+    folderTreeWidth: DEFAULT_FOLDER_TREE_WIDTH,
+    folderTreeHeight: null,
+  };
+  const raw = localStorage.getItem(FOLDER_TREE_STORAGE_KEY);
+  if (!raw) return defaults;
+  try {
+    const saved = JSON.parse(raw) as Partial<FolderTreeLayout>;
+    return {
+      folderTreeVisible:
+        typeof saved.folderTreeVisible === "boolean" ? saved.folderTreeVisible : defaults.folderTreeVisible,
+      folderTreeWidth: typeof saved.folderTreeWidth === "number" ? saved.folderTreeWidth : defaults.folderTreeWidth,
+      folderTreeHeight: typeof saved.folderTreeHeight === "number" ? saved.folderTreeHeight : defaults.folderTreeHeight,
+    };
+  } catch {
+    // 存档被手改坏时退回默认布局:这只是界面偏好,丢掉比让面板起不来强。
+    return defaults;
+  }
+}
+
+function saveFolderTreeLayout(state: FolderTreeLayout) {
+  const { folderTreeVisible, folderTreeWidth, folderTreeHeight } = state;
+  localStorage.setItem(
+    FOLDER_TREE_STORAGE_KEY,
+    JSON.stringify({ folderTreeVisible, folderTreeWidth, folderTreeHeight })
+  );
+}
+
 // ZMODEM 这类"前端驱动协议、后端只做本地文件 IO"的传输，取消逻辑（中止 zmodem.js 会话
 // + 后端 Abort）和 SFTP 不同，没法走 SFTPCancelTransfer。这里按 transferId 注册各自的取消
 // 回调，cancelTransfer 查表分派、查不到再回落 SFTP 默认取消。extend-by-registration，
 // 避免在共享的 cancelTransfer 里按传输类型字符串分支。
 const cancelHandlers = new Map<string, () => void>();
 
-interface SFTPState {
+interface SFTPState extends FolderTreeLayout {
   transfers: Record<string, SFTPTransfer>;
 
   // File manager panel state
@@ -76,6 +118,9 @@ interface SFTPState {
   openFileManager: (tabId: string) => void;
   setFileManagerPath: (tabId: string, path: string) => void;
   setFileManagerWidth: (width: number) => void;
+  toggleFolderTree: () => void;
+  setFolderTreeWidth: (width: number) => void;
+  setFolderTreeHeight: (height: number) => void;
 }
 
 function subscribeProgress(
@@ -188,6 +233,7 @@ export const useSFTPStore = create<SFTPState>((set, get) => ({
   fileManagerOpenTabs: {},
   fileManagerPaths: {},
   fileManagerWidth: DEFAULT_FILE_MANAGER_WIDTH,
+  ...loadFolderTreeLayout(),
 
   startUploadFile: async (target, localPath, remotePath) => {
     const transferId = await SFTPUploadFile(target.sessionId, localPath, remotePath);
@@ -323,6 +369,21 @@ export const useSFTPStore = create<SFTPState>((set, get) => ({
     set({
       fileManagerWidth: Math.max(MIN_FILE_MANAGER_WIDTH, Math.min(MAX_FILE_MANAGER_WIDTH, width)),
     });
+  },
+
+  toggleFolderTree: () => {
+    set((state) => ({ folderTreeVisible: !state.folderTreeVisible }));
+    saveFolderTreeLayout(get());
+  },
+
+  setFolderTreeWidth: (width) => {
+    set({ folderTreeWidth: width });
+    saveFolderTreeLayout(get());
+  },
+
+  setFolderTreeHeight: (height) => {
+    set({ folderTreeHeight: height });
+    saveFolderTreeLayout(get());
   },
 }));
 

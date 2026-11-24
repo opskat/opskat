@@ -56,6 +56,7 @@ import { PropertiesDialog } from "./file-manager/PropertiesDialog";
 import { TransferSection } from "./file-manager/TransferSection";
 import { type ClipboardState, type DeleteTarget, type CtxMenuState, type PermissionTarget } from "./file-manager/types";
 import { useFileManagerDirectory } from "./file-manager/useFileManagerDirectory";
+import { FileManagerSplit } from "./file-manager/FileManagerSplit";
 import { FolderTree } from "./file-manager/FolderTree";
 import { useNativeFileDrop } from "./file-manager/useNativeFileDrop";
 import { useResizeHandle } from "./file-manager/useResizeHandle";
@@ -184,6 +185,8 @@ export function FileManagerPanel({
   const [activeSyncMode, setActiveSyncMode] = useState<DirectorySyncMenuMode>(null);
   const [builtInBlock, setBuiltInBlock] = useState<{ remotePath: string; reasonKey: string } | null>(null);
 
+  const folderTreeVisible = useSFTPStore((s) => s.folderTreeVisible);
+  const toggleFolderTree = useSFTPStore((s) => s.toggleFolderTree);
   const startUploadFile = useSFTPStore((s) => s.startUploadFile);
   const startDownload = useSFTPStore((s) => s.startDownload);
   const startDownloadDir = useSFTPStore((s) => s.startDownloadDir);
@@ -248,6 +251,17 @@ export function FileManagerPanel({
     const map = new Map<string, sftp_svc.FileEntry>();
     for (const row of rows) if (row.entry) map.set(row.path, row.entry);
     return map;
+  }, [rows]);
+  // 上下排列时列表标题里的数量:只数当前目录这一层,不含列表里就地展开的子层。
+  const currentLayerCounts = useMemo(() => {
+    let files = 0;
+    let dirs = 0;
+    for (const row of rows) {
+      if (row.depth !== 0 || !row.entry) continue;
+      if (row.entry.isDir) dirs += 1;
+      else files += 1;
+    }
+    return { files, dirs };
   }, [rows]);
   const selectedEntries = useMemo(
     () => selected.map((path) => entryByPath.get(path)).filter(Boolean) as sftp_svc.FileEntry[],
@@ -971,6 +985,7 @@ export function FileManagerPanel({
               activeSyncMode={activeSyncMode}
               currentPath={currentPath}
               directoryFollowMode={directoryFollowMode}
+              folderTreeVisible={folderTreeVisible}
               onFollowToggle={() => void handleFollowToggle()}
               onGoHome={goHome}
               onGoUp={goUp}
@@ -979,6 +994,7 @@ export function FileManagerPanel({
               onRefresh={() => void refreshTree()}
               onSyncPanelFromTerminal={() => void handleSyncPanelFromTerminal()}
               onSyncTerminalToPath={() => void handleSyncTerminalToCurrentPath()}
+              onToggleFolderTree={toggleFolderTree}
               paneConnected={paneConnected}
               pathInput={pathInput}
             />
@@ -1003,55 +1019,72 @@ export function FileManagerPanel({
               </div>
             )}
 
-            <div className="flex min-h-0 flex-1 flex-col">
-              <FolderTree
-                className="h-[40%] shrink-0 border-b"
-                rows={folderRows}
-                currentPath={currentPath}
-                onNavigate={(path) => void navigateToPath(path)}
-                onToggle={toggleFolderExpand}
-                onRetry={retryExpand}
-              />
-              <FileList
-                canExternalEdit={canExternalEdit}
-                clipboardCutPaths={clipboardCutPaths}
-                currentPath={currentPath}
-                error={error}
-                loading={loading}
-                onExternalOpen={handleOpenByDefaultEditor}
-                onGoUp={goUp}
-                onMoveEntriesToDirectory={moveEntriesToDirectory}
-                onNavigate={(path) => void navigateToPath(path)}
-                onOpenContextMenu={(x, y, entry, entryPath) => {
-                  if (x < 0 || y < 0) return;
-                  ctxEntryPathRef.current = entryPath;
-                  if (!entry) {
-                    setSelected([]);
-                    setCtxMenu({ x, y, entry: null, selectedEntries: [] });
-                    return;
-                  }
-                  const menuSelectedEntries = selected
-                    .map((path) => entryByPath.get(path))
-                    .filter(Boolean) as sftp_svc.FileEntry[];
-                  setCtxMenu({
-                    x,
-                    y,
-                    entry,
-                    canExternalEdit: canExternalEdit(entry),
-                    selectedEntries: menuSelectedEntries,
-                  });
-                }}
-                onRenameCancel={() => setRenamePath(null)}
-                onRenameCommit={commitRename}
-                onRetry={() => void refreshTree()}
-                onRetryExpand={retryExpand}
-                onToggleExpand={toggleExpand}
-                renamePath={renamePath}
-                rows={rows}
-                selected={selected}
-                setSelected={setSelected}
-              />
-            </div>
+            <FileManagerSplit
+              panelWidth={width}
+              caption={
+                <div
+                  className="shrink-0 truncate px-2 py-1 text-[11px] font-medium text-muted-foreground"
+                  data-testid="sftp-list-caption"
+                >
+                  {t("sftp.folderTree.caption", {
+                    name: getPathBaseName(currentPath) || currentPath,
+                    files: currentLayerCounts.files,
+                    dirs: currentLayerCounts.dirs,
+                  })}
+                </div>
+              }
+              tree={
+                <FolderTree
+                  className="flex-1"
+                  rows={folderRows}
+                  currentPath={currentPath}
+                  onNavigate={(path) => void navigateToPath(path)}
+                  onToggle={toggleFolderExpand}
+                  onRetry={retryExpand}
+                />
+              }
+              list={
+                <FileList
+                  canExternalEdit={canExternalEdit}
+                  clipboardCutPaths={clipboardCutPaths}
+                  currentPath={currentPath}
+                  error={error}
+                  loading={loading}
+                  onExternalOpen={handleOpenByDefaultEditor}
+                  onGoUp={goUp}
+                  onMoveEntriesToDirectory={moveEntriesToDirectory}
+                  onNavigate={(path) => void navigateToPath(path)}
+                  onOpenContextMenu={(x, y, entry, entryPath) => {
+                    if (x < 0 || y < 0) return;
+                    ctxEntryPathRef.current = entryPath;
+                    if (!entry) {
+                      setSelected([]);
+                      setCtxMenu({ x, y, entry: null, selectedEntries: [] });
+                      return;
+                    }
+                    const menuSelectedEntries = selected
+                      .map((path) => entryByPath.get(path))
+                      .filter(Boolean) as sftp_svc.FileEntry[];
+                    setCtxMenu({
+                      x,
+                      y,
+                      entry,
+                      canExternalEdit: canExternalEdit(entry),
+                      selectedEntries: menuSelectedEntries,
+                    });
+                  }}
+                  onRenameCancel={() => setRenamePath(null)}
+                  onRenameCommit={commitRename}
+                  onRetry={() => void refreshTree()}
+                  onRetryExpand={retryExpand}
+                  onToggleExpand={toggleExpand}
+                  renamePath={renamePath}
+                  rows={rows}
+                  selected={selected}
+                  setSelected={setSelected}
+                />
+              }
+            />
             <div
               className="flex items-center justify-between gap-2 border-t px-2 py-1 text-[11px] text-muted-foreground"
               data-testid="sftp-status-bar"

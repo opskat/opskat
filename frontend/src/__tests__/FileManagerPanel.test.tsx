@@ -1697,10 +1697,12 @@ describe("FileManagerPanel", () => {
   });
 
   it("moves a dragged file into a dropped folder", async () => {
-    vi.mocked(SFTPListDir).mockResolvedValue([
-      { name: "logs", isDir: true, size: 0, modTime: 0 },
-      { name: "app.log", isDir: false, size: 42, modTime: 0 },
-    ]);
+    mockDirListings({
+      "/srv/app": [
+        { name: "logs", isDir: true, size: 0, modTime: 0 },
+        { name: "app.log", isDir: false, size: 42, modTime: 0 },
+      ] as sftp_svc.FileEntry[],
+    });
 
     render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
 
@@ -2960,6 +2962,96 @@ describe("FileManagerPanel", () => {
       fireEvent.click(screen.getByTitle("sftp.refresh"));
 
       await waitFor(() => expect(treeNames()).toEqual(["/", "/opt", "/srv", "/srv/app"]));
+    });
+  });
+
+  describe("folder tree layout", () => {
+    const panelAt = (width: number) => (
+      <FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={width} onWidthChange={vi.fn()} />
+    );
+    const split = () => screen.getByTestId("sftp-split");
+    const treeNames = () =>
+      Array.from(screen.getByTestId("sftp-folder-tree").querySelectorAll<HTMLElement>("[data-sftp-tree-path]")).map(
+        (row) => row.dataset.sftpTreePath
+      );
+
+    beforeEach(() => {
+      useSFTPStore.setState({ folderTreeVisible: true, folderTreeWidth: 180, folderTreeHeight: null });
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app"), dirEntry("www")],
+        "/srv/www": [dirEntry("html")],
+        "/srv/app": [dirEntry("logs"), fileEntry("a.txt"), fileEntry("b.txt")],
+      });
+    });
+
+    it("places the tree beside the list from 440px and above it when narrower, keeping its expansion", async () => {
+      const { rerender } = render(panelAt(520));
+      expect(split()).toHaveAttribute("data-layout", "side");
+      await waitFor(() => expect(treeNames()).toContain("/srv/www"));
+      fireEvent.click(screen.getByTestId("sftp-tree-toggle-/srv/www"));
+      await waitFor(() => expect(treeNames()).toContain("/srv/www/html"));
+
+      rerender(panelAt(439));
+
+      expect(split()).toHaveAttribute("data-layout", "stacked");
+      expect(treeNames()).toContain("/srv/www/html");
+    });
+
+    it("captions the list with the current directory and its counts only when stacked", async () => {
+      const { rerender } = render(panelAt(280));
+      expect(await screen.findByTestId("sftp-list-caption")).toHaveTextContent("sftp.folderTree.caption");
+
+      rerender(panelAt(520));
+
+      expect(screen.queryByTestId("sftp-list-caption")).toBeNull();
+    });
+
+    it("hides the tree from the path bar toggle and gives the list the whole area", async () => {
+      render(panelAt(280));
+      await screen.findByTestId("sftp-folder-tree");
+
+      fireEvent.click(screen.getByRole("button", { name: "sftp.folderTree.toggle" }));
+
+      expect(screen.queryByTestId("sftp-folder-tree")).toBeNull();
+      expect(screen.queryByTestId("sftp-tree-splitter")).toBeNull();
+      expect(screen.queryByTestId("sftp-list-caption")).toBeNull();
+      expect(screen.getByText("a.txt")).toBeInTheDocument();
+      expect(useSFTPStore.getState().folderTreeVisible).toBe(false);
+    });
+
+    it("resizes the tree width from the side-by-side splitter and stores the result", async () => {
+      render(panelAt(520));
+      const splitter = await screen.findByTestId("sftp-tree-splitter");
+
+      fireEvent.mouseDown(splitter, { clientX: 300 });
+      fireEvent(document, new MouseEvent("mousemove", { clientX: 340 }));
+      fireEvent(document, new MouseEvent("mouseup"));
+
+      expect(useSFTPStore.getState().folderTreeWidth).toBe(220);
+    });
+
+    it("never lets the side-by-side tree squeeze the list below its minimum", async () => {
+      render(panelAt(520));
+      const splitter = await screen.findByTestId("sftp-tree-splitter");
+
+      fireEvent.mouseDown(splitter, { clientX: 300 });
+      fireEvent(document, new MouseEvent("mousemove", { clientX: 900 }));
+      fireEvent(document, new MouseEvent("mouseup"));
+
+      expect(useSFTPStore.getState().folderTreeWidth).toBeLessThanOrEqual(520 - 200);
+    });
+
+    it("resizes the tree height from the stacked splitter and stores the result", async () => {
+      useSFTPStore.setState({ folderTreeHeight: 200 });
+      render(panelAt(280));
+      const splitter = await screen.findByTestId("sftp-tree-splitter");
+
+      fireEvent.mouseDown(splitter, { clientY: 300 });
+      fireEvent(document, new MouseEvent("mousemove", { clientY: 250 }));
+      fireEvent(document, new MouseEvent("mouseup"));
+
+      expect(useSFTPStore.getState().folderTreeHeight).toBe(150);
     });
   });
 });

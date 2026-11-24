@@ -23,6 +23,7 @@ import {
   splitNameForRename,
   treeGuideLines,
 } from "./utils";
+import { useElementSize } from "./useElementSize";
 
 function indentStyle(depth: number, panelWidth: number) {
   return { paddingLeft: indentForDepth(depth, panelWidth) };
@@ -33,25 +34,13 @@ const DEFAULT_PANEL_WIDTH_PX = 280;
 
 /**
  * 缩进封顶要按面板"当前"宽度算,而宽度只有父级容器的渲染尺寸知道 —— 面板可拖拽调宽
- * (useResizeHandle),用 ResizeObserver 跟着容器盒子实测,而不是让父组件把 width 状态
- * 透传下来:调用方不用为了这一层缩进细节多接一个 prop,拖宽面板时也能跟着重新封顶。
+ * (useResizeHandle),跟着容器盒子实测,而不是让父组件把 width 状态透传下来:调用方不用
+ * 为了这一层缩进细节多接一个 prop,拖宽面板或拖动目录树分隔条时也能跟着重新封顶。
  */
+const PANEL_SIZE_FALLBACK = { width: DEFAULT_PANEL_WIDTH_PX, height: 0 };
 function usePanelWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
-  const ref = useRef<T | null>(null);
-  const [width, setWidth] = useState(DEFAULT_PANEL_WIDTH_PX);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => {
-      const rect = el.getBoundingClientRect();
-      if (rect.width > 0) setWidth(rect.width);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-  return [ref, width];
+  const [ref, size] = useElementSize<T>(PANEL_SIZE_FALLBACK);
+  return [ref, size.width];
 }
 
 /**
