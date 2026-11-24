@@ -177,3 +177,10 @@ export function sortEntries(entries: sftp_svc.FileEntry[]): sftp_svc.FileEntry[]
     return a.name.localeCompare(b.name);
   });
 }
+
+/** 面板宽到这个值才把目录树放到列表左边;更窄时放上面——默认 280px 放不下两列。 */
+export const SIDE_BY_SIDE_MIN_PANEL_PX = 440;
+
+export function isSideBySidePanel(panelWidth: number) {
+  return panelWidth >= SIDE_BY_SIDE_MIN_PANEL_PX;
+}

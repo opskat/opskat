@@ -56,6 +56,10 @@ import { PropertiesDialog } from "./file-manager/PropertiesDialog";
 import { TransferSection } from "./file-manager/TransferSection";
 import { type ClipboardState, type DeleteTarget, type CtxMenuState, type PermissionTarget } from "./file-manager/types";
 import { useFileManagerDirectory } from "./file-manager/useFileManagerDirectory";
+import { movableDraggedPaths, useSftpDragState } from "./file-manager/dragDrop";
+import { rebaseCurrentPath, type PathChange } from "@/lib/sftpDirTree";
+import { FileManagerSplit } from "./file-manager/FileManagerSplit";
+import { FolderTree } from "./file-manager/FolderTree";
 import { useNativeFileDrop } from "./file-manager/useNativeFileDrop";
 import { useResizeHandle } from "./file-manager/useResizeHandle";
 import { sftpEntrySide, useSFTPTargetResolver, type SFTPWriteTarget } from "./file-manager/useSFTPTargetResolver";
@@ -66,6 +70,7 @@ import {
   getParentPath,
   getPathBaseName,
   HANDLE_PX,
+  isSideBySidePanel,
   joinRemotePath,
 } from "./file-manager/utils";
 import { errorMessage } from "@/lib/errorMessage";
@@ -139,6 +144,7 @@ export function FileManagerPanel({
     currentPath,
     currentPathRef,
     error,
+    folderRows,
     loading,
     loadDir,
     pathInput,
@@ -151,12 +157,14 @@ export function FileManagerPanel({
     setSelected,
     storedPath,
     toggleExpand,
+    toggleFolderExpand,
   } = useFileManagerDirectory(tabId, sessionId);
 
   const {
     directoryFollowMode,
     navigateToPath,
     paneConnected,
+    relocateFromRemovedPath,
     sessionSync,
     syncPanelFromTerminal,
     syncTerminalToPath,
@@ -167,7 +175,10 @@ export function FileManagerPanel({
   // 右键命中行的绝对路径:树里同名条目可能分布在不同层,不能再由 currentPath 拼回去。
   const ctxEntryPathRef = useRef<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
-  const [renamePath, setRenamePath] = useState<string | null>(null);
+  // 同一个目录可能同时出现在列表与目录树里:记住从哪边发起,只在那一边出现输入框。
+  const [rename, setRename] = useState<{ path: string; scope: "list" | "tree" } | null>(null);
+  const renamePath = rename?.scope === "list" ? rename.path : null;
+  const treeRenamePath = rename?.scope === "tree" ? rename.path : null;
   const [permissionTarget, setPermissionTarget] = useState<PermissionTarget | null>(null);
   const [propertiesTarget, setPropertiesTarget] = useState<PermissionTarget | null>(null);
   const [nameDialog, setNameDialog] = useState<null | "file" | "folder">(null);
@@ -181,6 +192,8 @@ export function FileManagerPanel({
   const [activeSyncMode, setActiveSyncMode] = useState<DirectorySyncMenuMode>(null);
   const [builtInBlock, setBuiltInBlock] = useState<{ remotePath: string; reasonKey: string } | null>(null);
 
+  const folderTreeVisible = useSFTPStore((s) => s.folderTreeVisible);
+  const toggleFolderTree = useSFTPStore((s) => s.toggleFolderTree);
   const startUploadFile = useSFTPStore((s) => s.startUploadFile);
   const startDownload = useSFTPStore((s) => s.startDownload);
   const startDownloadDir = useSFTPStore((s) => s.startDownloadDir);
@@ -244,7 +257,20 @@ export function FileManagerPanel({
   const entryByPath = useMemo(() => {
     const map = new Map<string, sftp_svc.FileEntry>();
     for (const row of rows) if (row.entry) map.set(row.path, row.entry);
+    // 目录树上的目录同样可以被右键/重命名/删除。
+    for (const row of folderRows) if (row.entry && !map.has(row.path)) map.set(row.path, row.entry);
     return map;
+  }, [folderRows, rows]);
+  // 上下排列时列表标题里的数量:只数当前目录这一层,不含列表里就地展开的子层。
+  const currentLayerCounts = useMemo(() => {
+    let files = 0;
+    let dirs = 0;
+    for (const row of rows) {
+      if (row.depth !== 0 || !row.entry) continue;
+      if (row.entry.isDir) dirs += 1;
+      else files += 1;
+    }
+    return { files, dirs };
   }, [rows]);
   const selectedEntries = useMemo(
     () => selected.map((path) => entryByPath.get(path)).filter(Boolean) as sftp_svc.FileEntry[],
@@ -256,6 +282,7 @@ export function FileManagerPanel({
   }, [clipboard, sessionId]);
 
   const { resolveTargets, conflictDialog } = useSFTPTargetResolver(sessionId);
+  const { draggedPathsRef, dropTarget, setDropTarget } = useSftpDragState();
 
   const uploadLocalPaths = useCallback(
     async (localPaths: string[], remoteDir: string) => {
@@ -293,7 +320,19 @@ export function FileManagerPanel({
     panelRef,
     uploadLocalPaths,
   });
-  const { handleResizeStart, isResizing, outerRef } = useResizeHandle({ onWidthChange, panelRef, width });
+  // 面板拖宽时 width 要到松手才提交(拖动中只改 DOM,不重渲染面板),目录树的排列却要在跨过
+  // 阈值的那一刻就换:拖动中另记一份排列,它只在跨过阈值时变化,不会每帧重渲染整个面板。
+  const [resizingSideBySide, setResizingSideBySide] = useState<boolean | null>(null);
+  const handleLiveWidth = useCallback(
+    (liveWidth: number | null) => setResizingSideBySide(liveWidth === null ? null : isSideBySidePanel(liveWidth)),
+    []
+  );
+  const { handleResizeStart, isResizing, outerRef } = useResizeHandle({
+    onWidthChange,
+    onLiveWidth: handleLiveWidth,
+    panelRef,
+    width,
+  });
 
   useEffect(() => {
     if (!sessionId) return;
@@ -363,7 +402,7 @@ export function FileManagerPanel({
   useEffect(() => {
     const handler = (event: Event) => {
       const path = (event as CustomEvent<{ path: string }>).detail?.path;
-      if (path) setRenamePath(path);
+      if (path) setRename({ path, scope: "list" });
     };
     window.addEventListener("sftp:rename-request", handler);
     return () => window.removeEventListener("sftp:rename-request", handler);
@@ -407,52 +446,74 @@ export function FileManagerPanel({
     [t]
   );
 
-  const paste = useCallback(async () => {
-    if (!clipboard?.items.length) return;
-    const targetDir = currentPathRef.current;
-    // 剪切到它本来所在的目录是空操作，不做同名检查。
-    const items = clipboard.items.filter(
-      (item) => !(clipboard.mode === "cut" && item.sessionId === sessionId && getParentPath(item.path) === targetDir)
-    );
-    if (!items.length) return;
-    const destinations = await resolveTargets(
-      items.map((item): SFTPWriteTarget => {
-        const targetPath = joinRemotePath(targetDir, item.name);
-        return {
-          targetPath,
-          incoming: sftpEntrySide(item),
-          duplicateInPlace: clipboard.mode === "copy" && item.sessionId === sessionId && item.path === targetPath,
-        };
-      })
-    );
-    const pasteItems = items.flatMap((item, index) => {
-      const destination = destinations[index];
-      if (!destination) return [];
-      return [
-        new sftp_svc.PasteItem({
-          sessionId: item.sessionId,
-          path: item.path,
-          isDir: item.isDir,
-          targetName: getPathBaseName(destination),
-        }),
-      ];
-    });
-    if (!pasteItems.length) return;
-    try {
-      await SFTPPaste(
-        new sftp_svc.PasteRequest({
-          targetSessionId: sessionId,
-          targetDir,
-          mode: clipboard.mode,
-          items: pasteItems,
+  // 删除、重命名或移走之后:当前目录(或其祖先)被动到了,就换到仍然存在的目录,否则原地刷新。
+  const settleAfterPathChanges = useCallback(
+    async (changes: PathChange[]) => {
+      const removedPaths = changes.map((change) => change.from);
+      const next = rebaseCurrentPath(currentPathRef.current, changes);
+      if (next === null) {
+        await refreshTree({ removedPaths });
+        return;
+      }
+      await relocateFromRemovedPath(next, (nextPath) => refreshTree({ nextPath, removedPaths }));
+    },
+    [currentPathRef, refreshTree, relocateFromRemovedPath]
+  );
+
+  /** 粘贴到 targetDir;不传时是当前目录(目录树行的菜单传入那一行的目录)。 */
+  const paste = useCallback(
+    async (targetDir: string = currentPathRef.current) => {
+      if (!clipboard?.items.length) return;
+      // 剪切到它本来所在的目录是空操作，不做同名检查。
+      const items = clipboard.items.filter(
+        (item) => !(clipboard.mode === "cut" && item.sessionId === sessionId && getParentPath(item.path) === targetDir)
+      );
+      if (!items.length) return;
+      const destinations = await resolveTargets(
+        items.map((item): SFTPWriteTarget => {
+          const targetPath = joinRemotePath(targetDir, item.name);
+          return {
+            targetPath,
+            incoming: sftpEntrySide(item),
+            duplicateInPlace: clipboard.mode === "copy" && item.sessionId === sessionId && item.path === targetPath,
+          };
         })
       );
-      if (clipboard.mode === "cut") setGlobalClipboard(null);
-      await refreshTree();
-    } catch (e) {
-      toast.error(errorMessage(e));
-    }
-  }, [clipboard, currentPathRef, refreshTree, resolveTargets, sessionId]);
+      const pasteItems = items.flatMap((item, index) => {
+        const destination = destinations[index];
+        if (!destination) return [];
+        return [
+          new sftp_svc.PasteItem({
+            sessionId: item.sessionId,
+            path: item.path,
+            isDir: item.isDir,
+            targetName: getPathBaseName(destination),
+          }),
+        ];
+      });
+      if (!pasteItems.length) return;
+      try {
+        await SFTPPaste(
+          new sftp_svc.PasteRequest({
+            targetSessionId: sessionId,
+            targetDir,
+            mode: clipboard.mode,
+            items: pasteItems,
+          })
+        );
+        if (clipboard.mode === "cut") setGlobalClipboard(null);
+        // 剪切走的若是当前目录或其祖先(只有目录树能这样动它们),面板退回最近仍存在的祖先。
+        const movedAway: PathChange[] =
+          clipboard.mode === "cut"
+            ? pasteItems.filter((item) => item.sessionId === sessionId).map((item) => ({ from: item.path, to: null }))
+            : [];
+        await settleAfterPathChanges(movedAway);
+      } catch (e) {
+        toast.error(errorMessage(e));
+      }
+    },
+    [clipboard, currentPathRef, resolveTargets, sessionId, settleAfterPathChanges]
+  );
 
   const goUp = useCallback(() => {
     if (currentPath === "/") return;
@@ -482,15 +543,21 @@ export function FileManagerPanel({
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return;
+    // 逐项删除:中途失败时已删掉的那些照样要反映出来(包括当前目录被删的情形)。
+    const deleted: PathChange[] = [];
     try {
-      for (const item of deleteTarget.paths) await SFTPDelete(sessionId, item.path, item.isDir);
-      await refreshTree();
+      for (const item of deleteTarget.paths) {
+        await SFTPDelete(sessionId, item.path, item.isDir);
+        deleted.push({ from: item.path, to: null });
+      }
+      await settleAfterPathChanges(deleted);
     } catch (e) {
+      if (deleted.length) await settleAfterPathChanges(deleted);
       setError(errorMessage(e));
     } finally {
       setDeleteTarget(null);
     }
-  }, [deleteTarget, refreshTree, sessionId, setError]);
+  }, [deleteTarget, sessionId, setError, settleAfterPathChanges]);
 
   const canExternalEdit = useCallback((entry: sftp_svc.FileEntry) => !entry.isDir, []);
 
@@ -672,9 +739,9 @@ export function FileManagerPanel({
   );
 
   const startRename = useCallback(
-    (path?: string) => {
+    (path?: string, scope: "list" | "tree" = "list") => {
       const targetPath = path ?? selected[0];
-      if (targetPath) setRenamePath(targetPath);
+      if (targetPath) setRename({ path: targetPath, scope });
     },
     [selected]
   );
@@ -683,7 +750,7 @@ export function FileManagerPanel({
     async (oldPath: string, nextName: string) => {
       const entry = entryByPath.get(oldPath);
       if (!entry || nextName === entry.name) {
-        setRenamePath(null);
+        setRename(null);
         return;
       }
       const [destination] = await resolveTargets(
@@ -698,13 +765,13 @@ export function FileManagerPanel({
       if (!destination) return;
       try {
         await SFTPRename(sessionId, oldPath, destination);
-        setRenamePath(null);
-        await refreshTree();
+        setRename(null);
+        await settleAfterPathChanges([{ from: oldPath, to: destination }]);
       } catch (e) {
         toast.error(errorMessage(e));
       }
     },
-    [entryByPath, refreshTree, resolveTargets, sessionId]
+    [entryByPath, resolveTargets, sessionId, settleAfterPathChanges]
   );
 
   const moveEntriesToDirectory = useCallback(
@@ -742,12 +809,44 @@ export function FileManagerPanel({
           await SFTPRename(sessionId, move.from, move.to);
         }
         setSelected([]);
-        await refreshTree();
+        await settleAfterPathChanges(accepted);
       } catch (e) {
         toast.error(errorMessage(e));
       }
     },
-    [entryByPath, refreshTree, resolveTargets, sessionId, setSelected]
+    [entryByPath, resolveTargets, sessionId, setSelected, settleAfterPathChanges]
+  );
+
+  // 目录树行上的 HTML5 拖放(指针拖动由列表自己命中,见 FileList 的 getPointerDropTarget)。
+  const handleTreeDragOver = useCallback(
+    (event: React.DragEvent, dirPath: string) => {
+      const movable = movableDraggedPaths(event, draggedPathsRef.current, dirPath);
+      if (!movable.length) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      setDropTarget({ path: dirPath, count: movable.length });
+    },
+    [draggedPathsRef, setDropTarget]
+  );
+  const handleTreeDragLeave = useCallback(
+    (event: React.DragEvent, dirPath: string) => {
+      const next = event.relatedTarget;
+      if (next instanceof Node && event.currentTarget.contains(next)) return;
+      if (dropTarget?.path === dirPath) setDropTarget(null);
+    },
+    [dropTarget, setDropTarget]
+  );
+  const handleTreeDrop = useCallback(
+    (event: React.DragEvent, dirPath: string) => {
+      const movable = movableDraggedPaths(event, draggedPathsRef.current, dirPath);
+      if (!movable.length) return;
+      event.preventDefault();
+      event.stopPropagation();
+      draggedPathsRef.current = [];
+      setDropTarget(null);
+      void moveEntriesToDirectory(movable, dirPath);
+    },
+    [draggedPathsRef, moveEntriesToDirectory, setDropTarget]
   );
 
   const openPermission = useCallback(
@@ -770,8 +869,9 @@ export function FileManagerPanel({
     (action: string) => {
       if (!ctxMenu) return;
       const entry = ctxMenu.entry;
+      const fromTree = ctxMenu.scope === "tree";
       const targetPath = entry ? ctxEntryPathRef.current : selected[0];
-      const multiPaths = selected.length > 1 ? selected : targetPath ? [targetPath] : [];
+      const multiPaths = !fromTree && selected.length > 1 ? selected : targetPath ? [targetPath] : [];
       setCtxMenu(null);
       switch (action) {
         case "open":
@@ -816,7 +916,7 @@ export function FileManagerPanel({
           copyFilePaths(multiPaths);
           break;
         case "paste":
-          void paste();
+          void paste(fromTree && targetPath ? targetPath : undefined);
           break;
         case "copyCurrentPath":
           void navigator.clipboard
@@ -825,7 +925,7 @@ export function FileManagerPanel({
             .catch((e) => toast.error(errorMessage(e)));
           break;
         case "rename":
-          if (targetPath) startRename(targetPath);
+          if (targetPath) startRename(targetPath, fromTree ? "tree" : "list");
           break;
         case "permission":
           if (targetPath) openPermission(targetPath);
@@ -968,6 +1068,7 @@ export function FileManagerPanel({
               activeSyncMode={activeSyncMode}
               currentPath={currentPath}
               directoryFollowMode={directoryFollowMode}
+              folderTreeVisible={folderTreeVisible}
               onFollowToggle={() => void handleFollowToggle()}
               onGoHome={goHome}
               onGoUp={goUp}
@@ -976,6 +1077,7 @@ export function FileManagerPanel({
               onRefresh={() => void refreshTree()}
               onSyncPanelFromTerminal={() => void handleSyncPanelFromTerminal()}
               onSyncTerminalToPath={() => void handleSyncTerminalToCurrentPath()}
+              onToggleFolderTree={toggleFolderTree}
               paneConnected={paneConnected}
               pathInput={pathInput}
             />
@@ -1000,57 +1102,101 @@ export function FileManagerPanel({
               </div>
             )}
 
-            <FileList
-              canExternalEdit={canExternalEdit}
-              clipboardCutPaths={clipboardCutPaths}
-              currentPath={currentPath}
-              error={error}
-              loading={loading}
-              onExternalOpen={handleOpenByDefaultEditor}
-              onGoUp={goUp}
-              onMoveEntriesToDirectory={moveEntriesToDirectory}
-              onNavigate={(path) => void navigateToPath(path)}
-              onOpenContextMenu={(x, y, entry, entryPath) => {
-                if (x < 0 || y < 0) return;
-                ctxEntryPathRef.current = entryPath;
-                if (!entry) {
-                  setSelected([]);
-                  setCtxMenu({ x, y, entry: null, selectedEntries: [] });
-                  return;
-                }
-                const menuSelectedEntries = selected
-                  .map((path) => entryByPath.get(path))
-                  .filter(Boolean) as sftp_svc.FileEntry[];
-                setCtxMenu({
-                  x,
-                  y,
-                  entry,
-                  canExternalEdit: canExternalEdit(entry),
-                  selectedEntries: menuSelectedEntries,
-                });
-              }}
-              onRenameCancel={() => setRenamePath(null)}
-              onRenameCommit={commitRename}
-              onRetry={() => void refreshTree()}
-              onRetryExpand={retryExpand}
-              onToggleExpand={toggleExpand}
-              renamePath={renamePath}
-              rows={rows}
-              selected={selected}
-              setSelected={setSelected}
+            <FileManagerSplit
+              panelWidth={width}
+              sideBySide={resizingSideBySide ?? isSideBySidePanel(width)}
+              caption={
+                <div
+                  className="shrink-0 truncate px-2 py-1 text-[11px] font-medium text-muted-foreground"
+                  data-testid="sftp-list-caption"
+                >
+                  {t("sftp.folderTree.caption", {
+                    name: getPathBaseName(currentPath) || currentPath,
+                    files: currentLayerCounts.files,
+                    dirs: currentLayerCounts.dirs,
+                  })}
+                </div>
+              }
+              tree={
+                <FolderTree
+                  className="flex-1"
+                  rows={folderRows}
+                  currentPath={currentPath}
+                  onNavigate={(path) => void navigateToPath(path)}
+                  onToggle={toggleFolderExpand}
+                  onRetry={retryExpand}
+                  dropTargetPath={dropTarget?.path ?? null}
+                  onDirDragOver={handleTreeDragOver}
+                  onDirDragLeave={handleTreeDragLeave}
+                  onDirDrop={handleTreeDrop}
+                  onDirContextMenu={(x, y, path, entry) => {
+                    ctxEntryPathRef.current = path;
+                    setCtxMenu({ x, y, entry, selectedEntries: [], scope: "tree" });
+                  }}
+                  renamingPath={treeRenamePath}
+                  onRenameCommit={commitRename}
+                  onRenameCancel={() => setRename(null)}
+                />
+              }
+              list={
+                <FileList
+                  canExternalEdit={canExternalEdit}
+                  clipboardCutPaths={clipboardCutPaths}
+                  currentPath={currentPath}
+                  error={error}
+                  loading={loading}
+                  onExternalOpen={handleOpenByDefaultEditor}
+                  onGoUp={goUp}
+                  onMoveEntriesToDirectory={moveEntriesToDirectory}
+                  onNavigate={(path) => void navigateToPath(path)}
+                  onOpenContextMenu={(x, y, entry, entryPath) => {
+                    if (x < 0 || y < 0) return;
+                    ctxEntryPathRef.current = entryPath;
+                    if (!entry) {
+                      setSelected([]);
+                      setCtxMenu({ x, y, entry: null, selectedEntries: [] });
+                      return;
+                    }
+                    const menuSelectedEntries = selected
+                      .map((path) => entryByPath.get(path))
+                      .filter(Boolean) as sftp_svc.FileEntry[];
+                    setCtxMenu({
+                      x,
+                      y,
+                      entry,
+                      canExternalEdit: canExternalEdit(entry),
+                      selectedEntries: menuSelectedEntries,
+                    });
+                  }}
+                  onRenameCancel={() => setRename(null)}
+                  onRenameCommit={commitRename}
+                  onRetry={() => void refreshTree()}
+                  onRetryExpand={retryExpand}
+                  onToggleExpand={toggleExpand}
+                  renamePath={renamePath}
+                  rows={rows}
+                  selected={selected}
+                  setSelected={setSelected}
+                  draggedPathsRef={draggedPathsRef}
+                  dropTarget={dropTarget}
+                  setDropTarget={setDropTarget}
+                />
+              }
             />
             <div
               className="flex items-center justify-between gap-2 border-t px-2 py-1 text-[11px] text-muted-foreground"
               data-testid="sftp-status-bar"
             >
               <span className="min-w-0 truncate">
-                {selected.length > 1
-                  ? t("sftp.selectedItems", { count: selected.length, size: formatBytes(selectedTotalSize) })
-                  : clipboard?.items.length
-                    ? clipboard.mode === "cut"
-                      ? t("sftp.clipboardCut", { count: clipboard.items.length })
-                      : t("sftp.clipboardCopy", { count: clipboard.items.length })
-                    : t("sftp.ready")}
+                {dropTarget
+                  ? t("sftp.tree.dropHint", { count: dropTarget.count, target: dropTarget.path })
+                  : selected.length > 1
+                    ? t("sftp.selectedItems", { count: selected.length, size: formatBytes(selectedTotalSize) })
+                    : clipboard?.items.length
+                      ? clipboard.mode === "cut"
+                        ? t("sftp.clipboardCut", { count: clipboard.items.length })
+                        : t("sftp.clipboardCopy", { count: clipboard.items.length })
+                      : t("sftp.ready")}
               </span>
               <span className="flex shrink-0 items-center gap-0.5">
                 <DropdownMenu>

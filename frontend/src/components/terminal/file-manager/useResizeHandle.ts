@@ -4,11 +4,13 @@ import { HANDLE_PX } from "./utils";
 
 interface UseResizeHandleOptions {
   onWidthChange: (width: number) => void;
+  /** 拖动中每一帧的宽度(此时 width 还没提交),松手时传 null。 */
+  onLiveWidth?: (width: number | null) => void;
   panelRef: RefObject<HTMLDivElement | null>;
   width: number;
 }
 
-export function useResizeHandle({ onWidthChange, panelRef, width }: UseResizeHandleOptions) {
+export function useResizeHandle({ onWidthChange, onLiveWidth, panelRef, width }: UseResizeHandleOptions) {
   const outerRef = useRef<HTMLDivElement>(null);
   const previousCursorRef = useRef("");
   const previousTransitionRef = useRef("");
@@ -20,9 +22,13 @@ export function useResizeHandle({ onWidthChange, panelRef, width }: UseResizeHan
     previousTransitionRef.current = outer?.style.transition ?? "";
     if (outer) outer.style.transition = "none";
   }, []);
-  const handleResize = useCallback((nextWidth: number) => {
-    if (outerRef.current) outerRef.current.style.width = `${nextWidth + HANDLE_PX}px`;
-  }, []);
+  const handleResize = useCallback(
+    (nextWidth: number) => {
+      if (outerRef.current) outerRef.current.style.width = `${nextWidth + HANDLE_PX}px`;
+      onLiveWidth?.(nextWidth);
+    },
+    [onLiveWidth]
+  );
   const handleResizeEnd = useCallback(
     (nextWidth: number) => {
       document.body.style.cursor = previousCursorRef.current;
@@ -32,8 +38,9 @@ export function useResizeHandle({ onWidthChange, panelRef, width }: UseResizeHan
         outer.style.transition = previousTransitionRef.current;
       }
       onWidthChange(nextWidth);
+      onLiveWidth?.(null);
     },
-    [onWidthChange]
+    [onLiveWidth, onWidthChange]
   );
   const { handleMouseDown, isResizing } = useSharedResizeHandle({
     defaultSize: width,

@@ -2695,7 +2695,13 @@
       "nonceFailed": "Could not start a verified directory change"
     },
     "clearCompleted": "Clear completed",
-    "showInFolder": "Show in folder"
+    "showInFolder": "Show in folder",
+    "folderTree": {
+      "label": "Folder tree",
+      "toggle": "Folder tree",
+      "caption": "{{name}} · Files: {{files}} · Folders: {{dirs}}",
+      "resize": "Resize folder tree"
+    }
   },
   "error": {
     "boundary": {

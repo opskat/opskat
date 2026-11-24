@@ -18,6 +18,7 @@ import {
 } from "../lib/externalEditApi";
 import {
   ChangeSSHDirectory,
+  SFTPDelete,
   SFTPListDir,
   SFTPPaste,
   SFTPRename,
@@ -1697,10 +1698,12 @@ describe("FileManagerPanel", () => {
   });
 
   it("moves a dragged file into a dropped folder", async () => {
-    vi.mocked(SFTPListDir).mockResolvedValue([
-      { name: "logs", isDir: true, size: 0, modTime: 0 },
-      { name: "app.log", isDir: false, size: 42, modTime: 0 },
-    ]);
+    mockDirListings({
+      "/srv/app": [
+        { name: "logs", isDir: true, size: 0, modTime: 0 },
+        { name: "app.log", isDir: false, size: 42, modTime: 0 },
+      ] as sftp_svc.FileEntry[],
+    });
 
     render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
 
@@ -1722,10 +1725,12 @@ describe("FileManagerPanel", () => {
   });
 
   it("moves a file when pointer-dragged onto a folder row", async () => {
-    vi.mocked(SFTPListDir).mockResolvedValue([
-      { name: "logs", isDir: true, size: 0, modTime: 0 },
-      { name: "app.log", isDir: false, size: 42, modTime: 0 },
-    ]);
+    mockDirListings({
+      "/srv/app": [
+        { name: "logs", isDir: true, size: 0, modTime: 0 },
+        { name: "app.log", isDir: false, size: 42, modTime: 0 },
+      ] as sftp_svc.FileEntry[],
+    });
 
     render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
 
@@ -1834,7 +1839,8 @@ describe("FileManagerPanel", () => {
 
     it("reports a denied child layer with its reason and retries it in place", async () => {
       vi.mocked(SFTPListDir).mockImplementation((_sessionId: string, path: string) => {
-        if (path !== "/srv/app/conf.d") return Promise.resolve([dirEntry("conf.d"), dirEntry("logs")]);
+        if (path === "/srv/app") return Promise.resolve([dirEntry("conf.d"), dirEntry("logs")]);
+        if (path !== "/srv/app/conf.d") return Promise.resolve([]);
         return listDirCalls(path).length === 1
           ? Promise.reject(new Error("permission denied"))
           : Promise.resolve([fileEntry("default.conf")]);
@@ -2810,6 +2816,805 @@ describe("FileManagerPanel", () => {
 
       await waitFor(() => expect(screen.queryByTestId("file-conflict-dialog")).toBeNull());
       expect(SFTPPaste).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("folder tree", () => {
+    const folderTree = () => screen.getByTestId("sftp-folder-tree");
+    const treeRow = (path: string) => screen.getByTestId(`sftp-tree-row-${path}`);
+    const treeToggle = (path: string) => screen.getByTestId(`sftp-tree-toggle-${path}`);
+    const treeNames = () =>
+      Array.from(folderTree().querySelectorAll<HTMLElement>("[data-sftp-tree-path]")).map(
+        (row) => row.dataset.sftpTreePath
+      );
+    const renderPanel = () =>
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    it("roots the tree at / with only directories, opening every ancestor and highlighting the current one", async () => {
+      mockDirListings({
+        "/": [dirEntry("etc"), dirEntry("srv"), fileEntry("swap.img")],
+        "/srv": [dirEntry("app"), dirEntry("www")],
+        "/srv/app": [dirEntry("logs"), fileEntry("a.txt")],
+      });
+
+      renderPanel();
+
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/etc", "/srv", "/srv/app", "/srv/www"]));
+      expect(treeRow("/srv/app")).toHaveAttribute("data-sftp-tree-current", "true");
+      expect(treeRow("/srv")).not.toHaveAttribute("data-sftp-tree-current", "true");
+      expect(within(folderTree()).queryByText("swap.img")).toBeNull();
+      // 当前目录这一层由列表载入,树直接复用缓存,不再为它单独请求。
+      expect(listDirCalls("/srv/app")).toHaveLength(1);
+    });
+
+    it("switches the current directory with a single click on a tree row", async () => {
+      mockDirListings({
+        "/": [dirEntry("etc"), dirEntry("srv")],
+        "/srv": [dirEntry("app")],
+        "/etc": [dirEntry("nginx"), fileEntry("hosts")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toContain("/etc"));
+
+      fireEvent.click(treeRow("/etc"));
+
+      await waitFor(() => expect(screen.getByTestId("sftp-path-input")).toHaveValue("/etc"));
+      expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/etc");
+      expect(await screen.findByText("hosts")).toBeInTheDocument();
+      expect(treeRow("/etc")).toHaveAttribute("data-sftp-tree-current", "true");
+    });
+
+    it("expands a directory from its arrow without changing the current directory", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app"), dirEntry("www")],
+        "/srv/www": [dirEntry("html")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toContain("/srv/www"));
+
+      fireEvent.click(treeToggle("/srv/www"));
+
+      await waitFor(() => expect(treeNames()).toContain("/srv/www/html"));
+      expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/www");
+      expect(screen.getByTestId("sftp-path-input")).toHaveValue("/srv/app");
+    });
+
+    it("follows a directory change made in the list by opening and highlighting it in the tree", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app")],
+        "/srv/app": [dirEntry("logs")],
+        "/srv/app/logs": [fileEntry("access.log")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toContain("/srv/app"));
+
+      fireEvent.doubleClick(rowOf("logs"));
+
+      await waitFor(() => expect(treeNames()).toContain("/srv/app/logs"));
+      expect(treeRow("/srv/app/logs")).toHaveAttribute("data-sftp-tree-current", "true");
+      expect(treeRow("/srv/app")).not.toHaveAttribute("data-sftp-tree-current", "true");
+    });
+
+    it("drops the arrow on a directory whose layer has no subdirectories", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv"), dirEntry("tmp")],
+        "/srv": [dirEntry("app")],
+        "/tmp": [fileEntry("x.sock")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toContain("/tmp"));
+      expect(treeToggle("/tmp")).toBeInTheDocument();
+
+      fireEvent.click(treeToggle("/tmp"));
+
+      await waitFor(() => expect(screen.queryByTestId("sftp-tree-toggle-/tmp")).toBeNull());
+    });
+
+    it("stops at an unreadable ancestor with its reason and a retry, while the list still shows the current directory", async () => {
+      let srvCalls = 0;
+      vi.mocked(SFTPListDir).mockImplementation((_sessionId: string, path: string) => {
+        if (path === "/") return Promise.resolve([dirEntry("srv")]);
+        if (path === "/srv") {
+          srvCalls += 1;
+          return srvCalls === 1 ? Promise.reject(new Error("permission denied")) : Promise.resolve([dirEntry("app")]);
+        }
+        if (path === "/srv/app") return Promise.resolve([fileEntry("a.txt")]);
+        return Promise.resolve([]);
+      });
+      renderPanel();
+
+      const failure = await within(folderTree()).findByText(/permission denied/);
+      expect(failure).toBeInTheDocument();
+      expect(screen.getByText("a.txt")).toBeInTheDocument();
+      expect(treeNames()).not.toContain("/srv/app");
+
+      fireEvent.click(screen.getByTestId("sftp-tree-retry-/srv"));
+
+      await waitFor(() => expect(treeNames()).toContain("/srv/app"));
+      expect(treeRow("/srv/app")).toHaveAttribute("data-sftp-tree-current", "true");
+    });
+
+    it("keeps tree expansion independent from expanding the same directory in the list", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app")],
+        "/srv/app": [dirEntry("logs")],
+        "/srv/app/logs": [dirEntry("old")],
+      });
+      renderPanel();
+      await screen.findByTestId("sftp-expand-/srv/app/logs");
+
+      fireEvent.click(expandToggle("/srv/app/logs"));
+
+      await screen.findByText("old");
+      expect(treeNames()).not.toContain("/srv/app/logs");
+    });
+
+    it("shows and highlights a current directory created after its parent was cached", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [[dirEntry("app")], [dirEntry("app"), dirEntry("new")]],
+        "/srv/app": [fileEntry("a.txt")],
+        "/srv/new": [fileEntry("b.txt")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+
+      const input = screen.getByTestId("sftp-path-input");
+      fireEvent.change(input, { target: { value: "/srv/new" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await screen.findByText("b.txt");
+      await waitFor(() => expect(treeRow("/srv/new")).toHaveAttribute("data-sftp-tree-current", "true"));
+      expect(listDirCalls("/srv")).toHaveLength(2);
+    });
+
+    it("re-reads a stale ancestor only once when the current directory still is not listed there", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app")],
+        "/srv/app": [fileEntry("a.txt")],
+        "/srv/hidden": [fileEntry("b.txt")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+
+      const input = screen.getByTestId("sftp-path-input");
+      fireEvent.change(input, { target: { value: "/srv/hidden" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await screen.findByText("b.txt");
+      await waitFor(() => expect(listDirCalls("/srv")).toHaveLength(2));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(listDirCalls("/srv")).toHaveLength(2);
+    });
+
+    it("re-reads a stale ancestor again when the current directory is revisited after navigating while the tree was hidden", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [
+          [dirEntry("app")],
+          [dirEntry("app"), dirEntry("new")],
+          [dirEntry("app")],
+          [dirEntry("app"), dirEntry("new")],
+        ],
+        "/srv/app": [fileEntry("a.txt")],
+        "/srv/new": [fileEntry("b.txt")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+      const input = screen.getByTestId("sftp-path-input");
+      const navigate = async (path: string, shows: string) => {
+        fireEvent.change(input, { target: { value: path } });
+        fireEvent.keyDown(input, { key: "Enter" });
+        await screen.findByText(shows);
+      };
+
+      await navigate("/srv/new", "b.txt");
+      await waitFor(() => expect(treeRow("/srv/new")).toHaveAttribute("data-sftp-tree-current", "true"));
+
+      // 树收起期间:/srv/new 被删、面板换到 /srv(这次列表里没有 new),之后 new 又被建回来并进入。
+      fireEvent.click(screen.getByRole("button", { name: "sftp.folderTree.toggle" }));
+      await navigate("/srv", "app");
+      await navigate("/srv/new", "b.txt");
+      fireEvent.click(screen.getByRole("button", { name: "sftp.folderTree.toggle" }));
+
+      await waitFor(() => expect(treeRow("/srv/new")).toHaveAttribute("data-sftp-tree-current", "true"));
+      expect(listDirCalls("/srv")).toHaveLength(4);
+    });
+
+    it("keeps the open branches on screen while a refresh is still loading them", async () => {
+      mockDirListings({
+        "/": [[dirEntry("srv")], new Promise<sftp_svc.FileEntry[]>(() => {})],
+        "/srv": [[dirEntry("app")], new Promise<sftp_svc.FileEntry[]>(() => {})],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+
+      fireEvent.click(screen.getByTitle("sftp.refresh"));
+
+      await waitFor(() => expect(listDirCalls("/srv")).toHaveLength(2));
+      expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]);
+    });
+
+    it("shows a directory created by refresh in the tree without collapsing it", async () => {
+      mockDirListings({
+        "/": [[dirEntry("srv")], [dirEntry("opt"), dirEntry("srv")]],
+        "/srv": [dirEntry("app")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+
+      fireEvent.click(screen.getByTitle("sftp.refresh"));
+
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/opt", "/srv", "/srv/app"]));
+    });
+
+    it("does not list the current directory's ancestors while the tree is hidden, and loads them once shown", async () => {
+      useSFTPStore.setState({ folderTreeVisible: false });
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app")],
+        "/srv/app": [fileEntry("a.txt")],
+      });
+      renderPanel();
+      await screen.findByText("a.txt");
+      await act(async () => {});
+
+      expect(listDirCalls("/")).toHaveLength(0);
+      expect(listDirCalls("/srv")).toHaveLength(0);
+
+      fireEvent.click(screen.getByRole("button", { name: "sftp.folderTree.toggle" }));
+
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+    });
+
+    it("does not re-list an open directory that a delete just removed", async () => {
+      vi.mocked(SFTPDelete).mockResolvedValue(undefined as never);
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [[dirEntry("app"), dirEntry("www")], [dirEntry("app")]],
+        "/srv/app": [fileEntry("a.txt")],
+        "/srv/www": [dirEntry("html")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toContain("/srv/www"));
+      fireEvent.click(treeToggle("/srv/www"));
+      await waitFor(() => expect(treeNames()).toContain("/srv/www/html"));
+      fireEvent.contextMenu(treeRow("/srv/www"), { clientX: 24, clientY: 24 });
+      await screen.findByRole("button", { name: "sftp.menu.delete" });
+      await new Promise((resolve) => window.setTimeout(resolve, 175));
+      fireEvent.click(screen.getByRole("button", { name: "sftp.menu.delete" }));
+      fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+      expect(listDirCalls("/srv/www")).toHaveLength(1);
+    });
+  });
+
+  describe("folder tree layout", () => {
+    const panelAt = (width: number) => (
+      <FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={width} onWidthChange={vi.fn()} />
+    );
+    const split = () => screen.getByTestId("sftp-split");
+    const treeNames = () =>
+      Array.from(screen.getByTestId("sftp-folder-tree").querySelectorAll<HTMLElement>("[data-sftp-tree-path]")).map(
+        (row) => row.dataset.sftpTreePath
+      );
+
+    beforeEach(() => {
+      useSFTPStore.setState({ folderTreeVisible: true, folderTreeWidth: 180, folderTreeHeight: null });
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app"), dirEntry("www")],
+        "/srv/www": [dirEntry("html")],
+        "/srv/app": [dirEntry("logs"), fileEntry("a.txt"), fileEntry("b.txt")],
+      });
+    });
+
+    it("places the tree beside the list from 440px and above it when narrower, keeping its expansion", async () => {
+      const { rerender } = render(panelAt(520));
+      expect(split()).toHaveAttribute("data-layout", "side");
+      await waitFor(() => expect(treeNames()).toContain("/srv/www"));
+      fireEvent.click(screen.getByTestId("sftp-tree-toggle-/srv/www"));
+      await waitFor(() => expect(treeNames()).toContain("/srv/www/html"));
+
+      rerender(panelAt(439));
+
+      expect(split()).toHaveAttribute("data-layout", "stacked");
+      expect(treeNames()).toContain("/srv/www/html");
+    });
+
+    it("captions the list with the current directory and its counts only when stacked", async () => {
+      const { rerender } = render(panelAt(280));
+      expect(await screen.findByTestId("sftp-list-caption")).toHaveTextContent("sftp.folderTree.caption");
+
+      rerender(panelAt(520));
+
+      expect(screen.queryByTestId("sftp-list-caption")).toBeNull();
+    });
+
+    it("hides the tree from the path bar toggle and gives the list the whole area", async () => {
+      render(panelAt(280));
+      await screen.findByTestId("sftp-folder-tree");
+
+      fireEvent.click(screen.getByRole("button", { name: "sftp.folderTree.toggle" }));
+
+      expect(screen.queryByTestId("sftp-folder-tree")).toBeNull();
+      expect(screen.queryByTestId("sftp-tree-splitter")).toBeNull();
+      expect(screen.queryByTestId("sftp-list-caption")).toBeNull();
+      expect(screen.getByText("a.txt")).toBeInTheDocument();
+      expect(useSFTPStore.getState().folderTreeVisible).toBe(false);
+    });
+
+    it("resizes the tree width from the side-by-side splitter and stores the result", async () => {
+      render(panelAt(520));
+      const splitter = await screen.findByTestId("sftp-tree-splitter");
+
+      fireEvent.mouseDown(splitter, { clientX: 300 });
+      fireEvent(document, new MouseEvent("mousemove", { clientX: 340 }));
+      fireEvent(document, new MouseEvent("mouseup"));
+
+      expect(useSFTPStore.getState().folderTreeWidth).toBe(220);
+    });
+
+    it.each([
+      ["side", 520, "width", "180px"],
+      ["stacked", 280, "height", "200px"],
+    ] as const)(
+      "keeps the %s tree size when its splitter is clicked without dragging",
+      async (_, width, prop, size) => {
+        useSFTPStore.setState({ folderTreeHeight: 200 });
+        render(panelAt(width));
+        const splitter = await screen.findByTestId("sftp-tree-splitter");
+        const tree = splitter.previousElementSibling as HTMLElement;
+        expect(tree.style[prop]).toBe(size);
+
+        fireEvent.mouseDown(splitter, { clientX: 300, clientY: 300 });
+        fireEvent(document, new MouseEvent("mouseup"));
+
+        expect(tree.style[prop]).toBe(size);
+      }
+    );
+
+    it("never lets the side-by-side tree squeeze the list below its minimum", async () => {
+      render(panelAt(520));
+      const splitter = await screen.findByTestId("sftp-tree-splitter");
+
+      fireEvent.mouseDown(splitter, { clientX: 300 });
+      fireEvent(document, new MouseEvent("mousemove", { clientX: 900 }));
+      fireEvent(document, new MouseEvent("mouseup"));
+
+      expect(useSFTPStore.getState().folderTreeWidth).toBeLessThanOrEqual(520 - 200);
+    });
+
+    it("resizes the tree height from the stacked splitter and stores the result", async () => {
+      useSFTPStore.setState({ folderTreeHeight: 200 });
+      render(panelAt(280));
+      const splitter = await screen.findByTestId("sftp-tree-splitter");
+
+      fireEvent.mouseDown(splitter, { clientY: 300 });
+      fireEvent(document, new MouseEvent("mousemove", { clientY: 250 }));
+      fireEvent(document, new MouseEvent("mouseup"));
+
+      expect(useSFTPStore.getState().folderTreeHeight).toBe(150);
+    });
+
+    it("switches the arrangement the moment a panel drag crosses 440px, before the width is committed", async () => {
+      const onWidthChange = vi.fn();
+      const { container } = render(
+        <FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={onWidthChange} />
+      );
+      await screen.findByTestId("sftp-folder-tree");
+      expect(split()).toHaveAttribute("data-layout", "stacked");
+      const panelHandle = container.querySelector(".cursor-col-resize") as HTMLElement;
+
+      fireEvent.mouseDown(panelHandle, { clientX: 300 });
+      fireEvent(document, new MouseEvent("mousemove", { clientX: 100 }));
+      expect(split()).toHaveAttribute("data-layout", "side");
+      expect(onWidthChange).not.toHaveBeenCalled();
+
+      fireEvent(document, new MouseEvent("mousemove", { clientX: 250 }));
+      expect(split()).toHaveAttribute("data-layout", "stacked");
+      fireEvent(document, new MouseEvent("mouseup"));
+      expect(onWidthChange).toHaveBeenCalledWith(330);
+    });
+  });
+
+  describe("folder tree keyboard and accessibility", () => {
+    beforeEach(() => {
+      useSFTPStore.setState({ folderTreeVisible: true, folderTreeWidth: 180, folderTreeHeight: null });
+      mockDirListings({
+        "/": [dirEntry("etc"), dirEntry("srv")],
+        "/etc": [dirEntry("nginx"), fileEntry("hosts")],
+        "/srv": [dirEntry("app"), dirEntry("www")],
+        "/srv/app": [fileEntry("a.txt")],
+        "/srv/www": [dirEntry("html")],
+      });
+    });
+
+    const item = (name: string) => within(screen.getByRole("tree")).getByRole("treeitem", { name });
+
+    it("exposes a tree whose items report expansion and the current directory as selected", async () => {
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+      await waitFor(() => expect(item("app")).toHaveAttribute("aria-selected", "true"));
+      expect(item("srv")).toHaveAttribute("aria-expanded", "true");
+      expect(item("etc")).toHaveAttribute("aria-expanded", "false");
+      expect(item("srv")).toHaveAttribute("aria-selected", "false");
+      expect(item("app")).toHaveAttribute("aria-level", "3");
+      // 只有一个可 Tab 进入的项:当前目录。
+      expect(
+        within(screen.getByRole("tree"))
+          .getAllByRole("treeitem")
+          .filter((el) => el.tabIndex === 0)
+      ).toEqual([item("app")]);
+    });
+
+    it("moves focus with up/down and expands, enters, collapses and climbs with right/left", async () => {
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await waitFor(() => expect(item("www")).toBeInTheDocument());
+      act(() => item("app").focus());
+
+      fireEvent.keyDown(item("app"), { key: "ArrowDown" });
+      expect(item("www")).toHaveFocus();
+
+      fireEvent.keyDown(item("www"), { key: "ArrowRight" });
+      await waitFor(() => expect(item("www")).toHaveAttribute("aria-expanded", "true"));
+      await waitFor(() => expect(item("html")).toBeInTheDocument());
+      expect(item("www")).toHaveFocus();
+
+      fireEvent.keyDown(item("www"), { key: "ArrowRight" });
+      expect(item("html")).toHaveFocus();
+
+      fireEvent.keyDown(item("html"), { key: "ArrowLeft" });
+      expect(item("www")).toHaveFocus();
+
+      fireEvent.keyDown(item("www"), { key: "ArrowLeft" });
+      expect(item("www")).toHaveAttribute("aria-expanded", "false");
+
+      fireEvent.keyDown(item("www"), { key: "ArrowUp" });
+      fireEvent.keyDown(item("app"), { key: "ArrowUp" });
+      expect(item("srv")).toHaveFocus();
+      expect(screen.getByTestId("sftp-path-input")).toHaveValue("/srv/app");
+    });
+
+    it("switches the current directory with Enter on the focused item", async () => {
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await waitFor(() => expect(item("etc")).toBeInTheDocument());
+      act(() => item("etc").focus());
+
+      fireEvent.keyDown(item("etc"), { key: "Enter" });
+
+      await waitFor(() => expect(screen.getByTestId("sftp-path-input")).toHaveValue("/etc"));
+      expect(item("etc")).toHaveAttribute("aria-selected", "true");
+    });
+  });
+
+  describe("dropping list entries onto the folder tree", () => {
+    const treeRow = (path: string) => screen.getByTestId(`sftp-tree-row-${path}`);
+    const statusBar = () => screen.getByTestId("sftp-status-bar");
+
+    beforeEach(() => {
+      useSFTPStore.setState({ folderTreeVisible: true, folderTreeWidth: 180, folderTreeHeight: null });
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app"), dirEntry("www")],
+        "/srv/app": [dirEntry("logs"), fileEntry("a.txt"), fileEntry("b.txt")],
+      });
+      vi.mocked(SFTPRename).mockResolvedValue(undefined as never);
+    });
+
+    async function renderReady() {
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a.txt");
+      await waitFor(() => expect(treeRow("/srv/www")).toBeInTheDocument());
+    }
+
+    function pointerDrag(source: HTMLElement, target: HTMLElement) {
+      const elementFromPoint = vi.spyOn(document, "elementFromPoint").mockReturnValue(target);
+      fireEvent.pointerDown(source, { button: 0, buttons: 1, clientX: 10, clientY: 10, pointerId: 1 });
+      fireEvent.pointerMove(source, { buttons: 1, clientX: 48, clientY: 48, pointerId: 1 });
+      return {
+        release: () => {
+          fireEvent.pointerUp(source, { button: 0, clientX: 48, clientY: 48, pointerId: 1 });
+          elementFromPoint.mockRestore();
+        },
+      };
+    }
+
+    it("highlights a tree directory under a pointer drag, names the full target in the status bar, and moves on release", async () => {
+      await renderReady();
+
+      const drag = pointerDrag(rowOf("a.txt"), treeRow("/srv/www"));
+
+      expect(treeRow("/srv/www")).toHaveAttribute("data-sftp-tree-drop", "true");
+      expect(within(statusBar()).getByText("sftp.tree.dropHint")).toBeInTheDocument();
+      // 悬停在收起的目录上不会自动展开它。
+      expect(listDirCalls("/srv/www")).toHaveLength(0);
+
+      drag.release();
+
+      await waitFor(() => expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/a.txt", "/srv/www/a.txt"));
+      expect(treeRow("/srv/www")).not.toHaveAttribute("data-sftp-tree-drop");
+    });
+
+    it("moves every selected entry when a multi-selection is dropped on a tree directory", async () => {
+      await renderReady();
+      fireEvent.click(rowOf("a.txt"));
+      fireEvent.click(rowOf("b.txt"), { ctrlKey: true });
+
+      pointerDrag(rowOf("b.txt"), treeRow("/srv/www")).release();
+
+      await waitFor(() => expect(SFTPRename).toHaveBeenCalledTimes(2));
+      expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/a.txt", "/srv/www/a.txt");
+      expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/b.txt", "/srv/www/b.txt");
+    });
+
+    it("accepts an HTML5 drag from the list onto a tree directory", async () => {
+      await renderReady();
+      const dataTransfer = createDragDataTransfer();
+
+      fireEvent.dragStart(rowOf("a.txt"), { dataTransfer });
+      fireEvent.dragOver(treeRow("/srv/www"), { dataTransfer });
+      expect(treeRow("/srv/www")).toHaveAttribute("data-sftp-tree-drop", "true");
+      fireEvent.drop(treeRow("/srv/www"), { dataTransfer });
+
+      await waitFor(() => expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/app/a.txt", "/srv/www/a.txt"));
+    });
+
+    it("refuses the entry's own directory and a directory onto itself", async () => {
+      await renderReady();
+
+      const ownDir = pointerDrag(rowOf("a.txt"), treeRow("/srv/app"));
+      expect(treeRow("/srv/app")).not.toHaveAttribute("data-sftp-tree-drop");
+      expect(within(statusBar()).queryByText("sftp.tree.dropHint")).toBeNull();
+      ownDir.release();
+
+      fireEvent.click(screen.getByTestId("sftp-tree-toggle-/srv/app"));
+      await waitFor(() => expect(screen.getByTestId("sftp-tree-row-/srv/app/logs")).toBeInTheDocument());
+      const listLogs = document.querySelector<HTMLElement>(
+        '[data-sftp-entry-row][data-sftp-entry-path="/srv/app/logs"]'
+      ) as HTMLElement;
+      const self = pointerDrag(listLogs, treeRow("/srv/app/logs"));
+      expect(treeRow("/srv/app/logs")).not.toHaveAttribute("data-sftp-tree-drop");
+      self.release();
+
+      expect(SFTPRename).not.toHaveBeenCalled();
+    });
+
+    it("asks about a same-name target before moving onto a tree directory", async () => {
+      mockTargetStats({ "/srv/www/a.txt": existingFile("/srv/www/a.txt", "/srv/www/a (1).txt") });
+      await renderReady();
+
+      pointerDrag(rowOf("a.txt"), treeRow("/srv/www")).release();
+
+      expect(await screen.findByTestId("file-conflict-dialog")).toBeInTheDocument();
+      expect(SFTPRename).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("folder tree context menu", () => {
+    const treeRow = (path: string) => screen.getByTestId(`sftp-tree-row-${path}`);
+    const menuItem = (name: string) => screen.findByRole("button", { name });
+    const pathInput = () => screen.getByTestId("sftp-path-input");
+
+    beforeEach(() => {
+      useSFTPStore.setState({ folderTreeVisible: true, folderTreeWidth: 180, folderTreeHeight: null });
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app"), dirEntry("www")],
+        "/srv/app": [fileEntry("a.txt"), fileEntry("b.txt")],
+        "/srv/api": [fileEntry("a.txt")],
+      });
+      vi.mocked(SFTPRename).mockResolvedValue(undefined as never);
+      vi.mocked(SFTPDelete).mockResolvedValue(undefined as never);
+    });
+
+    async function openTreeMenu(path: string) {
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+      await screen.findByText("a.txt");
+      await waitFor(() => expect(treeRow(path)).toBeInTheDocument());
+      return () => fireEvent.contextMenu(treeRow(path), { clientX: 24, clientY: 24 });
+    }
+
+    async function choose(name: string) {
+      await menuItem(name);
+      await new Promise((resolve) => window.setTimeout(resolve, 175));
+      fireEvent.click(screen.getByRole("button", { name }));
+    }
+
+    it("offers the single-directory menu for the clicked tree row regardless of the list selection", async () => {
+      const open = await openTreeMenu("/srv/www");
+      fireEvent.click(rowOf("a.txt"));
+      fireEvent.click(rowOf("b.txt"), { ctrlKey: true });
+
+      open();
+
+      expect(await menuItem("sftp.menu.downloadFolder")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "sftp.menu.deleteSelected" })).toBeNull();
+      await choose("sftp.menu.delete");
+      fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+
+      await waitFor(() => expect(SFTPDelete).toHaveBeenCalledWith("s1", "/srv/www", true));
+      expect(SFTPDelete).toHaveBeenCalledTimes(1);
+    });
+
+    it("renames a directory inline in its tree row", async () => {
+      const open = await openTreeMenu("/srv/www");
+      open();
+      await choose("sftp.menu.rename");
+
+      const input = within(treeRow("/srv/www")).getByRole("textbox");
+      fireEvent.change(input, { target: { value: "web" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => expect(SFTPRename).toHaveBeenCalledWith("s1", "/srv/www", "/srv/web"));
+      expect(pathInput()).toHaveValue("/srv/app");
+    });
+
+    it("follows the current directory to its new name after renaming it from the tree", async () => {
+      const open = await openTreeMenu("/srv/app");
+      open();
+      await choose("sftp.menu.rename");
+
+      const input = within(treeRow("/srv/app")).getByRole("textbox");
+      fireEvent.change(input, { target: { value: "api" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => expect(pathInput()).toHaveValue("/srv/api"));
+      expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv/api");
+    });
+
+    it("moves to the nearest surviving ancestor after deleting an ancestor of the current directory", async () => {
+      const open = await openTreeMenu("/srv");
+      open();
+      await choose("sftp.menu.delete");
+      fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+
+      await waitFor(() => expect(SFTPDelete).toHaveBeenCalledWith("s1", "/srv", true));
+      await waitFor(() => expect(pathInput()).toHaveValue("/"));
+    });
+
+    it("pastes into the directory of the tree row the menu was opened on", async () => {
+      const open = await openTreeMenu("/srv/www");
+      fireEvent.contextMenu(rowOf("a.txt"), { clientX: 24, clientY: 24 });
+      await choose("sftp.menu.cut");
+
+      open();
+      await choose("sftp.menu.paste");
+
+      await waitFor(() => expect(SFTPPaste).toHaveBeenCalledTimes(1));
+      const req = vi.mocked(SFTPPaste).mock.calls[0][0];
+      expect(req.targetDir).toBe("/srv/www");
+      expect(req.items).toEqual([{ sessionId: "s1", path: "/srv/app/a.txt", isDir: false, targetName: "a.txt" }]);
+      expect(pathInput()).toHaveValue("/srv/app");
+    });
+
+    it("moves to the nearest surviving ancestor after moving the current directory away from the tree", async () => {
+      const open = await openTreeMenu("/srv/app");
+      open();
+      await choose("sftp.menu.cut");
+
+      fireEvent.contextMenu(treeRow("/srv/www"), { clientX: 24, clientY: 24 });
+      await choose("sftp.menu.paste");
+
+      await waitFor(() => expect(SFTPPaste).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(SFTPPaste).mock.calls[0][0].targetDir).toBe("/srv/www");
+      await waitFor(() => expect(pathInput()).toHaveValue("/srv"));
+      expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/srv");
+    });
+
+    describe("with terminal follow enabled", () => {
+      beforeEach(() => {
+        useTerminalStore.getState().setDirectoryFollowMode("tab1", "always");
+        // 真实后端在终端 cd 完成后才回报新的 cwd:ChangeSSHDirectory 这里同步更新 sessionSync。
+        vi.mocked(ChangeSSHDirectory).mockImplementation(async (_sessionId: string, path: string) => {
+          useTerminalStore.getState().setSessionSyncState("s1", makeSyncState({ cwd: path }));
+        });
+      });
+
+      function goneAfterChange(path: string) {
+        let gone = false;
+        const listing = vi.mocked(SFTPListDir).getMockImplementation()!;
+        vi.mocked(SFTPListDir).mockImplementation((sessionId: string, dir: string) =>
+          gone && dir === path ? Promise.reject(new Error("file does not exist")) : listing(sessionId, dir)
+        );
+        return () => {
+          gone = true;
+        };
+      }
+
+      it("moves the terminal and the panel to the parent without a failed reload after deleting the current directory", async () => {
+        const open = await openTreeMenu("/srv/app");
+        const markGone = goneAfterChange("/srv/app");
+        vi.mocked(SFTPDelete).mockImplementation(async () => markGone());
+        open();
+        await choose("sftp.menu.delete");
+        fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+
+        await waitFor(() => expect(pathInput()).toHaveValue("/srv"));
+        expect(ChangeSSHDirectory).toHaveBeenCalledWith("s1", "/srv");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(screen.queryByText("sftp.loadError")).toBeNull();
+        expect(pathInput()).toHaveValue("/srv");
+      });
+
+      it("moves the terminal and the panel to the new name without a failed reload after renaming the current directory", async () => {
+        const open = await openTreeMenu("/srv/app");
+        const markGone = goneAfterChange("/srv/app");
+        vi.mocked(SFTPRename).mockImplementation(async () => markGone());
+        open();
+        await choose("sftp.menu.rename");
+        const input = within(treeRow("/srv/app")).getByRole("textbox");
+        fireEvent.change(input, { target: { value: "api" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        await waitFor(() => expect(pathInput()).toHaveValue("/srv/api"));
+        expect(ChangeSSHDirectory).toHaveBeenCalledWith("s1", "/srv/api");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(screen.queryByText("sftp.loadError")).toBeNull();
+        expect(pathInput()).toHaveValue("/srv/api");
+      });
+
+      it("turns follow off and still moves the panel when the terminal cannot cd out of the deleted directory", async () => {
+        vi.mocked(ChangeSSHDirectory).mockRejectedValue(new Error("terminal busy"));
+        const open = await openTreeMenu("/srv/app");
+        const markGone = goneAfterChange("/srv/app");
+        vi.mocked(SFTPDelete).mockImplementation(async () => markGone());
+        open();
+        await choose("sftp.menu.delete");
+        fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+
+        await waitFor(() => expect(pathInput()).toHaveValue("/srv"));
+        expect(ChangeSSHDirectory).toHaveBeenCalledWith("s1", "/srv");
+        expect(useTerminalStore.getState().tabData.tab1.directoryFollowMode).toBe("off");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(screen.queryByText("sftp.loadError")).toBeNull();
+        expect(pathInput()).toHaveValue("/srv");
+      });
+
+      it("moves the terminal too when follow is turned on while deleting the current directory is still running", async () => {
+        useTerminalStore.getState().setDirectoryFollowMode("tab1", "off");
+        const open = await openTreeMenu("/srv/app");
+        const markGone = goneAfterChange("/srv/app");
+        let finishDelete!: () => void;
+        vi.mocked(SFTPDelete).mockImplementation(
+          () =>
+            new Promise<void>((resolve) => {
+              finishDelete = () => {
+                markGone();
+                resolve();
+              };
+            })
+        );
+        open();
+        await choose("sftp.menu.delete");
+        fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+        await waitFor(() => expect(SFTPDelete).toHaveBeenCalledWith("s1", "/srv/app", true));
+
+        act(() => useTerminalStore.getState().setDirectoryFollowMode("tab1", "always"));
+        await act(async () => finishDelete());
+
+        await waitFor(() => expect(ChangeSSHDirectory).toHaveBeenCalledWith("s1", "/srv"));
+        await waitFor(() => expect(pathInput()).toHaveValue("/srv"));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(screen.queryByText("sftp.loadError")).toBeNull();
+        expect(pathInput()).toHaveValue("/srv");
+      });
+    });
+
+    it("stays put and reports the error when deleting the current directory fails", async () => {
+      vi.mocked(SFTPDelete).mockRejectedValue(new Error("directory not empty"));
+      const open = await openTreeMenu("/srv/app");
+      open();
+      await choose("sftp.menu.delete");
+      fireEvent.click(await screen.findByRole("button", { name: "action.delete" }));
+
+      expect(await screen.findByText(/directory not empty/)).toBeInTheDocument();
+      expect(pathInput()).toHaveValue("/srv/app");
     });
   });
 });

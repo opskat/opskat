@@ -356,3 +356,35 @@ describe("sftpStore", () => {
     });
   });
 });
+
+describe("sftpStore folder tree layout", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.resetModules();
+  });
+
+  it("shows the folder tree by default and keeps toggles across a restart", async () => {
+    const first = (await import("../stores/sftpStore")).useSFTPStore;
+    expect(first.getState().folderTreeVisible).toBe(true);
+
+    first.getState().toggleFolderTree();
+    expect(first.getState().folderTreeVisible).toBe(false);
+
+    vi.resetModules();
+    const restarted = (await import("../stores/sftpStore")).useSFTPStore;
+    expect(restarted.getState().folderTreeVisible).toBe(false);
+  });
+
+  it("remembers both split positions across a restart", async () => {
+    const first = (await import("../stores/sftpStore")).useSFTPStore;
+    expect(first.getState().folderTreeHeight).toBeNull();
+
+    first.getState().setFolderTreeWidth(240);
+    first.getState().setFolderTreeHeight(310);
+
+    vi.resetModules();
+    const restarted = (await import("../stores/sftpStore")).useSFTPStore;
+    expect(restarted.getState().folderTreeWidth).toBe(240);
+    expect(restarted.getState().folderTreeHeight).toBe(310);
+  });
+});

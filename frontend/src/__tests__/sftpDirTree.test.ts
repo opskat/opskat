@@ -3,7 +3,11 @@ import { sftp_svc } from "../../wailsjs/go/models";
 import {
   addExpandedPath,
   collapseSingleChildChains,
+  flattenFolderTree,
   flattenSftpTree,
+  folderRevealPaths,
+  rebaseCurrentPath,
+  staleRevealLayers,
   SFTP_EXPANDED_PATH_LIMIT,
   type SftpTreeNode,
 } from "../lib/sftpDirTree";
@@ -231,5 +235,175 @@ describe("addExpandedPath", () => {
 
     expect([...expanded]).toEqual(["/a"]);
     expect([...next]).toEqual(["/a", "/b"]);
+  });
+});
+
+describe("flattenFolderTree", () => {
+  it("starts at / and lists only the directories of each expanded layer", () => {
+    const tree = {
+      "/": node([entry("swap.img"), entry("var", true), entry("etc", true)]),
+      "/etc": node([entry("hosts"), entry("nginx", true)]),
+      "/var": node([entry("log", true)]),
+    };
+
+    const rows = flattenFolderTree(tree, new Set(["/", "/etc"]));
+
+    expect(rows.map((row) => [row.path, row.name, row.depth])).toEqual([
+      ["/", "/", 0],
+      ["/etc", "etc", 1],
+      ["/etc/nginx", "nginx", 2],
+      ["/var", "var", 1],
+    ]);
+    expect(rows.map((row) => row.expanded)).toEqual([true, true, false, false]);
+  });
+
+  it("drops the arrow only for a directory whose loaded layer has no subdirectories", () => {
+    const tree = {
+      "/": node([entry("etc", true), entry("tmp", true), entry("var", true)]),
+      "/tmp": node([entry("a.txt")]),
+      "/var": node([entry("log", true)]),
+    };
+
+    const rows = flattenFolderTree(tree, new Set(["/"]));
+
+    expect(rows.filter((row) => row.depth === 1).map((row) => [row.name, row.leaf])).toEqual([
+      ["etc", false],
+      ["tmp", true],
+      ["var", false],
+    ]);
+  });
+
+  it("shows a loading row under an expanded directory that has not loaded yet", () => {
+    const tree = {
+      "/": node([entry("var", true)]),
+      "/var": node([], { loaded: false, loading: true }),
+    };
+
+    const rows = flattenFolderTree(tree, new Set(["/", "/var"]));
+
+    expect(rows[1]).toMatchObject({ path: "/var", loading: true, state: "dir" });
+    expect(rows[2]).toMatchObject({ state: "loading", depth: 2, path: "/var" });
+  });
+
+  it("shows a loading row for / itself before its first layer arrives", () => {
+    const rows = flattenFolderTree({}, new Set(["/"]));
+
+    expect(rows.map((row) => [row.state, row.path, row.depth])).toEqual([
+      ["dir", "/", 0],
+      ["loading", "/", 1],
+    ]);
+  });
+
+  it("keeps a failed layer as an error row with its reason while siblings stay listed", () => {
+    const tree = {
+      "/": node([entry("root", true), entry("srv", true)]),
+      "/root": node([], { loaded: false, error: "permission denied" }),
+    };
+
+    const rows = flattenFolderTree(tree, new Set(["/", "/root"]));
+
+    expect(rows.map((row) => [row.state, row.path])).toEqual([
+      ["dir", "/"],
+      ["dir", "/root"],
+      ["error", "/root"],
+      ["dir", "/srv"],
+    ]);
+    expect(rows[2].message).toBe("permission denied");
+  });
+
+  it("keeps cached subdirectories visible and appends the error when a refresh of that layer fails", () => {
+    const tree = {
+      "/": node([entry("etc", true)]),
+      "/etc": node([entry("nginx", true)], { error: "connection lost" }),
+    };
+
+    const rows = flattenFolderTree(tree, new Set(["/", "/etc"]));
+
+    expect(rows.map((row) => [row.state, row.path])).toEqual([
+      ["dir", "/"],
+      ["dir", "/etc"],
+      ["dir", "/etc/nginx"],
+      ["error", "/etc"],
+    ]);
+  });
+});
+
+describe("folderRevealPaths", () => {
+  it("returns / plus every ancestor above the current directory, not the directory itself", () => {
+    expect(folderRevealPaths("/etc/nginx/conf.d")).toEqual(["/", "/etc", "/etc/nginx"]);
+  });
+
+  it("expands / itself when / is the current directory", () => {
+    expect(folderRevealPaths("/")).toEqual(["/"]);
+  });
+
+  it("expands only / for a top-level directory", () => {
+    expect(folderRevealPaths("/srv")).toEqual(["/"]);
+  });
+});
+
+describe("rebaseCurrentPath", () => {
+  it("leaves the current directory alone when the change is elsewhere or below it", () => {
+    expect(rebaseCurrentPath("/srv/app", [{ from: "/srv/www", to: null }])).toBeNull();
+    expect(rebaseCurrentPath("/srv/app", [{ from: "/srv/app/logs", to: "/srv/app/old" }])).toBeNull();
+    expect(rebaseCurrentPath("/srv/app", [{ from: "/srv/ap", to: null }])).toBeNull();
+  });
+
+  it("moves to the parent of a deleted current directory or ancestor", () => {
+    expect(rebaseCurrentPath("/srv/app", [{ from: "/srv/app", to: null }])).toBe("/srv");
+    expect(rebaseCurrentPath("/srv/app/logs", [{ from: "/srv", to: null }])).toBe("/");
+  });
+
+  it("keeps climbing when several deleted directories are nested", () => {
+    expect(
+      rebaseCurrentPath("/a/b/c", [
+        { from: "/a/b", to: null },
+        { from: "/a", to: null },
+      ])
+    ).toBe("/");
+  });
+
+  it("follows a renamed or moved current directory or ancestor to its new place", () => {
+    expect(rebaseCurrentPath("/srv/app", [{ from: "/srv/app", to: "/srv/api" }])).toBe("/srv/api");
+    expect(rebaseCurrentPath("/srv/app/logs", [{ from: "/srv", to: "/opt/srv" }])).toBe("/opt/srv/app/logs");
+  });
+});
+
+describe("staleRevealLayers", () => {
+  it("names a loaded ancestor whose listing lacks the next directory on the way to the current one", () => {
+    const tree = {
+      "/": node([entry("srv", true)]),
+      "/srv": node([entry("app", true)]),
+    };
+
+    expect(staleRevealLayers(tree, "/srv/new")).toEqual(["/srv"]);
+  });
+
+  it("ignores ancestors that already list the next directory, and layers not loaded yet", () => {
+    const tree = {
+      "/": node([entry("srv", true)]),
+      "/srv": node([], { loaded: false, loading: true }),
+    };
+
+    expect(staleRevealLayers(tree, "/srv/app")).toEqual([]);
+  });
+
+  it("skips a loaded ancestor whose background refresh is still in flight", () => {
+    const tree = {
+      "/": node([entry("srv", true)]),
+      "/srv": node([entry("app", true)], { loading: true }),
+    };
+
+    expect(staleRevealLayers(tree, "/srv/new")).toEqual([]);
+  });
+
+  it("treats a same-named file as missing the directory", () => {
+    const tree = { "/": node([entry("srv")]) };
+
+    expect(staleRevealLayers(tree, "/srv")).toEqual(["/"]);
+  });
+
+  it("has nothing to check when / is the current directory", () => {
+    expect(staleRevealLayers({ "/": node([]) }, "/")).toEqual([]);
   });
 });

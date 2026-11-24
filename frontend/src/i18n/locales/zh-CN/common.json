@@ -2695,7 +2695,13 @@
       "nonceFailed": "无法启动已验证的目录切换"
     },
     "clearCompleted": "清除已完成",
-    "showInFolder": "打开所在目录"
+    "showInFolder": "打开所在目录",
+    "folderTree": {
+      "label": "目录树",
+      "toggle": "目录树",
+      "caption": "{{name}} · {{files}} 个文件，{{dirs}} 个文件夹",
+      "resize": "调整目录树大小"
+    }
   },
   "error": {
     "boundary": {

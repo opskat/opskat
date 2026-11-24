@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { ArrowUp, FolderSync, Home, RefreshCw } from "lucide-react";
+import { ArrowUp, FolderSync, FolderTree, Home, RefreshCw } from "lucide-react";
 import {
   Button,
   DropdownMenu,
@@ -17,6 +17,7 @@ interface PathToolbarProps {
   activeSyncMode: DirectorySyncMenuMode;
   currentPath: string;
   directoryFollowMode: TerminalDirectoryFollowMode;
+  folderTreeVisible: boolean;
   onFollowToggle: () => void;
   onGoHome: () => void;
   onGoUp: () => void;
@@ -25,6 +26,7 @@ interface PathToolbarProps {
   onRefresh: () => void;
   onSyncPanelFromTerminal: () => void;
   onSyncTerminalToPath: () => void;
+  onToggleFolderTree: () => void;
   paneConnected: boolean;
   pathInput: string;
 }
@@ -33,6 +35,7 @@ export function PathToolbar({
   activeSyncMode,
   currentPath,
   directoryFollowMode,
+  folderTreeVisible,
   onFollowToggle,
   onGoHome,
   onGoUp,
@@ -41,6 +44,7 @@ export function PathToolbar({
   onRefresh,
   onSyncPanelFromTerminal,
   onSyncTerminalToPath,
+  onToggleFolderTree,
   paneConnected,
   pathInput,
 }: PathToolbarProps) {
@@ -49,6 +53,17 @@ export function PathToolbar({
 
   return (
     <div className="flex items-center gap-0.5 px-1 py-1 border-b shrink-0">
+      <Button
+        variant={folderTreeVisible ? "secondary" : "ghost"}
+        size="icon-xs"
+        title={t("sftp.folderTree.toggle")}
+        aria-label={t("sftp.folderTree.toggle")}
+        aria-pressed={folderTreeVisible}
+        data-testid="sftp-folder-tree-toggle"
+        onClick={onToggleFolderTree}
+      >
+        <FolderTree className="h-3.5 w-3.5" />
+      </Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button

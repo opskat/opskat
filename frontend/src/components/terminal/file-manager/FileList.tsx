@@ -1,7 +1,7 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight, File, Folder, Loader2 } from "lucide-react";
-import { Button, cn, Input, ScrollArea } from "@opskat/ui";
+import { Button, cn, ScrollArea } from "@opskat/ui";
 import { sftp_svc } from "../../../../wailsjs/go/models";
 import {
   collapseSingleChildChains,
@@ -20,9 +20,11 @@ import {
   getPathBaseName,
   indentForDepth,
   planChainRender,
-  splitNameForRename,
   treeGuideLines,
 } from "./utils";
+import { dropTargetPathOf, readDraggedPaths, SFTP_DRAG_PATHS_MIME, type SftpDropTarget } from "./dragDrop";
+import { RenameInput } from "./RenameInput";
+import { useElementSize } from "./useElementSize";
 
 function indentStyle(depth: number, panelWidth: number) {
   return { paddingLeft: indentForDepth(depth, panelWidth) };
@@ -33,25 +35,13 @@ const DEFAULT_PANEL_WIDTH_PX = 280;
 
 /**
  * 缩进封顶要按面板"当前"宽度算,而宽度只有父级容器的渲染尺寸知道 —— 面板可拖拽调宽
- * (useResizeHandle),用 ResizeObserver 跟着容器盒子实测,而不是让父组件把 width 状态
- * 透传下来:调用方不用为了这一层缩进细节多接一个 prop,拖宽面板时也能跟着重新封顶。
+ * (useResizeHandle),跟着容器盒子实测,而不是让父组件把 width 状态透传下来:调用方不用
+ * 为了这一层缩进细节多接一个 prop,拖宽面板或拖动目录树分隔条时也能跟着重新封顶。
  */
+const PANEL_SIZE_FALLBACK = { width: DEFAULT_PANEL_WIDTH_PX, height: 0 };
 function usePanelWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
-  const ref = useRef<T | null>(null);
-  const [width, setWidth] = useState(DEFAULT_PANEL_WIDTH_PX);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => {
-      const rect = el.getBoundingClientRect();
-      if (rect.width > 0) setWidth(rect.width);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-  return [ref, width];
+  const [ref, size] = useElementSize<T>(PANEL_SIZE_FALLBACK);
+  return [ref, size.width];
 }
 
 /**
@@ -134,52 +124,6 @@ function middleEllipsisName(name: string, depth: number, panelWidth: number, chr
   return `${name.slice(0, head)}…${name.slice(name.length - tail)}`;
 }
 
-/**
- * 拖拽事件的实际落点:从事件目标向上找最近的目录标记 —— 折叠链的每一段都各自携带这份标记
- * (仅当它自己是目录时才带 dir="true"),因此深层目录与链上的某一段都能被精确命中,而不是
- * 永远退回外层行代表的最深一段。命中不到目录就是 null,调用方必须当作"这里不能放"处理,
- * 不能退回行的路径 —— 否则会把文件行也当成合法落点。
- */
-function resolveDropTargetPath(target: EventTarget | null): string | null {
-  if (!(target instanceof Element)) return null;
-  const hit = target.closest<HTMLElement>('[data-sftp-entry-dir="true"][data-sftp-entry-path]');
-  return hit?.dataset.sftpEntryPath ?? null;
-}
-
-interface RenameInputProps {
-  initialName: string;
-  onCommit: (name: string) => void;
-  onCancel: () => void;
-}
-
-function RenameInput({ initialName, onCommit, onCancel }: RenameInputProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [value, setValue] = useState(initialName);
-
-  useEffect(() => {
-    const input = inputRef.current;
-    if (!input) return;
-    const range = splitNameForRename(initialName);
-    input.focus();
-    input.setSelectionRange(0, range.stemLength);
-  }, [initialName]);
-
-  return (
-    <Input
-      ref={inputRef}
-      value={value}
-      className="h-5 flex-1 border-0 bg-background px-1 text-xs shadow-none focus-visible:ring-1"
-      onChange={(e) => setValue(e.target.value)}
-      onBlur={onCancel}
-      onClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") onCommit(value);
-        if (e.key === "Escape") onCancel();
-      }}
-    />
-  );
-}
-
 interface FileListProps {
   canExternalEdit?: (entry: sftp_svc.FileEntry) => boolean;
   clipboardCutPaths: Set<string>;
@@ -200,6 +144,10 @@ interface FileListProps {
   rows: SftpTreeRow[];
   selected: string[];
   setSelected: (next: string[] | ((prev: string[]) => string[])) => void;
+  /** 拖动状态由面板持有:落点可能在目录树上,状态栏也要读落点说明。 */
+  draggedPathsRef: React.RefObject<string[]>;
+  dropTarget: SftpDropTarget | null;
+  setDropTarget: (next: SftpDropTarget | null) => void;
 }
 
 export function FileList({
@@ -222,6 +170,9 @@ export function FileList({
   rows,
   selected,
   setSelected,
+  draggedPathsRef,
+  dropTarget,
+  setDropTarget,
 }: FileListProps) {
   const { t } = useTranslation();
   const [containerRef, panelWidth] = usePanelWidth<HTMLDivElement>();
@@ -358,7 +309,6 @@ export function FileList({
   }, [selected]);
 
   const lastClickedRef = useRef<number | null>(null);
-  const draggedPathsRef = useRef<string[]>([]);
   const pointerDragRef = useRef<{
     dragging: boolean;
     pointerId: number;
@@ -368,16 +318,6 @@ export function FileList({
     startY: number;
   } | null>(null);
   const suppressNextClickRef = useRef(false);
-  // 落点连同"会搬多少个条目"一起存:高亮之外还要在落点上说清这一放会执行什么。
-  const [dropTarget, setDropTargetState] = useState<{ path: string; count: number } | null>(null);
-  // dragover 每帧都在触发:落点没变就必须交回同一个对象,否则每一帧都换 prop 标识,
-  // 把整目录所有行的 memo 全部打掉(和上面 selected 那一处同一个坑)。
-  const setDropTarget = useCallback((next: { path: string; count: number } | null) => {
-    setDropTargetState((prev) => {
-      if (!prev || !next) return prev === next ? prev : next;
-      return prev.path === next.path && prev.count === next.count ? prev : next;
-    });
-  }, []);
   const slowClickRef = useRef<{ path: string; time: number; timer: number | null }>({ path: "", time: 0, timer: null });
 
   const entryPathsRef = useRef(entryPaths);
@@ -447,17 +387,10 @@ export function FileList({
     return target instanceof Element && !!target.closest("[data-sftp-entry-row]");
   };
 
-  const getDragPaths = useCallback((event: React.DragEvent) => {
-    if (draggedPathsRef.current.length) return draggedPathsRef.current;
-    const raw = event.dataTransfer.getData("application/x-opskat-sftp-paths");
-    if (!raw) return [];
-    try {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
-    } catch {
-      return [];
-    }
-  }, []);
+  const getDragPaths = useCallback(
+    (event: React.DragEvent) => readDraggedPaths(event, draggedPathsRef.current),
+    [draggedPathsRef]
+  );
 
   const getMovableDragPaths = useCallback(
     (event: React.DragEvent, targetDirPath: string) =>
@@ -466,11 +399,9 @@ export function FileList({
   );
 
   const getPointerDropTarget = useCallback((clientX: number, clientY: number, sourcePaths: string[]) => {
-    const target = document.elementFromPoint(clientX, clientY);
     // 只认 dir + path 这对标记,不要求 entry-row:折叠链里每一段都单独携带它们,
-    // 这样悬停在链的某一段上也能精确命中那一段,而不是永远退回外层行代表的最深一段。
-    const hit = target?.closest<HTMLElement>('[data-sftp-entry-dir="true"][data-sftp-entry-path]');
-    const targetPath = hit?.dataset.sftpEntryPath;
+    // 这样悬停在链的某一段上也能精确命中那一段;目录树行同样是合法落点。
+    const targetPath = dropTargetPathOf(document.elementFromPoint(clientX, clientY));
     if (!targetPath) return null;
     const movable = sourcePaths.filter((path) => canMovePathToDirectory(path, targetPath));
     return movable.length ? { path: targetPath, count: movable.length } : null;
@@ -480,7 +411,7 @@ export function FileList({
     draggedPathsRef.current = [];
     pointerDragRef.current = null;
     setDropTarget(null);
-  }, [setDropTarget]);
+  }, [draggedPathsRef, setDropTarget]);
 
   const beginPointerDrag = useCallback((path: string, event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey) return;
@@ -573,6 +504,7 @@ export function FileList({
       beginPointerDrag,
       clearDragState,
       commitRename,
+      draggedPathsRef,
       endPointerDrag,
       getMovableDragPaths,
       maybeStartSlowRename,
@@ -728,7 +660,7 @@ interface FileRowHandlers {
   draggedPathsRef: React.RefObject<string[]>;
   suppressNextClickRef: React.RefObject<boolean>;
   getMovableDragPaths: (event: React.DragEvent, targetDirPath: string) => string[];
-  setDropTarget: (target: { path: string; count: number } | null) => void;
+  setDropTarget: (target: SftpDropTarget | null) => void;
   clearDragState: () => void;
   beginPointerDrag: (path: string, event: React.PointerEvent<HTMLElement>) => void;
   updatePointerDrag: (event: React.PointerEvent<HTMLElement>) => void;
@@ -743,7 +675,7 @@ interface FileRowProps {
   isRenaming: boolean;
   /** 自己被选中,或它是某个选中行的祖先 —— 参考线与目录行一起高亮,深层也能看出挂在谁下面。 */
   isLineage: boolean;
-  dropTarget: { path: string; count: number } | null;
+  dropTarget: SftpDropTarget | null;
   panelWidth: number;
   h: FileRowHandlers;
 }
@@ -814,13 +746,13 @@ const FileRow = memo(function FileRow({
         const paths = sel.includes(fullPath) ? sel : [fullPath];
         draggedPathsRef.current = paths;
         e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("application/x-opskat-sftp-paths", JSON.stringify(paths));
+        e.dataTransfer.setData(SFTP_DRAG_PATHS_MIME, JSON.stringify(paths));
         e.dataTransfer.setData("text/plain", fullPath);
         if (!sel.includes(fullPath)) h.setSelected([fullPath]);
       }}
       onDragEnd={h.clearDragState}
       onDragOver={(e) => {
-        const targetPath = resolveDropTargetPath(e.target);
+        const targetPath = dropTargetPathOf(e.target);
         const movable = targetPath ? h.getMovableDragPaths(e, targetPath) : [];
         if (!targetPath || !movable.length) return;
         e.preventDefault();
@@ -833,7 +765,7 @@ const FileRow = memo(function FileRow({
         if (isDropTarget) h.setDropTarget(null);
       }}
       onDrop={(e) => {
-        const targetPath = resolveDropTargetPath(e.target);
+        const targetPath = dropTargetPathOf(e.target);
         const sourcePaths = targetPath ? h.getMovableDragPaths(e, targetPath) : [];
         if (!targetPath || !sourcePaths.length) return;
         e.preventDefault();

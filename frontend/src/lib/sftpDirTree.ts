@@ -2,7 +2,7 @@
 // tree + expanded 展平成带缩进的渲染行（借 ossPrefixTree.flattenPrefixTree 的
 // 「tree record + expanded set + 每节点 loaded」范式，不像 redisKeyTree 那样一次性全量建树）。
 import { sftp_svc } from "../../wailsjs/go/models";
-import { getChildPath, sortEntries } from "@/components/terminal/file-manager/utils";
+import { getChildPath, getParentPath, sortEntries } from "@/components/terminal/file-manager/utils";
 
 export interface SftpTreeNode {
   entries: sftp_svc.FileEntry[];
@@ -179,4 +179,135 @@ export function collapseSingleChildChains(rows: SftpTreeRow[]): SftpTreeDisplayR
   const topLevel = rows.map((_, idx) => idx).filter((idx) => rows[idx].depth === 0);
   processSiblings(topLevel, 0);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// 目录树（文件面板里与列表并排的那棵）：根恒为 /，只列目录。与列表共用同一份按目录的条目
+// 缓存（tree），展开集合各自独立——列表里就地展开某个子目录，不意味着用户想在树上展开它。
+// ---------------------------------------------------------------------------
+
+/** dir=目录行；loading/error 是某个已展开目录的子层占位行（path 为该目录，用来重试）。 */
+export type FolderTreeRowState = "dir" | "loading" | "error";
+
+export interface FolderTreeRow {
+  depth: number;
+  path: string;
+  name: string;
+  /** 目录行在父层里的条目(右键菜单、重命名要用);根 / 与占位行没有。 */
+  entry: sftp_svc.FileEntry | null;
+  state: FolderTreeRowState;
+  expanded: boolean;
+  /** 目录行的子层正在请求（含后台刷新）。 */
+  loading: boolean;
+  /** 子层已加载且没有任何子目录：不画展开箭头（有没有文件看列表即可）。 */
+  leaf: boolean;
+  message: string | null;
+}
+
+export const FOLDER_TREE_ROOT = "/";
+
+function folderPlaceholder(dirPath: string, depth: number, state: FolderTreeRowState, message: string | null) {
+  return { depth, path: dirPath, name: "", entry: null, state, expanded: true, loading: false, leaf: false, message };
+}
+
+function hasSubdirectories(node: SftpTreeNode): boolean {
+  return node.entries.some((entry) => entry.isDir);
+}
+
+/** 把 / 及其所有已展开的层展平成目录树的渲染行（深度优先，父行在前，只含目录）。 */
+export function flattenFolderTree(tree: Record<string, SftpTreeNode>, expanded: Set<string>): FolderTreeRow[] {
+  const rows: FolderTreeRow[] = [];
+
+  const pushDir = (
+    path: string,
+    name: string,
+    entry: sftp_svc.FileEntry | null,
+    depth: number,
+    ancestors: Set<string>
+  ) => {
+    const node = tree[path];
+    const isExpanded = expanded.has(path);
+    rows.push({
+      depth,
+      path,
+      name,
+      entry,
+      state: "dir",
+      expanded: isExpanded,
+      loading: isExpanded && !!node?.loading,
+      leaf: !!node?.loaded && !hasSubdirectories(node),
+      message: null,
+    });
+    // 软链接可能把某个目录指回自己的祖先：同一条路径上不再往下走。
+    if (!isExpanded || ancestors.has(path)) return;
+    const childDepth = depth + 1;
+    if (node?.loaded) {
+      const nextAncestors = new Set([...ancestors, path]);
+      for (const entry of sortEntries(node.entries)) {
+        if (entry.isDir) pushDir(getChildPath(path, entry.name), entry.name, entry, childDepth, nextAncestors);
+      }
+      if (node.error) rows.push(folderPlaceholder(path, childDepth, "error", node.error));
+      return;
+    }
+    if (node?.error) {
+      rows.push(folderPlaceholder(path, childDepth, "error", node.error));
+      return;
+    }
+    rows.push(folderPlaceholder(path, childDepth, "loading", null));
+  };
+
+  pushDir(FOLDER_TREE_ROOT, FOLDER_TREE_ROOT, null, 0, new Set());
+  return rows;
+}
+
+/**
+ * 定位当前目录时要展开的目录：/ 与当前目录之上的每一级祖先（不含当前目录自己——它只需可见、
+ * 被高亮）。当前目录就是 / 时展开 / 本身，否则树只剩孤零零一行。
+ */
+export function folderRevealPaths(currentPath: string): string[] {
+  if (currentPath === FOLDER_TREE_ROOT) return [FOLDER_TREE_ROOT];
+  const parts = currentPath.split("/").filter(Boolean);
+  const paths = [FOLDER_TREE_ROOT];
+  for (let i = 1; i < parts.length; i++) paths.push(`/${parts.slice(0, i).join("/")}`);
+  return paths;
+}
+
+/**
+ * 定位当前目录时,已加载却不含下一级目录的祖先层:它们的缓存早于远端新建了这一级(例如终端里
+ * `mkdir x && cd x` 后面板跟过去),不重拉的话树上永远没有当前目录这一行。只看已加载完的层;
+ * 还在加载或从未加载的层本来就会被请求。
+ */
+export function staleRevealLayers(tree: Record<string, SftpTreeNode>, currentPath: string): string[] {
+  if (currentPath === FOLDER_TREE_ROOT) return [];
+  const parts = currentPath.split("/").filter(Boolean);
+  const stale: string[] = [];
+  let parent = FOLDER_TREE_ROOT;
+  for (const name of parts) {
+    const node = tree[parent];
+    if (node?.loaded && !node.loading && !node.entries.some((entry) => entry.isDir && entry.name === name)) {
+      stale.push(parent);
+    }
+    parent = getChildPath(parent, name);
+  }
+  return stale;
+}
+
+/** 一次已经成功的路径变更:to 为 null 表示删除或移走(剪切粘贴到别处),否则是重命名后的新路径。 */
+export interface PathChange {
+  from: string;
+  to: string | null;
+}
+
+/**
+ * 当前目录或其祖先被删除、重命名或移走之后,面板应当换到的目录;当前目录不受影响时返回 null。
+ * 删除或移走换到原位置的父目录(它仍然存在);重命名换到同一相对位置的新路径。多项变更按
+ * 发生顺序依次套用——嵌套的几个目录一起被删时会逐级往上退。
+ */
+export function rebaseCurrentPath(currentPath: string, changes: PathChange[]): string | null {
+  let path = currentPath;
+  for (const { from, to } of changes) {
+    if (path !== from && !path.startsWith(`${from}/`)) continue;
+    path = to === null ? getParentPath(from) : `${to}${path.slice(from.length)}`;
+  }
+  return path === currentPath ? null : path;
 }
