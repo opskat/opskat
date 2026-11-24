@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SFTPListDir } from "../../../../wailsjs/go/ssh/SSH";
 import { sftp_svc } from "../../../../wailsjs/go/models";
-import { addExpandedPath, flattenSftpTree, type SftpTreeNode } from "@/lib/sftpDirTree";
+import {
+  addExpandedPath,
+  flattenFolderTree,
+  flattenSftpTree,
+  folderRevealPaths,
+  FOLDER_TREE_ROOT,
+  type SftpTreeNode,
+} from "@/lib/sftpDirTree";
 import { useSFTPStore } from "@/stores/sftpStore";
 import { normalizeRemotePath } from "./utils";
 import { errorMessage } from "@/lib/errorMessage";
@@ -20,6 +27,8 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
   // 每个目录一份条目缓存:根层由 loadDir 写入,子层由 fetchLayer 懒填。
   const [tree, setTree] = useState<Record<string, SftpTreeNode>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  // 目录树的展开集合：与列表的 expanded 独立，只共用上面的条目缓存。
+  const [folderExpanded, setFolderExpanded] = useState<Set<string>>(() => new Set([FOLDER_TREE_ROOT]));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelectedState] = useState<string[]>([]);
@@ -28,6 +37,7 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
   const layerRequestRef = useRef(new Map<string, number>());
   const currentPathRef = useRef(currentPath);
   const expandedRef = useRef(expanded);
+  const folderExpandedRef = useRef(folderExpanded);
 
   const loadDir = useCallback(
     async (dirPath: string) => {
@@ -116,6 +126,24 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
     [fetchLayer, setExpandedPaths]
   );
 
+  /** 目录树的展开/收起：语义同 toggleExpand，但只动目录树自己的展开集合。 */
+  const toggleFolderExpand = useCallback(
+    (dirPath: string) => {
+      if (folderExpandedRef.current.has(dirPath)) {
+        const next = new Set(folderExpandedRef.current);
+        next.delete(dirPath);
+        folderExpandedRef.current = next;
+        setFolderExpanded(next);
+        return;
+      }
+      const next = addExpandedPath(folderExpandedRef.current, dirPath);
+      folderExpandedRef.current = next;
+      setFolderExpanded(next);
+      void fetchLayer(dirPath);
+    },
+    [fetchLayer]
+  );
+
   /** 刷新:丢掉每个目录的条目缓存并重拉根层,已展开层随后由下面的补拉 effect 重新请求。 */
   const refreshTree = useCallback(async () => {
     setTree({});
@@ -127,30 +155,56 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
   }, []);
 
   // currentPath 变化时重置路径输入框:渲染期对比上次值,替代 effect 里的同步 setState
+  // 同一处顺带把当前目录的祖先并进目录树的展开集合(只增不减,不收起用户展开的其它分支)。
   const [prevPath, setPrevPath] = useState(currentPath);
+  const [revealedPath, setRevealedPath] = useState<string | null>(null);
   if (currentPath !== prevPath) {
     setPrevPath(currentPath);
     setPathInput(currentPath);
+  }
+  if (currentPath !== revealedPath) {
+    setRevealedPath(currentPath);
+    let next = folderExpanded;
+    for (const path of folderRevealPaths(currentPath)) {
+      if (!next.has(path)) next = addExpandedPath(next, path);
+    }
+    if (next !== folderExpanded) setFolderExpanded(next);
   }
 
   useEffect(() => {
     currentPathRef.current = currentPath;
   }, [currentPath]);
 
+  useEffect(() => {
+    folderExpandedRef.current = folderExpanded;
+  }, [folderExpanded]);
+
   const rows = useMemo(() => flattenSftpTree(tree, expanded, currentPath), [currentPath, expanded, tree]);
+  // 面板真正载入过当前目录(打开着、会话可用)之后,目录树才开始自己拉层;
+  // 否则面板收起或会话未就绪时也会对着远端发请求。
+  const folderTreeActive = !!tree[currentPath];
+  const folderRows = useMemo(() => flattenFolderTree(tree, folderExpanded), [folderExpanded, tree]);
 
   // 展开态记忆比缓存活得久(刷新清空缓存、换根后才重新可见):补拉这些「记得展开、
   // 但这一轮还没有条目」的层,否则它们会停在加载中占位上等一个永远不会发出的请求。
+  // 目录树另外把定位当前目录要经过的每一级祖先一起并行拉取,不等父层到了再逐级出现
+  // 占位行——深层目录(或刷新清空缓存后)不必按深度串行往返。几个来源合并去重:同一轮
+  // 提交里 fetchLayer 写入的加载态还看不到,分开遍历会对同一目录重复请求。
   useEffect(() => {
-    for (const row of rows) {
-      if (row.state === "loading" && !tree[row.path]) void fetchLayer(row.path);
+    const pending = new Set<string>();
+    for (const row of rows) if (row.state === "loading") pending.add(row.path);
+    if (folderTreeActive) {
+      for (const row of folderRows) if (row.state === "loading") pending.add(row.path);
+      for (const path of folderRevealPaths(currentPath)) pending.add(path);
     }
-  }, [fetchLayer, rows, tree]);
+    for (const path of pending) if (!tree[path]) void fetchLayer(path);
+  }, [currentPath, fetchLayer, folderRows, folderTreeActive, rows, tree]);
 
   return {
     currentPath,
     currentPathRef,
     error,
+    folderRows,
     loading,
     loadDir,
     pathInput,
@@ -163,5 +217,6 @@ export function useFileManagerDirectory(tabId: string, sessionId: string) {
     setSelected,
     storedPath,
     toggleExpand,
+    toggleFolderExpand,
   };
 }

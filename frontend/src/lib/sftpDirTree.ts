@@ -180,3 +180,85 @@ export function collapseSingleChildChains(rows: SftpTreeRow[]): SftpTreeDisplayR
   processSiblings(topLevel, 0);
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// 目录树（文件面板里与列表并排的那棵）：根恒为 /，只列目录。与列表共用同一份按目录的条目
+// 缓存（tree），展开集合各自独立——列表里就地展开某个子目录，不意味着用户想在树上展开它。
+// ---------------------------------------------------------------------------
+
+/** dir=目录行；loading/error 是某个已展开目录的子层占位行（path 为该目录，用来重试）。 */
+export type FolderTreeRowState = "dir" | "loading" | "error";
+
+export interface FolderTreeRow {
+  depth: number;
+  path: string;
+  name: string;
+  state: FolderTreeRowState;
+  expanded: boolean;
+  /** 目录行的子层正在请求（含后台刷新）。 */
+  loading: boolean;
+  /** 子层已加载且没有任何子目录：不画展开箭头（有没有文件看列表即可）。 */
+  leaf: boolean;
+  message: string | null;
+}
+
+export const FOLDER_TREE_ROOT = "/";
+
+function folderPlaceholder(dirPath: string, depth: number, state: FolderTreeRowState, message: string | null) {
+  return { depth, path: dirPath, name: "", state, expanded: true, loading: false, leaf: false, message };
+}
+
+function hasSubdirectories(node: SftpTreeNode): boolean {
+  return node.entries.some((entry) => entry.isDir);
+}
+
+/** 把 / 及其所有已展开的层展平成目录树的渲染行（深度优先，父行在前，只含目录）。 */
+export function flattenFolderTree(tree: Record<string, SftpTreeNode>, expanded: Set<string>): FolderTreeRow[] {
+  const rows: FolderTreeRow[] = [];
+
+  const pushDir = (path: string, name: string, depth: number, ancestors: Set<string>) => {
+    const node = tree[path];
+    const isExpanded = expanded.has(path);
+    rows.push({
+      depth,
+      path,
+      name,
+      state: "dir",
+      expanded: isExpanded,
+      loading: isExpanded && !!node?.loading,
+      leaf: !!node?.loaded && !hasSubdirectories(node),
+      message: null,
+    });
+    // 软链接可能把某个目录指回自己的祖先：同一条路径上不再往下走。
+    if (!isExpanded || ancestors.has(path)) return;
+    const childDepth = depth + 1;
+    if (node?.loaded) {
+      const nextAncestors = new Set([...ancestors, path]);
+      for (const entry of sortEntries(node.entries)) {
+        if (entry.isDir) pushDir(getChildPath(path, entry.name), entry.name, childDepth, nextAncestors);
+      }
+      if (node.error) rows.push(folderPlaceholder(path, childDepth, "error", node.error));
+      return;
+    }
+    if (node?.error) {
+      rows.push(folderPlaceholder(path, childDepth, "error", node.error));
+      return;
+    }
+    rows.push(folderPlaceholder(path, childDepth, "loading", null));
+  };
+
+  pushDir(FOLDER_TREE_ROOT, FOLDER_TREE_ROOT, 0, new Set());
+  return rows;
+}
+
+/**
+ * 定位当前目录时要展开的目录：/ 与当前目录之上的每一级祖先（不含当前目录自己——它只需可见、
+ * 被高亮）。当前目录就是 / 时展开 / 本身，否则树只剩孤零零一行。
+ */
+export function folderRevealPaths(currentPath: string): string[] {
+  if (currentPath === FOLDER_TREE_ROOT) return [FOLDER_TREE_ROOT];
+  const parts = currentPath.split("/").filter(Boolean);
+  const paths = [FOLDER_TREE_ROOT];
+  for (let i = 1; i < parts.length; i++) paths.push(`/${parts.slice(0, i).join("/")}`);
+  return paths;
+}

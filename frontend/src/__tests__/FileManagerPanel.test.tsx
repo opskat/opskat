@@ -1722,10 +1722,12 @@ describe("FileManagerPanel", () => {
   });
 
   it("moves a file when pointer-dragged onto a folder row", async () => {
-    vi.mocked(SFTPListDir).mockResolvedValue([
-      { name: "logs", isDir: true, size: 0, modTime: 0 },
-      { name: "app.log", isDir: false, size: 42, modTime: 0 },
-    ]);
+    mockDirListings({
+      "/srv/app": [
+        { name: "logs", isDir: true, size: 0, modTime: 0 },
+        { name: "app.log", isDir: false, size: 42, modTime: 0 },
+      ] as sftp_svc.FileEntry[],
+    });
 
     render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
 
@@ -1834,7 +1836,8 @@ describe("FileManagerPanel", () => {
 
     it("reports a denied child layer with its reason and retries it in place", async () => {
       vi.mocked(SFTPListDir).mockImplementation((_sessionId: string, path: string) => {
-        if (path !== "/srv/app/conf.d") return Promise.resolve([dirEntry("conf.d"), dirEntry("logs")]);
+        if (path === "/srv/app") return Promise.resolve([dirEntry("conf.d"), dirEntry("logs")]);
+        if (path !== "/srv/app/conf.d") return Promise.resolve([]);
         return listDirCalls(path).length === 1
           ? Promise.reject(new Error("permission denied"))
           : Promise.resolve([fileEntry("default.conf")]);
@@ -2810,6 +2813,153 @@ describe("FileManagerPanel", () => {
 
       await waitFor(() => expect(screen.queryByTestId("file-conflict-dialog")).toBeNull());
       expect(SFTPPaste).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("folder tree", () => {
+    const folderTree = () => screen.getByTestId("sftp-folder-tree");
+    const treeRow = (path: string) => screen.getByTestId(`sftp-tree-row-${path}`);
+    const treeToggle = (path: string) => screen.getByTestId(`sftp-tree-toggle-${path}`);
+    const treeNames = () =>
+      Array.from(folderTree().querySelectorAll<HTMLElement>("[data-sftp-tree-path]")).map(
+        (row) => row.dataset.sftpTreePath
+      );
+    const renderPanel = () =>
+      render(<FileManagerPanel tabId="tab1" sessionId="s1" isOpen width={280} onWidthChange={vi.fn()} />);
+
+    it("roots the tree at / with only directories, opening every ancestor and highlighting the current one", async () => {
+      mockDirListings({
+        "/": [dirEntry("etc"), dirEntry("srv"), fileEntry("swap.img")],
+        "/srv": [dirEntry("app"), dirEntry("www")],
+        "/srv/app": [dirEntry("logs"), fileEntry("a.txt")],
+      });
+
+      renderPanel();
+
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/etc", "/srv", "/srv/app", "/srv/www"]));
+      expect(treeRow("/srv/app")).toHaveAttribute("data-sftp-tree-current", "true");
+      expect(treeRow("/srv")).not.toHaveAttribute("data-sftp-tree-current", "true");
+      expect(within(folderTree()).queryByText("swap.img")).toBeNull();
+      // 当前目录这一层由列表载入,树直接复用缓存,不再为它单独请求。
+      expect(listDirCalls("/srv/app")).toHaveLength(1);
+    });
+
+    it("switches the current directory with a single click on a tree row", async () => {
+      mockDirListings({
+        "/": [dirEntry("etc"), dirEntry("srv")],
+        "/srv": [dirEntry("app")],
+        "/etc": [dirEntry("nginx"), fileEntry("hosts")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toContain("/etc"));
+
+      fireEvent.click(treeRow("/etc"));
+
+      await waitFor(() => expect(screen.getByTestId("sftp-path-input")).toHaveValue("/etc"));
+      expect(useSFTPStore.getState().fileManagerPaths.tab1).toBe("/etc");
+      expect(await screen.findByText("hosts")).toBeInTheDocument();
+      expect(treeRow("/etc")).toHaveAttribute("data-sftp-tree-current", "true");
+    });
+
+    it("expands a directory from its arrow without changing the current directory", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app"), dirEntry("www")],
+        "/srv/www": [dirEntry("html")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toContain("/srv/www"));
+
+      fireEvent.click(treeToggle("/srv/www"));
+
+      await waitFor(() => expect(treeNames()).toContain("/srv/www/html"));
+      expect(SFTPListDir).toHaveBeenCalledWith("s1", "/srv/www");
+      expect(screen.getByTestId("sftp-path-input")).toHaveValue("/srv/app");
+    });
+
+    it("follows a directory change made in the list by opening and highlighting it in the tree", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app")],
+        "/srv/app": [dirEntry("logs")],
+        "/srv/app/logs": [fileEntry("access.log")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toContain("/srv/app"));
+
+      fireEvent.doubleClick(rowOf("logs"));
+
+      await waitFor(() => expect(treeNames()).toContain("/srv/app/logs"));
+      expect(treeRow("/srv/app/logs")).toHaveAttribute("data-sftp-tree-current", "true");
+      expect(treeRow("/srv/app")).not.toHaveAttribute("data-sftp-tree-current", "true");
+    });
+
+    it("drops the arrow on a directory whose layer has no subdirectories", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv"), dirEntry("tmp")],
+        "/srv": [dirEntry("app")],
+        "/tmp": [fileEntry("x.sock")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toContain("/tmp"));
+      expect(treeToggle("/tmp")).toBeInTheDocument();
+
+      fireEvent.click(treeToggle("/tmp"));
+
+      await waitFor(() => expect(screen.queryByTestId("sftp-tree-toggle-/tmp")).toBeNull());
+    });
+
+    it("stops at an unreadable ancestor with its reason and a retry, while the list still shows the current directory", async () => {
+      let srvCalls = 0;
+      vi.mocked(SFTPListDir).mockImplementation((_sessionId: string, path: string) => {
+        if (path === "/") return Promise.resolve([dirEntry("srv")]);
+        if (path === "/srv") {
+          srvCalls += 1;
+          return srvCalls === 1 ? Promise.reject(new Error("permission denied")) : Promise.resolve([dirEntry("app")]);
+        }
+        if (path === "/srv/app") return Promise.resolve([fileEntry("a.txt")]);
+        return Promise.resolve([]);
+      });
+      renderPanel();
+
+      const failure = await within(folderTree()).findByText(/permission denied/);
+      expect(failure).toBeInTheDocument();
+      expect(screen.getByText("a.txt")).toBeInTheDocument();
+      expect(treeNames()).not.toContain("/srv/app");
+
+      fireEvent.click(screen.getByTestId("sftp-tree-retry-/srv"));
+
+      await waitFor(() => expect(treeNames()).toContain("/srv/app"));
+      expect(treeRow("/srv/app")).toHaveAttribute("data-sftp-tree-current", "true");
+    });
+
+    it("keeps tree expansion independent from expanding the same directory in the list", async () => {
+      mockDirListings({
+        "/": [dirEntry("srv")],
+        "/srv": [dirEntry("app")],
+        "/srv/app": [dirEntry("logs")],
+        "/srv/app/logs": [dirEntry("old")],
+      });
+      renderPanel();
+      await screen.findByTestId("sftp-expand-/srv/app/logs");
+
+      fireEvent.click(expandToggle("/srv/app/logs"));
+
+      await screen.findByText("old");
+      expect(treeNames()).not.toContain("/srv/app/logs");
+    });
+
+    it("shows a directory created by refresh in the tree without collapsing it", async () => {
+      mockDirListings({
+        "/": [[dirEntry("srv")], [dirEntry("opt"), dirEntry("srv")]],
+        "/srv": [dirEntry("app")],
+      });
+      renderPanel();
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/srv", "/srv/app"]));
+
+      fireEvent.click(screen.getByTitle("sftp.refresh"));
+
+      await waitFor(() => expect(treeNames()).toEqual(["/", "/opt", "/srv", "/srv/app"]));
     });
   });
 });

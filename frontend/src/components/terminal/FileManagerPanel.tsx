@@ -56,6 +56,7 @@ import { PropertiesDialog } from "./file-manager/PropertiesDialog";
 import { TransferSection } from "./file-manager/TransferSection";
 import { type ClipboardState, type DeleteTarget, type CtxMenuState, type PermissionTarget } from "./file-manager/types";
 import { useFileManagerDirectory } from "./file-manager/useFileManagerDirectory";
+import { FolderTree } from "./file-manager/FolderTree";
 import { useNativeFileDrop } from "./file-manager/useNativeFileDrop";
 import { useResizeHandle } from "./file-manager/useResizeHandle";
 import { sftpEntrySide, useSFTPTargetResolver, type SFTPWriteTarget } from "./file-manager/useSFTPTargetResolver";
@@ -139,6 +140,7 @@ export function FileManagerPanel({
     currentPath,
     currentPathRef,
     error,
+    folderRows,
     loading,
     loadDir,
     pathInput,
@@ -151,6 +153,7 @@ export function FileManagerPanel({
     setSelected,
     storedPath,
     toggleExpand,
+    toggleFolderExpand,
   } = useFileManagerDirectory(tabId, sessionId);
 
   const {
@@ -1000,45 +1003,55 @@ export function FileManagerPanel({
               </div>
             )}
 
-            <FileList
-              canExternalEdit={canExternalEdit}
-              clipboardCutPaths={clipboardCutPaths}
-              currentPath={currentPath}
-              error={error}
-              loading={loading}
-              onExternalOpen={handleOpenByDefaultEditor}
-              onGoUp={goUp}
-              onMoveEntriesToDirectory={moveEntriesToDirectory}
-              onNavigate={(path) => void navigateToPath(path)}
-              onOpenContextMenu={(x, y, entry, entryPath) => {
-                if (x < 0 || y < 0) return;
-                ctxEntryPathRef.current = entryPath;
-                if (!entry) {
-                  setSelected([]);
-                  setCtxMenu({ x, y, entry: null, selectedEntries: [] });
-                  return;
-                }
-                const menuSelectedEntries = selected
-                  .map((path) => entryByPath.get(path))
-                  .filter(Boolean) as sftp_svc.FileEntry[];
-                setCtxMenu({
-                  x,
-                  y,
-                  entry,
-                  canExternalEdit: canExternalEdit(entry),
-                  selectedEntries: menuSelectedEntries,
-                });
-              }}
-              onRenameCancel={() => setRenamePath(null)}
-              onRenameCommit={commitRename}
-              onRetry={() => void refreshTree()}
-              onRetryExpand={retryExpand}
-              onToggleExpand={toggleExpand}
-              renamePath={renamePath}
-              rows={rows}
-              selected={selected}
-              setSelected={setSelected}
-            />
+            <div className="flex min-h-0 flex-1 flex-col">
+              <FolderTree
+                className="h-[40%] shrink-0 border-b"
+                rows={folderRows}
+                currentPath={currentPath}
+                onNavigate={(path) => void navigateToPath(path)}
+                onToggle={toggleFolderExpand}
+                onRetry={retryExpand}
+              />
+              <FileList
+                canExternalEdit={canExternalEdit}
+                clipboardCutPaths={clipboardCutPaths}
+                currentPath={currentPath}
+                error={error}
+                loading={loading}
+                onExternalOpen={handleOpenByDefaultEditor}
+                onGoUp={goUp}
+                onMoveEntriesToDirectory={moveEntriesToDirectory}
+                onNavigate={(path) => void navigateToPath(path)}
+                onOpenContextMenu={(x, y, entry, entryPath) => {
+                  if (x < 0 || y < 0) return;
+                  ctxEntryPathRef.current = entryPath;
+                  if (!entry) {
+                    setSelected([]);
+                    setCtxMenu({ x, y, entry: null, selectedEntries: [] });
+                    return;
+                  }
+                  const menuSelectedEntries = selected
+                    .map((path) => entryByPath.get(path))
+                    .filter(Boolean) as sftp_svc.FileEntry[];
+                  setCtxMenu({
+                    x,
+                    y,
+                    entry,
+                    canExternalEdit: canExternalEdit(entry),
+                    selectedEntries: menuSelectedEntries,
+                  });
+                }}
+                onRenameCancel={() => setRenamePath(null)}
+                onRenameCommit={commitRename}
+                onRetry={() => void refreshTree()}
+                onRetryExpand={retryExpand}
+                onToggleExpand={toggleExpand}
+                renamePath={renamePath}
+                rows={rows}
+                selected={selected}
+                setSelected={setSelected}
+              />
+            </div>
             <div
               className="flex items-center justify-between gap-2 border-t px-2 py-1 text-[11px] text-muted-foreground"
               data-testid="sftp-status-bar"
