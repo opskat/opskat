@@ -146,6 +146,8 @@ func Execute() int {
 		return cmdPolicy(ctx, args, resolvedSession)
 	case "ext":
 		return cmdExt(ctx, args)
+	case "mcp":
+		return cmdMCP(ctx, args, resolvedSession)
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown command %q\n\nRun 'opsctl help' for usage.\n", verb)
 		return 1
@@ -213,6 +215,7 @@ Commands:
   batch     Execute multiple commands in parallel across assets
   policy    Manage permanent permission rules (show / allow / deny / rm, group, attach / detach)
   ext       Manage extensions (list, search, install, update, dev)
+  mcp       Run a stdio MCP server exposing OpsKat tools (--approval-mode desktop|external)
   version   Print version information
 
 Note:
