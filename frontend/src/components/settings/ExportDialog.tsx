@@ -9,7 +9,7 @@ import { backup_svc } from "../../../wailsjs/go/models";
 import { ExportToFile } from "../../../wailsjs/go/system/System";
 import { AssetMultiSelect } from "@/components/asset/AssetMultiSelect";
 import { useAssetStore } from "@/stores/assetStore";
-import { useShortcutStore, customShortcuts } from "@/stores/shortcutStore";
+import { useShortcutStore, serializeShortcutsForBackup } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
 import { errorMessage } from "@/lib/errorMessage";
 
@@ -51,7 +51,7 @@ export function ExportDialog({
 }: ExportDialogProps) {
   const { t } = useTranslation();
   const { assets } = useAssetStore();
-  const { shortcuts } = useShortcutStore();
+  const { shortcuts, mouseShortcuts } = useShortcutStore();
   const { customThemes } = useTerminalThemeStore();
 
   const [selectionMode, setSelectionMode] = useState<AssetSelectionMode>("all");
@@ -117,9 +117,9 @@ export function ExportDialog({
     opts.include_themes = includeThemes;
 
     if (includeShortcuts) {
-      const custom = customShortcuts(shortcuts);
-      if (Object.keys(custom).length > 0) {
-        opts.shortcuts = JSON.stringify(custom);
+      const serialized = serializeShortcutsForBackup(shortcuts, mouseShortcuts);
+      if (serialized) {
+        opts.shortcuts = serialized;
       }
     }
 
@@ -137,6 +137,7 @@ export function ExportDialog({
     includeShortcuts,
     includeThemes,
     shortcuts,
+    mouseShortcuts,
     customThemes,
   ]);
 

@@ -23,6 +23,11 @@ interface SettingsUiState {
   /** 切到扩展页并打开这个扩展的详情，例如命令审核里"在扩展详情里设置"。 */
   openExtensionDetail: (name: string) => void;
   clearExtensionDetail: () => void;
+  /** 别的设置页要求滚动定位的子分区标识（如 "mouse-selection"）；目标区域滚动后清空。 */
+  focusSection: string | null;
+  /** 切换到指定设置页并定位到页内子分区。 */
+  openSettingsSection: (tab: SettingsTab, section?: string) => void;
+  clearFocusSection: () => void;
 }
 
 export const useSettingsUiStore = create<SettingsUiState>((set) => ({
@@ -31,4 +36,7 @@ export const useSettingsUiStore = create<SettingsUiState>((set) => ({
   extensionDetail: null,
   openExtensionDetail: (name) => set({ activeTab: "extensions", extensionDetail: name }),
   clearExtensionDetail: () => set({ extensionDetail: null }),
+  focusSection: null,
+  openSettingsSection: (tab, section) => set({ activeTab: tab, focusSection: section ?? null }),
+  clearFocusSection: () => set({ focusSection: null }),
 }));

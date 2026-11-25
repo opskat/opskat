@@ -1,19 +1,21 @@
 import { useEffect } from "react";
-import { useTerminalStore } from "@/stores/terminalStore";
-import { useTabStore } from "@/stores/tabStore";
-import { useQueryStore } from "@/stores/queryStore";
 import { useShortcutStore, eventMatchesBinding, matchShortcut, FIND_SCOPE_ATTR } from "@/stores/shortcutStore";
 import { useLayoutStore } from "@/stores/layoutStore";
 import { copySelectedAssetMarkdownRef, shouldCopyAssetRef } from "@/lib/assetRef";
+import { dispatchAppAction, type AppShellActionHandlers } from "@/lib/appActionDispatch";
 
-interface ShortcutHandlers {
-  onToggleAIPanel: () => void;
-  onToggleSidebar: () => void;
-  onToggleCommandPalette: () => void;
-}
-
-export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggleCommandPalette }: ShortcutHandlers) {
+export function useKeyboardShortcuts({
+  onToggleAIPanel,
+  onToggleSidebar,
+  onToggleCommandPalette,
+}: AppShellActionHandlers) {
   useEffect(() => {
+    const handlers: AppShellActionHandlers = {
+      onToggleAIPanel,
+      onToggleSidebar,
+      onToggleCommandPalette,
+    };
+
     const handler = (e: KeyboardEvent) => {
       const { shortcuts, isRecording, disableShortcutsInTerminal } = useShortcutStore.getState();
       if (isRecording) return;
@@ -37,7 +39,7 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
       if (action === "command.quickopen") {
         e.preventDefault();
         e.stopPropagation();
-        onToggleCommandPalette();
+        dispatchAppAction(action, handlers);
         return;
       }
 
@@ -72,124 +74,7 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
 
       e.preventDefault();
       e.stopPropagation();
-
-      const tabStore = useTabStore.getState();
-      const { tabs, activeTabId } = tabStore;
-
-      // Tab switching: tab.1 ~ tab.9
-      const tabMatch = action.match(/^tab\.(\d)$/);
-      if (tabMatch) {
-        const idx = parseInt(tabMatch[1]) - 1;
-        if (idx < tabs.length) {
-          tabStore.activateTab(tabs[idx].id);
-        }
-        return;
-      }
-
-      switch (action) {
-        case "tab.close": {
-          if (activeTabId) {
-            const activeTab = tabs.find((t) => t.id === activeTabId);
-            if (activeTab?.type === "terminal") {
-              // Close terminal pane (not tab) if there are splits
-              const termStore = useTerminalStore.getState();
-              const data = termStore.tabData[activeTabId];
-              if (data) {
-                termStore.closePane(activeTabId, data.activePaneId);
-              }
-            } else {
-              // 关系型数据库标签(有 dbStates)先关当前内层标签,内层全关完才关外层;关闭都受未提交修改拦截。
-              const query = useQueryStore.getState();
-              const innerId = query.dbStates[activeTabId]?.activeInnerTabId;
-              if (innerId) query.closeInnerTab(activeTabId, innerId);
-              else tabStore.closeTab(activeTabId);
-            }
-          }
-          break;
-        }
-        case "tab.prev": {
-          if (tabs.length === 0) break;
-          const curIdx = tabs.findIndex((t) => t.id === activeTabId);
-          const prevIdx = curIdx <= 0 ? tabs.length - 1 : curIdx - 1;
-          tabStore.activateTab(tabs[prevIdx].id);
-          break;
-        }
-        case "tab.next": {
-          if (tabs.length === 0) break;
-          const curIdx = tabs.findIndex((t) => t.id === activeTabId);
-          const nextIdx = curIdx >= tabs.length - 1 ? 0 : curIdx + 1;
-          tabStore.activateTab(tabs[nextIdx].id);
-          break;
-        }
-        case "split.vertical": {
-          const activeTab = tabs.find((t) => t.id === activeTabId);
-          if (activeTab?.type === "terminal") {
-            useTerminalStore.getState().splitPane(activeTabId!, "vertical");
-          }
-          break;
-        }
-        case "split.horizontal": {
-          const activeTab = tabs.find((t) => t.id === activeTabId);
-          if (activeTab?.type === "terminal") {
-            useTerminalStore.getState().splitPane(activeTabId!, "horizontal");
-          }
-          break;
-        }
-        case "panel.switch": {
-          const st = useLayoutStore.getState();
-          st.switchPanel();
-          if (!st.leftPanelVisible) st.toggleVisible();
-          break;
-        }
-        case "panel.ai":
-          onToggleAIPanel();
-          break;
-        case "panel.sidebar": {
-          const layout = useLayoutStore.getState().tabBarLayout;
-          if (layout === "left") {
-            useLayoutStore.getState().toggleVisible();
-          } else {
-            onToggleSidebar();
-          }
-          break;
-        }
-        case "panel.toolbar":
-          useLayoutStore.getState().toggleToolbar();
-          break;
-        case "page.home": {
-          const homeTab = tabs.find((t) => t.type === "terminal" || t.type === "info");
-          if (homeTab) tabStore.activateTab(homeTab.id);
-          break;
-        }
-        case "page.settings": {
-          const existing = tabs.find((t) => t.id === "settings");
-          if (existing) {
-            tabStore.activateTab("settings");
-          } else {
-            tabStore.openTab({
-              id: "settings",
-              type: "page",
-              label: "settings",
-              meta: { type: "page", pageId: "settings" },
-            });
-          }
-          break;
-        }
-        case "page.sshkeys": {
-          const existing = tabs.find((t) => t.id === "sshkeys");
-          if (existing) {
-            tabStore.activateTab("sshkeys");
-          } else {
-            tabStore.openTab({
-              id: "sshkeys",
-              type: "page",
-              label: "sshkeys",
-              meta: { type: "page", pageId: "sshkeys" },
-            });
-          }
-          break;
-        }
-      }
+      dispatchAppAction(action, handlers);
     };
 
     window.addEventListener("keydown", handler, true);

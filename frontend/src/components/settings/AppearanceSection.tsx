@@ -34,6 +34,7 @@ import {
   resolveFontPresetOrphan,
 } from "@/data/terminalFonts";
 import { TerminalThemeEditor } from "@/components/settings/TerminalThemeEditor";
+import { TerminalMouseSettings } from "@/components/settings/TerminalMouseSettings";
 
 export function AppearanceSection() {
   const { t, i18n } = useTranslation();
@@ -122,8 +123,6 @@ export function TerminalSection() {
     setHighlightLinks,
     osc52ClipboardEnabled,
     setOsc52ClipboardEnabled,
-    copyBehavior,
-    setCopyBehavior,
     customThemes,
     addCustomTheme,
     updateCustomTheme,
@@ -312,23 +311,6 @@ export function TerminalSection() {
             <Switch checked={highlightLinks} onCheckedChange={setHighlightLinks} />
           </div>
 
-          <div className="grid gap-2">
-            <Label>{t("terminal.copyBehavior")}</Label>
-            <Select value={copyBehavior} onValueChange={setCopyBehavior as (value: string) => void}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="popover-menu">{t("terminal.copyBehaviorPopoverMenu")}</SelectItem>
-                <SelectItem value="smart-right-click">{t("terminal.copyBehaviorSmartRightClick")}</SelectItem>
-                <SelectItem value="select-copy-right-paste">
-                  {t("terminal.copyBehaviorSelectCopyRightPaste")}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">{t("terminal.copyBehaviorHint")}</p>
-          </div>
-
           <div className="flex items-start justify-between gap-4">
             <div className="grid gap-1">
               <Label>{t("terminal.osc52Clipboard")}</Label>
@@ -457,6 +439,9 @@ export function TerminalSection() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Terminal mouse & selection settings */}
+      <TerminalMouseSettings />
 
       {/* Terminal theme editor */}
       <TerminalThemeEditor

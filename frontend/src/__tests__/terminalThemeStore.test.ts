@@ -43,7 +43,7 @@ describe("terminalThemeStore", () => {
       fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
       scrollback: SCROLLBACK_DEFAULT,
       highlightLinks: false,
-      copyBehavior: "popover-menu",
+      selectionAction: "popover",
     });
   });
 
@@ -165,15 +165,15 @@ describe("terminalThemeStore", () => {
     });
   });
 
-  describe("setCopyBehavior", () => {
-    it("defaults to popover/menu and updates copy behavior", () => {
-      expect(useTerminalThemeStore.getState().copyBehavior).toBe("popover-menu");
+  describe("selectionAction setting", () => {
+    it("defaults selectionAction to popover and switches across popover, auto-copy, and none", () => {
+      expect(useTerminalThemeStore.getState().selectionAction).toBe("popover");
 
-      useTerminalThemeStore.getState().setCopyBehavior("select-copy-right-paste");
-      expect(useTerminalThemeStore.getState().copyBehavior).toBe("select-copy-right-paste");
+      useTerminalThemeStore.getState().setSelectionAction("auto-copy");
+      expect(useTerminalThemeStore.getState().selectionAction).toBe("auto-copy");
 
-      useTerminalThemeStore.getState().setCopyBehavior("smart-right-click");
-      expect(useTerminalThemeStore.getState().copyBehavior).toBe("smart-right-click");
+      useTerminalThemeStore.getState().setSelectionAction("none");
+      expect(useTerminalThemeStore.getState().selectionAction).toBe("none");
     });
   });
 

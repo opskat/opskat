@@ -6,9 +6,13 @@ import { toast } from "sonner";
 // 顶部居中放不下太多内容。
 const SUCCESS_POSITION = "top-center" as const;
 
-// 复制 / 剪贴板确认：高频、扫一眼就行，1s 一闪而过即可。
-export function notifyCopied(message: string) {
-  toast.success(message, { position: SUCCESS_POSITION, duration: 1000 });
+// 复制 / 剪贴板确认：高频、扫一眼就行，1s 一闪而过即可。传 id 时覆盖同 id 的前一条提示，避免连续复制堆叠。
+export function notifyCopied(message: string, options?: { id?: string }) {
+  toast.success(message, {
+    position: SUCCESS_POSITION,
+    duration: 1000,
+    ...(options?.id && { id: options.id }),
+  });
 }
 
 // 操作成功确认：顶部居中，沿用 sonner 默认停留时长；action 给出可点击的后续入口（如打开新建的资源）。

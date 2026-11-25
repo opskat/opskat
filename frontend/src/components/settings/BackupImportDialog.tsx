@@ -17,7 +17,7 @@ import {
 import { backup_svc } from "../../../wailsjs/go/models";
 import { SecretInput } from "@/components/SecretInput";
 import { useAssetStore } from "@/stores/assetStore";
-import { useShortcutStore } from "@/stores/shortcutStore";
+import { applyShortcutsBackup } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
 import { errorMessage } from "@/lib/errorMessage";
 
@@ -44,13 +44,7 @@ interface BackupImportDialogProps {
 async function applyImportResult(result: backup_svc.ImportResult) {
   if (result.shortcuts) {
     try {
-      const parsed = JSON.parse(result.shortcuts);
-      localStorage.setItem("keyboard_shortcuts", JSON.stringify(parsed));
-      const store = useShortcutStore.getState();
-      store.resetAll();
-      for (const [action, binding] of Object.entries(parsed)) {
-        store.updateShortcut(action as never, binding as never);
-      }
+      applyShortcutsBackup(result.shortcuts);
     } catch {
       // ignore parse errors
     }

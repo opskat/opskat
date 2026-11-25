@@ -2,6 +2,11 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Terminal } from "@/components/terminal/Terminal";
+import {
+  cloneDefaultMouseShortcuts,
+  type TerminalMouseBindings,
+  type TerminalSelectionAction,
+} from "@/stores/terminalMouseShortcuts";
 
 const hoisted = vi.hoisted(() => {
   const pasteFromClipboardSpy = vi.fn().mockResolvedValue(undefined);
@@ -10,9 +15,12 @@ const hoisted = vi.hoisted(() => {
   const focusSpy = vi.fn();
   const term = {
     getSelection: vi.fn(() => ""),
+    clearSelection: vi.fn(),
+    clear: vi.fn(),
     selectAll: vi.fn(),
     focus: focusSpy,
     options: {},
+    modes: { mouseTrackingMode: "none" as const },
     onSelectionChange: vi.fn(() => ({ dispose: vi.fn() })),
   };
   const fitAddon = {
@@ -42,7 +50,13 @@ const hoisted = vi.hoisted(() => {
     },
   };
   return {
-    copyBehavior: "popover-menu",
+    selectionAction: "popover" as TerminalSelectionAction,
+    mouseShortcuts: {
+      right: "terminal.contextMenu",
+      middle: "terminal.paste",
+      back: "tab.prev",
+      forward: "tab.next",
+    } as TerminalMouseBindings,
     pasteFromClipboardSpy,
     resizeSpy,
     setOnPasteSpy,
@@ -83,6 +97,7 @@ vi.mock("@/stores/terminalStore", () => ({
       splitPane: vi.fn(),
       reconnect: vi.fn(),
       closePane: vi.fn(),
+      setActivePaneId: vi.fn(),
     }),
 }));
 
@@ -95,13 +110,14 @@ vi.mock("@/stores/terminalThemeStore", () => ({
       scrollback: 1000,
       webglEnabled: false,
       highlightLinks: false,
-      copyBehavior: hoisted.copyBehavior,
+      selectionAction: hoisted.selectionAction,
       selectedThemeId: "default",
       customThemes: [],
     }),
 }));
 
 vi.mock("@/stores/shortcutStore", () => ({
+  isMac: false,
   formatBinding: vi.fn(() => "shortcut"),
   useShortcutStore: (selector: (state: unknown) => unknown) =>
     selector({
@@ -114,6 +130,7 @@ vi.mock("@/stores/shortcutStore", () => ({
         "split.vertical": {},
         "tab.close": {},
       },
+      mouseShortcuts: hoisted.mouseShortcuts,
     }),
 }));
 
@@ -127,6 +144,8 @@ vi.mock("@/stores/sftpStore", () => ({
 }));
 
 vi.mock("@/stores/tabStore", () => ({
+  registerTabCloseHook: vi.fn(),
+  registerTabRestoreHook: vi.fn(),
   useTabStore: (selector: (state: unknown) => unknown) => selector({ closeTab: vi.fn() }),
 }));
 
@@ -181,7 +200,8 @@ function terminalSurface(container: HTMLElement) {
 describe("Terminal paste suppression", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    hoisted.copyBehavior = "popover-menu";
+    hoisted.selectionAction = "popover";
+    hoisted.mouseShortcuts = cloneDefaultMouseShortcuts();
     hoisted.term.getSelection.mockReturnValue("");
   });
 
@@ -204,7 +224,7 @@ describe("Terminal paste suppression", () => {
   });
 
   it("does not suppress native paste for smart right-click paste", () => {
-    hoisted.copyBehavior = "smart-right-click";
+    hoisted.mouseShortcuts = { ...cloneDefaultMouseShortcuts(), right: "terminal.copyOrPaste" };
     const { container } = renderTerminal();
 
     fireEvent.contextMenu(terminalSurface(container));
