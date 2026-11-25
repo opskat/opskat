@@ -27,7 +27,16 @@ import (
 	"github.com/opskat/opskat/internal/repository/audit_repo"
 )
 
-const testCLISecret = "cli-strong-secret-0123456789abcdef"
+const testCLISecret = "cli-strong-secret-0123456789abcdef" //nolint:gosec // test fixture
+
+func shortMCPSocketPath(t *testing.T, name string) string {
+	t.Helper()
+	// Keep Unix domain socket paths below macOS's 104-byte sun_path limit.
+	dir, err := os.MkdirTemp("", "mcp-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, name)
+}
 
 type lockedBufferWriter struct {
 	mu  *sync.Mutex
@@ -54,7 +63,7 @@ func TestCmdMCPExternalModeRequiresControlSocketAndStrongSecret(t *testing.T) {
 	require.Contains(t, stderr, "--approval-control-socket")
 
 	// Missing / weak secret
-	sock := filepath.Join(t.TempDir(), "ctrl.sock")
+	sock := shortMCPSocketPath(t, "ctrl.sock")
 	t.Setenv(mcpApprovalSecretEnv, "short")
 	stderr2 := captureStderr(t, func() {
 		code := cmdMCP(context.Background(), []string{"--approval-mode=external", "--approval-control-socket=" + sock})
@@ -92,7 +101,7 @@ func TestCmdMCPExternalCoreToolsetExcludesResolveAndAudit(t *testing.T) {
 	// Seed a CLI active session and verify cmdMCP never overwrites or relies on it.
 	require.NoError(t, writeActiveSession("cli-existing-session"))
 
-	sock := filepath.Join(t.TempDir(), "mcp-ctrl.sock")
+	sock := shortMCPSocketPath(t, "mcp-ctrl.sock")
 	clientR, serverW := io.Pipe()
 	serverR, clientW := io.Pipe()
 	var stderrMu sync.Mutex

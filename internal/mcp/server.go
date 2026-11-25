@@ -23,6 +23,9 @@ import (
 // GetTaskToolName polls or waits for a backgrounded task after out-of-band approval.
 const GetTaskToolName = "get_task"
 
+// NotificationCancelled is the MCP JSON-RPC cancellation notification method name.
+const NotificationCancelled = "notifications/cancelled" //nolint:misspell // MCP protocol uses British spelling
+
 const (
 	defaultMaxRequestLineBytes = 4 << 20 // 4 MiB per JSON-RPC frame
 	defaultMaxConcurrentReqs   = 32
@@ -318,7 +321,7 @@ func (s *Server) unregisterInFlight(key string) {
 }
 
 func (s *Server) handleNotification(req Request) {
-	if req.Method != "notifications/cancelled" || len(req.Params) == 0 {
+	if req.Method != NotificationCancelled || len(req.Params) == 0 {
 		return
 	}
 	var params struct {
@@ -468,8 +471,8 @@ func (s *Server) callTool(serveCtx, reqCtx context.Context, name string, args ma
 	}
 
 	if s.approver != nil {
-		// Parent ctx is serveCtx so a parked background task survives after tools/call returns PausePayload;
-		// reqCtx still cancels before pausing if the client sends notifications/cancelled.
+		// Parent ctx is serveCtx so a parked background task survives after tools/call returns PauseRef;
+		// reqCtx still cancels before pausing if the client sends a cancellation notification.
 		return s.approver.Run(serveCtx, reqCtx, name, execFn), nil
 	}
 	out, isErr := execFn(reqCtx)

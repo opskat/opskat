@@ -36,9 +36,9 @@ import (
 )
 
 const (
-	mcpApprovalSecretEnv  = "OPSKAT_MCP_APPROVAL_SECRET"
-	mcpAuditSource        = "mcp"
-	mcpMaxAuditListLimit  = 200
+	mcpApprovalSecretEnv = "OPSKAT_MCP_APPROVAL_SECRET" //nolint:gosec // env var name, not a credential
+	mcpAuditSource       = "mcp"
+	mcpMaxAuditListLimit = 200
 )
 
 // mcpStdio holds the streams used by cmdMCP; overridden in tests.
@@ -142,7 +142,7 @@ func cmdMCP(ctx context.Context, args []string) int {
 			return 1
 		}
 		defer controlSrv.Stop()
-		fmt.Fprintf(stderr, "OPSKAT_MCP_CONTROL_ADDR=%s\n", controlSrv.Addr())
+		_, _ = fmt.Fprintf(stderr, "OPSKAT_MCP_CONTROL_ADDR=%s\n", controlSrv.Addr())
 
 		checker = permission.NewCommandPolicyChecker(approver.ConfirmFunc)
 		checker.SetGrantRequestFunc(approver.GrantRequestFunc)
@@ -222,9 +222,10 @@ Flags:
   --approval-mode <desktop|external>
         How NeedConfirm operations are approved (default: desktop).
         desktop  - Delegate to the running OpsKat desktop approval dialog.
-        external - Pause and return structured needs_approval / needs_mfa
-                   payloads resolved over --approval-control-socket
-                   (requires OPSKAT_MCP_APPROVAL_SECRET >= 16 chars).
+        external - Pause and return an opaque PauseRef (needs_approval / needs_mfa)
+                   on the MCP data plane; external hosts fetch details and resolve
+                   decisions over --approval-control-socket (get_pending / list_pending /
+                   resolve; requires OPSKAT_MCP_APPROVAL_SECRET >= 16 chars).
   --approval-control-socket <path>
         Out-of-band local IPC socket path for human approval resolution
         (required in external mode; never exposed on the MCP data plane).
@@ -280,7 +281,7 @@ func activateExtensionsForRef(ctx context.Context, ref string) error {
 	}
 	asset, err := resolveAsset(ctx, ref)
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // let underlying tool surface the canonical asset resolution error
 	}
 	if asset == nil {
 		return nil
@@ -313,10 +314,10 @@ type extensionActivatingTool struct {
 	inner agent.Tool
 }
 
-func (e *extensionActivatingTool) Name() string        { return e.inner.Name() }
-func (e *extensionActivatingTool) Description() string { return e.inner.Description() }
+func (e *extensionActivatingTool) Name() string         { return e.inner.Name() }
+func (e *extensionActivatingTool) Description() string  { return e.inner.Description() }
 func (e *extensionActivatingTool) Schema() agent.Schema { return e.inner.Schema() }
-func (e *extensionActivatingTool) Serial() bool        { return isToolSerial(e.inner) }
+func (e *extensionActivatingTool) Serial() bool         { return isToolSerial(e.inner) }
 
 func (e *extensionActivatingTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
 	if err := activateExtensionsForRef(ctx, aictx.ArgString(input, "asset")); err != nil {
@@ -329,10 +330,10 @@ type helpExtensionActivatingTool struct {
 	inner agent.Tool
 }
 
-func (h *helpExtensionActivatingTool) Name() string        { return h.inner.Name() }
-func (h *helpExtensionActivatingTool) Description() string { return h.inner.Description() }
+func (h *helpExtensionActivatingTool) Name() string         { return h.inner.Name() }
+func (h *helpExtensionActivatingTool) Description() string  { return h.inner.Description() }
 func (h *helpExtensionActivatingTool) Schema() agent.Schema { return h.inner.Schema() }
-func (h *helpExtensionActivatingTool) Serial() bool        { return isToolSerial(h.inner) }
+func (h *helpExtensionActivatingTool) Serial() bool         { return isToolSerial(h.inner) }
 
 func (h *helpExtensionActivatingTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
 	if err := activateExtensionsForRef(ctx, aictx.ArgString(input, "asset")); err != nil {
@@ -345,10 +346,10 @@ type batchExtensionActivatingTool struct {
 	inner agent.Tool
 }
 
-func (b *batchExtensionActivatingTool) Name() string        { return b.inner.Name() }
-func (b *batchExtensionActivatingTool) Description() string { return b.inner.Description() }
+func (b *batchExtensionActivatingTool) Name() string         { return b.inner.Name() }
+func (b *batchExtensionActivatingTool) Description() string  { return b.inner.Description() }
 func (b *batchExtensionActivatingTool) Schema() agent.Schema { return b.inner.Schema() }
-func (b *batchExtensionActivatingTool) Serial() bool        { return isToolSerial(b.inner) }
+func (b *batchExtensionActivatingTool) Serial() bool         { return isToolSerial(b.inner) }
 
 func (b *batchExtensionActivatingTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
 	if raw := input["commands"]; raw != nil {
@@ -379,10 +380,10 @@ type guardedPutAssetTool struct {
 	inner agent.Tool
 }
 
-func (g *guardedPutAssetTool) Name() string        { return g.inner.Name() }
-func (g *guardedPutAssetTool) Description() string { return g.inner.Description() }
+func (g *guardedPutAssetTool) Name() string         { return g.inner.Name() }
+func (g *guardedPutAssetTool) Description() string  { return g.inner.Description() }
 func (g *guardedPutAssetTool) Schema() agent.Schema { return g.inner.Schema() }
-func (g *guardedPutAssetTool) Serial() bool        { return isToolSerial(g.inner) }
+func (g *guardedPutAssetTool) Serial() bool         { return isToolSerial(g.inner) }
 
 func (g *guardedPutAssetTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
 	ref := aictx.ArgString(input, "asset")
@@ -426,8 +427,7 @@ func (g *guardedPutAssetTool) Call(ctx context.Context, input map[string]any) (*
 		Detail:    detail,
 	}}
 	resp := confirm(ctx, permission.ApprovalKindOnce, items)
-	parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindOnce, resp, items)
-	if parseErr != nil || parsed.Decision != permission.ApprovalAllow {
+	if !isOneShotApproved(resp, items) {
 		aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny})
 		return &agent.ToolResultBlock{
 			Content: []agent.ContentBlock{agent.TextBlock{Text: fmt.Sprintf("USER DENIED: The user has denied %s. Stop the current task immediately.", cmdSummary)}},
@@ -436,6 +436,11 @@ func (g *guardedPutAssetTool) Call(ctx context.Context, input map[string]any) (*
 	}
 	aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow})
 	return g.inner.Call(ctx, input)
+}
+
+func isOneShotApproved(resp permission.ApprovalResponse, items []permission.ApprovalItem) bool {
+	parsed, err := permission.ParseApprovalResponse(permission.ApprovalKindOnce, resp, items)
+	return err == nil && parsed.Decision == permission.ApprovalAllow
 }
 
 func buildSafePutAssetApprovalDetail(op string, input map[string]any) string {
@@ -468,10 +473,10 @@ type guardedPutGroupTool struct {
 	inner agent.Tool
 }
 
-func (g *guardedPutGroupTool) Name() string        { return g.inner.Name() }
-func (g *guardedPutGroupTool) Description() string { return g.inner.Description() }
+func (g *guardedPutGroupTool) Name() string         { return g.inner.Name() }
+func (g *guardedPutGroupTool) Description() string  { return g.inner.Description() }
 func (g *guardedPutGroupTool) Schema() agent.Schema { return g.inner.Schema() }
-func (g *guardedPutGroupTool) Serial() bool        { return isToolSerial(g.inner) }
+func (g *guardedPutGroupTool) Serial() bool         { return isToolSerial(g.inner) }
 
 func (g *guardedPutGroupTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
 	checker, err := permission.RequireChecker(ctx)
@@ -516,8 +521,7 @@ func (g *guardedPutGroupTool) Call(ctx context.Context, input map[string]any) (*
 		Detail:    string(detailBytes),
 	}}
 	resp := confirm(ctx, permission.ApprovalKindOnce, items)
-	parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindOnce, resp, items)
-	if parseErr != nil || parsed.Decision != permission.ApprovalAllow {
+	if !isOneShotApproved(resp, items) {
 		aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny})
 		return &agent.ToolResultBlock{
 			Content: []agent.ContentBlock{agent.TextBlock{Text: fmt.Sprintf("USER DENIED: The user has denied %s. Stop the current task immediately.", cmdSummary)}},
@@ -539,10 +543,10 @@ type guardedCpTool struct {
 	allowedLocalDirs []string
 }
 
-func (g *guardedCpTool) Name() string        { return g.inner.Name() }
-func (g *guardedCpTool) Description() string { return g.inner.Description() }
+func (g *guardedCpTool) Name() string         { return g.inner.Name() }
+func (g *guardedCpTool) Description() string  { return g.inner.Description() }
 func (g *guardedCpTool) Schema() agent.Schema { return g.inner.Schema() }
-func (g *guardedCpTool) Serial() bool        { return isToolSerial(g.inner) }
+func (g *guardedCpTool) Serial() bool         { return isToolSerial(g.inner) }
 
 func (g *guardedCpTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
 	srcRaw := aictx.ArgString(input, "src")
@@ -600,8 +604,7 @@ func (g *guardedCpTool) Call(ctx context.Context, input map[string]any) (*agent.
 			Detail:    detail,
 		}}
 		resp := confirm(ctx, permission.ApprovalKindOnce, items)
-		parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindOnce, resp, items)
-		if parseErr != nil || parsed.Decision != permission.ApprovalAllow {
+		if !isOneShotApproved(resp, items) {
 			aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny})
 			return &agent.ToolResultBlock{
 				Content: []agent.ContentBlock{agent.TextBlock{Text: "USER DENIED: The user has denied reading the local file for upload. Stop the current task immediately."}},

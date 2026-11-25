@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -24,7 +25,7 @@ import (
 	"github.com/opskat/opskat/internal/sshagent"
 )
 
-const testStrongSecret = "opskat-mcp-strong-secret-0123456789"
+const testStrongSecret = "opskat-mcp-strong-secret-0123456789" //nolint:gosec // test fixture
 
 type mcpTestClient struct {
 	t      *testing.T
@@ -65,9 +66,18 @@ func startTestServer(t *testing.T, cfg ServerConfig) (*mcpTestClient, func()) {
 	return client, cleanup
 }
 
+func shortSocketPath(t *testing.T, name string) string {
+	t.Helper()
+	// Keep Unix domain socket paths below macOS's 104-byte sun_path limit.
+	dir, err := os.MkdirTemp("", "mcp-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return filepath.Join(dir, name)
+}
+
 func startTestControlServer(t *testing.T, approver *ExternalApprover) (string, func()) {
 	t.Helper()
-	sockPath := filepath.Join(t.TempDir(), "mcp-control.sock")
+	sockPath := shortSocketPath(t, "ctrl.sock")
 	ctrl := NewControlServer(approver)
 	require.NoError(t, ctrl.Start(sockPath))
 	return sockPath, ctrl.Stop
@@ -424,9 +434,12 @@ func TestExternalApprovalEditedItemsScopeLockedAndPermanentWithEditSucceeds(t *t
 			resp := approver.ConfirmFunc(ctx, permission.ApprovalKindSingle, []permission.ApprovalItem{item})
 			// Downstream HandleConfirm always passes resp through ParseApprovalResponse.
 			parsed, parseErr := permission.ParseApprovalResponse(permission.ApprovalKindSingle, resp, []permission.ApprovalItem{item})
-			if parseErr != nil || parsed.Decision == permission.ApprovalDeny {
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			if parsed.Decision == permission.ApprovalDeny {
 				return &agent.ToolResultBlock{
-					Content: []agent.ContentBlock{agent.TextBlock{Text: "DENIED:" + parseErr.Error()}},
+					Content: []agent.ContentBlock{agent.TextBlock{Text: "DENIED"}},
 					IsError: true,
 				}, nil
 			}
@@ -790,7 +803,7 @@ func TestServerRequestSizeLimitAndCancellationNotification(t *testing.T) {
 	// 2. Subsequent normal ping still works
 	require.Nil(t, client.call("ping", nil).Error)
 
-	// 3. notifications/cancelled cancels an in-flight tool call
+	// 3. Cancellation notification cancels an in-flight tool call
 	reqBytes, err := json.Marshal(Request{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage("77"),
@@ -807,11 +820,11 @@ func TestServerRequestSizeLimitAndCancellationNotification(t *testing.T) {
 		t.Fatal("slow tool did not start")
 	}
 
-	client.sendNotification("notifications/cancelled", map[string]any{"requestId": 77})
+	client.sendNotification(NotificationCancelled, map[string]any{"requestId": 77})
 	select {
 	case <-canceled:
 	case <-time.After(2 * time.Second):
-		t.Fatal("notifications/cancelled did not cancel in-flight request")
+		t.Fatal("cancellation notification did not cancel in-flight request")
 	}
 
 	cancelLine, err := client.reader.ReadBytes('\n')
@@ -944,7 +957,7 @@ func TestControlPlaneGetPendingAuthBackoffGroupFieldsAndAddr(t *testing.T) {
 
 	ctrl := NewControlServer(approver)
 	require.Empty(t, ctrl.Addr(), "Addr must be empty before Start")
-	sockPath := filepath.Join(t.TempDir(), "ctrl-addr.sock")
+	sockPath := shortSocketPath(t, "ctrl-addr.sock")
 	require.NoError(t, ctrl.Start(sockPath))
 	defer ctrl.Stop()
 

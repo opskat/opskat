@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -127,8 +128,17 @@ func TestSocketPath(t *testing.T) {
 	})
 }
 
+func shortApprovalDir(t *testing.T) string {
+	t.Helper()
+	// Keep Unix domain socket paths below macOS's 104-byte sun_path limit.
+	dir, err := os.MkdirTemp("", "apr-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 func TestRequestApprovalContextCancel(t *testing.T) {
-	sockPath := SocketPath(t.TempDir())
+	sockPath := SocketPath(shortApprovalDir(t))
 	handlerEntered := make(chan struct{})
 	handlerCanceled := make(chan struct{})
 
