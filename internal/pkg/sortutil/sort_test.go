@@ -96,6 +96,63 @@ func TestReorderSiblings(t *testing.T) {
 	})
 }
 
+func TestReorderSiblingsBatch(t *testing.T) {
+	Convey("ReorderSiblingsBatch 批量同级重排逻辑", t, func() {
+		baseItems := []testItem{
+			{id: 1, order: 10},
+			{id: 2, order: 20},
+			{id: 3, order: 30},
+			{id: 4, order: 40},
+			{id: 5, order: 50},
+		}
+
+		cases := []struct {
+			name     string
+			movedIDs []int64
+			beforeID int64
+			want     []int64
+		}{
+			{
+				name:     "批量保序插入到 beforeID 之前",
+				movedIDs: []int64{4, 2},
+				beforeID: 1,
+				want:     []int64{4, 2, 1, 3, 5},
+			},
+			{
+				name:     "beforeID 为 0 时批量追加到末尾",
+				movedIDs: []int64{2, 4},
+				beforeID: 0,
+				want:     []int64{1, 3, 5, 2, 4},
+			},
+			{
+				name:     "去重并忽略不存在的 ID",
+				movedIDs: []int64{5, 99, 5, 3},
+				beforeID: 2,
+				want:     []int64{1, 5, 3, 2, 4},
+			},
+			{
+				name:     "beforeID 落在 movedIDs 内时插到其后首个未移动项之前",
+				movedIDs: []int64{2, 4},
+				beforeID: 2,
+				want:     []int64{1, 2, 4, 3, 5},
+			},
+			{
+				name:     "movedIDs 全为空或不存在时原样返回",
+				movedIDs: []int64{88, 99},
+				beforeID: 1,
+				want:     []int64{1, 2, 3, 4, 5},
+			},
+		}
+
+		for _, tc := range cases {
+			Convey(tc.name, func() {
+				got := ReorderSiblingsBatch(baseItems, tc.movedIDs, tc.beforeID, getID)
+				So(idsOf(got), ShouldResemble, tc.want)
+			})
+		}
+	})
+}
+
 func TestMoveItem(t *testing.T) {
 	Convey("MoveItem 通用排序移动逻辑", t, func() {
 

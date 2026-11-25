@@ -7,6 +7,8 @@ import {
   CreateAsset,
   UpdateAsset,
   DeleteAsset,
+  DeleteAssets,
+  ReorderAssets,
   GetAsset,
   ListGroups,
   CreateGroup,
@@ -16,10 +18,26 @@ import {
 import { useRecentAssetStore } from "./recentAssetStore";
 import { formatAssetPath } from "@/lib/groupPath";
 
+const EMPTY_ID_SET: ReadonlySet<number> = new Set();
+
+function uniqueIds(ids: number[]): number[] {
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 interface AssetState {
   assets: asset_entity.Asset[];
   groups: group_entity.Group[];
   selectedAssetId: number | null;
+  selectedAssetIds: number[];
+  selectedAssetIdSet: ReadonlySet<number>;
+  selectionAnchorId: number | null;
   selectedGroupId: number | null;
   collapsedGroupIds: number[];
   loading: boolean;
@@ -32,14 +50,22 @@ interface AssetState {
   createAsset: (asset: asset_entity.Asset) => Promise<void>;
   updateAsset: (asset: asset_entity.Asset) => Promise<void>;
   deleteAsset: (id: number) => Promise<void>;
+  deleteAssets: (ids: number[]) => Promise<void>;
+  reorderAssets: (ids: number[], targetGroupID: number, beforeID: number) => Promise<void>;
   getAsset: (id: number) => Promise<asset_entity.Asset>;
   getAssetPath: (asset: asset_entity.Asset) => string;
   createGroup: (group: group_entity.Group) => Promise<void>;
   updateGroup: (group: group_entity.Group) => Promise<void>;
   deleteGroup: (id: number, deleteAssets: boolean) => Promise<void>;
   selectAsset: (id: number | null) => void;
+  toggleAssetSelection: (id: number) => void;
+  selectAssetRange: (visibleAssetIds: number[], targetId: number) => void;
+  selectAllAssets: (visibleAssetIds: number[]) => void;
+  clearSelection: () => void;
+  pruneSelection: (visibleAssetIdSet: ReadonlySet<number>) => void;
   selectGroup: (id: number | null) => void;
   toggleGroupCollapsed: (id: number) => void;
+  expandGroup: (id: number) => void;
   isGroupCollapsed: (id: number) => boolean;
   refresh: () => Promise<void>;
 }
@@ -50,6 +76,9 @@ export const useAssetStore = create<AssetState>()(
       assets: [],
       groups: [],
       selectedAssetId: null,
+      selectedAssetIds: [],
+      selectedAssetIdSet: EMPTY_ID_SET,
+      selectionAnchorId: null,
       selectedGroupId: null,
       collapsedGroupIds: [],
       loading: false,
@@ -63,10 +92,32 @@ export const useAssetStore = create<AssetState>()(
           set((state) => {
             const hadUngroupedAssets = state.assets.some((asset) => !asset.GroupID);
             const hasUngroupedAssets = assets.some((asset) => !asset.GroupID);
+            const existingIds = new Set(assets.map((asset) => asset.ID));
+            const nextSelectedIds = state.selectedAssetIds.filter((id) => existingIds.has(id));
+            const nextPrimary =
+              state.selectedAssetId != null && existingIds.has(state.selectedAssetId)
+                ? state.selectedAssetId
+                : (nextSelectedIds[nextSelectedIds.length - 1] ?? null);
+            const nextAnchor =
+              state.selectionAnchorId != null && existingIds.has(state.selectionAnchorId)
+                ? state.selectionAnchorId
+                : (nextSelectedIds[nextSelectedIds.length - 1] ?? null);
+            const selectionChanged =
+              nextSelectedIds.length !== state.selectedAssetIds.length ||
+              nextPrimary !== state.selectedAssetId ||
+              nextAnchor !== state.selectionAnchorId;
             return {
               assets,
               initialized: true,
               loadErrors: { ...state.loadErrors, assets: null },
+              ...(selectionChanged
+                ? {
+                    selectedAssetIds: nextSelectedIds,
+                    selectedAssetIdSet: nextSelectedIds.length > 0 ? new Set(nextSelectedIds) : EMPTY_ID_SET,
+                    selectedAssetId: nextPrimary,
+                    selectionAnchorId: nextAnchor,
+                  }
+                : {}),
               collapsedGroupIds:
                 state.initialized && !hadUngroupedAssets && hasUngroupedAssets
                   ? state.collapsedGroupIds.filter((id) => id !== 0)
@@ -104,7 +155,44 @@ export const useAssetStore = create<AssetState>()(
       deleteAsset: async (id) => {
         await DeleteAsset(id);
         useRecentAssetStore.getState().remove(id);
-        set({ selectedAssetId: null });
+        set({
+          selectedAssetId: null,
+          selectedAssetIds: [],
+          selectedAssetIdSet: EMPTY_ID_SET,
+          selectionAnchorId: null,
+        });
+        await get().refresh();
+      },
+
+      deleteAssets: async (ids) => {
+        const unique = uniqueIds(ids);
+        if (unique.length === 0) return;
+        await DeleteAssets(unique);
+        const recent = useRecentAssetStore.getState();
+        for (const id of unique) recent.remove(id);
+        const removed = new Set(unique);
+        set((state) => {
+          const nextIds = state.selectedAssetIds.filter((id) => !removed.has(id));
+          return {
+            selectedAssetIds: nextIds,
+            selectedAssetIdSet: nextIds.length > 0 ? new Set(nextIds) : EMPTY_ID_SET,
+            selectedAssetId:
+              state.selectedAssetId != null && !removed.has(state.selectedAssetId)
+                ? state.selectedAssetId
+                : (nextIds[nextIds.length - 1] ?? null),
+            selectionAnchorId:
+              state.selectionAnchorId != null && !removed.has(state.selectionAnchorId)
+                ? state.selectionAnchorId
+                : (nextIds[nextIds.length - 1] ?? null),
+          };
+        });
+        await get().refresh();
+      },
+
+      reorderAssets: async (ids, targetGroupID, beforeID) => {
+        const unique = uniqueIds(ids);
+        if (unique.length === 0) return;
+        await ReorderAssets(unique, targetGroupID, beforeID);
         await get().refresh();
       },
 
@@ -132,7 +220,119 @@ export const useAssetStore = create<AssetState>()(
         await get().refresh();
       },
 
-      selectAsset: (id) => set({ selectedAssetId: id }),
+      selectAsset: (id) =>
+        set(() => {
+          if (id === null) {
+            return {
+              selectedAssetId: null,
+              selectedAssetIds: [],
+              selectedAssetIdSet: EMPTY_ID_SET,
+              selectionAnchorId: null,
+            };
+          }
+          return {
+            selectedAssetId: id,
+            selectedAssetIds: [id],
+            selectedAssetIdSet: new Set([id]),
+            selectionAnchorId: id,
+          };
+        }),
+
+      toggleAssetSelection: (id) =>
+        set((state) => {
+          // 兼容直接 setState({ selectedAssetId }) 后的首次 Ctrl/Cmd+Click
+          const baseIds =
+            state.selectedAssetIds.length > 0
+              ? state.selectedAssetIds
+              : state.selectedAssetId != null
+                ? [state.selectedAssetId]
+                : [];
+          const exists = baseIds.includes(id);
+          const nextIds = exists ? baseIds.filter((item) => item !== id) : [...baseIds, id];
+          return {
+            selectedAssetIds: nextIds,
+            selectedAssetIdSet: nextIds.length > 0 ? new Set(nextIds) : EMPTY_ID_SET,
+            selectedAssetId: exists ? (nextIds[nextIds.length - 1] ?? null) : id,
+            selectionAnchorId: id,
+          };
+        }),
+
+      selectAssetRange: (visibleAssetIds, targetId) =>
+        set((state) => {
+          const anchor = state.selectionAnchorId ?? state.selectedAssetId;
+          const from = anchor != null ? visibleAssetIds.indexOf(anchor) : -1;
+          const to = visibleAssetIds.indexOf(targetId);
+          if (from === -1 || to === -1) {
+            return {
+              selectedAssetId: targetId,
+              selectedAssetIds: [targetId],
+              selectedAssetIdSet: new Set([targetId]),
+              selectionAnchorId: targetId,
+            };
+          }
+          const range = uniqueIds(visibleAssetIds.slice(Math.min(from, to), Math.max(from, to) + 1));
+          return {
+            selectedAssetId: targetId,
+            selectedAssetIds: range,
+            selectedAssetIdSet: range.length > 0 ? new Set(range) : EMPTY_ID_SET,
+            selectionAnchorId: anchor,
+          };
+        }),
+
+      selectAllAssets: (visibleAssetIds) =>
+        set(() => {
+          const nextIds = uniqueIds(visibleAssetIds);
+          return {
+            selectedAssetIds: nextIds,
+            selectedAssetIdSet: nextIds.length > 0 ? new Set(nextIds) : EMPTY_ID_SET,
+            selectedAssetId: nextIds[0] ?? null,
+            selectionAnchorId: nextIds[0] ?? null,
+          };
+        }),
+
+      clearSelection: () =>
+        set((state) => {
+          if (
+            state.selectedAssetIds.length === 0 &&
+            state.selectedAssetId === null &&
+            state.selectionAnchorId === null
+          ) {
+            return state;
+          }
+          return {
+            selectedAssetId: null,
+            selectedAssetIds: [],
+            selectedAssetIdSet: EMPTY_ID_SET,
+            selectionAnchorId: null,
+          };
+        }),
+
+      pruneSelection: (visibleAssetIdSet) =>
+        set((state) => {
+          const nextIds = state.selectedAssetIds.filter((id) => visibleAssetIdSet.has(id));
+          const nextPrimary =
+            state.selectedAssetId != null && visibleAssetIdSet.has(state.selectedAssetId)
+              ? state.selectedAssetId
+              : (nextIds[nextIds.length - 1] ?? null);
+          const nextAnchor =
+            state.selectionAnchorId != null && visibleAssetIdSet.has(state.selectionAnchorId)
+              ? state.selectionAnchorId
+              : (nextIds[nextIds.length - 1] ?? null);
+          if (
+            nextIds.length === state.selectedAssetIds.length &&
+            nextPrimary === state.selectedAssetId &&
+            nextAnchor === state.selectionAnchorId
+          ) {
+            return state;
+          }
+          return {
+            selectedAssetIds: nextIds,
+            selectedAssetIdSet: nextIds.length > 0 ? new Set(nextIds) : EMPTY_ID_SET,
+            selectedAssetId: nextPrimary,
+            selectionAnchorId: nextAnchor,
+          };
+        }),
+
       selectGroup: (id) => set({ selectedGroupId: id }),
 
       toggleGroupCollapsed: (id) =>
@@ -143,6 +343,23 @@ export const useAssetStore = create<AssetState>()(
               ? state.collapsedGroupIds.filter((g) => g !== id)
               : [...state.collapsedGroupIds, id],
           };
+        }),
+
+      expandGroup: (id) =>
+        set((state) => {
+          // 同时展开该分组及其祖先链，确保新建子分组立即可见；带 visited 防环。
+          const toExpand = new Set<number>([id]);
+          const byId = new Map(state.groups.map((g) => [g.ID, g] as const));
+          let cur = id;
+          while (cur > 0) {
+            const group = byId.get(cur);
+            if (!group || !group.ParentID || toExpand.has(group.ParentID)) break;
+            toExpand.add(group.ParentID);
+            cur = group.ParentID;
+          }
+          const next = state.collapsedGroupIds.filter((gid) => !toExpand.has(gid));
+          if (next.length === state.collapsedGroupIds.length) return state;
+          return { collapsedGroupIds: next };
         }),
 
       isGroupCollapsed: (id) => get().collapsedGroupIds.includes(id),

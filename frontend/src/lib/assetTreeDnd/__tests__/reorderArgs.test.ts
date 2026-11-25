@@ -21,7 +21,7 @@ describe("insertionToReorderArgs - asset", () => {
         groups,
         assets,
       })
-    ).toEqual({ kind: "asset", id: 99, targetGroupID: 1, beforeID: 11 });
+    ).toEqual({ kind: "asset", id: 99, ids: [99], targetGroupID: 1, beforeID: 11 });
   });
 
   it("after-asset 中间 → beforeID = next sibling", () => {
@@ -32,7 +32,7 @@ describe("insertionToReorderArgs - asset", () => {
         groups,
         assets,
       })
-    ).toEqual({ kind: "asset", id: 99, targetGroupID: 1, beforeID: 11 });
+    ).toEqual({ kind: "asset", id: 99, ids: [99], targetGroupID: 1, beforeID: 11 });
   });
 
   it("after-asset 末尾 → beforeID = 0", () => {
@@ -43,7 +43,7 @@ describe("insertionToReorderArgs - asset", () => {
         groups,
         assets,
       })
-    ).toEqual({ kind: "asset", id: 99, targetGroupID: 1, beforeID: 0 });
+    ).toEqual({ kind: "asset", id: 99, ids: [99], targetGroupID: 1, beforeID: 0 });
   });
 
   it("after-asset 末尾时 next sibling 排除 active 自己", () => {
@@ -54,7 +54,7 @@ describe("insertionToReorderArgs - asset", () => {
         groups,
         assets,
       })
-    ).toEqual({ kind: "asset", id: 11, targetGroupID: 1, beforeID: 0 });
+    ).toEqual({ kind: "asset", id: 11, ids: [11], targetGroupID: 1, beforeID: 0 });
   });
 
   it("before-group(G) + asset → 移到 G.ParentID 末尾", () => {
@@ -65,7 +65,7 @@ describe("insertionToReorderArgs - asset", () => {
         groups,
         assets,
       })
-    ).toEqual({ kind: "asset", id: 99, targetGroupID: 1, beforeID: 0 });
+    ).toEqual({ kind: "asset", id: 99, ids: [99], targetGroupID: 1, beforeID: 0 });
   });
 
   it("into-group-first(G) + asset, G 已有 assets → beforeID = G 首位 asset", () => {
@@ -76,7 +76,30 @@ describe("insertionToReorderArgs - asset", () => {
         groups,
         assets,
       })
-    ).toEqual({ kind: "asset", id: 99, targetGroupID: 2, beforeID: 20 });
+    ).toEqual({ kind: "asset", id: 99, ids: [99], targetGroupID: 2, beforeID: 20 });
+  });
+
+  it("into-group-first(G) + multi-asset 排除整个选中集并保序", () => {
+    expect(
+      insertionToReorderArgs({
+        point: { kind: "into-group-first", groupID: 2, depth: 0 },
+        active: { kind: "asset", id: 10, ids: [10, 20] },
+        groups,
+        assets,
+      })
+    ).toEqual({ kind: "asset", id: 10, ids: [10, 20], targetGroupID: 2, beforeID: 21 });
+  });
+
+  it("筛选态 into-group-first(G) + multi-asset → beforeID = 0（追加到目标组末尾）", () => {
+    expect(
+      insertionToReorderArgs({
+        point: { kind: "into-group-first", groupID: 2, depth: 0 },
+        active: { kind: "asset", id: 10, ids: [10, 11] },
+        groups,
+        assets,
+        isFiltered: true,
+      })
+    ).toEqual({ kind: "asset", id: 10, ids: [10, 11], targetGroupID: 2, beforeID: 0 });
   });
 
   it("into-group-first(G) + asset, G 没有 asset → beforeID = 0", () => {
@@ -87,7 +110,7 @@ describe("insertionToReorderArgs - asset", () => {
         groups,
         assets,
       })
-    ).toEqual({ kind: "asset", id: 99, targetGroupID: 11, beforeID: 0 });
+    ).toEqual({ kind: "asset", id: 99, ids: [99], targetGroupID: 11, beforeID: 0 });
   });
 
   it("root-end + asset → targetGroupID = 0, beforeID = 0", () => {
@@ -98,7 +121,7 @@ describe("insertionToReorderArgs - asset", () => {
         groups,
         assets,
       })
-    ).toEqual({ kind: "asset", id: 99, targetGroupID: 0, beforeID: 0 });
+    ).toEqual({ kind: "asset", id: 99, ids: [99], targetGroupID: 0, beforeID: 0 });
   });
 });
 
@@ -115,6 +138,26 @@ describe("insertionToReorderArgs - group", () => {
         assets,
       })
     ).toEqual({ kind: "group", id: 99, targetParentID: 0, beforeID: 2 });
+  });
+
+  it("after-group(G) + group → 同父级排到 G 之后（下一兄弟或末尾 0）", () => {
+    expect(
+      insertionToReorderArgs({
+        point: { kind: "after-group", groupID: 1, depth: 0 },
+        active: { kind: "group", id: 99 },
+        groups,
+        assets,
+      })
+    ).toEqual({ kind: "group", id: 99, targetParentID: 0, beforeID: 2 });
+
+    expect(
+      insertionToReorderArgs({
+        point: { kind: "after-group", groupID: 12, depth: 1 },
+        active: { kind: "group", id: 99 },
+        groups,
+        assets,
+      })
+    ).toEqual({ kind: "group", id: 99, targetParentID: 1, beforeID: 0 });
   });
 
   it("into-group-first(G) + group, G 有子 group → beforeID = G 首位子 group", () => {

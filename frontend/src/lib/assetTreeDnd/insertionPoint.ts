@@ -3,6 +3,7 @@ import type { Row } from "./flattenTree";
 
 export type InsertionPoint =
   | { kind: "before-group"; groupID: number; depth: number }
+  | { kind: "after-group"; groupID: number; depth: number }
   | { kind: "into-group-first"; groupID: number; depth: number }
   | { kind: "before-asset"; assetID: number; groupID: number; depth: number }
   | { kind: "after-asset"; assetID: number; groupID: number; depth: number }
@@ -15,12 +16,18 @@ export interface RowRect {
   height: number;
 }
 
+export type DragActive = { kind: "asset"; id: number; ids?: number[] } | { kind: "group"; id: number };
+
 export interface ComputeInsertionPointInput {
   rows: Row[];
   rowRects: Map<string, RowRect>;
   pointerY: number;
-  active: { kind: "asset" | "group"; id: number };
+  active: DragActive;
   groups: group_entity.Group[];
+  /** 搜索或类型筛选生效时，仅允许拖入目标分组/未分组，禁止组内精细插队排序。 */
+  isFiltered?: boolean;
+  /** 拖拽已分组资产且当前树无“未分组”桶时，底部的动态“移至未分组”投放区矩形。 */
+  ungroupedZoneRect?: RowRect | null;
 }
 
 export function rowKey(row: Row): string {
@@ -53,8 +60,23 @@ export function computeInsertionPoint({
   pointerY,
   active,
   groups,
+  isFiltered = false,
+  ungroupedZoneRect = null,
 }: ComputeInsertionPointInput): InsertionPoint {
-  if (rows.length === 0) return { kind: "root-end" };
+  if (
+    active.kind === "asset" &&
+    ungroupedZoneRect &&
+    pointerY >= ungroupedZoneRect.top &&
+    pointerY <= ungroupedZoneRect.bottom
+  ) {
+    return { kind: "into-group-first", groupID: 0, depth: 0 };
+  }
+
+  if (rows.length === 0) return active.kind === "group" && !isFiltered ? { kind: "root-end" } : { kind: "invalid" };
+
+  if (isFiltered && active.kind === "group") {
+    return { kind: "invalid" };
+  }
 
   let hitIdx = -1;
   for (let i = 0; i < rows.length; i++) {
@@ -69,17 +91,20 @@ export function computeInsertionPoint({
   if (hitIdx < 0) {
     // pointer 超出最后一行：仅允许 group 落到 root 末尾；
     // asset 不走 root-end，避免无意中拖出原 group → 落入未分组。
-    return active.kind === "group" ? { kind: "root-end" } : { kind: "invalid" };
+    return active.kind === "group" && !isFiltered ? { kind: "root-end" } : { kind: "invalid" };
   }
 
   const row = rows[hitIdx];
   const rect = rowRects.get(rowKey(row))!;
   const upperHalf = pointerY < rect.top + rect.height / 2;
+  const activeAssetSet =
+    active.kind === "asset" ? new Set(active.ids && active.ids.length > 0 ? active.ids : [active.id]) : null;
 
   switch (row.kind) {
     case "asset": {
       if (active.kind === "group") return { kind: "invalid" };
-      if (active.id === row.assetID) return { kind: "invalid" };
+      if (isFiltered) return { kind: "invalid" };
+      if (activeAssetSet?.has(row.assetID)) return { kind: "invalid" };
       return upperHalf
         ? { kind: "before-asset", assetID: row.assetID, groupID: row.groupID, depth: row.depth }
         : { kind: "after-asset", assetID: row.assetID, groupID: row.groupID, depth: row.depth };
@@ -89,7 +114,7 @@ export function computeInsertionPoint({
         if (active.kind === "group") return { kind: "invalid" };
         return { kind: "into-group-first", groupID: 0, depth: row.depth };
       }
-      // asset 拖到任意 group header（无论上下半区）一律视为"进入该 group"。
+      // asset 拖到任意 group header（无论上中下区）一律视为"进入该 group"。
       // 不让 asset 走 before-group → 否则顶级 group 的 ParentID=0 会把 asset 误推到未分组。
       if (active.kind === "asset") {
         return { kind: "into-group-first", groupID: row.groupID, depth: row.depth };
@@ -97,9 +122,15 @@ export function computeInsertionPoint({
       if (isGroupSelfOrDescendant(row.groupID, active.id, groups)) {
         return { kind: "invalid" };
       }
-      return upperHalf
-        ? { kind: "before-group", groupID: row.groupID, depth: row.depth }
-        : { kind: "into-group-first", groupID: row.groupID, depth: row.depth };
+      // 三段热区：上 25% 插入该分组之前，中 50% 移入成为子分组，下 25% 插入该分组之后。
+      const offsetY = pointerY - rect.top;
+      if (offsetY < rect.height * 0.25) {
+        return { kind: "before-group", groupID: row.groupID, depth: row.depth };
+      }
+      if (offsetY >= rect.height * 0.75) {
+        return { kind: "after-group", groupID: row.groupID, depth: row.depth };
+      }
+      return { kind: "into-group-first", groupID: row.groupID, depth: row.depth };
     }
     case "empty-placeholder": {
       if (active.kind === "group" && isGroupSelfOrDescendant(row.groupID, active.id, groups)) {

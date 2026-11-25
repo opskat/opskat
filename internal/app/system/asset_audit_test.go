@@ -223,3 +223,67 @@ func TestDeleteGroup_KeepingAssetsWritesNoAssetAudit(t *testing.T) {
 	require.NoError(t, s.DeleteGroup(4, false))
 	assert.Empty(t, auditMem.logs)
 }
+
+func TestReorderAssets_AuditsCrossGroupOnlyAndChecksTargetGroup(t *testing.T) {
+	s, assetMock, auditMem := setupAssetAudit(t)
+	s.ctx = dbutil.WithTransactionRunner(s.ctx, func(ctx context.Context, fn func(context.Context) error) error {
+		return fn(ctx)
+	})
+
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+	groupMock := mock_group_repo.NewMockGroupRepo(ctrl)
+	origGroup := group_repo.Group()
+	group_repo.RegisterGroup(groupMock)
+	t.Cleanup(func() {
+		if origGroup != nil {
+			group_repo.RegisterGroup(origGroup)
+		}
+	})
+
+	// 跨分组批量移动：目标分组 8 存在；资产 11 跨组（3 -> 8），资产 12 已在分组 8。
+	a11 := sshAsset(t, 11, "web-11")
+	a12 := sshAsset(t, 12, "web-12")
+	a12.GroupID = 8
+	groupMock.EXPECT().Find(gomock.Any(), int64(8)).Return(&group_entity.Group{ID: 8, Name: "target"}, nil)
+	assetMock.EXPECT().FindByIDs(gomock.Any(), []int64{11, 12}).Return([]*asset_entity.Asset{a11, a12}, nil)
+	assetMock.EXPECT().UpdateGroupIDs(gomock.Any(), []int64{11}, int64(8)).Return(nil)
+	assetMock.EXPECT().List(gomock.Any(), asset_repo.ListOptions{GroupID: 8, ExactGroupID: true}).
+		Return([]*asset_entity.Asset{{ID: 11, GroupID: 8}, {ID: 12, GroupID: 8}}, nil)
+	assetMock.EXPECT().UpdateSortOrder(gomock.Any(), int64(11), 10).Return(nil)
+	assetMock.EXPECT().UpdateSortOrder(gomock.Any(), int64(12), 20).Return(nil)
+
+	require.NoError(t, s.ReorderAssets([]int64{11, 12}, 8, 0))
+
+	require.Len(t, auditMem.logs, 1)
+	assert.Equal(t, "desktop", auditMem.logs[0].Source)
+	assert.Equal(t, "update_asset", auditMem.logs[0].ToolName)
+	assert.Equal(t, int64(11), auditMem.logs[0].AssetID)
+	assert.Contains(t, auditMem.logs[0].Request, `"group_id":8`)
+
+	// 不存在的目标分组在 IPC 边界即拒绝
+	groupMock.EXPECT().Find(gomock.Any(), int64(999)).Return(nil, assert.AnError)
+	assert.Error(t, s.ReorderAssets([]int64{11}, 999, 0))
+}
+
+func TestDeleteAssets_WritesDesktopAuditPerAsset(t *testing.T) {
+	s, assetMock, auditMem := setupAssetAudit(t)
+	s.ctx = dbutil.WithTransactionRunner(s.ctx, func(ctx context.Context, fn func(context.Context) error) error {
+		return fn(ctx)
+	})
+
+	a1 := sshAsset(t, 21, "db-1")
+	a2 := sshAsset(t, 22, "db-2")
+	assetMock.EXPECT().FindByIDs(gomock.Any(), []int64{21, 22}).Return([]*asset_entity.Asset{a1, a2}, nil)
+	assetMock.EXPECT().DeleteByIDs(gomock.Any(), []int64{21, 22}).Return(nil)
+
+	require.NoError(t, s.DeleteAssets([]int64{21, 22}))
+
+	require.Len(t, auditMem.logs, 2)
+	assert.Equal(t, "desktop", auditMem.logs[0].Source)
+	assert.Equal(t, "delete_asset", auditMem.logs[0].ToolName)
+	assert.Equal(t, int64(21), auditMem.logs[0].AssetID)
+	assert.Equal(t, "db-1", auditMem.logs[0].AssetName)
+	assert.Equal(t, int64(22), auditMem.logs[1].AssetID)
+	assert.Equal(t, "db-2", auditMem.logs[1].AssetName)
+}

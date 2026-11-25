@@ -1,13 +1,16 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import {
   ASSET_SIDEBAR_ATTR,
+  copySelectedAssetMarkdownRef,
   formatAssetMarkdownRef,
+  formatAssetMarkdownRefs,
   parseOpsctlAssetHref,
   parseOpsctlAssetMarkdown,
   shouldCopyAssetRef,
   splitOpsctlAssetRefs,
 } from "./assetRef";
 import { useAssetStore } from "@/stores/assetStore";
+import { asset_entity, group_entity } from "../../wailsjs/go/models";
 
 describe("formatAssetMarkdownRef", () => {
   it("formats a name and id as a markdown opsctl link", () => {
@@ -18,13 +21,47 @@ describe("formatAssetMarkdownRef", () => {
     expect(formatAssetMarkdownRef("prod [web]", 9)).toBe("[prod \\[web\\]](opsctl://asset/9)");
     expect(formatAssetMarkdownRef("a\\b", 2)).toBe("[a\\\\b](opsctl://asset/2)");
   });
+
+  it("formats multiple asset references as newline-separated markdown links", () => {
+    expect(
+      formatAssetMarkdownRefs([
+        { ID: 1, Name: "web-01" },
+        { ID: 2, Name: "db-01" },
+      ])
+    ).toBe("[web-01](opsctl://asset/1)\n[db-01](opsctl://asset/2)");
+  });
+});
+
+describe("copySelectedAssetMarkdownRef", () => {
+  it("copies multi-selected assets in visible tree order", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const g1 = new group_entity.Group({ ID: 1, Name: "Prod", ParentID: 0, SortOrder: 10 });
+    const a1 = new asset_entity.Asset({ ID: 10, Name: "web-01", GroupID: 1, Type: "ssh", Status: 1, SortOrder: 10 });
+    const a2 = new asset_entity.Asset({ ID: 20, Name: "web-02", GroupID: 1, Type: "ssh", Status: 1, SortOrder: 20 });
+    useAssetStore.setState({
+      groups: [g1],
+      assets: [a1, a2],
+      collapsedGroupIds: [],
+      selectedAssetId: 10,
+      selectedAssetIds: [20, 10], // 倒序点击
+      selectedAssetIdSet: new Set([20, 10]),
+    });
+
+    const copied = await copySelectedAssetMarkdownRef();
+    expect(copied).toBe("[web-01](opsctl://asset/10)\n[web-02](opsctl://asset/20)");
+    expect(writeText).toHaveBeenCalledWith("[web-01](opsctl://asset/10)\n[web-02](opsctl://asset/20)");
+  });
 });
 
 describe("shouldCopyAssetRef", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
     window.getSelection()?.removeAllRanges();
-    useAssetStore.setState({ selectedAssetId: 1 });
+    useAssetStore.setState({ selectedAssetId: 1, selectedAssetIds: [], selectedAssetIdSet: new Set() });
   });
 
   // Mounts a child of the asset sidebar root, which is the only surface that owns

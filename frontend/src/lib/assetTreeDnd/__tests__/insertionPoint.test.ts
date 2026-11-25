@@ -104,6 +104,18 @@ describe("computeInsertionPoint - group active", () => {
     ).toEqual({ kind: "before-group", groupID: 1, depth: 0 });
   });
 
+  it("group 拖到另一 group header 中间 50% → into-group-first（移入子分组）", () => {
+    expect(
+      computeInsertionPoint({ rows, rowRects: rects, pointerY: 12, active: { kind: "group", id: 2 }, groups })
+    ).toEqual({ kind: "into-group-first", groupID: 1, depth: 0 });
+  });
+
+  it("group 拖到另一 group header 下方 25% → after-group（排在该分组之后）", () => {
+    expect(
+      computeInsertionPoint({ rows, rowRects: rects, pointerY: 20, active: { kind: "group", id: 2 }, groups })
+    ).toEqual({ kind: "after-group", groupID: 1, depth: 0 });
+  });
+
   it("group 拖到自己或自己的子孙 → invalid", () => {
     expect(
       computeInsertionPoint({ rows, rowRects: rects, pointerY: 24 + 5, active: { kind: "group", id: 1 }, groups })
@@ -154,5 +166,77 @@ describe("computeInsertionPoint - empty placeholder & ungrouped", () => {
         groups,
       })
     ).toEqual({ kind: "into-group-first", groupID: 0, depth: 0 });
+  });
+
+  it("动态未分组投放区命中时 → into-group-first(groupID: 0)", () => {
+    expect(
+      computeInsertionPoint({
+        rows,
+        rowRects: rects,
+        pointerY: 110,
+        active: { kind: "asset", id: 99, ids: [99, 100] },
+        groups,
+        ungroupedZoneRect: { top: 100, bottom: 132, height: 32 },
+      })
+    ).toEqual({ kind: "into-group-first", groupID: 0, depth: 0 });
+  });
+});
+
+describe("computeInsertionPoint - multi-asset & filtered mode", () => {
+  const groups = [g(1), g(2)];
+  const rows: Row[] = [
+    { kind: "group-header", groupID: 1, depth: 0, collapsed: false },
+    { kind: "asset", assetID: 10, groupID: 1, depth: 1 },
+    { kind: "asset", assetID: 11, groupID: 1, depth: 1 },
+    { kind: "group-header", groupID: 2, depth: 0, collapsed: false },
+    { kind: "asset", assetID: 20, groupID: 2, depth: 1 },
+  ];
+  const rects = makeRects(rows);
+
+  it("多选拖拽落在选中集自身任一行上 → invalid", () => {
+    expect(
+      computeInsertionPoint({
+        rows,
+        rowRects: rects,
+        pointerY: 48 + 5,
+        active: { kind: "asset", id: 10, ids: [10, 11] },
+        groups,
+      })
+    ).toEqual({ kind: "invalid" });
+  });
+
+  it("搜索/筛选态：允许资产拖入分组，禁止资产行插队排序线和分组拖拽", () => {
+    expect(
+      computeInsertionPoint({
+        rows,
+        rowRects: rects,
+        pointerY: 72 + 10,
+        active: { kind: "asset", id: 10, ids: [10, 11] },
+        groups,
+        isFiltered: true,
+      })
+    ).toEqual({ kind: "into-group-first", groupID: 2, depth: 0 });
+
+    expect(
+      computeInsertionPoint({
+        rows,
+        rowRects: rects,
+        pointerY: 96 + 5,
+        active: { kind: "asset", id: 10, ids: [10, 11] },
+        groups,
+        isFiltered: true,
+      })
+    ).toEqual({ kind: "invalid" });
+
+    expect(
+      computeInsertionPoint({
+        rows,
+        rowRects: rects,
+        pointerY: 5,
+        active: { kind: "group", id: 2 },
+        groups,
+        isFiltered: true,
+      })
+    ).toEqual({ kind: "invalid" });
   });
 });

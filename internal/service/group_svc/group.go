@@ -47,6 +47,18 @@ func (s *groupSvc) Create(ctx context.Context, group *group_entity.Group) error 
 	if err := group.Validate(); err != nil {
 		return err
 	}
+	if group.ParentID < 0 {
+		return fmt.Errorf("上级分组 ID 无效")
+	}
+	if group.ParentID > 0 {
+		allGroups, err := group_repo.Group().List(ctx)
+		if err != nil {
+			return err
+		}
+		if err := validateGroupParent(0, group.ParentID, allGroups); err != nil {
+			return err
+		}
+	}
 	now := time.Now().Unix()
 	group.Createtime = now
 	group.Updatetime = now
@@ -56,6 +68,18 @@ func (s *groupSvc) Create(ctx context.Context, group *group_entity.Group) error 
 func (s *groupSvc) Update(ctx context.Context, group *group_entity.Group) error {
 	if err := group.Validate(); err != nil {
 		return err
+	}
+	if group.ParentID < 0 {
+		return fmt.Errorf("上级分组 ID 无效")
+	}
+	if group.ParentID > 0 {
+		allGroups, err := group_repo.Group().List(ctx)
+		if err != nil {
+			return err
+		}
+		if err := validateGroupParent(group.ID, group.ParentID, allGroups); err != nil {
+			return err
+		}
 	}
 	group.Updatetime = time.Now().Unix()
 	return group_repo.Group().Update(ctx, group)
@@ -147,10 +171,53 @@ func (s *groupSvc) Move(ctx context.Context, id int64, direction string) error {
 	)
 }
 
+// validateGroupParent 校验目标上级分组是否合法：允许为 0（顶级），否则必须存在，
+// 且 id > 0 时不能指向自身或自身子孙（防止成环）。
+func validateGroupParent(id, targetParentID int64, allGroups []*group_entity.Group) error {
+	if targetParentID == 0 {
+		return nil
+	}
+	if targetParentID < 0 {
+		return fmt.Errorf("上级分组 ID 无效")
+	}
+	if id > 0 && id == targetParentID {
+		return fmt.Errorf("不能把分组拖到自身下")
+	}
+	parents := make(map[int64]int64, len(allGroups))
+	for _, g := range allGroups {
+		parents[g.ID] = g.ParentID
+	}
+	if _, exists := parents[targetParentID]; !exists {
+		return fmt.Errorf("上级分组不存在: %d", targetParentID)
+	}
+	if id > 0 {
+		visited := make(map[int64]struct{})
+		cursor := targetParentID
+		for cursor != 0 {
+			if cursor == id {
+				return fmt.Errorf("不能把分组拖到自己的子孙下")
+			}
+			if _, seen := visited[cursor]; seen {
+				break
+			}
+			visited[cursor] = struct{}{}
+			next, ok := parents[cursor]
+			if !ok {
+				break
+			}
+			cursor = next
+		}
+	}
+	return nil
+}
+
 // Reorder 把 id 移动到 targetParentID 下 beforeID 之前。beforeID == 0 表示插到末尾。
-// 校验：不能把分组拖进自己或自己的子孙（成环）。
+// 校验：不能把分组拖进自己或自己的子孙（成环），且非 0 目标父级必须存在。
 // 跨父级时同步 ParentID。重排目标父级下所有兄弟的 sort_order，等间距 (10/20/30...)。
 func (s *groupSvc) Reorder(ctx context.Context, id, targetParentID, beforeID int64) error {
+	if targetParentID < 0 {
+		return fmt.Errorf("上级分组 ID 无效")
+	}
 	if id == targetParentID {
 		return fmt.Errorf("不能把分组拖到自身下")
 	}
@@ -166,23 +233,8 @@ func (s *groupSvc) Reorder(ctx context.Context, id, targetParentID, beforeID int
 			return err
 		}
 
-		// 成环校验：从 targetParentID 沿 ParentID 链向上走，若经过 id 则成环。
-		if targetParentID != 0 {
-			parents := make(map[int64]int64, len(allGroups))
-			for _, g := range allGroups {
-				parents[g.ID] = g.ParentID
-			}
-			cursor := targetParentID
-			for cursor != 0 {
-				if cursor == id {
-					return fmt.Errorf("不能把分组拖到自己的子孙下")
-				}
-				next, ok := parents[cursor]
-				if !ok {
-					break
-				}
-				cursor = next
-			}
+		if err := validateGroupParent(id, targetParentID, allGroups); err != nil {
+			return err
 		}
 
 		// 跨父级迁移

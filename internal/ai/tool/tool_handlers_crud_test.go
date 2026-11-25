@@ -161,11 +161,40 @@ func (r *fakeAssetRepo) DeleteByGroupID(_ context.Context, groupID int64) error 
 	}
 	return nil
 }
+func (r *fakeAssetRepo) FindByIDs(_ context.Context, ids []int64) ([]*asset_entity.Asset, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*asset_entity.Asset, 0, len(ids))
+	for _, id := range ids {
+		if a, ok := r.byID[id]; ok {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+func (r *fakeAssetRepo) DeleteByIDs(_ context.Context, ids []int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, id := range ids {
+		delete(r.byID, id)
+	}
+	return nil
+}
 func (r *fakeAssetRepo) FindByCredentialID(_ context.Context, _ int64) ([]*asset_entity.Asset, error) {
 	return nil, nil
 }
 func (r *fakeAssetRepo) UpdateSortOrder(_ context.Context, _ int64, _ int) error { return nil }
 func (r *fakeAssetRepo) UpdateGroupID(_ context.Context, _, _ int64) error       { return nil }
+func (r *fakeAssetRepo) UpdateGroupIDs(_ context.Context, ids []int64, groupID int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, id := range ids {
+		if a, ok := r.byID[id]; ok {
+			a.GroupID = groupID
+		}
+	}
+	return nil
+}
 func (r *fakeAssetRepo) CountByTypes(_ context.Context, _ []string) (int64, error) {
 	return 0, nil
 }
@@ -733,6 +762,17 @@ func TestHandlePutGroup_CreateThenUpdate(t *testing.T) {
 	}
 	if got := env.group("prod").Description; got != "production fleet" {
 		t.Errorf("description = %q, want %q", got, "production fleet")
+	}
+
+	if _, err := handlePutGroup(env.ctx, map[string]any{
+		"name": "child", "parent_id": float64(env.group("prod").ID),
+	}); err != nil {
+		t.Fatalf("create child failed: %v", err)
+	}
+	if _, err := handlePutGroup(env.ctx, map[string]any{
+		"id": float64(env.group("prod").ID), "parent_id": float64(env.group("child").ID),
+	}); err == nil {
+		t.Fatalf("updating parent_id to descendant must be rejected")
 	}
 }
 

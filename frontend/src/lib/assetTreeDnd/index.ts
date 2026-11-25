@@ -2,6 +2,7 @@ export { buildTreeIndex, flattenTree, type Row, type FlattenInput, type TreeInde
 export {
   computeInsertionPoint,
   rowKey,
+  type DragActive,
   type InsertionPoint,
   type RowRect,
   type ComputeInsertionPointInput,

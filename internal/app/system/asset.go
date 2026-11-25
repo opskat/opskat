@@ -266,6 +266,27 @@ func (s *System) DeleteAsset(id int64) error {
 	return err
 }
 
+// DeleteAssets 批量软删除资产并逐条记录桌面审计。
+func (s *System) DeleteAssets(ids []int64) error {
+	ctx := s.desktopCtx()
+	logger.Ctx(ctx).Info("delete assets started", zap.Int("count", len(ids)))
+	if len(ids) == 0 {
+		err := fmt.Errorf("资产 ID 列表不能为空")
+		logger.Ctx(ctx).Error("delete assets failed", zap.Error(err))
+		return err
+	}
+	deleted, err := asset_svc.Asset().DeleteBatch(ctx, ids)
+	if err != nil {
+		logger.Ctx(ctx).Error("delete assets failed", zap.Int("count", len(ids)), zap.Error(err))
+		return err
+	}
+	for _, asset := range deleted {
+		audit.WriteAssetChange(ctx, audit.ActionDeleteAsset, asset, nil)
+	}
+	logger.Ctx(ctx).Info("delete assets completed", zap.Int("deletedCount", len(deleted)))
+	return nil
+}
+
 // MoveAsset 移动资产排序（up/down/top）
 func (s *System) MoveAsset(id int64, direction string) error {
 	return asset_svc.Asset().Move(i18n.Ctx(s.ctx, s.Lang()), id, direction)
@@ -279,7 +300,51 @@ func (s *System) MoveGroup(id int64, direction string) error {
 // ReorderAsset 把资产拖到 targetGroupID 内 beforeID 之前；beforeID==0 表示追加末尾。
 // 跨分组时同步 GroupID。
 func (s *System) ReorderAsset(id, targetGroupID, beforeID int64) error {
-	return asset_svc.Asset().Reorder(i18n.Ctx(s.ctx, s.Lang()), id, targetGroupID, beforeID)
+	return s.ReorderAssets([]int64{id}, targetGroupID, beforeID)
+}
+
+// ReorderAssets 批量把资产移动到 targetGroupID 内 beforeID 之前；beforeID==0 表示追加末尾。
+// 跨分组时在 IPC 边界校验目标分组存在，并在事务提交后逐条记录资产变更审计。
+func (s *System) ReorderAssets(ids []int64, targetGroupID, beforeID int64) error {
+	ctx := s.desktopCtx()
+	logger.Ctx(ctx).Info("reorder assets started",
+		zap.Int("count", len(ids)),
+		zap.Int64("targetGroupID", targetGroupID),
+		zap.Int64("beforeID", beforeID))
+	if len(ids) == 0 {
+		err := fmt.Errorf("资产 ID 列表不能为空")
+		logger.Ctx(ctx).Error("reorder assets failed", zap.Error(err))
+		return err
+	}
+	if targetGroupID < 0 {
+		err := fmt.Errorf("目标分组 ID 无效")
+		logger.Ctx(ctx).Error("reorder assets failed", zap.Int64("targetGroupID", targetGroupID), zap.Error(err))
+		return err
+	}
+	if targetGroupID > 0 {
+		if _, err := group_svc.Group().Get(ctx, targetGroupID); err != nil {
+			logger.Ctx(ctx).Error("reorder assets failed",
+				zap.Int64("targetGroupID", targetGroupID),
+				zap.Error(err))
+			return fmt.Errorf("目标分组不存在: %w", err)
+		}
+	}
+	movedCrossGroup, err := asset_svc.Asset().ReorderBatch(ctx, ids, targetGroupID, beforeID)
+	if err != nil {
+		logger.Ctx(ctx).Error("reorder assets failed",
+			zap.Int("count", len(ids)),
+			zap.Int64("targetGroupID", targetGroupID),
+			zap.Error(err))
+		return err
+	}
+	for _, asset := range movedCrossGroup {
+		audit.WriteAssetChange(ctx, audit.ActionUpdateAsset, asset, nil)
+	}
+	logger.Ctx(ctx).Info("reorder assets completed",
+		zap.Int("count", len(ids)),
+		zap.Int("crossGroupCount", len(movedCrossGroup)),
+		zap.Int64("targetGroupID", targetGroupID))
+	return nil
 }
 
 // ReorderGroup 把分组拖到 targetParentID 下 beforeID 之前；beforeID==0 表示追加末尾。

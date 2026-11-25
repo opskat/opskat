@@ -11,6 +11,8 @@ interface GroupSelectProps {
   placeholder?: string;
   /** Custom className for the trigger button */
   className?: string;
+  /** Stable test id for the trigger button */
+  testId?: string;
 }
 
 /**
@@ -18,7 +20,14 @@ interface GroupSelectProps {
  * Node icons come from each group's own Icon field (see useGroupTree / buildGroupTree).
  * Supports search and circular reference prevention.
  */
-export function GroupSelect({ value, onValueChange, excludeGroupId, placeholder, className }: GroupSelectProps) {
+export function GroupSelect({
+  value,
+  onValueChange,
+  excludeGroupId,
+  placeholder,
+  className,
+  testId,
+}: GroupSelectProps) {
   const { t } = useTranslation();
   const excludeIds = useMemo(() => (excludeGroupId ? [excludeGroupId] : undefined), [excludeGroupId]);
   const tree = useGroupTree({ excludeIds });
@@ -33,6 +42,7 @@ export function GroupSelect({ value, onValueChange, excludeGroupId, placeholder,
       searchable
       searchPlaceholder={t("asset.search")}
       className={className}
+      testId={testId}
     />
   );
 }

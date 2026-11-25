@@ -208,7 +208,7 @@ func TestAssetSvc_Reorder(t *testing.T) {
 			{ID: 3, GroupID: 10, SortOrder: 30},
 			moving,
 		}
-		mockRepo.EXPECT().Find(gomock.Any(), int64(4)).Return(moving, nil)
+		mockRepo.EXPECT().FindByIDs(gomock.Any(), []int64{4}).Return([]*asset_entity.Asset{moving}, nil)
 		mockRepo.EXPECT().List(gomock.Any(), asset_repo.ListOptions{GroupID: 10, ExactGroupID: true}).Return(siblings, nil)
 		// 新顺序 [1, 4, 2, 3] → sort_order = 10/20/30/40
 		mockRepo.EXPECT().UpdateSortOrder(gomock.Any(), int64(4), 20).Return(nil)
@@ -228,7 +228,7 @@ func TestAssetSvc_Reorder(t *testing.T) {
 			{ID: 2, GroupID: 10, SortOrder: 20},
 			{ID: 3, GroupID: 10, SortOrder: 30},
 		}
-		mockRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(moving, nil)
+		mockRepo.EXPECT().FindByIDs(gomock.Any(), []int64{1}).Return([]*asset_entity.Asset{moving}, nil)
 		mockRepo.EXPECT().List(gomock.Any(), asset_repo.ListOptions{GroupID: 10, ExactGroupID: true}).Return(siblings, nil)
 		// 新顺序 [2, 3, 1]：2→10, 3→20, 1→30
 		mockRepo.EXPECT().UpdateSortOrder(gomock.Any(), int64(2), 10).Return(nil)
@@ -246,10 +246,10 @@ func TestAssetSvc_Reorder(t *testing.T) {
 		targetSiblings := []*asset_entity.Asset{
 			{ID: 7, GroupID: 20, SortOrder: 10},
 			{ID: 8, GroupID: 20, SortOrder: 20},
-			{ID: 5, GroupID: 20, SortOrder: 10}, // 假设 DB 返回，未必精确
+			{ID: 5, GroupID: 20, SortOrder: 10},
 		}
-		mockRepo.EXPECT().Find(gomock.Any(), int64(5)).Return(moving, nil)
-		mockRepo.EXPECT().UpdateGroupID(gomock.Any(), int64(5), int64(20)).Return(nil)
+		mockRepo.EXPECT().FindByIDs(gomock.Any(), []int64{5}).Return([]*asset_entity.Asset{moving}, nil)
+		mockRepo.EXPECT().UpdateGroupIDs(gomock.Any(), []int64{5}, int64(20)).Return(nil)
 		mockRepo.EXPECT().List(gomock.Any(), asset_repo.ListOptions{GroupID: 20, ExactGroupID: true}).Return(targetSiblings, nil)
 		// 把 5 插到 8 之前 → [7, 5, 8]：7→10(skip), 5→20, 8→30
 		mockRepo.EXPECT().UpdateSortOrder(gomock.Any(), int64(5), 20).Return(nil)
@@ -257,6 +257,83 @@ func TestAssetSvc_Reorder(t *testing.T) {
 
 		err := Asset().Reorder(ctx, 5, 20, 8)
 		assert.NoError(t, err)
+	})
+}
+
+func TestAssetSvc_ReorderBatch(t *testing.T) {
+	t.Run("cross-group batch preserves order and returns moved assets with new group", func(t *testing.T) {
+		ctx, mockRepo := setupTest(t)
+		a1 := &asset_entity.Asset{ID: 1, Name: "web-1", GroupID: 10, SortOrder: 10}
+		a2 := &asset_entity.Asset{ID: 2, Name: "web-2", GroupID: 20, SortOrder: 10} // already in target group
+		a3 := &asset_entity.Asset{ID: 3, Name: "web-3", GroupID: 11, SortOrder: 10}
+
+		mockRepo.EXPECT().FindByIDs(gomock.Any(), []int64{3, 1, 2}).Return([]*asset_entity.Asset{a1, a2, a3}, nil)
+		mockRepo.EXPECT().UpdateGroupIDs(gomock.Any(), []int64{3, 1}, int64(20)).Return(nil)
+		mockRepo.EXPECT().List(gomock.Any(), asset_repo.ListOptions{GroupID: 20, ExactGroupID: true}).Return([]*asset_entity.Asset{
+			{ID: 2, GroupID: 20, SortOrder: 10},
+			{ID: 9, GroupID: 20, SortOrder: 20},
+			{ID: 1, GroupID: 20, SortOrder: 10},
+			{ID: 3, GroupID: 20, SortOrder: 10},
+		}, nil)
+		// Insert [3, 1, 2] before 9 -> [3, 1, 2, 9]
+		mockRepo.EXPECT().UpdateSortOrder(gomock.Any(), int64(3), 10).Return(nil)
+		mockRepo.EXPECT().UpdateSortOrder(gomock.Any(), int64(1), 20).Return(nil)
+		mockRepo.EXPECT().UpdateSortOrder(gomock.Any(), int64(2), 30).Return(nil)
+		mockRepo.EXPECT().UpdateSortOrder(gomock.Any(), int64(9), 40).Return(nil)
+
+		moved, err := Asset().ReorderBatch(ctx, []int64{3, 1, 3, 2}, 20, 9)
+		require.NoError(t, err)
+		require.Len(t, moved, 2)
+		assert.Equal(t, int64(3), moved[0].ID)
+		assert.Equal(t, int64(20), moved[0].GroupID)
+		assert.Equal(t, int64(1), moved[1].ID)
+		assert.Equal(t, int64(20), moved[1].GroupID)
+	})
+
+	t.Run("missing asset fails transaction", func(t *testing.T) {
+		ctx, mockRepo := setupTest(t)
+		mockRepo.EXPECT().FindByIDs(gomock.Any(), []int64{1, 999}).Return([]*asset_entity.Asset{{ID: 1}}, nil)
+
+		moved, err := Asset().ReorderBatch(ctx, []int64{1, 999}, 0, 0)
+		require.Error(t, err)
+		assert.Nil(t, moved)
+	})
+}
+
+func TestAssetSvc_DeleteBatch(t *testing.T) {
+	ctx, mockRepo := setupTest(t)
+
+	var closed []int64
+	assetconn.Register("asset_svc_delete_batch_test", func(_ context.Context, assetID int64) error {
+		closed = append(closed, assetID)
+		return nil
+	})
+	t.Cleanup(func() { assetconn.UnregisterForTest("asset_svc_delete_batch_test") })
+
+	t.Run("deletes in one transaction and closes connections after commit", func(t *testing.T) {
+		closed = nil
+		a1 := &asset_entity.Asset{ID: 11, Name: "web-11"}
+		a2 := &asset_entity.Asset{ID: 12, Name: "web-12"}
+		mockRepo.EXPECT().FindByIDs(gomock.Any(), []int64{12, 11}).Return([]*asset_entity.Asset{a1, a2}, nil)
+		mockRepo.EXPECT().DeleteByIDs(gomock.Any(), []int64{12, 11}).Return(nil)
+
+		deleted, err := Asset().DeleteBatch(ctx, []int64{12, 11, 12})
+		require.NoError(t, err)
+		require.Len(t, deleted, 2)
+		assert.Equal(t, int64(12), deleted[0].ID)
+		assert.Equal(t, int64(11), deleted[1].ID)
+		assert.Equal(t, []int64{12, 11}, closed)
+	})
+
+	t.Run("does not close connections when delete fails", func(t *testing.T) {
+		closed = nil
+		mockRepo.EXPECT().FindByIDs(gomock.Any(), []int64{11}).Return([]*asset_entity.Asset{{ID: 11}}, nil)
+		mockRepo.EXPECT().DeleteByIDs(gomock.Any(), []int64{11}).Return(errors.New("db error"))
+
+		deleted, err := Asset().DeleteBatch(ctx, []int64{11})
+		require.Error(t, err)
+		assert.Nil(t, deleted)
+		assert.Empty(t, closed)
 	})
 }
 
