@@ -812,12 +812,12 @@ function GroupContextMenuContent({
 function AssetDragPreview({ asset, active }: { asset: asset_entity.Asset; active: boolean }) {
   return (
     <div className="flex min-w-36 max-w-56 items-center gap-1.5 rounded-md border bg-popover px-2 py-1.5 text-sm shadow-lg">
+      {active && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />}
       <EntityIcon
         icon={asset.Icon || undefined}
         fallback={Folder}
         className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
       />
-      {active && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-success" />}
       <span className="truncate text-popover-foreground">{asset.Name}</span>
     </div>
   );
@@ -1138,8 +1138,11 @@ const AssetRowContent = React.memo(function AssetRowContent({
 }: AssetRowProps) {
   // Per-row selector: a selection change re-renders only the rows whose state flips.
   const selected = useAssetStore((s) => s.selectedAssetId === asset.ID);
+  // Leading status slot (w-1.5 = 6px) + row gap (gap-1.5 = 6px) = 12px.
+  // Subtracting 12px from the 20 + depth * 12 icon offset keeps icon & name aligned
+  // at the exact same horizontal position across active/inactive rows and every depth (>= 0).
   const style: React.CSSProperties = {
-    paddingLeft: `${20 + depth * 12}px`,
+    paddingLeft: `${8 + depth * 12}px`,
   };
 
   return (
@@ -1157,6 +1160,20 @@ const AssetRowContent = React.memo(function AssetRowContent({
             if (getAssetType(asset.Type)?.canConnect) onConnectAsset(asset);
           }}
         >
+          <span
+            data-slot="asset-session-status"
+            className="flex h-1.5 w-1.5 shrink-0 items-center justify-center"
+            aria-hidden={!active || undefined}
+          >
+            {active && (
+              <span
+                role="img"
+                aria-label={t("ssh.session.connected")}
+                title={t("ssh.session.connected")}
+                className="h-1.5 w-1.5 rounded-full bg-success"
+              />
+            )}
+          </span>
           {isConnecting ? (
             <Loader2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground animate-spin" />
           ) : (
@@ -1166,7 +1183,6 @@ const AssetRowContent = React.memo(function AssetRowContent({
               className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
             />
           )}
-          {active && <span className="h-1.5 w-1.5 rounded-full bg-success shrink-0" />}
           <span className="truncate text-sidebar-foreground">{asset.Name}</span>
         </div>
       </ContextMenuTrigger>
