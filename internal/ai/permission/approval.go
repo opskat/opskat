@@ -45,7 +45,9 @@ type ApprovalItem struct {
 // request read the same item.
 func ApprovalItemOfRequest(req approval.ApprovalRequest) ApprovalItem {
 	return ApprovalItem{
-		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName, Command: req.Command, Detail: req.Detail,
+		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
+		GroupID: req.GroupID, GroupName: req.GroupName,
+		Command: req.Command, Detail: req.Detail,
 		Action: req.Action, Resource: req.Resource, Resources: req.Resources, RememberPattern: req.RememberPattern,
 		Review: req.Review,
 	}

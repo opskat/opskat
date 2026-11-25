@@ -16,29 +16,39 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
-	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/audit"
+	"github.com/opskat/opskat/internal/ai/runner"
 )
 
-// ResolveToolName is the protected internal tool used by an external UI host
-// (such as a Hob plugin adapter) to resolve a pending approval or MFA challenge.
-const ResolveToolName = "_approval_resolve"
-
-// GetTaskToolName polls or waits for a backgrounded task after approval.
+// GetTaskToolName polls or waits for a backgrounded task after out-of-band approval.
 const GetTaskToolName = "get_task"
+
+const (
+	defaultMaxRequestLineBytes = 4 << 20 // 4 MiB per JSON-RPC frame
+	defaultMaxConcurrentReqs   = 32
+)
+
+var errLineTooLong = errors.New("JSON-RPC request exceeds maximum allowed size")
+
+// serialTool is implemented by tools that require serialized execution (e.g. *tool.RawTool).
+type serialTool interface {
+	Serial() bool
+}
 
 // ServerConfig configures an MCP stdio server.
 type ServerConfig struct {
-	ServerName    string
-	ServerVersion string
-	Tools         []agent.Tool
-	ExtraTools    []ExtraTool
-	Approver      *ExternalApprover // non-nil in external approval mode
-	AuditWriter   audit.AuditWriter
-	SessionID     string
-	AuditSource   string
-	PrepareCtx    func(ctx context.Context) context.Context
-	OnMutate      func(toolName string)
+	ServerName        string
+	ServerVersion     string
+	Tools             []agent.Tool
+	ExtraTools        []ExtraTool
+	Approver          *ExternalApprover // non-nil in external approval mode
+	AuditWriter       audit.AuditWriter
+	SessionID         string
+	AuditSource       string
+	PrepareCtx        func(ctx context.Context) context.Context
+	OnMutate          func(toolName string)
+	MaxRequestBytes   int // defaults to 4 MiB
+	MaxConcurrentReqs int // defaults to 32
 }
 
 // ExtraTool registers a tool not defined via agent.Tool (e.g. list_audit).
@@ -50,19 +60,24 @@ type ExtraTool struct {
 
 // Server serves MCP JSON-RPC 2.0 requests over newline-delimited stdio.
 type Server struct {
-	serverName    string
-	serverVersion string
-	specs         []ToolSpec
-	agentTools    map[string]agent.Tool
-	extraTools    map[string]ExtraTool
-	approver      *ExternalApprover
-	auditWriter   audit.AuditWriter
-	sessionID     string
-	auditSource   string
-	prepareCtx    func(ctx context.Context) context.Context
-	onMutate      func(toolName string)
+	serverName      string
+	serverVersion   string
+	specs           []ToolSpec
+	agentTools      map[string]agent.Tool
+	extraTools      map[string]ExtraTool
+	approver        *ExternalApprover
+	auditWriter     audit.AuditWriter
+	sessionID       string
+	auditSource     string
+	prepareCtx      func(ctx context.Context) context.Context
+	onMutate        func(toolName string)
+	maxRequestBytes int
+	reqSem          chan struct{}
+	serialSem       chan struct{}
 
-	writeMu sync.Mutex
+	writeMu    sync.Mutex
+	inFlightMu sync.Mutex
+	inFlight   map[string]context.CancelFunc
 }
 
 // NewServer constructs an MCP stdio server from the given configuration.
@@ -73,20 +88,32 @@ func NewServer(cfg ServerConfig) *Server {
 	}
 	source := cfg.AuditSource
 	if source == "" {
-		source = "opsctl"
+		source = "mcp"
+	}
+	maxBytes := cfg.MaxRequestBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxRequestLineBytes
+	}
+	maxConc := cfg.MaxConcurrentReqs
+	if maxConc <= 0 {
+		maxConc = defaultMaxConcurrentReqs
 	}
 
 	s := &Server{
-		serverName:    name,
-		serverVersion: cfg.ServerVersion,
-		agentTools:    make(map[string]agent.Tool, len(cfg.Tools)),
-		extraTools:    make(map[string]ExtraTool, len(cfg.ExtraTools)+2),
-		approver:      cfg.Approver,
-		auditWriter:   cfg.AuditWriter,
-		sessionID:     cfg.SessionID,
-		auditSource:   source,
-		prepareCtx:    cfg.PrepareCtx,
-		onMutate:      cfg.OnMutate,
+		serverName:      name,
+		serverVersion:   cfg.ServerVersion,
+		agentTools:      make(map[string]agent.Tool, len(cfg.Tools)),
+		extraTools:      make(map[string]ExtraTool, len(cfg.ExtraTools)+1),
+		approver:        cfg.Approver,
+		auditWriter:     cfg.AuditWriter,
+		sessionID:       cfg.SessionID,
+		auditSource:     source,
+		prepareCtx:      cfg.PrepareCtx,
+		onMutate:        cfg.OnMutate,
+		maxRequestBytes: maxBytes,
+		reqSem:          make(chan struct{}, maxConc),
+		serialSem:       make(chan struct{}, 1),
+		inFlight:        make(map[string]context.CancelFunc),
 	}
 
 	for _, t := range cfg.Tools {
@@ -95,20 +122,44 @@ func NewServer(cfg ServerConfig) *Server {
 			Name:        t.Name(),
 			Description: t.Description(),
 			InputSchema: t.Schema(),
+			Annotations: toolAnnotationsFor(t.Name()),
 		})
 	}
 	for _, extra := range cfg.ExtraTools {
+		if extra.Spec.Annotations == nil {
+			extra.Spec.Annotations = toolAnnotationsFor(extra.Spec.Name)
+		}
 		s.extraTools[extra.Spec.Name] = extra
 		s.specs = append(s.specs, extra.Spec)
 	}
 
 	if s.approver != nil {
-		s.registerExternalApprovalTools()
+		s.registerExternalTaskTool()
 	}
 	return s
 }
 
-func (s *Server) registerExternalApprovalTools() {
+func boolPtr(v bool) *bool { return &v }
+
+// toolAnnotationsFor returns MCP 2025-03-26 behavioral hints for known OpsKat tools.
+func toolAnnotationsFor(name string) *ToolAnnotations {
+	switch name {
+	case "list_assets", "get_asset", "list_groups", "get_group",
+		"list_credentials", "get_credential", "help", "list_audit", GetTaskToolName:
+		return &ToolAnnotations{ReadOnlyHint: boolPtr(true), DestructiveHint: boolPtr(false)}
+	case "exec", "batch_exec", "cp", "delete_asset", "delete_group":
+		return &ToolAnnotations{ReadOnlyHint: boolPtr(false), DestructiveHint: boolPtr(true)}
+	case "put_asset", "put_group", "request_permission", "get_asset_secret":
+		return &ToolAnnotations{ReadOnlyHint: boolPtr(false), DestructiveHint: boolPtr(false)}
+	default:
+		return nil
+	}
+}
+
+// registerExternalTaskTool exposes only read-only get_task on the MCP data plane.
+// Approval resolution intentionally lives on the out-of-band ControlServer socket,
+// never as a model-callable MCP tool.
+func (s *Server) registerExternalTaskTool() {
 	getTask := ExtraTool{
 		Spec: ToolSpec{
 			Name: GetTaskToolName,
@@ -122,6 +173,7 @@ func (s *Server) registerExternalApprovalTools() {
 				},
 				Required: []string{"task_id"},
 			},
+			Annotations: toolAnnotationsFor(GetTaskToolName),
 		},
 		Handler: func(ctx context.Context, args map[string]any) (*CallToolResult, error) {
 			taskID := aictx.ArgString(args, "task_id")
@@ -135,55 +187,6 @@ func (s *Server) registerExternalApprovalTools() {
 	}
 	s.extraTools[GetTaskToolName] = getTask
 	s.specs = append(s.specs, getTask.Spec)
-
-	resolveTool := ExtraTool{
-		Spec: ToolSpec{
-			Name:        ResolveToolName,
-			Description: "Internal host callback to submit a human approval or MFA decision for a paused operation.",
-			InputSchema: agent.Schema{
-				Type: "object",
-				Properties: map[string]*agent.Property{
-					"approval_id": {Type: "string", Description: "Pending approval_id from needs_approval / needs_mfa."},
-					"secret":      {Type: "string", Description: "Per-process approval secret configured via OPSKAT_MCP_APPROVAL_SECRET."},
-					"decision":    {Type: "string", Description: "Human decision: deny, allow, allow_session, or allow_permanent."},
-					"edited_items": {
-						Type:        "array",
-						Description: "Optional edited approval items (for grant or allow_session edits).",
-						Items:       &agent.Property{Type: "object"},
-					},
-					"mfa_answers": {
-						Type:        "array",
-						Description: "Optional MFA prompt answers in server order (for kind=mfa).",
-						Items:       &agent.Property{Type: "string"},
-					},
-					"wait_ms": {Type: "number", Description: "Optional milliseconds to wait for execution completion before returning running (default 45000, max 55000)."},
-				},
-				Required: []string{"approval_id", "secret", "decision"},
-			},
-			Meta: map[string]any{
-				"ui": map[string]any{
-					"visibility": []string{"app"},
-				},
-			},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (*CallToolResult, error) {
-			raw, err := json.Marshal(args)
-			if err != nil {
-				return textResult(fmt.Sprintf("invalid resolve params: %v", err), true), nil
-			}
-			var req ResolveRequest
-			if err := json.Unmarshal(raw, &req); err != nil {
-				return textResult(fmt.Sprintf("invalid resolve params: %v", err), true), nil
-			}
-			res, err := s.approver.Resolve(ctx, req)
-			if err != nil {
-				return textResult(err.Error(), true), nil
-			}
-			return taskResultToMCP(res), nil
-		},
-	}
-	s.extraTools[ResolveToolName] = resolveTool
-	s.specs = append(s.specs, resolveTool.Spec)
 }
 
 // Serve runs the stdio JSON-RPC loop until r reaches EOF or ctx is canceled.
@@ -206,7 +209,15 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	reader := bufio.NewReaderSize(r, 64*1024)
 
 	for {
-		line, err := reader.ReadBytes('\n')
+		line, err := readLineLimited(reader, s.maxRequestBytes)
+		if errors.Is(err, errLineTooLong) {
+			_ = s.writeResponse(w, Response{
+				JSONRPC: "2.0",
+				ID:      json.RawMessage("null"),
+				Error:   &RPCError{Code: CodeInvalidRequest, Message: errLineTooLong.Error()},
+			})
+			continue
+		}
 		if len(line) > 0 {
 			trimmed := bytes.TrimSpace(line)
 			if len(trimmed) > 0 {
@@ -217,15 +228,34 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 						ID:      json.RawMessage("null"),
 						Error:   &RPCError{Code: CodeParseError, Message: "parse error: " + uerr.Error()},
 					})
-				} else if !req.IsNotification() {
-					wg.Add(1)
-					go func(req Request) {
-						defer wg.Done()
-						resp := s.handleRequest(serveCtx, req)
-						if werr := s.writeResponse(w, resp); werr != nil {
-							logger.Ctx(serveCtx).Warn("mcp write response failed", zap.Error(werr))
-						}
-					}(req)
+				} else if req.IsNotification() {
+					s.handleNotification(req)
+				} else {
+					select {
+					case s.reqSem <- struct{}{}:
+						reqCtx, reqCancel := context.WithCancel(serveCtx)
+						reqKey := canonicalRequestID(req.ID)
+						s.registerInFlight(reqKey, reqCancel)
+						wg.Add(1)
+						go func(req Request, rCtx context.Context, rCancel context.CancelFunc, key string) {
+							defer wg.Done()
+							defer func() {
+								s.unregisterInFlight(key)
+								rCancel()
+								<-s.reqSem
+							}()
+							resp := s.handleRequest(serveCtx, rCtx, req)
+							if werr := s.writeResponse(w, resp); werr != nil {
+								logger.Ctx(serveCtx).Warn("mcp write response failed", zap.Error(werr))
+							}
+						}(req, reqCtx, reqCancel, reqKey)
+					default:
+						_ = s.writeResponse(w, Response{
+							JSONRPC: "2.0",
+							ID:      req.ID,
+							Error:   &RPCError{Code: CodeInternalError, Message: "server busy: too many concurrent requests"},
+						})
+					}
 				}
 			}
 		}
@@ -243,6 +273,66 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 			return serveCtx.Err()
 		default:
 		}
+	}
+}
+
+func readLineLimited(r *bufio.Reader, limit int) ([]byte, error) {
+	var buf []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if len(buf)+len(chunk) > limit {
+			// Drain remainder of the oversized line up to '\n' or EOF.
+			for errors.Is(err, bufio.ErrBufferFull) {
+				_, err = r.ReadSlice('\n')
+			}
+			return nil, errLineTooLong
+		}
+		buf = append(buf, chunk...)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return buf, err
+	}
+}
+
+func canonicalRequestID(raw json.RawMessage) string {
+	return string(bytes.TrimSpace(raw))
+}
+
+func (s *Server) registerInFlight(key string, cancel context.CancelFunc) {
+	if key == "" {
+		return
+	}
+	s.inFlightMu.Lock()
+	s.inFlight[key] = cancel
+	s.inFlightMu.Unlock()
+}
+
+func (s *Server) unregisterInFlight(key string) {
+	if key == "" {
+		return
+	}
+	s.inFlightMu.Lock()
+	delete(s.inFlight, key)
+	s.inFlightMu.Unlock()
+}
+
+func (s *Server) handleNotification(req Request) {
+	if req.Method != "notifications/cancelled" || len(req.Params) == 0 {
+		return
+	}
+	var params struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil || len(params.RequestID) == 0 {
+		return
+	}
+	key := canonicalRequestID(params.RequestID)
+	s.inFlightMu.Lock()
+	cancel, ok := s.inFlight[key]
+	s.inFlightMu.Unlock()
+	if ok {
+		cancel()
 	}
 }
 
@@ -264,10 +354,10 @@ func (s *Server) writeResponse(w io.Writer, resp Response) error {
 	return err
 }
 
-func (s *Server) handleRequest(ctx context.Context, req Request) (resp Response) {
+func (s *Server) handleRequest(serveCtx, reqCtx context.Context, req Request) (resp Response) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Ctx(ctx).Error("mcp request panic recovered",
+			logger.Ctx(reqCtx).Error("mcp request panic recovered",
 				zap.String("method", req.Method),
 				zap.Any("panic", r),
 				zap.Stack("stack"))
@@ -331,7 +421,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) (resp Response)
 		if params.Arguments == nil {
 			params.Arguments = map[string]any{}
 		}
-		result, rpcErr := s.callTool(ctx, params.Name, params.Arguments)
+		result, rpcErr := s.callTool(serveCtx, reqCtx, params.Name, params.Arguments)
 		if rpcErr != nil {
 			return Response{JSONRPC: "2.0", ID: req.ID, Error: rpcErr}
 		}
@@ -346,10 +436,13 @@ func (s *Server) handleRequest(ctx context.Context, req Request) (resp Response)
 	}
 }
 
-func (s *Server) callTool(ctx context.Context, name string, args map[string]any) (*CallToolResult, *RPCError) {
+func (s *Server) callTool(serveCtx, reqCtx context.Context, name string, args map[string]any) (*CallToolResult, *RPCError) {
 	if extra, ok := s.extraTools[name]; ok {
-		runCtx := s.enrichContext(ctx)
+		runCtx := s.enrichContext(reqCtx)
 		res, err := extra.Handler(runCtx, args)
+		if extra.Audit && s.auditWriter != nil {
+			s.writeExtraAudit(runCtx, name, args, res, err)
+		}
 		if err != nil {
 			return textResult(err.Error(), true), nil
 		}
@@ -361,15 +454,47 @@ func (s *Server) callTool(ctx context.Context, name string, args map[string]any)
 		return nil, &RPCError{Code: CodeInvalidParams, Message: fmt.Sprintf("unknown tool: %s", name)}
 	}
 
+	if st, ok := t.(serialTool); ok && st.Serial() {
+		select {
+		case s.serialSem <- struct{}{}:
+			defer func() { <-s.serialSem }()
+		case <-reqCtx.Done():
+			return textResult("request canceled", true), nil
+		}
+	}
+
 	execFn := func(callCtx context.Context) (string, bool) {
 		return s.executeAgentTool(callCtx, t, args)
 	}
 
 	if s.approver != nil {
-		return s.approver.Run(ctx, ctx, name, execFn), nil
+		// Parent ctx is serveCtx so a parked background task survives after tools/call returns PausePayload;
+		// reqCtx still cancels before pausing if the client sends notifications/cancelled.
+		return s.approver.Run(serveCtx, reqCtx, name, execFn), nil
 	}
-	out, isErr := execFn(ctx)
+	out, isErr := execFn(reqCtx)
 	return textResult(out, isErr), nil
+}
+
+func (s *Server) writeExtraAudit(ctx context.Context, name string, args map[string]any, res *CallToolResult, callErr error) {
+	argsJSON, merr := json.Marshal(args)
+	if merr != nil {
+		logger.Ctx(ctx).Warn("mcp audit marshal extra input", zap.String("toolName", name), zap.Error(merr))
+	}
+	var outText string
+	if res != nil && len(res.Content) > 0 {
+		outText = res.Content[0].Text
+	}
+	auditErr := callErr
+	if auditErr == nil && res != nil && res.IsError {
+		auditErr = errors.New(outText)
+	}
+	s.auditWriter.WriteToolCall(runner.DetachAuditContext(ctx), audit.ToolCallInfo{
+		ToolName: name,
+		ArgsJSON: string(argsJSON),
+		Result:   outText,
+		Error:    auditErr,
+	})
 }
 
 func (s *Server) enrichContext(ctx context.Context) context.Context {
@@ -394,20 +519,32 @@ func (s *Server) executeAgentTool(ctx context.Context, t agent.Tool, args map[st
 	ctx = aictx.WithAuditResultSlot(ctx, aictx.NewAuditResultSlot())
 
 	var assetID int64
-	var assetName string
+	var assetName, command string
 	if s.auditWriter != nil {
-		assetID, assetName = preResolveAssetForAudit(ctx, args)
+		assetID, assetName, command = runner.ResolveAssetForAudit(ctx, t.Name(), args)
 	}
 
 	block, err := t.Call(ctx, args)
+	if commandSlot != "" {
+		command = commandSlot
+	}
 
 	var textOut string
 	isErr := err != nil
 	if err != nil {
 		textOut = err.Error()
 	} else if block != nil {
-		textOut = extractBlockText(block)
-		isErr = block.IsError
+		if slot.Decision == aictx.Deny {
+			block.IsError = true
+		}
+		var blockErr error
+		textOut, blockErr = runner.ExtractAuditResult(block)
+		if blockErr != nil {
+			isErr = true
+			if textOut == "" {
+				textOut = blockErr.Error()
+			}
+		}
 	}
 	if slot.Decision == aictx.Deny {
 		isErr = true
@@ -426,6 +563,9 @@ func (s *Server) executeAgentTool(ctx context.Context, t agent.Tool, args map[st
 		auditErr := err
 		if auditErr == nil && isErr {
 			auditErr = errors.New(textOut)
+		}
+		if assetID == 0 && auditErr == nil && audit.ShouldResolveAssetFromResult(t.Name()) {
+			assetID, assetName = runner.ResolveResultAssetForAudit(ctx, auditResult)
 		}
 		if summary, ok := aictx.GetAuditResult(ctx); ok {
 			if auditErr != nil {
@@ -446,9 +586,9 @@ func (s *Server) executeAgentTool(ctx context.Context, t agent.Tool, args map[st
 			Decision:  dec,
 			AssetID:   assetID,
 			AssetName: assetName,
-			Command:   commandSlot,
+			Command:   command,
 		}
-		s.auditWriter.WriteToolCall(ctx, info)
+		s.auditWriter.WriteToolCall(runner.DetachAuditContext(ctx), info)
 	}
 
 	if !isErr && s.onMutate != nil {
@@ -458,54 +598,22 @@ func (s *Server) executeAgentTool(ctx context.Context, t agent.Tool, args map[st
 	return textOut, isErr
 }
 
-func preResolveAssetForAudit(ctx context.Context, args map[string]any) (int64, string) {
-	ref := aictx.ArgString(args, "asset")
-	if ref == "" {
-		if id := aictx.ArgInt64(args, "asset_id"); id > 0 {
-			ref = fmt.Sprintf("%d", id)
-		} else if id := aictx.ArgInt64(args, "id"); id > 0 {
-			ref = fmt.Sprintf("%d", id)
-		}
-	}
-	if ref == "" {
-		return 0, ""
-	}
-	asset, err := assetref.Resolve(ctx, ref)
-	if err != nil || asset == nil {
-		return 0, ""
-	}
-	return asset.ID, asset.Name
-}
-
-func extractBlockText(block *agent.ToolResultBlock) string {
-	if block == nil {
-		return ""
-	}
-	var parts []string
-	for _, item := range block.Content {
-		if tb, ok := item.(agent.TextBlock); ok {
-			parts = append(parts, tb.Text)
-		} else if tbPtr, ok := item.(*agent.TextBlock); ok && tbPtr != nil {
-			parts = append(parts, tbPtr.Text)
-		}
-	}
-	return strings.Join(parts, "\n")
-}
-
 func taskResultToMCP(res *TaskResultPayload) *CallToolResult {
-	switch res.Status {
+	safe := toDataPlaneTaskResult(res)
+	switch safe.Status {
 	case StatusCompleted:
-		return structuredResult(res.Output, res, res.IsError)
+		return structuredResult(safe.Output, safe, safe.IsError)
 	case StatusNeedsApproval, StatusNeedsMFA:
-		if res.Pause != nil {
-			summary := fmt.Sprintf("Task %s paused (%s, approval_id=%s).", res.TaskID, res.Status, res.Pause.ApprovalID)
-			return structuredResult(summary, res, false)
+		if safe.PauseRef != nil {
+			summary := fmt.Sprintf("Task %s paused (%s, approval_id=%s). Wait for the user to decide before continuing.",
+				safe.TaskID, safe.Status, safe.PauseRef.ApprovalID)
+			return structuredResult(summary, safe, false)
 		}
-		return structuredResult(fmt.Sprintf("Task %s paused (%s).", res.TaskID, res.Status), res, false)
+		return structuredResult(fmt.Sprintf("Task %s paused (%s).", safe.TaskID, safe.Status), safe, false)
 	default:
 		summary := fmt.Sprintf("Task %s is still running in the background. Call %s(task_id=%q) to wait for its result.",
-			res.TaskID, GetTaskToolName, res.TaskID)
-		return structuredResult(summary, res, false)
+			safe.TaskID, GetTaskToolName, safe.TaskID)
+		return structuredResult(summary, safe, false)
 	}
 }
 

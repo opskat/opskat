@@ -38,7 +38,7 @@ func auditMiddleware(c *agent.ToolContext) {
 	ctx = aictx.WithAuditResultSlot(ctx, aictx.NewAuditResultSlot())
 	c.WithContext(ctx)
 
-	assetID, assetName, command := resolveAssetForAudit(c.Context(), c.ToolName, c.Input)
+	assetID, assetName, command := ResolveAssetForAudit(c.Context(), c.ToolName, c.Input)
 
 	c.Next()
 	if commandSlot != "" {
@@ -63,9 +63,9 @@ func auditMiddleware(c *agent.ToolContext) {
 			zap.String("toolName", c.ToolName), zap.Error(err))
 	}
 
-	result, errVal := extractAuditResult(c.Output)
+	result, errVal := ExtractAuditResult(c.Output)
 	if assetID == 0 && errVal == nil && audit.ShouldResolveAssetFromResult(c.ToolName) {
-		assetID, assetName = resolveResultAssetForAudit(c.Context(), result)
+		assetID, assetName = ResolveResultAssetForAudit(c.Context(), result)
 	}
 	// 审计 result 默认是返回给模型的完整输出。执行器（通用资产 exec、含通用资产条目的
 	// batch_exec）通过 aictx.RecordAuditResult 写了摘要时，审计改存摘要——输出可能回显
@@ -89,11 +89,13 @@ func auditMiddleware(c *agent.ToolContext) {
 		AssetName: assetName,
 		Command:   command,
 	}
-	auditCtx := detachAuditContext(c.Context())
+	auditCtx := DetachAuditContext(c.Context())
 	go auditWriter.WriteToolCall(auditCtx, info)
 }
 
-func resolveResultAssetForAudit(ctx context.Context, result string) (int64, string) {
+// ResolveResultAssetForAudit resolves the created asset ID/name from a JSON tool result
+// containing {"id": N} (used for tools registered via audit.RegisterResultAssetTool).
+func ResolveResultAssetForAudit(ctx context.Context, result string) (int64, string) {
 	var created struct {
 		ID int64 `json:"id"`
 	}
@@ -107,7 +109,7 @@ func resolveResultAssetForAudit(ctx context.Context, result string) (int64, stri
 	return asset.ID, asset.Name
 }
 
-// resolveAssetForAudit resolves the tool's args["asset"] identifier (numeric id or
+// ResolveAssetForAudit resolves the tool's args["asset"] identifier (numeric id or
 // name string — the convention shared by exec/help, and any single-asset tool)
 // before c.Next() runs the tool, so the audit row keeps correct attribution
 // even if the tool itself changes the asset's status: asset_repo filters by
@@ -139,7 +141,7 @@ func resolveResultAssetForAudit(ctx context.Context, result string) (int64, stri
 // value at its zero value / the raw command, and the caller falls back to its
 // existing args["asset_id"]/ExtractCommandForAudit path — which also covers every
 // tool that doesn't use the asset-string convention at all (the pre-existing 14).
-func resolveAssetForAudit(ctx context.Context, toolName string, input map[string]any) (assetID int64, assetName, command string) {
+func ResolveAssetForAudit(ctx context.Context, toolName string, input map[string]any) (assetID int64, assetName, command string) {
 	ref := aictx.ArgString(input, "asset")
 	if ref == "" {
 		id, name := resolveTransferAssetForAudit(ctx, input)
@@ -210,9 +212,9 @@ func resolveTransferAssetForAudit(ctx context.Context, input map[string]any) (in
 	return 0, ""
 }
 
-// extractAuditResult 把 cago 的 *ToolResultBlock 拆成审计需要的 (result, error)。
+// ExtractAuditResult 把 cago 的 *ToolResultBlock 拆成审计需要的 (result, error)。
 // IsError=true 的块当成 error 路径，文本作为 error message。
-func extractAuditResult(block *agent.ToolResultBlock) (string, error) {
+func ExtractAuditResult(block *agent.ToolResultBlock) (string, error) {
 	if block == nil {
 		return "", nil
 	}
@@ -237,9 +239,9 @@ func extractAuditResult(block *agent.ToolResultBlock) (string, error) {
 	return text, nil
 }
 
-// detachAuditContext 把审计需要的 ctx value 复制到一个全新的 context.Background()
+// DetachAuditContext 把审计需要的 ctx value 复制到一个全新的 context.Background()
 // 之上，避免 runner ctx 被 Cancel 后导致审计写入异步中断。
-func detachAuditContext(ctx context.Context) context.Context {
+func DetachAuditContext(ctx context.Context) context.Context {
 	out := context.Background()
 	if v := aictx.GetAuditSource(ctx); v != "" {
 		out = aictx.WithAuditSource(out, v)

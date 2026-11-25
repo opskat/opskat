@@ -2512,6 +2512,7 @@
     "refresh": "刷新",
     "sources": {
       "opsctl": "opsctl",
+      "mcp": "MCP",
       "ai": "AI",
       "desktop": "桌面端"
     },

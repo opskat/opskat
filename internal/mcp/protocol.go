@@ -14,10 +14,11 @@ type ApprovalMode string
 
 const (
 	// ApprovalModeDesktop delegates approvals to the running OpsKat desktop app
-	// over local IPC, falling back to structured refusal when unreachable.
+	// over local IPC, failing closed when unreachable.
 	ApprovalModeDesktop ApprovalMode = "desktop"
 	// ApprovalModeExternal pauses NeedConfirm operations and returns structured
-	// pending payloads for an external host (such as a Hob plugin adapter) to resolve.
+	// pending payloads for an external host adapter to resolve over the out-of-band
+	// local control socket (--approval-control-socket).
 	ApprovalModeExternal ApprovalMode = "external"
 )
 
@@ -27,7 +28,8 @@ type Toolset string
 const (
 	// ToolsetCore exposes the high-frequency operational tools (<= 10 tools).
 	ToolsetCore Toolset = "core"
-	// ToolsetFull exposes all OpsKat AI tools plus list_audit (and get_task in external mode).
+	// ToolsetFull exposes all OpsKat AI tools plus session-scoped list_audit
+	// (and get_task in external mode).
 	ToolsetFull Toolset = "full"
 )
 
@@ -68,12 +70,22 @@ type RPCError struct {
 	Data    any    `json:"data,omitempty"`
 }
 
+// ToolAnnotations carries MCP 2025-03-26 behavioral hints for tool discovery.
+type ToolAnnotations struct {
+	Title           string `json:"title,omitempty"`
+	ReadOnlyHint    *bool  `json:"readOnlyHint,omitempty"`
+	DestructiveHint *bool  `json:"destructiveHint,omitempty"`
+	IdempotentHint  *bool  `json:"idempotentHint,omitempty"`
+	OpenWorldHint   *bool  `json:"openWorldHint,omitempty"`
+}
+
 // ToolSpec describes a single tool returned by tools/list.
 type ToolSpec struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	InputSchema agent.Schema   `json:"inputSchema"`
-	Meta        map[string]any `json:"_meta,omitempty"`
+	Name        string           `json:"name"`
+	Description string           `json:"description,omitempty"`
+	InputSchema agent.Schema     `json:"inputSchema"`
+	Annotations *ToolAnnotations `json:"annotations,omitempty"`
+	Meta        map[string]any   `json:"_meta,omitempty"`
 }
 
 // ContentItem is a single MCP content block.

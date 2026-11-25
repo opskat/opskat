@@ -1,12 +1,15 @@
 package approval
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestApprovalRequest_JSON(t *testing.T) {
@@ -122,4 +125,52 @@ func TestSocketPath(t *testing.T) {
 		path := SocketPath(dataDir)
 		assert.Equal(t, filepath.Join(dataDir, "approval.sock"), path)
 	})
+}
+
+func TestRequestApprovalContextCancel(t *testing.T) {
+	sockPath := SocketPath(t.TempDir())
+	handlerEntered := make(chan struct{})
+	handlerCanceled := make(chan struct{})
+
+	srv := NewServer(func(ctx context.Context, _ ApprovalRequest) ApprovalResponse {
+		close(handlerEntered)
+		<-ctx.Done()
+		close(handlerCanceled)
+		return ApprovalResponse{Approved: false, Reason: "canceled"}
+	}, "tok-1")
+	require.NoError(t, srv.Start(sockPath))
+	t.Cleanup(srv.Stop)
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := RequestApprovalWithTokenContext(reqCtx, sockPath, "tok-1", ApprovalRequest{
+			Type:      "delete",
+			GroupID:   7,
+			GroupName: "Prod",
+			Command:   "delete group Prod",
+		})
+		errCh <- err
+	}()
+
+	select {
+	case <-handlerEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("approval server did not receive request")
+	}
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("RequestApprovalWithTokenContext did not unblock on ctx cancel")
+	}
+
+	select {
+	case <-handlerCanceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server handler ctx was not canceled when client closed connection")
+	}
 }

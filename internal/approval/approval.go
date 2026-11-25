@@ -3,6 +3,7 @@ package approval
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -43,9 +44,12 @@ type BatchItem struct {
 type ApprovalRequest struct {
 	Token       string        `json:"token,omitempty"`      // 认证 token
 	Type        string        `json:"type"`                 // "exec"|"cp"|"create"|"update"|"delete"|"grant"|"batch"|"ext_dev_install"|"ext_store_search"|"ext_store_install"
+	Kind        string        `json:"kind,omitempty"`       // 可选审批能力收窄（如 "once" / "delete"），服务端只允许收窄不允许放宽
 	CheckType   string        `json:"check_type,omitempty"` // internal permission face; cp keeps read/write direction while Type stays "cp"
 	AssetID     int64         `json:"asset_id,omitempty"`
 	AssetName   string        `json:"asset_name,omitempty"`
+	GroupID     int64         `json:"group_id,omitempty"`
+	GroupName   string        `json:"group_name,omitempty"`
 	Command     string        `json:"command,omitempty"`
 	Detail      string        `json:"detail"`
 	SessionID   string        `json:"session_id,omitempty"`  // 统一 session 标识（审批 session 或 grant session）
@@ -326,29 +330,65 @@ func SendNotification(socketPath, token, resource string) {
 
 // RequestApprovalWithToken connects to the local IPC endpoint and sends an approval request with auth token.
 func RequestApprovalWithToken(socketPath, token string, req ApprovalRequest) (ApprovalResponse, error) {
+	return RequestApprovalWithTokenContext(context.Background(), socketPath, token, req)
+}
+
+// RequestApprovalWithTokenContext sends an approval request with auth token and aborts
+// the blocking IPC read if ctx is canceled, closing the connection so the desktop dialog closes too.
+func RequestApprovalWithTokenContext(ctx context.Context, socketPath, token string, req ApprovalRequest) (ApprovalResponse, error) {
 	req.Token = token
-	return RequestApproval(socketPath, req)
+	return RequestApprovalContext(ctx, socketPath, req)
 }
 
 // RequestApproval connects to the local IPC endpoint and sends an approval request.
 // Blocks until a response is received.
 func RequestApproval(socketPath string, req ApprovalRequest) (ApprovalResponse, error) {
+	return RequestApprovalContext(context.Background(), socketPath, req)
+}
+
+// RequestApprovalContext connects to the local IPC endpoint and sends an approval request,
+// closing the connection to unblock the read if ctx is canceled.
+func RequestApprovalContext(ctx context.Context, socketPath string, req ApprovalRequest) (ApprovalResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return ApprovalResponse{}, err
+	}
 	conn, err := localipc.Dial(socketPath)
 	if err != nil {
 		return ApprovalResponse{}, fmt.Errorf("cannot connect to desktop app (is it running?): %w", err)
 	}
-	defer func() {
-		if err := conn.Close(); err != nil {
-			logger.Default().Warn("close request connection", zap.Error(err))
+	done := make(chan struct{})
+	var closeOnce sync.Once
+	closeConn := func() {
+		closeOnce.Do(func() {
+			if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				logger.Ctx(ctx).Warn("close request connection", zap.Error(err))
+			}
+		})
+	}
+	go func() {
+		select {
+		case <-ctx.Done():
+			closeConn()
+		case <-done:
 		}
+	}()
+	defer func() {
+		close(done)
+		closeConn()
 	}()
 
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		if ctx.Err() != nil {
+			return ApprovalResponse{}, ctx.Err()
+		}
 		return ApprovalResponse{}, fmt.Errorf("send request: %w", err)
 	}
 
 	var resp ApprovalResponse
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		if ctx.Err() != nil {
+			return ApprovalResponse{}, ctx.Err()
+		}
 		return ApprovalResponse{}, fmt.Errorf("read response: %w", err)
 	}
 

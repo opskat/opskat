@@ -79,7 +79,7 @@ func (o *Opsctl) startApprovalServer() {
 // 请求方离开时弹窗里的这一条随之关闭（awaitSingleApproval）。
 func (o *Opsctl) requestSingleApproval(ctx context.Context, req approval.ApprovalRequest) approval.ApprovalResponse {
 	item := permission.ApprovalItemOfRequest(req)
-	parsed, reason := o.awaitSingleApproval(ctx, item, req.SessionID)
+	parsed, reason := o.awaitSingleApproval(ctx, item, req.SessionID, req.Kind)
 	switch parsed.Decision {
 	case permission.ApprovalAllow:
 		return approval.ApprovalResponse{Approved: true}
@@ -114,10 +114,17 @@ const opsctlAuditSource = "opsctl"
 // 按分类落（requestSingleApproval）。拒绝时第二个返回值是原因。ctx 是发起这次审批的调用：它被取消
 // 就不再等待，关掉弹窗里的这一条（closeAbandonedApproval）并按拒绝返回，之后到达的作答
 // 找不到这条待决审批。
-func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.ApprovalItem, sessionID string) (permission.ParsedApprovalResponse, string) {
+func (o *Opsctl) awaitSingleApproval(ctx context.Context, item permission.ApprovalItem, sessionID, requestedKind string) (permission.ParsedApprovalResponse, string) {
 	confirmID := fmt.Sprintf("opsctl_%d", time.Now().UnixNano())
 	// 与 opsctl 终端提示同一判定：分类失败的扩展调用没有可落的规则，只给本次允许/拒绝。
+	// 请求方显式要求更严格的能力（如 once / delete）时只允许收窄、绝不放宽为 single。
 	kind := permission.ApprovalKindForItem(ctx, item.Type, item)
+	if kind == permission.ApprovalKindSingle {
+		switch requestedKind {
+		case permission.ApprovalKindOnce, permission.ApprovalKindDelete:
+			kind = requestedKind
+		}
+	}
 	log := logger.Ctx(o.ctx).With(
 		zap.String("confirmID", confirmID),
 		zap.String("approvalType", item.Type),

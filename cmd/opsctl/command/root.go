@@ -147,7 +147,10 @@ func Execute() int {
 	case "ext":
 		return cmdExt(ctx, args)
 	case "mcp":
-		return cmdMCP(ctx, args, resolvedSession)
+		if err := bootstrap.InitLogger(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to initialize file logger: %v\n", err)
+		}
+		return cmdMCP(ctx, args)
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown command %q\n\nRun 'opsctl help' for usage.\n", verb)
 		return 1

@@ -205,7 +205,7 @@ func TestCmdListAudit(t *testing.T) {
 				{[]string{"--result", "maybe"}, "success, failed"},
 				{[]string{"--decision", "perhaps"}, "allow, deny"},
 				{[]string{"--decider", "robot"}, "policy, user, grant"},
-				{[]string{"--source", "cron"}, "ai, opsctl, desktop"},
+				{[]string{"--source", "cron"}, "ai, opsctl, mcp, desktop"},
 			} {
 				stub.opts = nil
 				code, stderr := runListAuditStderr(context.Background(), append([]string{"audit"}, c.args...)...)
