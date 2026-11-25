@@ -19,6 +19,7 @@ import {
   Link2,
   Trash2,
   TerminalSquare,
+  RotateCcw,
   ExternalLink,
   Settings2,
 } from "lucide-react";
@@ -67,7 +68,9 @@ import { useAssetTypeOptions, matchSelectedTypes } from "@/lib/assetTypes/option
 import { AssetTypeFilterButton } from "@/components/asset/AssetTypeFilterButton";
 import { selectLoadError, useAssetStore } from "@/stores/assetStore";
 import { formatBinding, useShortcutStore } from "@/stores/shortcutStore";
+import { useTabStore } from "@/stores/tabStore";
 import { useTerminalStore } from "@/stores/terminalStore";
+import { findExistingAssetTabs } from "@/lib/openAsset";
 import { useActiveAssetIds } from "@/hooks/useActiveAssetIds";
 import { MoveAsset } from "../../../wailsjs/go/system/System";
 import { MoveGroup, ReorderAsset, ReorderGroup } from "../../../wailsjs/go/system/System";
@@ -100,6 +103,7 @@ interface AssetTreeProps {
   onEditAsset: (asset: asset_entity.Asset) => void;
   onCopyAsset: (asset: asset_entity.Asset) => void;
   onConnectAsset: (asset: asset_entity.Asset) => void;
+  onReconnectAsset?: (asset: asset_entity.Asset) => void;
   onConnectAssetInNewTab?: (asset: asset_entity.Asset) => void;
   onOpenFileManager?: (asset: asset_entity.Asset) => void;
   onSelectAsset: (asset: asset_entity.Asset) => void;
@@ -232,6 +236,7 @@ export function AssetTree({
   onEditAsset,
   onCopyAsset,
   onConnectAsset,
+  onReconnectAsset,
   onConnectAssetInNewTab,
   onOpenFileManager,
   onSelectAsset,
@@ -618,6 +623,7 @@ export function AssetTree({
               onEditAsset={onEditAsset}
               onCopyAsset={onCopyAsset}
               onConnectAsset={onConnectAsset}
+              onReconnectAsset={onReconnectAsset}
               onConnectAssetInNewTab={onConnectAssetInNewTab}
               onOpenFileManager={onOpenFileManager}
               onDeleteAsset={setDeleteAssetConfirm}
@@ -840,6 +846,7 @@ type RowCallbacks = {
   onEditAsset: (asset: asset_entity.Asset) => void;
   onCopyAsset: (asset: asset_entity.Asset) => void;
   onConnectAsset: (asset: asset_entity.Asset) => void;
+  onReconnectAsset?: (asset: asset_entity.Asset) => void;
   onConnectAssetInNewTab?: (asset: asset_entity.Asset) => void;
   onOpenFileManager?: (asset: asset_entity.Asset) => void;
   onDeleteAsset: (asset: asset_entity.Asset) => void;
@@ -877,6 +884,7 @@ const VirtualTreeRows = React.memo(function VirtualTreeRows({
   onEditAsset,
   onCopyAsset,
   onConnectAsset,
+  onReconnectAsset,
   onConnectAssetInNewTab,
   onOpenFileManager,
   onDeleteAsset,
@@ -940,6 +948,7 @@ const VirtualTreeRows = React.memo(function VirtualTreeRows({
               onEditAsset={onEditAsset}
               onCopyAsset={onCopyAsset}
               onConnectAsset={onConnectAsset}
+              onReconnectAsset={onReconnectAsset}
               onConnectAssetInNewTab={onConnectAssetInNewTab}
               onOpenFileManager={onOpenFileManager}
               onDeleteAsset={onDeleteAsset}
@@ -1063,6 +1072,7 @@ type AssetRowProps = {
   onEditAsset: (asset: asset_entity.Asset) => void;
   onCopyAsset: (asset: asset_entity.Asset) => void;
   onConnectAsset: (asset: asset_entity.Asset) => void;
+  onReconnectAsset?: (asset: asset_entity.Asset) => void;
   onConnectAssetInNewTab?: (asset: asset_entity.Asset) => void;
   onOpenFileManager?: (asset: asset_entity.Asset) => void;
   onDeleteAsset: (asset: asset_entity.Asset) => void;
@@ -1091,6 +1101,26 @@ function AssetRowDraggable({ id, children }: { id: string; children: React.React
     >
       {children}
     </div>
+  );
+}
+
+function ReconnectAssetMenuItem({
+  asset,
+  onReconnectAsset,
+  t,
+}: {
+  asset: asset_entity.Asset;
+  onReconnectAsset: (asset: asset_entity.Asset) => void;
+  t: (key: string) => string;
+}) {
+  // 仅在菜单展开时订阅 tabStore，避免为所有资产行引入额外的状态订阅。
+  const hasOpenTab = useTabStore((s) => findExistingAssetTabs(asset, s.tabs).length > 0);
+  if (!hasOpenTab) return null;
+  return (
+    <ContextMenuItem data-testid="asset-context-reconnect" onClick={() => onReconnectAsset(asset)}>
+      <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+      {t("asset.reconnect")}
+    </ContextMenuItem>
   );
 }
 
@@ -1129,6 +1159,7 @@ const AssetRowContent = React.memo(function AssetRowContent({
   onEditAsset,
   onCopyAsset,
   onConnectAsset,
+  onReconnectAsset,
   onConnectAssetInNewTab,
   onOpenFileManager,
   onDeleteAsset,
@@ -1172,7 +1203,7 @@ const AssetRowContent = React.memo(function AssetRowContent({
       </ContextMenuTrigger>
       <ContextMenuContent>
         {getAssetType(asset.Type)?.canConnect && (
-          <ContextMenuItem onClick={() => onConnectAsset(asset)} disabled={isConnecting}>
+          <ContextMenuItem onClick={() => onConnectAsset(asset)}>
             {isConnecting ? (
               <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
             ) : (
@@ -1180,6 +1211,9 @@ const AssetRowContent = React.memo(function AssetRowContent({
             )}
             {t("asset.connect")}
           </ContextMenuItem>
+        )}
+        {getAssetType(asset.Type)?.canConnect && onReconnectAsset && (
+          <ReconnectAssetMenuItem asset={asset} onReconnectAsset={onReconnectAsset} t={t} />
         )}
         {getAssetType(asset.Type)?.canConnectInNewTab && onConnectAssetInNewTab && (
           <ContextMenuItem onClick={() => onConnectAssetInNewTab(asset)} disabled={isConnecting}>

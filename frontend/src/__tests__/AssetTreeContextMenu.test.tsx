@@ -3,6 +3,9 @@ import { render, screen, fireEvent, within } from "@testing-library/react";
 import { TooltipProvider } from "@opskat/ui";
 import { AssetTree } from "@/components/layout/AssetTree";
 import { useAssetStore } from "@/stores/assetStore";
+import { useTabStore } from "@/stores/tabStore";
+import { useTerminalStore } from "@/stores/terminalStore";
+import { ListAssets, ListGroups } from "../../wailsjs/go/system/System";
 import { asset_entity, group_entity } from "../../wailsjs/go/models";
 
 function makeGroup(id: number, name: string): group_entity.Group {
@@ -30,10 +33,14 @@ function makeAsset(id: number, name: string, groupId: number, type = "ssh"): ass
 function renderTree({
   onAddAsset = vi.fn(),
   onGroupDetail = vi.fn(),
+  onConnectAsset = vi.fn(),
+  onReconnectAsset,
   onOpenFileManager,
 }: {
   onAddAsset?: (groupId?: number) => void;
   onGroupDetail?: (group: group_entity.Group) => void;
+  onConnectAsset?: (asset: asset_entity.Asset) => void;
+  onReconnectAsset?: (asset: asset_entity.Asset) => void;
   onOpenFileManager?: (asset: asset_entity.Asset) => void;
 } = {}) {
   return render(
@@ -46,7 +53,8 @@ function renderTree({
         onGroupDetail={onGroupDetail}
         onEditAsset={vi.fn()}
         onCopyAsset={vi.fn()}
-        onConnectAsset={vi.fn()}
+        onConnectAsset={onConnectAsset}
+        onReconnectAsset={onReconnectAsset}
         onSelectAsset={vi.fn()}
         onOpenFileManager={onOpenFileManager}
       />
@@ -56,6 +64,8 @@ function renderTree({
 
 describe("AssetTree context menu", () => {
   beforeEach(() => {
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useTerminalStore.setState({ connectingAssetIds: new Set() });
     useAssetStore.setState({
       assets: [makeAsset(101, "Asset A", 1), makeAsset(102, "Asset B", 2)],
       groups: [makeGroup(1, "Folder A"), makeGroup(2, "Folder B")],
@@ -206,5 +216,56 @@ describe("AssetTree context menu", () => {
 
     expect(menu).toHaveTextContent("asset.copyRef");
     expect(menu).toHaveTextContent("action.copy");
+  });
+
+  it("keeps Connect enabled while connecting and shows Reconnect only when an open tab exists", async () => {
+    const assets = [makeAsset(101, "Asset A", 1), makeAsset(102, "Asset B", 2)];
+    const groups = [makeGroup(1, "Folder A"), makeGroup(2, "Folder B")];
+    vi.mocked(ListAssets).mockResolvedValueOnce(assets);
+    vi.mocked(ListGroups).mockResolvedValueOnce(groups);
+    useAssetStore.setState({ assets, groups });
+
+    const onConnectAsset = vi.fn();
+    const onReconnectAsset = vi.fn();
+    useTerminalStore.setState({ connectingAssetIds: new Set([101]) });
+    renderTree({ onConnectAsset, onReconnectAsset });
+
+    // Without an open tab, Reconnect is hidden; Connect remains clickable even while connecting (#380).
+    fireEvent.contextMenu(screen.getByText("Asset A"));
+    let menu = await screen.findByRole("menu");
+    expect(within(menu).queryByTestId("asset-context-reconnect")).not.toBeInTheDocument();
+    const connectItem = within(menu).getByText("asset.connect").closest('[role="menuitem"]')!;
+    expect(connectItem).not.toHaveAttribute("data-disabled", "true");
+    fireEvent.click(connectItem);
+    expect(onConnectAsset).toHaveBeenCalledTimes(1);
+
+    // Once a tab is open for the asset, Reconnect appears and triggers onReconnectAsset even while connecting.
+    useTabStore.setState({
+      tabs: [
+        {
+          id: "conn-101",
+          type: "terminal",
+          label: "Asset A",
+          meta: {
+            type: "terminal",
+            assetId: 101,
+            assetName: "Asset A",
+            assetIcon: "",
+            host: "h",
+            port: 22,
+            username: "root",
+          },
+        },
+      ],
+      activeTabId: "conn-101",
+    });
+
+    fireEvent.contextMenu(screen.getByText("Asset A"));
+    menu = await screen.findByRole("menu");
+    const reconnectItem = within(menu).getByTestId("asset-context-reconnect");
+    expect(reconnectItem).not.toHaveAttribute("data-disabled", "true");
+    fireEvent.click(reconnectItem);
+    expect(onReconnectAsset).toHaveBeenCalledTimes(1);
+    expect(onReconnectAsset.mock.calls[0][0]).toMatchObject({ ID: 101 });
   });
 });

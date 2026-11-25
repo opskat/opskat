@@ -127,7 +127,7 @@ export function AssetDetail({ asset, isConnecting, onEdit, onDelete, onConnect }
         </div>
         <div className="flex gap-1.5">
           {def?.canConnect && (
-            <Button size="sm" className="h-8 gap-1.5" onClick={onConnect} disabled={isConnecting}>
+            <Button size="sm" className="h-8 gap-1.5" onClick={onConnect}>
               {isConnecting ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (

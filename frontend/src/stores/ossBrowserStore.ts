@@ -11,8 +11,11 @@ import {
 } from "../../wailsjs/go/oss/OSS";
 import { oss_svc } from "../../wailsjs/go/models";
 import { registerTabCloseHook, type QueryTabMeta } from "./tabStore";
+import { useAssetStore } from "./assetStore";
+import { parseOSSConfig } from "@/components/asset/OSSConfigSection.config";
 import type { OssPrefixNode } from "@/lib/ossPrefixTree";
 import { errorMessage } from "@/lib/errorMessage";
+import { registerTabReconnectAdapter } from "@/lib/tabReconnect";
 
 const OSS_PAGE_SIZE = 200;
 
@@ -371,4 +374,24 @@ registerTabCloseHook((tab) => {
     delete next[tab.id];
     return { tabs: next };
   });
+});
+
+registerTabReconnectAdapter({
+  match: (tab) => tab.type === "query" && (tab.meta as QueryTabMeta).assetType === "oss",
+  getPhase: (tab) => {
+    const state = useOssBrowserStore.getState().tabs[tab.id];
+    if (!state) return "disconnected";
+    if (state.loading.buckets) return "connecting";
+    if (state.bucketsError && state.buckets === null) return "failed";
+    return "connected";
+  },
+  reconnect: async (tab) => {
+    const meta = tab.meta as QueryTabMeta;
+    const assetConfig = useAssetStore.getState().assets.find((a) => a.ID === meta.assetId)?.Config ?? "";
+    const defaultBucket = parseOSSConfig(assetConfig).bucket;
+    await useOssBrowserStore
+      .getState()
+      .loadBuckets(tab.id, meta.assetId, defaultBucket)
+      .catch(() => undefined);
+  },
 });

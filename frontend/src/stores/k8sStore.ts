@@ -10,6 +10,7 @@ import {
   ReleaseK8sConnections,
 } from "../../wailsjs/go/k8s/K8s";
 import { errorMessage } from "@/lib/errorMessage";
+import { registerTabReconnectAdapter } from "@/lib/tabReconnect";
 import type { K8sActionContext } from "@/components/k8s/actions";
 import type { LogTabState, LogTabStateUpdate } from "@/components/k8s/k8sLogState";
 import { registerTabCloseHook, type PageTabMeta } from "./tabStore";
@@ -323,6 +324,8 @@ interface K8sStoreState {
 
   /** Creates the cluster's state and reads it; a cluster that already has state (page remount) is left as is. */
   initCluster: (assetId: number, defaultNamespace: string) => void;
+  /** Re-reads version, types and namespaces together after a failed initial cluster load. */
+  retryCluster: (assetId: number) => Promise<void>;
   loadVersion: (assetId: number) => Promise<void>;
   loadTypes: (assetId: number) => Promise<void>;
   loadNamespaces: (assetId: number) => Promise<void>;
@@ -474,6 +477,12 @@ export const useK8sStore = create<K8sStoreState>((set, get) => {
       void get().loadVersion(assetId);
       void get().loadTypes(assetId);
       void get().loadNamespaces(assetId);
+    },
+
+    retryCluster: async (assetId) => {
+      if (!get().clusters[assetId]) return;
+      const state = get();
+      await Promise.allSettled([state.loadVersion(assetId), state.loadTypes(assetId), state.loadNamespaces(assetId)]);
     },
 
     loadVersion: (assetId) =>
@@ -1042,4 +1051,30 @@ registerTabCloseHook((tab) => {
   ReleaseK8sConnections(assetId).catch((error) =>
     console.error(`Failed to release K8S connections of asset ${assetId}:`, error)
   );
+});
+
+registerTabReconnectAdapter({
+  match: (tab) =>
+    tab.type === "page" &&
+    (tab.meta as PageTabMeta).pageId === K8S_CLUSTER_PAGE_ID &&
+    (tab.meta as PageTabMeta).assetId != null,
+  getPhase: (tab) => {
+    const assetId = (tab.meta as PageTabMeta).assetId!;
+    const cluster = useK8sStore.getState().clusters[assetId];
+    if (!cluster) return "connecting";
+    if (cluster.version.data) return "connected";
+    if (cluster.version.status === "error") return "failed";
+    return "connecting";
+  },
+  reconnect: async (tab) => {
+    const assetId = (tab.meta as PageTabMeta).assetId!;
+    const store = useK8sStore.getState();
+    const cluster = store.clusters[assetId];
+    if (!cluster) return;
+    if (cluster.version.data) {
+      await store.refreshAll(assetId);
+    } else {
+      await store.retryCluster(assetId);
+    }
+  },
 });

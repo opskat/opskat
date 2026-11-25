@@ -307,7 +307,7 @@ export function MainPanel({ onEditAsset, onDeleteAsset, onConnectAsset, topBarHi
                 {meta.pageId === "vnc" ? (
                   <VNCPanel tabId={tab.id} asset={asset} onEdit={() => onEditAsset(asset)} />
                 ) : (
-                  <RDPPanel asset={asset} onEdit={() => onEditAsset(asset)} />
+                  <RDPPanel tabId={tab.id} asset={asset} onEdit={() => onEditAsset(asset)} />
                 )}
               </LazySurface>
             </div>

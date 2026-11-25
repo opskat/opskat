@@ -12,6 +12,7 @@ import {
   loadDatabaseDrivers,
 } from "../lib/dbDrivers";
 import { errorMessage } from "@/lib/errorMessage";
+import { registerTabReconnectAdapter } from "@/lib/tabReconnect";
 
 // --- Types ---
 
@@ -162,6 +163,7 @@ export interface MongoDBTabState {
   activeDatabase: string | null;
   innerTabs: MongoInnerTab[];
   activeInnerTabId: string | null;
+  loadingDbs?: boolean;
   /** Why the database list failed to load; only loadMongoDatabases sets / clears it. */
   error: string | null;
   /** Why a database's collection list failed to load (db -> reason); loadMongoCollections sets / clears it. Not persisted. */
@@ -330,6 +332,7 @@ function defaultMongoState(): MongoDBTabState {
     activeDatabase: null,
     innerTabs: [],
     activeInnerTabId: null,
+    loadingDbs: false,
     error: null,
   };
 }
@@ -1475,15 +1478,30 @@ export const useQueryStore = create<QueryState>((set, get) => ({
     const tab = getQueryTabFromTabStore(tabId);
     if (!tab) return;
 
+    set((s) => {
+      const existing = s.mongoStates[tabId];
+      if (!existing) return s;
+      return {
+        mongoStates: {
+          ...s.mongoStates,
+          [tabId]: { ...existing, loadingDbs: true, error: null },
+        },
+      };
+    });
+
     try {
       const result = await ListMongoDatabases(tab.assetId);
       const databases: string[] = JSON.parse(result);
-      set((s) => ({
-        mongoStates: {
-          ...s.mongoStates,
-          [tabId]: { ...s.mongoStates[tabId], databases, error: null },
-        },
-      }));
+      set((s) => {
+        const existing = s.mongoStates[tabId];
+        if (!existing) return s;
+        return {
+          mongoStates: {
+            ...s.mongoStates,
+            [tabId]: { ...existing, databases, loadingDbs: false, error: null },
+          },
+        };
+      });
 
       // Also refresh collections for already-loaded or expanded databases that still exist,
       // otherwise the top-level refresh button leaves stale (or never-loaded) collection lists.
@@ -1493,12 +1511,16 @@ export const useQueryStore = create<QueryState>((set, get) => ({
         [...toRefresh].filter((db) => databases.includes(db)).map((db) => get().loadMongoCollections(tabId, db))
       );
     } catch (err) {
-      set((s) => ({
-        mongoStates: {
-          ...s.mongoStates,
-          [tabId]: { ...s.mongoStates[tabId], error: errorMessage(err) },
-        },
-      }));
+      set((s) => {
+        const existing = s.mongoStates[tabId];
+        if (!existing) return s;
+        return {
+          mongoStates: {
+            ...s.mongoStates,
+            [tabId]: { ...existing, loadingDbs: false, error: errorMessage(err) },
+          },
+        };
+      });
     }
   },
 
@@ -1858,4 +1880,50 @@ registerTabRestoreHook("query", (tabs) => {
     Object.keys(persisted.dbStates).some((id) => !openIds.has(id)) ||
     Object.keys(persisted.mongoStates).some((id) => !openIds.has(id));
   if (hasStale) savePersistedQueryStore();
+});
+
+// === Reconnect Adapters: database / redis / mongodb ===
+
+registerTabReconnectAdapter({
+  match: (tab) => tab.type === "query" && (tab.meta as QueryTabMeta).assetType === "database",
+  getPhase: (tab) => {
+    const st = useQueryStore.getState().dbStates[tab.id];
+    if (!st) return "connected";
+    if (st.loadingDbs) return "connecting";
+    // 已有库列表数据时遇到刷新瞬态错误仍视为已连接，避免双击覆盖现有工作现场。
+    if (st.error && st.databases.length === 0) return "failed";
+    return "connected";
+  },
+  reconnect: async (tab) => {
+    await useQueryStore.getState().loadDatabases(tab.id);
+  },
+});
+
+registerTabReconnectAdapter({
+  match: (tab) => tab.type === "query" && (tab.meta as QueryTabMeta).assetType === "redis",
+  getPhase: (tab) => {
+    const st = useQueryStore.getState().redisStates[tab.id];
+    if (!st) return "connected";
+    if (st.loadingKeys) return "connecting";
+    if (st.error && st.keys.length === 0 && Object.keys(st.dbKeyCounts).length === 0) return "failed";
+    return "connected";
+  },
+  reconnect: async (tab) => {
+    const store = useQueryStore.getState();
+    await Promise.all([store.scanKeys(tab.id, true), store.loadDbKeyCounts(tab.id)]);
+  },
+});
+
+registerTabReconnectAdapter({
+  match: (tab) => tab.type === "query" && (tab.meta as QueryTabMeta).assetType === "mongodb",
+  getPhase: (tab) => {
+    const st = useQueryStore.getState().mongoStates[tab.id];
+    if (!st) return "connected";
+    if (st.loadingDbs) return "connecting";
+    if (st.error && st.databases.length === 0) return "failed";
+    return "connected";
+  },
+  reconnect: async (tab) => {
+    await useQueryStore.getState().loadMongoDatabases(tab.id);
+  },
 });

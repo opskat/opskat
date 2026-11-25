@@ -8,6 +8,8 @@ vi.mock("../../wailsjs/go/etcd/Etcd", () => ({
 }));
 
 import { useEtcdStore } from "./etcdStore";
+import { getTabConnectionPhase, reconnectTabIfNeeded } from "@/lib/tabReconnect";
+import { useTabStore, type Tab } from "./tabStore";
 
 describe("useEtcdStore", () => {
   beforeEach(async () => {
@@ -18,6 +20,9 @@ describe("useEtcdStore", () => {
     useEtcdStore.setState({
       treeCache: new Map(),
       truncatedAt: new Map(),
+      prefixErrors: new Map(),
+      loadingPrefixes: new Set(),
+      refreshingAssets: new Set(),
       queryHistory: [],
       lastResult: null,
     });
@@ -133,5 +138,40 @@ describe("useEtcdStore", () => {
     const { EtcdTestConnection } = await import("../../wailsjs/go/etcd/Etcd");
     await useEtcdStore.getState().testConnection(42);
     expect(EtcdTestConnection).toHaveBeenCalledWith(42);
+  });
+
+  it("reports etcd reconnect adapter phase and reloads root on reconnectTabIfNeeded", async () => {
+    const { EtcdListPrefix } = await import("../../wailsjs/go/etcd/Etcd");
+    const tab: Tab = {
+      id: "query-9",
+      type: "query",
+      label: "etcd-prod",
+      meta: { type: "query", assetId: 9, assetName: "etcd-prod", assetIcon: "", assetType: "etcd" },
+    };
+
+    let resolvePending: (v: unknown) => void = () => {};
+    vi.mocked(EtcdListPrefix).mockReturnValueOnce(new Promise((r) => (resolvePending = r)) as any);
+    const pending = useEtcdStore.getState().loadPrefix(9, "/");
+    expect(getTabConnectionPhase(tab)).toBe("connecting");
+    resolvePending({ dirs: [], leaves: [], truncated: false });
+    await pending;
+    expect(getTabConnectionPhase(tab)).toBe("connected");
+
+    // Failed initial root load (no cached root) -> failed -> reconnectTabIfNeeded reloads root
+    useEtcdStore.getState().invalidate(9);
+    vi.mocked(EtcdListPrefix).mockRejectedValueOnce(new Error("dial timeout"));
+    await expect(useEtcdStore.getState().loadPrefix(9, "/")).rejects.toThrow("dial timeout");
+    expect(useEtcdStore.getState().getPrefixError(9, "/")).toBe("dial timeout");
+    expect(getTabConnectionPhase(tab)).toBe("failed");
+
+    vi.mocked(EtcdListPrefix).mockResolvedValueOnce({ dirs: ["svc"], leaves: [], truncated: false } as any);
+    expect(await reconnectTabIfNeeded(tab)).toBe(true);
+    expect(getTabConnectionPhase(tab)).toBe("connected");
+    expect(useEtcdStore.getState().getTreeNodes(9, "/")?.[0]?.name).toBe("svc");
+
+    // Closing the etcd tab cleans up cached prefixes & errors
+    useTabStore.setState({ tabs: [tab], activeTabId: tab.id });
+    useTabStore.getState().closeTab(tab.id);
+    expect(useEtcdStore.getState().getTreeNodes(9, "/")).toBeUndefined();
   });
 });

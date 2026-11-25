@@ -39,6 +39,7 @@ import {
   type VNCServerKeyCheck,
 } from "@/lib/vncClient";
 import { errorMessage } from "@/lib/errorMessage";
+import { registerLiveTabReconnector, type TabConnectionPhase } from "@/lib/tabReconnect";
 import { useVNCStore } from "@/stores/vncStore";
 
 interface VNCPanelProps {
@@ -151,6 +152,33 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
     setTabConnected(tabId, status === "connected");
     return () => setTabConnected(tabId, false);
   }, [tabId, status]);
+
+  const tabPhase: TabConnectionPhase = serverIdentity
+    ? "waiting_input"
+    : status === "error"
+      ? "failed"
+      : status === "closed"
+        ? "disconnected"
+        : status;
+  const tabPhaseRef = useRef<TabConnectionPhase>(tabPhase);
+  const connectRef = useRef(connect);
+
+  useEffect(() => {
+    tabPhaseRef.current = tabPhase;
+  }, [tabPhase]);
+
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+
+  useEffect(
+    () =>
+      registerLiveTabReconnector(tabId, {
+        getPhase: () => tabPhaseRef.current,
+        reconnect: () => connectRef.current(),
+      }),
+    [tabId]
+  );
 
   useEffect(() => {
     if (!session || !vncContainerRef.current) return;
@@ -434,23 +462,25 @@ export function VNCPanel({ tabId, asset, onEdit }: VNCPanelProps) {
 
       <div className="flex min-h-0 flex-1">
         <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden bg-black">
-          <RemoteConnectionOverlay
-            status={serverIdentity ? "connecting" : status}
-            error={error}
-            host={host}
-            port={port}
-            labels={{
-              connecting: t("vnc.connecting"),
-              error: t("vnc.errorTitle"),
-              closed: t("vnc.disconnectedTitle"),
-              reconnect: t("vnc.reconnect"),
-              edit: onEdit ? t("vnc.editConnection") : undefined,
-            }}
-            onReconnect={() => void connect()}
-            onEdit={onEdit}
-            reconnectTestId="vnc-reconnect"
-            editTestId="vnc-edit"
-          />
+          {!serverIdentity && (
+            <RemoteConnectionOverlay
+              status={status}
+              error={error}
+              host={host}
+              port={port}
+              labels={{
+                connecting: t("vnc.connecting"),
+                error: t("vnc.errorTitle"),
+                closed: t("vnc.disconnectedTitle"),
+                reconnect: t("vnc.reconnect"),
+                edit: onEdit ? t("vnc.editConnection") : undefined,
+              }}
+              onReconnect={() => void connect()}
+              onEdit={onEdit}
+              reconnectTestId="vnc-reconnect"
+              editTestId="vnc-edit"
+            />
+          )}
 
           {serverIdentity && (
             <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-background px-6 text-center">
