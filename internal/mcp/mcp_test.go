@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,54 +16,82 @@ import (
 
 	"github.com/cago-frame/agents/agent"
 	"github.com/cago-frame/agents/tool"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/permission"
+	aitool "github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/localipc"
 	"github.com/opskat/opskat/internal/sshagent"
 )
 
 const testStrongSecret = "opskat-mcp-strong-secret-0123456789" //nolint:gosec // test fixture
 
+// mcpTestClient drives the server through the official SDK client over an in-memory
+// transport, and exposes results in their JSON wire shape (what a real client sees).
 type mcpTestClient struct {
-	t      *testing.T
-	writer io.Writer
-	reader *bufio.Reader
-	nextID atomic.Int64
+	t       *testing.T
+	session *mcpsdk.ClientSession
+}
+
+// testResponse is a tools/list or tools/call outcome: Result on success, Error when the
+// server answered with a JSON-RPC error.
+type testResponse struct {
+	Result any
+	Error  *jsonrpc.Error
+}
+
+// wireToolResult / wireToolSpec decode the JSON wire form of CallToolResult / Tool.
+type wireToolResult struct {
+	Content []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content"`
+	StructuredContent any  `json:"structuredContent,omitempty"`
+	IsError           bool `json:"isError,omitempty"`
+}
+
+type wireToolSpec struct {
+	Name        string `json:"name"`
+	Annotations *struct {
+		ReadOnlyHint    *bool `json:"readOnlyHint"`
+		DestructiveHint *bool `json:"destructiveHint"`
+		IdempotentHint  *bool `json:"idempotentHint"`
+		OpenWorldHint   *bool `json:"openWorldHint"`
+	} `json:"annotations"`
 }
 
 func startTestServer(t *testing.T, cfg ServerConfig) (*mcpTestClient, func()) {
 	t.Helper()
-	clientR, serverW := io.Pipe()
-	serverR, clientW := io.Pipe()
+	if cfg.AuditWriter == nil {
+		cfg.AuditWriter = &recordingAuditWriter{}
+	}
+	serverT, clientT := mcpsdk.NewInMemoryTransports()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	srv := NewServer(cfg)
-
 	done := make(chan error, 1)
 	go func() {
-		done <- srv.Serve(ctx, serverR, serverW)
+		done <- srv.Run(ctx, serverT)
 	}()
 
-	client := &mcpTestClient{
-		t:      t,
-		writer: clientW,
-		reader: bufio.NewReader(clientR),
-	}
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+	session, err := client.Connect(ctx, clientT, nil)
+	require.NoError(t, err)
 
 	cleanup := func() {
+		_ = session.Close()
 		cancel()
-		_ = clientW.Close()
-		_ = clientR.Close()
 		select {
 		case <-done:
 		case <-time.After(3 * time.Second):
 			t.Fatalf("mcp server did not shut down cleanly")
 		}
 	}
-	return client, cleanup
+	return &mcpTestClient{t: t, session: session}, cleanup
 }
 
 func shortSocketPath(t *testing.T, name string) string {
@@ -84,57 +111,35 @@ func startTestControlServer(t *testing.T, approver *ExternalApprover) (string, f
 	return sockPath, ctrl.Stop
 }
 
-func (c *mcpTestClient) call(method string, params any) Response {
+func (c *mcpTestClient) call(method string, params any) testResponse {
 	c.t.Helper()
-	id := c.nextID.Add(1)
-	return c.callWithID(id, method, params)
+	return c.callCtx(context.Background(), method, params)
 }
 
-func (c *mcpTestClient) callWithID(id int64, method string, params any) Response {
+func (c *mcpTestClient) callCtx(ctx context.Context, method string, params any) testResponse {
 	c.t.Helper()
-	rawID, err := json.Marshal(id)
-	require.NoError(c.t, err)
-	var rawParams json.RawMessage
-	if params != nil {
-		rawParams, err = json.Marshal(params)
-		require.NoError(c.t, err)
+	var (
+		res any
+		err error
+	)
+	switch method {
+	case "tools/list":
+		res, err = c.session.ListTools(ctx, nil)
+	case "tools/call":
+		p := params.(map[string]any)
+		res, err = c.session.CallTool(ctx, &mcpsdk.CallToolParams{Name: p["name"].(string), Arguments: p["arguments"]})
+	default:
+		c.t.Fatalf("unsupported test method %q", method)
 	}
-	reqBytes, err := json.Marshal(Request{
-		JSONRPC: "2.0",
-		ID:      rawID,
-		Method:  method,
-		Params:  rawParams,
-	})
-	require.NoError(c.t, err)
-	_, err = c.writer.Write(append(reqBytes, '\n'))
-	require.NoError(c.t, err)
-
-	line, err := c.reader.ReadBytes('\n')
-	require.NoError(c.t, err)
-	var resp Response
-	require.NoError(c.t, json.Unmarshal(line, &resp))
-	return resp
-}
-
-func (c *mcpTestClient) sendNotification(method string, params any) {
-	c.t.Helper()
-	var rawParams json.RawMessage
-	if params != nil {
-		var err error
-		rawParams, err = json.Marshal(params)
-		require.NoError(c.t, err)
+	if err != nil {
+		var rpcErr *jsonrpc.Error
+		require.ErrorAs(c.t, err, &rpcErr)
+		return testResponse{Error: rpcErr}
 	}
-	reqBytes, err := json.Marshal(Request{
-		JSONRPC: "2.0",
-		Method:  method,
-		Params:  rawParams,
-	})
-	require.NoError(c.t, err)
-	_, err = c.writer.Write(append(reqBytes, '\n'))
-	require.NoError(c.t, err)
+	return testResponse{Result: res}
 }
 
-func decodeResult[T any](t *testing.T, resp Response) T {
+func decodeResult[T any](t *testing.T, resp testResponse) T {
 	t.Helper()
 	require.Nil(t, resp.Error, "unexpected RPC error: %+v", resp.Error)
 	raw, err := json.Marshal(resp.Result)
@@ -144,7 +149,7 @@ func decodeResult[T any](t *testing.T, resp Response) T {
 	return out
 }
 
-func decodeStructured[T any](t *testing.T, res CallToolResult) T {
+func decodeStructured[T any](t *testing.T, res wireToolResult) T {
 	t.Helper()
 	raw, err := json.Marshal(res.StructuredContent)
 	require.NoError(t, err)
@@ -200,7 +205,6 @@ func TestServerHandshakeAndDataPlaneNeverExposesResolveTool(t *testing.T) {
 
 	auditRec := &recordingAuditWriter{}
 	client, cleanup := startTestServer(t, ServerConfig{
-		ServerName:    "opsctl-test",
 		ServerVersion: "1.0.0",
 		Tools:         []agent.Tool{echoTool},
 		Approver:      approver,
@@ -208,17 +212,16 @@ func TestServerHandshakeAndDataPlaneNeverExposesResolveTool(t *testing.T) {
 	})
 	defer cleanup()
 
-	initResp := client.call("initialize", map[string]any{"protocolVersion": "2025-03-26"})
-	require.Nil(t, initResp.Error)
-	initMap := decodeResult[map[string]any](t, initResp)
-	require.Equal(t, "2025-03-26", initMap["protocolVersion"])
+	initRes := client.session.InitializeResult()
+	require.Equal(t, "opsctl", initRes.ServerInfo.Name)
+	require.Equal(t, "1.0.0", initRes.ServerInfo.Version)
+	require.NotNil(t, initRes.Capabilities.Tools)
 
-	pingResp := client.call("ping", nil)
-	require.Nil(t, pingResp.Error)
+	require.NoError(t, client.session.Ping(context.Background(), nil))
 
 	listResp := client.call("tools/list", nil)
 	listRes := decodeResult[struct {
-		Tools []ToolSpec `json:"tools"`
+		Tools []wireToolSpec `json:"tools"`
 	}](t, listResp)
 	names := make([]string, 0, len(listRes.Tools))
 	for _, spec := range listRes.Tools {
@@ -233,13 +236,13 @@ func TestServerHandshakeAndDataPlaneNeverExposesResolveTool(t *testing.T) {
 		"arguments": map[string]any{"approval_id": "apr_1", "secret": testStrongSecret, "decision": DecisionAllow},
 	})
 	require.NotNil(t, resolveAttempt.Error)
-	require.Equal(t, CodeInvalidParams, resolveAttempt.Error.Code)
+	require.EqualValues(t, jsonrpc.CodeInvalidParams, resolveAttempt.Error.Code)
 
 	callResp := client.call("tools/call", map[string]any{
 		"name":      "echo",
 		"arguments": map[string]any{"msg": "hello"},
 	})
-	callRes := decodeResult[CallToolResult](t, callResp)
+	callRes := decodeResult[wireToolResult](t, callResp)
 	require.False(t, callRes.IsError)
 	require.Equal(t, "echo:hello", callRes.Content[0].Text)
 
@@ -249,7 +252,7 @@ func TestServerHandshakeAndDataPlaneNeverExposesResolveTool(t *testing.T) {
 	auditRec.mu.Unlock()
 }
 
-func assertNoApprovalLeakOnDataPlane(t *testing.T, res CallToolResult, forbiddenSubstrings ...string) {
+func assertNoApprovalLeakOnDataPlane(t *testing.T, res wireToolResult, forbiddenSubstrings ...string) {
 	t.Helper()
 	var contentText strings.Builder
 	for _, item := range res.Content {
@@ -325,7 +328,7 @@ func TestExternalApprovalControlSocketApproveDenyAndAudit(t *testing.T) {
 	defer cleanup()
 
 	// 1. Trigger pause -> data plane returns opaque PauseRef only
-	rawPauseRes := decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	rawPauseRes := decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "exec",
 		"arguments": map[string]any{"command": "systemctl restart nginx"},
 	}))
@@ -380,7 +383,7 @@ func TestExternalApprovalControlSocketApproveDenyAndAudit(t *testing.T) {
 	require.Contains(t, err.Error(), "not found")
 
 	// 6. Deny flow
-	denyPause := decodeStructured[PauseRef](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	denyPause := decodeStructured[PauseRef](t, decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "exec",
 		"arguments": map[string]any{"command": "rm -rf /tmp/foo"},
 	})))
@@ -456,7 +459,7 @@ func TestExternalApprovalEditedItemsScopeLockedAndPermanentWithEditSucceeds(t *t
 	})
 	defer cleanup()
 
-	pauseRef := decodeStructured[PauseRef](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	pauseRef := decodeStructured[PauseRef](t, decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "exec",
 		"arguments": map[string]any{},
 	})))
@@ -543,7 +546,7 @@ func TestExternalGrantRejectsScopeTamperingAndPersistsValidEdit(t *testing.T) {
 	})
 	defer cleanup()
 
-	pauseRef := decodeStructured[PauseRef](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	pauseRef := decodeStructured[PauseRef](t, decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "request_permission",
 		"arguments": map[string]any{},
 	})))
@@ -624,7 +627,7 @@ func TestExternalApprovalGetTaskPauseStateMachineAndSecondaryMFA(t *testing.T) {
 	})
 	defer cleanup()
 
-	rawPause1 := decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	rawPause1 := decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "exec",
 		"arguments": map[string]any{},
 	}))
@@ -634,7 +637,7 @@ func TestExternalApprovalGetTaskPauseStateMachineAndSecondaryMFA(t *testing.T) {
 
 	// Calling get_task while still paused must return PauseRef ONLY (no full PausePayload)
 	// WITHOUT corrupting subsequent transitions.
-	rawPolledPause := decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	rawPolledPause := decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      GetTaskToolName,
 		"arguments": map[string]any{"task_id": pause1.TaskID, "wait_ms": 100},
 	}))
@@ -659,7 +662,7 @@ func TestExternalApprovalGetTaskPauseStateMachineAndSecondaryMFA(t *testing.T) {
 	require.Equal(t, "prod-bastion", step2.Pause.MFA.AssetName)
 
 	// Calling get_task while paused on MFA must also redact MFA prompts to PauseRef
-	rawPolledMFA := decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	rawPolledMFA := decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      GetTaskToolName,
 		"arguments": map[string]any{"task_id": pause1.TaskID, "wait_ms": 100},
 	}))
@@ -683,7 +686,7 @@ func TestExternalApprovalGetTaskPauseStateMachineAndSecondaryMFA(t *testing.T) {
 
 	// Release slow execution and fetch via get_task
 	close(releaseSlow)
-	step4 := decodeStructured[TaskResultPayload](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	step4 := decodeStructured[TaskResultPayload](t, decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      GetTaskToolName,
 		"arguments": map[string]any{"task_id": step3.TaskID, "wait_ms": 2000},
 	})))
@@ -741,7 +744,7 @@ func TestExternalApprovalLocalWriteAndMaxPendingFailClosed(t *testing.T) {
 	defer cleanup()
 
 	// 1. First call parks and occupies the single MaxPending slot
-	pauseRef := decodeStructured[PauseRef](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	pauseRef := decodeStructured[PauseRef](t, decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "write_test",
 		"arguments": map[string]any{"path": "/tmp/out.txt"},
 	})))
@@ -752,7 +755,7 @@ func TestExternalApprovalLocalWriteAndMaxPendingFailClosed(t *testing.T) {
 	require.Equal(t, []string{"/tmp/out.txt"}, pause.Items[0].LocalPaths)
 
 	// 2. Second concurrent pause exceeds MaxPending=1 -> fails closed immediately
-	secondRes := decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	secondRes := decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "write_test",
 		"arguments": map[string]any{"path": "/tmp/second.txt"},
 	}))
@@ -770,7 +773,7 @@ func TestExternalApprovalLocalWriteAndMaxPendingFailClosed(t *testing.T) {
 	require.Equal(t, "wrote:/tmp/out.txt", doneRes.Output)
 }
 
-func TestServerRequestSizeLimitAndCancellationNotification(t *testing.T) {
+func TestServerCancellationCancelsInFlightToolCall(t *testing.T) {
 	started := make(chan struct{}, 1)
 	canceled := make(chan struct{}, 1)
 	slowTool := &tool.RawTool{
@@ -784,55 +787,32 @@ func TestServerRequestSizeLimitAndCancellationNotification(t *testing.T) {
 		},
 	}
 
-	client, cleanup := startTestServer(t, ServerConfig{
-		Tools:           []agent.Tool{slowTool},
-		MaxRequestBytes: 256,
-	})
+	client, cleanup := startTestServer(t, ServerConfig{Tools: []agent.Tool{slowTool}})
 	defer cleanup()
 
-	// 1. Oversized frame (> 256 bytes) is rejected without killing the session
-	oversized := `{"jsonrpc":"2.0","id":99,"method":"ping","params":{"pad":"` + strings.Repeat("a", 300) + `"}}` + "\n"
-	_, err := client.writer.Write([]byte(oversized))
-	require.NoError(t, err)
-	line, err := client.reader.ReadBytes('\n')
-	require.NoError(t, err)
-	var errResp Response
-	require.NoError(t, json.Unmarshal(line, &errResp))
-	require.NotNil(t, errResp.Error)
-	require.Equal(t, CodeInvalidRequest, errResp.Error.Code)
-
-	// 2. Subsequent normal ping still works
-	require.Nil(t, client.call("ping", nil).Error)
-
-	// 3. Cancellation notification cancels an in-flight tool call
-	reqBytes, err := json.Marshal(Request{
-		JSONRPC: "2.0",
-		ID:      json.RawMessage("77"),
-		Method:  "tools/call",
-		Params:  json.RawMessage(`{"name":"slow","arguments":{}}`),
-	})
-	require.NoError(t, err)
-	_, err = client.writer.Write(append(reqBytes, '\n'))
-	require.NoError(t, err)
+	// Canceling the client call sends the MCP cancellation notification, which must reach the tool's ctx.
+	callCtx, cancelCall := context.WithCancel(context.Background())
+	callDone := make(chan struct{})
+	go func() {
+		defer close(callDone)
+		_, _ = client.session.CallTool(callCtx, &mcpsdk.CallToolParams{Name: "slow", Arguments: map[string]any{}})
+	}()
 
 	select {
 	case <-started:
 	case <-time.After(2 * time.Second):
 		t.Fatal("slow tool did not start")
 	}
-
-	client.sendNotification(NotificationCancelled, map[string]any{"requestId": 77})
+	cancelCall()
 	select {
 	case <-canceled:
 	case <-time.After(2 * time.Second):
-		t.Fatal("cancellation notification did not cancel in-flight request")
+		t.Fatal("client cancellation did not cancel the in-flight tool call")
 	}
+	<-callDone
 
-	cancelLine, err := client.reader.ReadBytes('\n')
-	require.NoError(t, err)
-	var cancelResp Response
-	require.NoError(t, json.Unmarshal(cancelLine, &cancelResp))
-	require.Equal(t, "77", string(cancelResp.ID))
+	// The session stays usable afterwards.
+	require.NoError(t, client.session.Ping(context.Background(), nil))
 }
 
 func TestServerSerializesSerialTools(t *testing.T) {
@@ -868,28 +848,20 @@ func TestServerSerializesSerialTools(t *testing.T) {
 	})
 	defer cleanup()
 
-	writeCall := func(id string) {
-		b, err := json.Marshal(Request{
-			JSONRPC: "2.0",
-			ID:      json.RawMessage(id),
-			Method:  "tools/call",
-			Params:  json.RawMessage(`{"name":"serial_op","arguments":{}}`),
+	var wg sync.WaitGroup
+	callAsync := func() {
+		wg.Go(func() {
+			res := decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{"name": "serial_op", "arguments": map[string]any{}}))
+			require.Equal(t, "done", res.Content[0].Text)
 		})
-		require.NoError(t, err)
-		_, err = client.writer.Write(append(b, '\n'))
-		require.NoError(t, err)
 	}
 
-	writeCall("1")
+	callAsync()
 	<-firstEntered
-	writeCall("2")
+	callAsync()
 	time.Sleep(40 * time.Millisecond)
 	close(gate)
-
-	for range 2 {
-		_, err := client.reader.ReadBytes('\n')
-		require.NoError(t, err)
-	}
+	wg.Wait()
 	require.Equal(t, int32(1), maxInFlight.Load(), "IsSerial=true tools must never overlap")
 }
 
@@ -926,7 +898,7 @@ func TestExternalApprovalExpiresFailClosed(t *testing.T) {
 	})
 	defer cleanup()
 
-	pause := decodeStructured[PauseRef](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	pause := decodeStructured[PauseRef](t, decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "exec",
 		"arguments": map[string]any{},
 	})))
@@ -998,7 +970,7 @@ func TestControlPlaneGetPendingAuthBackoffGroupFieldsAndAddr(t *testing.T) {
 	})
 	defer cleanup()
 
-	rawRes := decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	rawRes := decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "delete_group",
 		"arguments": map[string]any{},
 	}))
@@ -1035,14 +1007,21 @@ func TestControlPlaneGetPendingAuthBackoffGroupFieldsAndAddr(t *testing.T) {
 	require.Equal(t, "internal-policy-rule-42", full.Items[0].Review.Reason)
 }
 
-func TestToolsListPopulatesMCP2025Annotations(t *testing.T) {
+type behaviorRawTool struct {
+	*tool.RawTool
+	behavior aitool.Behavior
+}
+
+func (b behaviorRawTool) Behavior() aitool.Behavior { return b.behavior }
+
+func TestToolsListMapsDeclaredBehaviorToAnnotations(t *testing.T) {
 	approver, err := NewExternalApprover(ExternalApproverConfig{
 		Secret:             testStrongSecret,
 		AuthFailureBackoff: -1,
 	})
 	require.NoError(t, err)
 
-	makeTool := func(name string) agent.Tool {
+	makeTool := func(name string) *tool.RawTool {
 		return &tool.RawTool{
 			NameStr:   name,
 			SchemaVal: agent.Schema{Type: "object"},
@@ -1052,60 +1031,42 @@ func TestToolsListPopulatesMCP2025Annotations(t *testing.T) {
 		}
 	}
 
-	allNames := []string{
-		"list_assets", "get_asset", "list_groups", "get_group",
-		"list_credentials", "get_credential", "help",
-		"exec", "batch_exec", "cp",
-		"put_asset", "put_group", "delete_asset", "delete_group",
-		"request_permission", "get_asset_secret",
-	}
-	tools := make([]agent.Tool, 0, len(allNames))
-	for _, name := range allNames {
-		tools = append(tools, makeTool(name))
-	}
-
 	client, cleanup := startTestServer(t, ServerConfig{
-		Tools:    tools,
+		Tools: []agent.Tool{
+			makeTool("list_assets"), // built-in, declared read-only
+			makeTool("exec"),        // built-in, declared remote + destructive
+			behaviorRawTool{RawTool: makeTool("list_audit"), behavior: aitool.Behavior{ReadOnly: true, Idempotent: true}},
+			makeTool("undeclared_tool"),
+		},
 		Approver: approver,
-		ExtraTools: []ExtraTool{{
-			Spec: ToolSpec{Name: "list_audit", InputSchema: agent.Schema{Type: "object"}},
-			Handler: func(_ context.Context, _ map[string]any) (*CallToolResult, error) {
-				return textResult("[]", false), nil
-			},
-		}},
 	})
 	defer cleanup()
 
 	listRes := decodeResult[struct {
-		Tools []ToolSpec `json:"tools"`
+		Tools []wireToolSpec `json:"tools"`
 	}](t, client.call("tools/list", nil))
-	byName := make(map[string]ToolSpec, len(listRes.Tools))
+	byName := make(map[string]wireToolSpec, len(listRes.Tools))
 	for _, spec := range listRes.Tools {
 		byName[spec.Name] = spec
 	}
 
-	assertHints := func(name string, wantReadOnly, wantDestructive bool) {
-		spec, ok := byName[name]
-		require.True(t, ok, "missing tool %q", name)
-		require.NotNil(t, spec.Annotations, "missing annotations on tool %q", name)
-		require.NotNil(t, spec.Annotations.ReadOnlyHint, "missing readOnlyHint on tool %q", name)
-		require.Equal(t, wantReadOnly, *spec.Annotations.ReadOnlyHint, "readOnlyHint mismatch on %q", name)
-		require.NotNil(t, spec.Annotations.DestructiveHint, "missing destructiveHint on tool %q", name)
-		require.Equal(t, wantDestructive, *spec.Annotations.DestructiveHint, "destructiveHint mismatch on %q", name)
+	assertHints := func(name string, readOnly, destructive, idempotent, openWorld bool) {
+		t.Helper()
+		a := byName[name].Annotations
+		require.NotNil(t, a, "missing annotations on tool %q", name)
+		require.Equal(t, readOnly, *a.ReadOnlyHint, "readOnlyHint on %q", name)
+		require.Equal(t, destructive, *a.DestructiveHint, "destructiveHint on %q", name)
+		require.Equal(t, idempotent, *a.IdempotentHint, "idempotentHint on %q", name)
+		require.Equal(t, openWorld, *a.OpenWorldHint, "openWorldHint on %q", name)
 	}
-
-	for _, name := range []string{"list_assets", "get_asset", "list_groups", "get_group", "list_credentials", "get_credential", "help", "list_audit", GetTaskToolName} {
-		assertHints(name, true, false)
-	}
-	for _, name := range []string{"exec", "batch_exec", "cp", "delete_asset", "delete_group"} {
-		assertHints(name, false, true)
-	}
-	for _, name := range []string{"put_asset", "put_group", "request_permission", "get_asset_secret"} {
-		assertHints(name, false, false)
-	}
+	assertHints("list_assets", true, false, true, false)
+	assertHints("exec", false, true, false, true)
+	assertHints("list_audit", true, false, true, false)
+	assertHints(GetTaskToolName, true, false, true, false)
+	require.Nil(t, byName["undeclared_tool"].Annotations, "an undeclared tool keeps the conservative MCP defaults")
 }
 
-func TestServerAuditDoesNotMisattributeGroupScopedToolsAndAuditsExtraTools(t *testing.T) {
+func TestServerAuditDoesNotMisattributeGroupScopedToolsAndAuditsEveryTool(t *testing.T) {
 	groupTool := &tool.RawTool{
 		NameStr:   "delete_group",
 		SchemaVal: agent.Schema{Type: "object"},
@@ -1113,27 +1074,26 @@ func TestServerAuditDoesNotMisattributeGroupScopedToolsAndAuditsExtraTools(t *te
 			return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: `{"id":3,"message":"group deleted"}`}}}, nil
 		},
 	}
-	extra := ExtraTool{
-		Spec:  ToolSpec{Name: "list_audit", InputSchema: agent.Schema{Type: "object"}},
-		Audit: true,
-		Handler: func(_ context.Context, _ map[string]any) (*CallToolResult, error) {
-			return textResult("[]", false), nil
+	listAudit := &tool.RawTool{
+		NameStr:   "list_audit",
+		SchemaVal: agent.Schema{Type: "object"},
+		Handler: func(_ context.Context, _ map[string]any) (*agent.ToolResultBlock, error) {
+			return tool.TextResult("[]"), nil
 		},
 	}
 
 	rec := &recordingAuditWriter{}
 	client, cleanup := startTestServer(t, ServerConfig{
-		Tools:       []agent.Tool{groupTool},
-		ExtraTools:  []ExtraTool{extra},
+		Tools:       []agent.Tool{groupTool, listAudit},
 		AuditWriter: rec,
 	})
 	defer cleanup()
 
-	_ = decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	_ = decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "delete_group",
 		"arguments": map[string]any{"id": 3},
 	}))
-	_ = decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	_ = decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "list_audit",
 		"arguments": map[string]any{},
 	}))
@@ -1197,11 +1157,11 @@ func TestExternalSerialToolsRemainSerializedAfterResume(t *testing.T) {
 	})
 	defer cleanup()
 
-	p1 := decodeStructured[PauseRef](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	p1 := decodeStructured[PauseRef](t, decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "exec",
 		"arguments": map[string]any{"cmd": "op1"},
 	})))
-	p2 := decodeStructured[PauseRef](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	p2 := decodeStructured[PauseRef](t, decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "exec",
 		"arguments": map[string]any{"cmd": "op2"},
 	})))
@@ -1226,61 +1186,6 @@ func TestExternalSerialToolsRemainSerializedAfterResume(t *testing.T) {
 	wg.Wait()
 
 	require.Equal(t, int32(1), maxInExec.Load(), "resumed Serial tools in external mode must never execute concurrently")
-}
-
-func TestServerRejectsUnsupportedProtocolVersionAndDuplicateInFlightID(t *testing.T) {
-	gate := make(chan struct{})
-	entered := make(chan struct{}, 1)
-	slow := &tool.RawTool{
-		NameStr:   "slow",
-		SchemaVal: agent.Schema{Type: "object"},
-		Handler: func(ctx context.Context, _ map[string]any) (*agent.ToolResultBlock, error) {
-			entered <- struct{}{}
-			select {
-			case <-gate:
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-			return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: "done"}}}, nil
-		},
-	}
-
-	client, cleanup := startTestServer(t, ServerConfig{Tools: []agent.Tool{slow}})
-	defer cleanup()
-
-	// Unsupported protocol version must fall back to server's ProtocolVersion, never echo arbitrary string
-	initResp := client.call("initialize", map[string]any{"protocolVersion": "9999-99-99"})
-	require.Nil(t, initResp.Error)
-	initMap := decodeResult[map[string]any](t, initResp)
-	require.Equal(t, ProtocolVersion, initMap["protocolVersion"])
-
-	// Duplicate in-flight JSON-RPC id must be rejected instead of overwriting cancel handle
-	reqBytes, err := json.Marshal(Request{
-		JSONRPC: "2.0",
-		ID:      json.RawMessage("42"),
-		Method:  "tools/call",
-		Params:  json.RawMessage(`{"name":"slow","arguments":{}}`),
-	})
-	require.NoError(t, err)
-	_, err = client.writer.Write(append(reqBytes, '\n'))
-	require.NoError(t, err)
-	<-entered
-
-	_, err = client.writer.Write(append(reqBytes, '\n'))
-	require.NoError(t, err)
-	dupLine, err := client.reader.ReadBytes('\n')
-	require.NoError(t, err)
-	var dupResp Response
-	require.NoError(t, json.Unmarshal(dupLine, &dupResp))
-	require.NotNil(t, dupResp.Error)
-	require.Equal(t, CodeInvalidRequest, dupResp.Error.Code)
-
-	close(gate)
-	firstLine, err := client.reader.ReadBytes('\n')
-	require.NoError(t, err)
-	var firstResp Response
-	require.NoError(t, json.Unmarshal(firstLine, &firstResp))
-	require.Nil(t, firstResp.Error)
 }
 
 func TestExternalApproverGetAssetSecretIsOneShotOnGetTask(t *testing.T) {
@@ -1313,7 +1218,7 @@ func TestExternalApproverGetAssetSecretIsOneShotOnGetTask(t *testing.T) {
 	})
 	defer cleanup()
 
-	pauseRef := decodeStructured[PauseRef](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	pauseRef := decodeStructured[PauseRef](t, decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      "get_asset_secret",
 		"arguments": map[string]any{},
 	})))
@@ -1324,7 +1229,7 @@ func TestExternalApproverGetAssetSecretIsOneShotOnGetTask(t *testing.T) {
 	require.NoError(t, err)
 
 	// First get_task delivers secret
-	first := decodeStructured[TaskResultPayload](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	first := decodeStructured[TaskResultPayload](t, decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      GetTaskToolName,
 		"arguments": map[string]any{"task_id": pauseRef.TaskID},
 	})))
@@ -1332,7 +1237,7 @@ func TestExternalApproverGetAssetSecretIsOneShotOnGetTask(t *testing.T) {
 	require.Equal(t, "sk-live-secret-999", first.Output)
 
 	// Second get_task must fail: plaintext secret must not be retained for 30 minutes
-	second := decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+	second := decodeResult[wireToolResult](t, client.call("tools/call", map[string]any{
 		"name":      GetTaskToolName,
 		"arguments": map[string]any{"task_id": pauseRef.TaskID},
 	}))
@@ -1375,11 +1280,11 @@ func TestServerExitsCleanlyOnContextCancelWhileStdinRemainsOpen(t *testing.T) {
 		_ = clientR.Close()
 	}()
 
-	srv := NewServer(ServerConfig{})
+	srv := NewServer(ServerConfig{AuditWriter: &recordingAuditWriter{}})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- srv.Serve(ctx, serverR, serverW)
+		done <- srv.Run(ctx, &mcpsdk.IOTransport{Reader: serverR, Writer: serverW})
 	}()
 
 	// Cancel context WITHOUT closing clientW (simulating SIGINT while stdin pipe stays open)
@@ -1388,6 +1293,6 @@ func TestServerExitsCleanlyOnContextCancelWhileStdinRemainsOpen(t *testing.T) {
 	case err := <-done:
 		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(2 * time.Second):
-		t.Fatal("Server.Serve hung on ctx cancel while stdin remained open")
+		t.Fatal("Server.Run hung on ctx cancel while stdin remained open")
 	}
 }

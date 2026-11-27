@@ -137,7 +137,7 @@ func TestAuditMiddleware_RecordedAuditResultReplacesOutputInAuditOnly(t *testing
 
 		entry := waitForAuditEntry(t, mockRepo, "exec", 11)
 		So(entry.Result, ShouldEqual, "HTTP 200 OK")
-		got, err := ExtractAuditResult(res.Output)
+		got, err := extractAuditResult(res.Output)
 		So(err, ShouldBeNil)
 		So(got, ShouldEqual, body)
 	})
@@ -176,7 +176,7 @@ func TestAuditMiddleware_RecordedAuditResultReplacesOutputInAuditOnly(t *testing
 		So(entry.Error, ShouldNotContainSubstring, "glsa_echoed_must_not_reach_audit")
 		So(entry.Result, ShouldNotContainSubstring, "glsa_echoed_must_not_reach_audit")
 		So(entry.Error, ShouldEqual, "HTTP 200 OK")
-		_, err := ExtractAuditResult(res.Output)
+		_, err := extractAuditResult(res.Output)
 		So(err, ShouldNotBeNil)
 		So(err.Error(), ShouldEqual, body)
 	})

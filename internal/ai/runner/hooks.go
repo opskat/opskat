@@ -18,17 +18,35 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 )
 
-// auditMiddleware 是 cago tool dispatch 的"around"中间件，负责审计落库。
+// auditMiddleware 是 AI runner 挂的审计中间件：经 [AuditMiddleware] 落库，写入走
+// 包级 auditWriter 并起 goroutine 异步完成，不拖慢对话里的工具返回。
+func auditMiddleware(c *agent.ToolContext) {
+	AuditMiddleware(asyncAuditWriter{})(c)
+}
+
+// asyncAuditWriter 在调用时读包级 auditWriter（测试会替换它），再异步写入。
+type asyncAuditWriter struct{}
+
+func (asyncAuditWriter) WriteToolCall(ctx context.Context, info audit.ToolCallInfo) {
+	go auditWriter.WriteToolCall(ctx, info)
+}
+
+// AuditMiddleware 返回 cago tool dispatch 的"around"审计中间件，经 w 落库。AI runner
+// 与 opsctl mcp 的工具调用都走它，两条入口的审计列语义因此只有这一份实现。
 //
 // 工作流：
 //  1. 建一个 *aictx.CheckResult slot，挂到 c.ctx（通过 c.WithContext）。
 //  2. c.Next() 推链：后续 mw（如 aitool.LocalToolGate）+ 终端 tool.Call 全跑；tool
 //     内部用 aictx.RecordDecision(ctx, r) 把决策写进 slot。
 //  3. c.Next() 返回后，从 c.Output 抽出文本 / 错误，组合成 audit.ToolCallInfo，
-//     起 goroutine 异步写入审计仓库。
+//     交给 w 写入（脱离调用方 ctx 的取消）。
 //
 // 每次调用的状态都保存在当前 ctx 和闭包内，不通过全局索引跨调用共享。
-func auditMiddleware(c *agent.ToolContext) {
+func AuditMiddleware(w audit.AuditWriter) agent.ToolMiddleware {
+	return func(c *agent.ToolContext) { runAuditMiddleware(c, w) }
+}
+
+func runAuditMiddleware(c *agent.ToolContext, w audit.AuditWriter) {
 	slot := &aictx.CheckResult{}
 	commandSlot := ""
 	auditRequestSlot := aictx.NewAuditRequestSlot()
@@ -38,7 +56,7 @@ func auditMiddleware(c *agent.ToolContext) {
 	ctx = aictx.WithAuditResultSlot(ctx, aictx.NewAuditResultSlot())
 	c.WithContext(ctx)
 
-	assetID, assetName, command := ResolveAssetForAudit(c.Context(), c.ToolName, c.Input)
+	assetID, assetName, command := resolveAssetForAudit(c.Context(), c.ToolName, c.Input)
 
 	c.Next()
 	if commandSlot != "" {
@@ -63,9 +81,9 @@ func auditMiddleware(c *agent.ToolContext) {
 			zap.String("toolName", c.ToolName), zap.Error(err))
 	}
 
-	result, errVal := ExtractAuditResult(c.Output)
+	result, errVal := extractAuditResult(c.Output)
 	if assetID == 0 && errVal == nil && audit.ShouldResolveAssetFromResult(c.ToolName) {
-		assetID, assetName = ResolveResultAssetForAudit(c.Context(), result)
+		assetID, assetName = resolveResultAssetForAudit(c.Context(), result)
 	}
 	// 审计 result 默认是返回给模型的完整输出。执行器（通用资产 exec、含通用资产条目的
 	// batch_exec）通过 aictx.RecordAuditResult 写了摘要时，审计改存摘要——输出可能回显
@@ -89,13 +107,10 @@ func auditMiddleware(c *agent.ToolContext) {
 		AssetName: assetName,
 		Command:   command,
 	}
-	auditCtx := DetachAuditContext(c.Context())
-	go auditWriter.WriteToolCall(auditCtx, info)
+	w.WriteToolCall(detachAuditContext(c.Context()), info)
 }
 
-// ResolveResultAssetForAudit resolves the created asset ID/name from a JSON tool result
-// containing {"id": N} (used for tools registered via audit.RegisterResultAssetTool).
-func ResolveResultAssetForAudit(ctx context.Context, result string) (int64, string) {
+func resolveResultAssetForAudit(ctx context.Context, result string) (int64, string) {
 	var created struct {
 		ID int64 `json:"id"`
 	}
@@ -109,7 +124,7 @@ func ResolveResultAssetForAudit(ctx context.Context, result string) (int64, stri
 	return asset.ID, asset.Name
 }
 
-// ResolveAssetForAudit resolves the tool's args["asset"] identifier (numeric id or
+// resolveAssetForAudit resolves the tool's args["asset"] identifier (numeric id or
 // name string — the convention shared by exec/help, and any single-asset tool)
 // before c.Next() runs the tool, so the audit row keeps correct attribution
 // even if the tool itself changes the asset's status: asset_repo filters by
@@ -141,7 +156,7 @@ func ResolveResultAssetForAudit(ctx context.Context, result string) (int64, stri
 // value at its zero value / the raw command, and the caller falls back to its
 // existing args["asset_id"]/ExtractCommandForAudit path — which also covers every
 // tool that doesn't use the asset-string convention at all (the pre-existing 14).
-func ResolveAssetForAudit(ctx context.Context, toolName string, input map[string]any) (assetID int64, assetName, command string) {
+func resolveAssetForAudit(ctx context.Context, toolName string, input map[string]any) (assetID int64, assetName, command string) {
 	ref := aictx.ArgString(input, "asset")
 	if ref == "" {
 		id, name := resolveTransferAssetForAudit(ctx, input)
@@ -212,9 +227,9 @@ func resolveTransferAssetForAudit(ctx context.Context, input map[string]any) (in
 	return 0, ""
 }
 
-// ExtractAuditResult 把 cago 的 *ToolResultBlock 拆成审计需要的 (result, error)。
+// extractAuditResult 把 cago 的 *ToolResultBlock 拆成审计需要的 (result, error)。
 // IsError=true 的块当成 error 路径，文本作为 error message。
-func ExtractAuditResult(block *agent.ToolResultBlock) (string, error) {
+func extractAuditResult(block *agent.ToolResultBlock) (string, error) {
 	if block == nil {
 		return "", nil
 	}
@@ -239,9 +254,9 @@ func ExtractAuditResult(block *agent.ToolResultBlock) (string, error) {
 	return text, nil
 }
 
-// DetachAuditContext 把审计需要的 ctx value 复制到一个全新的 context.Background()
+// detachAuditContext 把审计需要的 ctx value 复制到一个全新的 context.Background()
 // 之上，避免 runner ctx 被 Cancel 后导致审计写入异步中断。
-func DetachAuditContext(ctx context.Context) context.Context {
+func detachAuditContext(ctx context.Context) context.Context {
 	out := context.Background()
 	if v := aictx.GetAuditSource(ctx); v != "" {
 		out = aictx.WithAuditSource(out, v)

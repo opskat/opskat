@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/cago-frame/agents/agent"
+	cagotool "github.com/cago-frame/agents/tool"
 	"github.com/cago-frame/cago/configs"
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/google/uuid"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
@@ -39,23 +41,16 @@ import (
 
 const (
 	mcpApprovalSecretEnv = "OPSKAT_MCP_APPROVAL_SECRET" //nolint:gosec // env var name, not a credential
-	mcpAuditSource       = "mcp"
 	mcpMaxAuditListLimit = 200
 )
 
-// mcpRealStdout preserves the original process stdout captured in Execute() before
-// redirecting os.Stdout -> os.Stderr for MCP stdio framing protection.
+// mcpRealStdout is the process stdout captured in Execute() before os.Stdout is
+// redirected to os.Stderr, so only the MCP transport ever writes JSON-RPC frames to it.
 var mcpRealStdout *os.File
 
-// mcpStdio holds the streams used by cmdMCP; overridden in tests.
-var mcpStdio = func() (io.Reader, io.Writer) { return os.Stdin, os.Stderr }
-
-// mcpStdout holds the JSON-RPC output stream used by cmdMCP; overridden in tests.
-var mcpStdout = func() io.Writer {
-	if mcpRealStdout != nil {
-		return mcpRealStdout
-	}
-	return os.Stdout
+// mcpStdio returns the MCP transport and the diagnostics stream; overridden in tests.
+var mcpStdio = func() (mcpsdk.Transport, io.Writer) {
+	return &mcpsdk.IOTransport{Reader: os.Stdin, Writer: mcpRealStdout}, os.Stderr
 }
 
 type serialTool interface {
@@ -120,8 +115,7 @@ func cmdMCP(ctx context.Context, args []string) int {
 		session = "mcp_" + uuid.New().String()
 	}
 
-	in, stderr := mcpStdio()
-	out := mcpStdout()
+	transport, stderr := mcpStdio()
 
 	var approver *mcp.ExternalApprover
 	var controlSrv *mcp.ControlServer
@@ -173,20 +167,16 @@ func cmdMCP(ctx context.Context, args []string) int {
 
 	docGate := tool.NewDocGate()
 	tools := wrapMCPTools(mcp.FilterTools(tool.Tools(), toolset), normalizedLocalDirs)
-	var extraTools []mcp.ExtraTool
 	if toolset == mcp.ToolsetFull {
-		extraTools = append(extraTools, newMCPListAuditTool(session))
+		tools = append(tools, newMCPListAuditTool(session))
 	}
 
 	srv := mcp.NewServer(mcp.ServerConfig{
-		ServerName:    "opsctl",
 		ServerVersion: configs.Version,
 		Tools:         tools,
-		ExtraTools:    extraTools,
 		Approver:      approver,
 		AuditWriter:   opsctlAuditWriter,
 		SessionID:     session,
-		AuditSource:   mcpAuditSource,
 		PrepareCtx: func(callCtx context.Context) context.Context {
 			callCtx = tool.WithDocGate(callCtx, docGate)
 			callCtx = permission.WithPolicyChecker(callCtx, checker)
@@ -214,14 +204,7 @@ func cmdMCP(ctx context.Context, args []string) int {
 	serveCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 
-	// Protect the stdio JSON-RPC stream: redirect global os.Stdout to os.Stderr while
-	// keeping the real stdout handle exclusively for srv.Serve.
-	if outFile, ok := out.(*os.File); ok && outFile == os.Stdout {
-		os.Stdout = os.Stderr
-		defer func() { os.Stdout = outFile }()
-	}
-
-	if err := srv.Serve(serveCtx, in, out); err != nil && !errors.Is(err, context.Canceled) {
+	if err := srv.Run(serveCtx, transport); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
@@ -879,7 +862,7 @@ func newMCPResolveAuditor(sessionID string) func(ctx context.Context, ev mcp.Res
 		if opsctlAuditWriter == nil {
 			return
 		}
-		auditCtx := aictx.WithAuditSource(context.Background(), mcpAuditSource)
+		auditCtx := aictx.WithAuditSource(context.Background(), mcp.AuditSource)
 		auditCtx = aictx.WithSessionID(auditCtx, sessionID)
 
 		argsMap := map[string]any{
@@ -1056,28 +1039,36 @@ func newDesktopMCPLocalConfirmFunc(sessionID string) tool.LocalToolConfirmFunc {
 	}
 }
 
-func newMCPListAuditTool(sessionID string) mcp.ExtraTool {
-	return mcp.ExtraTool{
-		Spec: mcp.ToolSpec{
-			Name: "list_audit",
-			Description: "Read-only query of audit log rows produced by this MCP session (newest first): " +
-				"time, source, asset, tool, command summary, result, and decision source.",
-			InputSchema: agent.Schema{
-				Type: "object",
-				Properties: map[string]*agent.Property{
-					"asset":    {Type: "string", Description: "Optional asset filter (name, group/name, or numeric ID)."},
-					"tool":     {Type: "string", Description: "Optional tool name filter (e.g. exec, cp, batch_exec)."},
-					"result":   {Type: "string", Description: "Optional result filter: " + strings.Join(audit_svc.Results, ", ")},
-					"decision": {Type: "string", Description: "Optional decision filter: " + strings.Join(audit_svc.Decisions, ", ")},
-					"decider":  {Type: "string", Description: "Optional decider filter: " + strings.Join(aictx.DeciderGroups, ", ")},
-					"grep":     {Type: "string", Description: "Optional case-insensitive substring filter on command or asset name."},
-					"since":    {Type: "string", Description: "Optional duration window, e.g. 30m, 6h, 7d."},
-					"limit":    {Type: "number", Description: fmt.Sprintf("Maximum rows to return (default %d, max %d).", defaultAuditListLimit, mcpMaxAuditListLimit)},
-				},
+// mcpListAuditTool is list_audit: an ordinary agent tool (so it runs through the same
+// dispatcher and audit middleware as every other tool) that also declares its side
+// effects, since it lives outside the built-in tool registry.
+type mcpListAuditTool struct {
+	*cagotool.RawTool
+}
+
+func (mcpListAuditTool) Behavior() tool.Behavior {
+	return tool.Behavior{ReadOnly: true, Idempotent: true}
+}
+
+func newMCPListAuditTool(sessionID string) agent.Tool {
+	return mcpListAuditTool{&cagotool.RawTool{
+		NameStr: "list_audit",
+		DescStr: "Read-only query of audit log rows produced by this MCP session (newest first): " +
+			"time, source, asset, tool, command summary, result, and decision source.",
+		SchemaVal: agent.Schema{
+			Type: "object",
+			Properties: map[string]*agent.Property{
+				"asset":    {Type: "string", Description: "Optional asset filter (name, group/name, or numeric ID)."},
+				"tool":     {Type: "string", Description: "Optional tool name filter (e.g. exec, cp, batch_exec)."},
+				"result":   {Type: "string", Description: "Optional result filter: " + strings.Join(audit_svc.Results, ", ")},
+				"decision": {Type: "string", Description: "Optional decision filter: " + strings.Join(audit_svc.Decisions, ", ")},
+				"decider":  {Type: "string", Description: "Optional decider filter: " + strings.Join(aictx.DeciderGroups, ", ")},
+				"grep":     {Type: "string", Description: "Optional case-insensitive substring filter on command or asset name."},
+				"since":    {Type: "string", Description: "Optional duration window, e.g. 30m, 6h, 7d."},
+				"limit":    {Type: "number", Description: fmt.Sprintf("Maximum rows to return (default %d, max %d).", defaultAuditListLimit, mcpMaxAuditListLimit)},
 			},
 		},
-		Audit: true,
-		Handler: func(ctx context.Context, args map[string]any) (*mcp.CallToolResult, error) {
+		Handler: func(ctx context.Context, args map[string]any) (*agent.ToolResultBlock, error) {
 			limit := aictx.ArgInt(args, "limit")
 			if limit <= 0 {
 				limit = defaultAuditListLimit
@@ -1086,7 +1077,7 @@ func newMCPListAuditTool(sessionID string) mcp.ExtraTool {
 				return nil, fmt.Errorf("limit %d exceeds maximum allowed %d", limit, mcpMaxAuditListLimit)
 			}
 			q := audit_svc.Query{
-				Source:    mcpAuditSource,
+				Source:    mcp.AuditSource,
 				SessionID: sessionID,
 				ToolName:  aictx.ArgString(args, "tool"),
 				Result:    aictx.ArgString(args, "result"),
@@ -1144,10 +1135,7 @@ func newMCPListAuditTool(sessionID string) mcp.ExtraTool {
 			if err != nil {
 				return nil, err
 			}
-			return &mcp.CallToolResult{
-				Content:           []mcp.ContentItem{{Type: "text", Text: string(encoded)}},
-				StructuredContent: map[string]any{"rows": rows},
-			}, nil
+			return cagotool.TextResult(string(encoded)), nil
 		},
-	}
+	}}
 }

@@ -1,10 +1,8 @@
 package command
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,6 +14,7 @@ import (
 
 	"github.com/cago-frame/agents/agent"
 	cagotool "github.com/cago-frame/agents/tool"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
@@ -106,19 +105,13 @@ func TestCmdMCPExternalCoreToolsetExcludesResolveAndAudit(t *testing.T) {
 	require.NoError(t, writeActiveSession("cli-existing-session"))
 
 	sock := shortMCPSocketPath(t, "mcp-ctrl.sock")
-	clientR, serverW := io.Pipe()
-	serverR, clientW := io.Pipe()
+	serverT, clientT := mcpsdk.NewInMemoryTransports()
 	var stderrMu sync.Mutex
 	var stderrBuf bytes.Buffer
 	stderrWriter := &lockedBufferWriter{mu: &stderrMu, buf: &stderrBuf}
 	origStdio := mcpStdio
-	origStdout := mcpStdout
-	mcpStdio = func() (io.Reader, io.Writer) { return serverR, stderrWriter }
-	mcpStdout = func() io.Writer { return serverW }
-	t.Cleanup(func() {
-		mcpStdio = origStdio
-		mcpStdout = origStdout
-	})
+	mcpStdio = func() (mcpsdk.Transport, io.Writer) { return serverT, stderrWriter }
+	t.Cleanup(func() { mcpStdio = origStdio })
 
 	done := make(chan int, 1)
 	go func() {
@@ -129,29 +122,9 @@ func TestCmdMCPExternalCoreToolsetExcludesResolveAndAudit(t *testing.T) {
 		})
 	}()
 
-	reader := bufio.NewReader(clientR)
-	send := func(id int, method string, params any) mcp.Response {
-		t.Helper()
-		rawID, err := json.Marshal(id)
-		require.NoError(t, err)
-		var rawParams json.RawMessage
-		if params != nil {
-			rawParams, err = json.Marshal(params)
-			require.NoError(t, err)
-		}
-		b, err := json.Marshal(mcp.Request{JSONRPC: "2.0", ID: rawID, Method: method, Params: rawParams})
-		require.NoError(t, err)
-		_, err = clientW.Write(append(b, '\n'))
-		require.NoError(t, err)
-		line, err := reader.ReadBytes('\n')
-		require.NoError(t, err)
-		var resp mcp.Response
-		require.NoError(t, json.Unmarshal(line, &resp))
-		return resp
-	}
-
-	initResp := send(1, "initialize", map[string]any{"protocolVersion": mcp.ProtocolVersion})
-	require.Nil(t, initResp.Error)
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "1.0.0"}, nil)
+	session, err := client.Connect(context.Background(), clientT, nil)
+	require.NoError(t, err)
 
 	// Verify OPSKAT_MCP_CONTROL_ADDR was emitted on stderr with platform IPC address.
 	stderrMu.Lock()
@@ -171,16 +144,9 @@ func TestCmdMCPExternalCoreToolsetExcludesResolveAndAudit(t *testing.T) {
 		require.Equal(t, sock, controlAddr)
 	}
 
-	listResp := send(2, "tools/list", nil)
-	require.Nil(t, listResp.Error)
-	raw, err := json.Marshal(listResp.Result)
+	listRes, err := session.ListTools(context.Background(), nil)
 	require.NoError(t, err)
-	var listRes struct {
-		Tools []mcp.ToolSpec `json:"tools"`
-	}
-	require.NoError(t, json.Unmarshal(raw, &listRes))
-
-	names := make(map[string]mcp.ToolSpec)
+	names := make(map[string]*mcpsdk.Tool)
 	for _, spec := range listRes.Tools {
 		names[spec.Name] = spec
 	}
@@ -193,17 +159,11 @@ func TestCmdMCPExternalCoreToolsetExcludesResolveAndAudit(t *testing.T) {
 	require.NotContains(t, names, "_approval_resolve", "approval control plane must never appear in tools/list")
 	require.NotContains(t, names, "list_audit", "list_audit must stay out of core toolset")
 
-	// Verify MCP 2025-03-26 tool annotations are populated on tools/list
+	// The built-in tools' declared behavior reaches the client as annotations.
 	require.NotNil(t, names["list_assets"].Annotations)
-	require.NotNil(t, names["list_assets"].Annotations.ReadOnlyHint)
-	require.True(t, *names["list_assets"].Annotations.ReadOnlyHint)
-	require.NotNil(t, names[mcp.GetTaskToolName].Annotations)
-	require.NotNil(t, names[mcp.GetTaskToolName].Annotations.ReadOnlyHint)
-	require.True(t, *names[mcp.GetTaskToolName].Annotations.ReadOnlyHint)
+	require.True(t, names["list_assets"].Annotations.ReadOnlyHint)
 	require.NotNil(t, names["exec"].Annotations)
-	require.NotNil(t, names["exec"].Annotations.ReadOnlyHint)
-	require.False(t, *names["exec"].Annotations.ReadOnlyHint)
-	require.NotNil(t, names["exec"].Annotations.DestructiveHint)
+	require.False(t, names["exec"].Annotations.ReadOnlyHint)
 	require.True(t, *names["exec"].Annotations.DestructiveHint)
 
 	// Control socket must be reachable with valid secret
@@ -214,13 +174,12 @@ func TestCmdMCPExternalCoreToolsetExcludesResolveAndAudit(t *testing.T) {
 	// CLI active session file remained untouched
 	require.Equal(t, "cli-existing-session", resolveSessionID())
 
-	_ = clientW.Close()
-	_ = clientR.Close()
+	require.NoError(t, session.Close())
 	select {
 	case code := <-done:
 		require.Equal(t, 0, code)
 	case <-time.After(3 * time.Second):
-		t.Fatal("cmdMCP did not exit after stdin closed")
+		t.Fatal("cmdMCP did not exit after the client disconnected")
 	}
 }
 
@@ -376,18 +335,17 @@ func TestMCPListAuditEnforcesSessionScopeAndLimitCap(t *testing.T) {
 	t.Cleanup(func() { audit_repo.RegisterAudit(origAudit) })
 
 	auditTool := newMCPListAuditTool("mcp_session_xyz")
-	require.True(t, auditTool.Audit)
 
 	// Exceeding limit cap fails closed
-	_, err := auditTool.Handler(context.Background(), map[string]any{"limit": float64(mcpMaxAuditListLimit + 1)})
+	_, err := auditTool.Call(context.Background(), map[string]any{"limit": float64(mcpMaxAuditListLimit + 1)})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "exceeds maximum")
 
 	// Normal call enforces Source="mcp" and SessionID="mcp_session_xyz"
-	_, err = auditTool.Handler(context.Background(), map[string]any{"limit": float64(10)})
+	_, err = auditTool.Call(context.Background(), map[string]any{"limit": float64(10)})
 	require.NoError(t, err)
 	require.Len(t, stub.opts, 1)
-	require.Equal(t, mcpAuditSource, stub.opts[0].Source)
+	require.Equal(t, mcp.AuditSource, stub.opts[0].Source)
 	require.Equal(t, "mcp_session_xyz", stub.opts[0].SessionID)
 	require.Equal(t, 10, stub.opts[0].Limit)
 }
@@ -458,8 +416,9 @@ func (r *mcpAuditRecorder) WriteToolCall(_ context.Context, info audit.ToolCallI
 func TestGuardedPutAssetDeniedRedactsAuditAndShowsSafeHostInApproval(t *testing.T) {
 	innerCalled := false
 	innerPutAsset := &cagotool.RawTool{
-		NameStr:  "put_asset",
-		IsSerial: true,
+		NameStr:   "put_asset",
+		SchemaVal: agent.Schema{Type: "object"},
+		IsSerial:  true,
 		Handler: func(_ context.Context, _ map[string]any) (*agent.ToolResultBlock, error) {
 			innerCalled = true
 			return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: "ok"}}}, nil
@@ -475,8 +434,6 @@ func TestGuardedPutAssetDeniedRedactsAuditAndShowsSafeHostInApproval(t *testing.
 	})
 
 	auditRec := &mcpAuditRecorder{}
-	clientR, serverW := io.Pipe()
-	serverR, clientW := io.Pipe()
 	srv := mcp.NewServer(mcp.ServerConfig{
 		Tools:       []agent.Tool{&guardedPutAssetTool{inner: innerPutAsset}},
 		AuditWriter: auditRec,
@@ -484,27 +441,24 @@ func TestGuardedPutAssetDeniedRedactsAuditAndShowsSafeHostInApproval(t *testing.
 			return permission.WithPolicyChecker(ctx, checker)
 		},
 	})
+	serverT, clientT := mcpsdk.NewInMemoryTransports()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- srv.Serve(ctx, serverR, serverW) }()
+	go func() { done <- srv.Run(ctx, serverT) }()
+	session, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "1.0.0"}, nil).Connect(ctx, clientT, nil)
+	require.NoError(t, err)
 	t.Cleanup(func() {
+		_ = session.Close()
 		cancel()
-		_ = clientW.Close()
-		_ = clientR.Close()
 		<-done
 	})
 
-	reqBytes, err := json.Marshal(mcp.Request{
-		JSONRPC: "2.0",
-		ID:      json.RawMessage("1"),
-		Method:  "tools/call",
-		Params:  json.RawMessage(`{"name":"put_asset","arguments":{"name":"prod-ssh","type":"ssh","config":{"host":"attacker.example","port":22,"username":"root","password":"SUPER_SECRET_PASSWORD_123"}}}`),
-	})
+	res, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "put_asset", Arguments: map[string]any{
+		"name": "prod-ssh", "type": "ssh",
+		"config": map[string]any{"host": "attacker.example", "port": 22, "username": "root", "password": "SUPER_SECRET_PASSWORD_123"},
+	}})
 	require.NoError(t, err)
-	_, err = clientW.Write(append(reqBytes, '\n'))
-	require.NoError(t, err)
-	_, err = bufio.NewReader(clientR).ReadBytes('\n')
-	require.NoError(t, err)
+	require.True(t, res.IsError)
 
 	require.False(t, innerCalled)
 	require.Contains(t, seenDetail, "attacker.example", "approval detail must show safe non-secret host to prevent blind approval")
@@ -587,7 +541,7 @@ func TestMCPGrantPersisterSplitsMultilineAndResolvesAssetType(t *testing.T) {
 	t.Cleanup(func() { grant_repo.RegisterGrant(origGrant) })
 
 	persister := newMCPGrantPersister("mcp_sess")
-	ctx := aictx.WithAuditSource(context.Background(), mcpAuditSource)
+	ctx := aictx.WithAuditSource(context.Background(), mcp.AuditSource)
 	raw := []permission.ApprovalItem{{Type: "grant", AssetID: 7, AssetName: "web-01", Command: "ls *"}}
 	edited := []permission.ApprovalItem{{Type: "grant", AssetID: 7, AssetName: "web-01", Command: "ls /tmp\npwd"}}
 

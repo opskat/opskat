@@ -12,6 +12,7 @@ import (
 
 	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/google/uuid"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
@@ -374,7 +375,7 @@ func (a *ExternalApprover) Close() {
 // Run executes fn in a managed goroutine. If fn finishes without needing approval,
 // its output is returned directly. If fn pauses for approval or MFA, Run returns
 // immediately with an opaque PauseRef handle while the goroutine stays parked.
-func (a *ExternalApprover) Run(parentCtx context.Context, reqCtx context.Context, toolName string, fn func(ctx context.Context) (string, bool)) *CallToolResult {
+func (a *ExternalApprover) Run(parentCtx context.Context, reqCtx context.Context, toolName string, fn func(ctx context.Context) (string, bool)) *mcpsdk.CallToolResult {
 	runCtx, cancel := context.WithCancel(parentCtx)
 	run := newTaskRun("tsk_"+uuid.NewString(), toolName, runCtx, cancel)
 
@@ -1236,7 +1237,7 @@ func isRemoteEndpointSyntax(raw string) bool {
 	return strings.HasPrefix(rest, "/") || strings.HasPrefix(rest, "~")
 }
 
-func pauseToolResult(payload PausePayload) *CallToolResult {
+func pauseToolResult(payload PausePayload) *mcpsdk.CallToolResult {
 	ref := payload.Ref()
 	summary := fmt.Sprintf("Operation requires human approval (approval_id=%s, task_id=%s). Wait for the user to decide before continuing.",
 		ref.ApprovalID, ref.TaskID)
