@@ -20,6 +20,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
+	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/mcp"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
@@ -270,7 +271,7 @@ func TestGuardedCpToolEnforcesLocalDirWhitelistAndUploadConfirmation(t *testing.
 	require.NoError(t, os.WriteFile(insideFile, []byte("ok"), 0o600))
 	require.NoError(t, os.WriteFile(outsideFile, []byte("secret"), 0o600))
 
-	normDirs, err := normalizeAllowedLocalDirs([]string{allowedDir})
+	normDirs, err := helper.NormalizeAllowedLocalDirs([]string{allowedDir})
 	require.NoError(t, err)
 
 	called := false
@@ -493,7 +494,7 @@ func TestGuardedCpToolBlocksGlobIntermediateSymlinkEscape(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(outsideDir, "secret.key"), []byte("top-secret"), 0o600))
 	require.NoError(t, os.Symlink(outsideDir, filepath.Join(allowedDir, "sub1")))
 
-	normDirs, err := normalizeAllowedLocalDirs([]string{allowedDir})
+	normDirs, err := helper.NormalizeAllowedLocalDirs([]string{allowedDir})
 	require.NoError(t, err)
 
 	called := false
@@ -547,7 +548,8 @@ func TestMCPGrantPersisterSplitsMultilineAndResolvesAssetType(t *testing.T) {
 
 	patterns, err := persister(ctx, raw, edited)
 	require.NoError(t, err)
-	require.Equal(t, []string{"ls /tmp", "pwd"}, patterns)
+	// Returned as approved (like the desktop AI grant flow); persisted split into matchable lines.
+	require.Equal(t, []string{"ls /tmp\npwd"}, patterns)
 	require.Len(t, recGrant.saved, 2)
 	require.Equal(t, "exec", recGrant.saved[0].ToolName)
 	require.Equal(t, "ls /tmp", recGrant.saved[0].Command)

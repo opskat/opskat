@@ -29,6 +29,11 @@ import (
 // 返回 ApprovalResponse
 type CommandConfirmFunc func(ctx context.Context, kind string, items []ApprovalItem) ApprovalResponse
 
+// grantApprovalItemType 是 request_permission 给内置类型资产的审批项 Type：弹窗按它展示
+// 「授权」，落库时由 SaveGrantPatternsForApproval 换回资产的真实审批面。扩展资产的条目
+// 带扩展类型（见 SubmitGrantMulti）。
+const grantApprovalItemType = "grant"
+
 // GrantRequestFunc Grant 审批回调，创建 grant 并等待用户审批
 // ctx 携带会话 ID 等上下文（通过 aictx.GetConversationID 获取）
 // items 为多资产的审批条目列表，用户可能在审批弹窗中编辑
@@ -92,7 +97,7 @@ func (c *CommandPolicyChecker) SubmitGrantMulti(ctx context.Context, items []Gra
 	var allPatterns []string
 	for _, item := range items {
 		assetName := ""
-		itemType := "grant"
+		itemType := grantApprovalItemType
 		if item.AssetID > 0 {
 			asset, err := asset_svc.Asset().Get(ctx, item.AssetID)
 			if err != nil {

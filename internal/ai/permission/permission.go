@@ -883,6 +883,14 @@ func NormalizeGrantPatterns(approvalType, command string, origin GrantOrigin) []
 // ext:<policyType>:… ——扩展调用只匹配这种形状。不合法的不落库：上游
 // （SubmitGrantMulti、ParseApprovalResponse）已拒绝它们，走到这里的只会是合法的。
 func SaveGrantPatternsForApproval(ctx context.Context, sessionID string, assetID int64, assetName, approvalType, command string, origin GrantOrigin) {
+	// request_permission 给内置类型资产的审批项标的是 grantApprovalItemType（弹窗里的
+	// 「授权」标记），不是工具面：按它归一化会跳过资产类型注册的拆分（复合命令按子命令、
+	// OSS 的 DSL 派生策略串），整串落库后任何一次检查都匹配不上。落库前换成资产的真实审批面。
+	if approvalType == grantApprovalItemType && assetID > 0 {
+		if asset := resolveAssetForPolicy(ctx, assetID); asset != nil {
+			approvalType = ApprovalTypeFor(asset.Type)
+		}
+	}
 	grant, isExt, err := extensionGrantFor(approvalType, command)
 	patterns := grant.Rules
 	switch {

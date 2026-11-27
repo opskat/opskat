@@ -29,7 +29,6 @@ import (
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/assettype"
-	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/mcp"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_put_svc"
@@ -704,17 +703,12 @@ func (mcpLocalReadGate) CheckLocalRead(ctx context.Context, assetID int64, asset
 	return err
 }
 
-func normalizeAllowedLocalDirs(rawDirs []string) ([]string, error) {
-	return helper.NormalizeAllowedLocalDirs(rawDirs)
-}
-
+// lookupMCPAssetName names the asset in an external MFA challenge view; an asset that
+// can no longer be read is shown without a name rather than failing the challenge.
 func lookupMCPAssetName(ctx context.Context, assetID int64) string {
-	svc := asset_svc.Asset()
-	if svc == nil {
-		return ""
-	}
-	asset, err := svc.Get(ctx, assetID)
-	if err != nil || asset == nil {
+	asset, err := asset_svc.Asset().Get(ctx, assetID)
+	if err != nil {
+		logger.Ctx(ctx).Warn("resolve asset name for mcp MFA challenge", zap.Int64("assetID", assetID), zap.Error(err))
 		return ""
 	}
 	return asset.Name
@@ -777,83 +771,27 @@ func writeMCPPermanentRules(ctx context.Context, items []permission.ApprovalItem
 	return svc.AppendRules(ctx, permission.RuleAllow, targets)
 }
 
+// newMCPGrantPersister persists an approved request_permission the same way the desktop
+// AI grant dialog does (internal/app/ai makeGrantRequestFunc): each item through
+// permission.SaveGrantPatternsForApproval, system-derived subjects as GrantOriginSystem
+// and human edits as GrantOriginUser. Edits were already held to the items' syntax by
+// permission.ParseApprovalResponse in ExternalApprover.Resolve.
 func newMCPGrantPersister(sessionID string) mcp.GrantPersister {
 	return func(ctx context.Context, items []permission.ApprovalItem, edited []permission.ApprovalItem) ([]string, error) {
-		if sessionID == "" {
-			return nil, errors.New("session ID is required to persist grant")
-		}
-		origin := permission.GrantOriginSystem
-		source := items
+		persist, origin := items, permission.GrantOriginSystem
 		if len(edited) > 0 {
-			origin = permission.GrantOriginUser
-			source = edited
+			persist, origin = edited, permission.GrantOriginUser
 		}
-
-		// Validate all extension items before persisting anything so invalid syntax fails closed.
-		extGrants := make(map[int]permission.ExtensionGrant)
-		for i, item := range source {
-			if item.AssetID <= 0 {
-				return nil, fmt.Errorf("grant item %d requires a valid target asset", i)
-			}
-			grant, isExt, err := permission.ExtensionGrantForAsset(ctx, item.AssetID, item.Command)
-			if err != nil {
-				return nil, fmt.Errorf("grant item %d (%s): %w", i, item.AssetName, err)
-			}
-			if isExt {
-				extGrants[i] = grant
-			}
-		}
-
-		var allPatterns []string
-		byAsset := make(map[int64]struct {
-			name     string
-			patterns []string
-		})
-
-		for i, item := range source {
+		final := make([]string, 0, len(persist))
+		for _, item := range persist {
 			cmd := strings.TrimSpace(item.Command)
 			if cmd == "" {
 				continue
 			}
-			if grant, ok := extGrants[i]; ok {
-				for _, rule := range grant.Rules {
-					permission.SaveGrantPattern(ctx, sessionID, item.AssetID, item.AssetName, grant.Type, rule)
-					allPatterns = append(allPatterns, rule)
-					entry := byAsset[item.AssetID]
-					entry.name = item.AssetName
-					entry.patterns = append(entry.patterns, rule)
-					byAsset[item.AssetID] = entry
-				}
-				continue
-			}
-			approvalType := item.Type
-			if approvalType == "grant" && item.AssetID > 0 {
-				if svc := asset_svc.Asset(); svc != nil {
-					if asset, aerr := svc.Get(ctx, item.AssetID); aerr == nil && asset != nil {
-						approvalType = permission.ApprovalTypeFor(asset.Type)
-					}
-				}
-			}
-			for _, line := range strings.Split(cmd, "\n") {
-				line = strings.TrimSpace(line)
-				if line == "" {
-					continue
-				}
-				normalized := permission.NormalizeGrantPatternsFor(ctx, item.AssetID, approvalType, line, origin)
-				for _, p := range normalized {
-					permission.SaveGrantPattern(ctx, sessionID, item.AssetID, item.AssetName, approvalType, p)
-					allPatterns = append(allPatterns, p)
-					entry := byAsset[item.AssetID]
-					entry.name = item.AssetName
-					entry.patterns = append(entry.patterns, p)
-					byAsset[item.AssetID] = entry
-				}
-			}
+			final = append(final, cmd)
+			permission.SaveGrantPatternsForApproval(ctx, sessionID, item.AssetID, item.AssetName, item.Type, cmd, origin)
 		}
-		for assetID, entry := range byAsset {
-			audit.WriteGrantSubmitAudit(ctx, assetID, entry.name, entry.patterns)
-		}
-		return allPatterns, nil
+		return final, nil
 	}
 }
 
@@ -900,112 +838,49 @@ func newMCPResolveAuditor(sessionID string) func(ctx context.Context, ev mcp.Res
 	}
 }
 
+// newDesktopMCPChecker routes every NeedConfirm decision of an MCP session to the
+// running desktop app's approval dialog. The desktop persists session grants itself
+// (keyed by the request's SessionID), so a desktop allow maps to a plain "allow" here.
+// An unreachable desktop, an IPC error or a denial all fail closed.
 func newDesktopMCPChecker(sessionID string) *permission.CommandPolicyChecker {
-	confirmFn := func(ctx context.Context, kind string, items []permission.ApprovalItem) permission.ApprovalResponse {
-		dataDir := approvalDataDir()
-		sockPath := approval.SocketPath(dataDir)
-		if err := dialApprovalSocket(sockPath); err != nil {
-			logger.Ctx(ctx).Warn("mcp desktop approval unreachable", zap.Error(err))
-			return permission.ApprovalResponse{Decision: "deny"}
-		}
-		token, err := bootstrap.ReadAuthToken(dataDir)
-		if err != nil {
-			logger.Ctx(ctx).Warn("mcp read auth token", zap.Error(err))
-		}
-
+	checker := permission.NewCommandPolicyChecker(func(ctx context.Context, kind string, items []permission.ApprovalItem) permission.ApprovalResponse {
+		req := approval.ApprovalRequest{Kind: kind, SessionID: sessionID}
 		if kind == permission.ApprovalKindBatch {
-			batchItems := make([]approval.BatchItem, 0, len(items))
+			req.Type = "batch"
 			for _, it := range items {
-				batchItems = append(batchItems, approval.BatchItem{
-					Type:            it.Type,
-					AssetID:         it.AssetID,
-					AssetName:       it.AssetName,
-					Command:         it.Command,
-					Detail:          it.Detail,
-					Action:          it.Action,
-					Resource:        it.Resource,
-					Resources:       it.Resources,
-					RememberPattern: it.RememberPattern,
-					Review:          it.Review,
+				req.BatchItems = append(req.BatchItems, approval.BatchItem{
+					Type: it.Type, AssetID: it.AssetID, AssetName: it.AssetName, Command: it.Command, Detail: it.Detail,
+					Action: it.Action, Resource: it.Resource, Resources: it.Resources, RememberPattern: it.RememberPattern,
+					Review: it.Review,
 				})
 			}
-			resp, err := approval.RequestApprovalWithTokenContext(ctx, sockPath, token, approval.ApprovalRequest{
-				Type:       "batch",
-				Kind:       kind,
-				SessionID:  sessionID,
-				BatchItems: batchItems,
-			})
-			if err != nil || !resp.Approved {
-				return permission.ApprovalResponse{Decision: "deny"}
-			}
-			return permission.ApprovalResponse{Decision: "allow"}
+		} else {
+			it := items[0] // non-batch kinds always carry exactly one item (CommandPolicyChecker)
+			req.Type, req.AssetID, req.AssetName, req.GroupID, req.GroupName = it.Type, it.AssetID, it.AssetName, it.GroupID, it.GroupName
+			req.Command, req.Detail, req.Review = it.Command, it.Detail, it.Review
+			req.Action, req.Resource, req.Resources, req.RememberPattern = it.Action, it.Resource, it.Resources, it.RememberPattern
 		}
-
-		if len(items) == 0 {
-			return permission.ApprovalResponse{Decision: "deny"}
-		}
-		it := items[0]
-		resp, err := approval.RequestApprovalWithTokenContext(ctx, sockPath, token, approval.ApprovalRequest{
-			Type:            it.Type,
-			Kind:            kind,
-			AssetID:         it.AssetID,
-			AssetName:       it.AssetName,
-			GroupID:         it.GroupID,
-			GroupName:       it.GroupName,
-			Command:         it.Command,
-			Detail:          it.Detail,
-			SessionID:       sessionID,
-			Action:          it.Action,
-			Resource:        it.Resource,
-			Resources:       it.Resources,
-			RememberPattern: it.RememberPattern,
-			Review:          it.Review,
-		})
-		if err != nil || !resp.Approved {
-			return permission.ApprovalResponse{Decision: "deny"}
-		}
-		return permission.ApprovalResponse{Decision: "allow"}
-	}
-
-	checker := permission.NewCommandPolicyChecker(confirmFn)
+		return desktopMCPDecision(ctx, req)
+	})
 	checker.SetGrantRequestFunc(func(ctx context.Context, items []permission.ApprovalItem, reason string) (bool, []string) {
-		dataDir := approvalDataDir()
-		sockPath := approval.SocketPath(dataDir)
-		if err := dialApprovalSocket(sockPath); err != nil {
-			logger.Ctx(ctx).Warn("mcp desktop grant approval unreachable", zap.Error(err))
-			return false, nil
-		}
-		token, err := bootstrap.ReadAuthToken(dataDir)
-		if err != nil {
-			logger.Ctx(ctx).Warn("mcp read auth token", zap.Error(err))
-		}
-		grantItems := make([]approval.GrantItem, 0, len(items))
+		req := approval.ApprovalRequest{Type: "grant", SessionID: sessionID, Description: reason}
 		for _, it := range items {
-			grantItems = append(grantItems, approval.GrantItem{
-				Type:      it.Type,
-				AssetID:   it.AssetID,
-				AssetName: it.AssetName,
-				GroupID:   it.GroupID,
-				GroupName: it.GroupName,
-				Command:   it.Command,
-				Detail:    it.Detail,
+			req.GrantItems = append(req.GrantItems, approval.GrantItem{
+				Type: it.Type, AssetID: it.AssetID, AssetName: it.AssetName,
+				GroupID: it.GroupID, GroupName: it.GroupName, Command: it.Command, Detail: it.Detail,
 			})
 		}
-		resp, err := approval.RequestApprovalWithTokenContext(ctx, sockPath, token, approval.ApprovalRequest{
-			Type:        "grant",
-			SessionID:   sessionID,
-			GrantItems:  grantItems,
-			Description: reason,
-		})
+		resp, err := requestDesktopContext(ctx, req)
 		if err != nil || !resp.Approved {
+			logDesktopMCPRefusal(ctx, req, err)
 			return false, nil
 		}
-		finalItems := resp.EditedItems
-		if len(finalItems) == 0 {
-			finalItems = grantItems
+		final := resp.EditedItems
+		if len(final) == 0 {
+			final = req.GrantItems
 		}
-		patterns := make([]string, 0, len(finalItems))
-		for _, it := range finalItems {
+		patterns := make([]string, 0, len(final))
+		for _, it := range final {
 			patterns = append(patterns, it.Command)
 		}
 		return true, patterns
@@ -1015,27 +890,27 @@ func newDesktopMCPChecker(sessionID string) *permission.CommandPolicyChecker {
 
 func newDesktopMCPLocalConfirmFunc(sessionID string) tool.LocalToolConfirmFunc {
 	return func(ctx context.Context, req tool.LocalToolApprovalRequest) permission.ApprovalResponse {
-		dataDir := approvalDataDir()
-		sockPath := approval.SocketPath(dataDir)
-		if err := dialApprovalSocket(sockPath); err != nil {
-			logger.Ctx(ctx).Warn("mcp desktop local-write approval unreachable", zap.Error(err))
-			return permission.ApprovalResponse{Decision: "deny"}
-		}
-		token, err := bootstrap.ReadAuthToken(dataDir)
-		if err != nil {
-			logger.Ctx(ctx).Warn("mcp read auth token", zap.Error(err))
-		}
-		resp, err := approval.RequestApprovalWithTokenContext(ctx, sockPath, token, approval.ApprovalRequest{
-			Type:      req.ToolName,
-			Kind:      permission.ApprovalKindOnce,
-			Command:   req.Command,
-			Detail:    req.Detail,
-			SessionID: sessionID,
+		return desktopMCPDecision(ctx, approval.ApprovalRequest{
+			Type: req.ToolName, Kind: permission.ApprovalKindOnce, Command: req.Command, Detail: req.Detail, SessionID: sessionID,
 		})
-		if err != nil || !resp.Approved {
-			return permission.ApprovalResponse{Decision: "deny"}
-		}
-		return permission.ApprovalResponse{Decision: "allow"}
+	}
+}
+
+// desktopMCPDecision sends one approval request to the desktop and maps the answer onto
+// the checker's decision; anything but an explicit approval is a denial.
+func desktopMCPDecision(ctx context.Context, req approval.ApprovalRequest) permission.ApprovalResponse {
+	resp, err := requestDesktopContext(ctx, req)
+	if err != nil || !resp.Approved {
+		logDesktopMCPRefusal(ctx, req, err)
+		return permission.ApprovalResponse{Decision: "deny"}
+	}
+	return permission.ApprovalResponse{Decision: "allow"}
+}
+
+func logDesktopMCPRefusal(ctx context.Context, req approval.ApprovalRequest, err error) {
+	if err != nil {
+		logger.Ctx(ctx).Warn("mcp desktop approval unavailable; denying",
+			zap.String("approvalType", req.Type), zap.String("sessionID", req.SessionID), zap.Error(err))
 	}
 }
 

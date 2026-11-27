@@ -200,3 +200,17 @@ func TestBuiltinGrantRequestIsUnchanged(t *testing.T) {
 	require.Equal(t, []ApprovalItem{{Type: "grant", AssetID: 4, AssetName: "web-1", Command: "systemctl * nginx", Detail: "why"}}, shown)
 	require.Equal(t, []string{"systemctl * nginx"}, persistedGrants(stub))
 }
+
+// A built-in grant request is persisted the way exec's check splits the command: a
+// compound pattern becomes its sub-commands. Stored whole, no sub-command of
+// `ls /tmp && cat /etc/hosts` would ever match the grant row.
+func TestBuiltinGrantRequestSplitsCompoundPatternIntoMatchableSubCommands(t *testing.T) {
+	ctx, stub := grantRequestFixture(t)
+	var shown []ApprovalItem
+	checker, _ := approvingGrantChecker(&shown, ApprovalResponse{Decision: "allow"})
+
+	got := checker.SubmitGrantMulti(ctx, []GrantItem{{AssetID: 4, Patterns: []string{"ls /tmp && cat /etc/hosts"}}}, "why")
+
+	require.Equal(t, aictx.Allow, got.Decision)
+	require.ElementsMatch(t, []string{"ls /tmp", "cat /etc/hosts"}, persistedGrants(stub))
+}

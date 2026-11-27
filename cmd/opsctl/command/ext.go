@@ -547,12 +547,18 @@ func requestExtDevInstall(sourceDir string) (string, string, error) {
 // dir; a failure to reach it names that data dir, the usual reason being an app
 // running on another one (or none at all).
 func requestDesktop(req approval.ApprovalRequest) (approval.ApprovalResponse, error) {
+	return requestDesktopContext(context.Background(), req)
+}
+
+// requestDesktopContext is requestDesktop bound to ctx: canceling it drops the IPC
+// connection, which also closes the request's dialog on the desktop.
+func requestDesktopContext(ctx context.Context, req approval.ApprovalRequest) (approval.ApprovalResponse, error) {
 	dataDir := bootstrap.ResolvedDataDir()
 	token, err := bootstrap.ReadAuthToken(dataDir)
 	if err != nil {
-		logger.Default().Warn("read auth token", zap.Error(err))
+		logger.Ctx(ctx).Warn("read auth token", zap.Error(err))
 	}
-	resp, err := approval.RequestApprovalWithToken(approval.SocketPath(dataDir), token, req)
+	resp, err := approval.RequestApprovalWithTokenContext(ctx, approval.SocketPath(dataDir), token, req)
 	if err != nil {
 		return approval.ApprovalResponse{}, fmt.Errorf("%w on data dir %s", err, dataDir)
 	}

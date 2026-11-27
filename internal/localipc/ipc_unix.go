@@ -9,6 +9,9 @@ import (
 	"net"
 	"os"
 	"syscall"
+
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // DialContext connects to a Unix-domain socket.
@@ -65,6 +68,8 @@ func (l *peerVerifiedListener) Accept() (net.Conn, error) {
 			return nil, err
 		}
 		if err := verifyUnixPeerUID(conn, l.expectedUID); err != nil {
+			logger.Default().Warn("local IPC connection rejected: peer is not the current user",
+				zap.String("addr", l.Addr().String()), zap.Error(err))
 			_ = conn.Close()
 			continue
 		}
