@@ -123,3 +123,10 @@ jobs:
           Commit: ${{ needs.prepare.outputs.sha }}
           Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             artifacts/*
+
+      - name: Upload release info for mirror fallback
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/releases/tags/nightly > release-info.json
+          gh release upload nightly release-info.json --clobber
