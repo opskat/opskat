@@ -1192,7 +1192,7 @@ func TestPutAssetTopLevelAuditArgs_TypedFailClosedProjection(t *testing.T) {
 		"group_id":    map[string]any{"id": secret},       // 非法复合
 		"config":      map[string]any{"password": secret}, // config 从不投影
 	}
-	proj := putAssetTopLevelAuditArgs(args)
+	proj := PutAssetTopLevelAuditArgs(args)
 
 	for _, key := range []string{"asset", "name", "type", "description", "icon", "group_id"} {
 		_, ok := proj[key]
@@ -1218,7 +1218,7 @@ func TestPutAssetTopLevelAuditArgs_PreservesTypeCorrectScalars(t *testing.T) {
 		"group_id":    float64(7),
 		"config":      map[string]any{"password": "keep-out"},
 	}
-	proj := putAssetTopLevelAuditArgs(args)
+	proj := PutAssetTopLevelAuditArgs(args)
 
 	assert.Equal(t, "web-9", proj["asset"])
 	assert.Equal(t, "prod", proj["name"])
@@ -1248,7 +1248,7 @@ func TestPutAssetTopLevelAuditArgs_GroupIDAcceptsBoundaryNumerics(t *testing.T) 
 		{name: "json.Number", value: json.Number("7")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proj := putAssetTopLevelAuditArgs(map[string]any{"group_id": tc.value})
+			proj := PutAssetTopLevelAuditArgs(map[string]any{"group_id": tc.value})
 			v, ok := proj["group_id"]
 			assert.True(t, ok, "group_id %T must be preserved", tc.value)
 			assert.Equal(t, tc.value, v)
@@ -1279,7 +1279,7 @@ func TestPutAssetTopLevelAuditArgs_GroupIDOmitsUnsafeOrInvalid(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			proj := putAssetTopLevelAuditArgs(map[string]any{"group_id": tc.value})
+			proj := PutAssetTopLevelAuditArgs(map[string]any{"group_id": tc.value})
 			_, ok := proj["group_id"]
 			assert.False(t, ok, "group_id %#v must be omitted", tc.value)
 			encoded, err := json.Marshal(proj)

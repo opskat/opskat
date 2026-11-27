@@ -19,12 +19,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
+	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/mcp"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/model/entity/grant_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
 	"github.com/opskat/opskat/internal/repository/asset_repo/mock_asset_repo"
 	"github.com/opskat/opskat/internal/repository/audit_repo"
+	"github.com/opskat/opskat/internal/repository/grant_repo"
 )
 
 const testCLISecret = "cli-strong-secret-0123456789abcdef" //nolint:gosec // test fixture
@@ -249,11 +253,13 @@ func TestGuardedPutAssetAndPutGroupRequireConfirmationAndMaskSecrets(t *testing.
 		"group_id": float64(5),
 		"config": map[string]any{
 			"host":     "10.0.0.5",
+			"username": "root",
 			"password": "SUPER_SECRET_PASSWORD_123",
 		},
 	}
 
-	// Denied -> inner handler must NOT run, and approval detail must NEVER leak secret values
+	// Denied -> inner handler must NOT run, and approval detail must show safe non-secret host
+	// while NEVER leaking secret values
 	res, err := wrapped.Call(ctx, input)
 	require.NoError(t, err)
 	require.True(t, res.IsError)
@@ -261,7 +267,8 @@ func TestGuardedPutAssetAndPutGroupRequireConfirmationAndMaskSecrets(t *testing.
 	require.Equal(t, permission.ApprovalKindOnce, seenKind)
 	require.Len(t, seenItems, 1)
 	require.NotContains(t, seenItems[0].Detail, "SUPER_SECRET_PASSWORD_123")
-	require.Contains(t, seenItems[0].Detail, `"config_keys":["host","password"]`)
+	require.Contains(t, seenItems[0].Detail, `"host":"10.0.0.5"`)
+	require.Contains(t, seenItems[0].Detail, `"username":"root"`)
 
 	// Allowed -> inner handler executes
 	decision = "allow"
@@ -383,4 +390,213 @@ func TestMCPListAuditEnforcesSessionScopeAndLimitCap(t *testing.T) {
 	require.Equal(t, mcpAuditSource, stub.opts[0].Source)
 	require.Equal(t, "mcp_session_xyz", stub.opts[0].SessionID)
 	require.Equal(t, 10, stub.opts[0].Limit)
+}
+
+func TestWriteMCPPermanentRulesCpRefusesDirectionlessAndSplitsCompoundSSH(t *testing.T) {
+	env := newPolicyTestEnv(t)
+	env.expectSSHAsset(t, 5, "web-01", &asset_entity.CommandPolicy{
+		DenyList: []string{"rm *"},
+	})
+
+	// 1. Directionless cp item must NEVER fall back to SSH CommandPolicy (would grant SSH RCE on "*")
+	err := writeMCPPermanentRules(env.ctx, []permission.ApprovalItem{{
+		Type:      permission.GrantToolCp,
+		AssetID:   5,
+		AssetName: "web-01",
+		Command:   "/etc/app/config.yml",
+	}}, []permission.ApprovalItem{{
+		Type:    permission.GrantToolCp,
+		AssetID: 5,
+		Command: "*",
+	}})
+	require.Error(t, err)
+	require.Empty(t, env.updates, "directionless cp must fail closed without touching SSH policy")
+
+	// 2. Directional cp item (CheckType="cp:read") writes cp:read: prefixed rule, never bare SSH rule
+	err = writeMCPPermanentRules(env.ctx, []permission.ApprovalItem{{
+		Type:      permission.GrantToolCp,
+		CheckType: permission.GrantToolCpRead,
+		AssetID:   5,
+		AssetName: "web-01",
+		Command:   "/etc/app/config.yml",
+	}}, nil)
+	require.NoError(t, err)
+	require.Len(t, env.updates, 1)
+	cmdPol, perr := env.updates[0].GetCommandPolicy()
+	require.NoError(t, perr)
+	require.Contains(t, cmdPol.AllowList, "cp:read:/etc/app/config.yml")
+	require.NotContains(t, cmdPol.AllowList, "/etc/app/config.yml")
+	env.updates = nil
+
+	// 3. Compound SSH edit containing a denied subcommand must be split and rejected by ShadowingDeny
+	err = writeMCPPermanentRules(env.ctx, []permission.ApprovalItem{{
+		Type:      "exec",
+		AssetID:   5,
+		AssetName: "web-01",
+		Command:   "ls /tmp",
+	}}, []permission.ApprovalItem{{
+		Type:    "exec",
+		AssetID: 5,
+		Command: "ls /tmp && rm -rf /tmp/x",
+	}})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "shadowed by deny")
+	require.Empty(t, env.updates)
+}
+
+type mcpAuditRecorder struct {
+	mu      sync.Mutex
+	entries []audit.ToolCallInfo
+}
+
+func (r *mcpAuditRecorder) WriteToolCall(_ context.Context, info audit.ToolCallInfo) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.entries = append(r.entries, info)
+}
+
+func TestGuardedPutAssetDeniedRedactsAuditAndShowsSafeHostInApproval(t *testing.T) {
+	innerCalled := false
+	innerPutAsset := &cagotool.RawTool{
+		NameStr:  "put_asset",
+		IsSerial: true,
+		Handler: func(_ context.Context, _ map[string]any) (*agent.ToolResultBlock, error) {
+			innerCalled = true
+			return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: "ok"}}}, nil
+		},
+	}
+
+	var seenDetail string
+	checker := permission.NewCommandPolicyChecker(func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
+		if len(items) > 0 {
+			seenDetail = items[0].Detail
+		}
+		return permission.ApprovalResponse{Decision: "deny"}
+	})
+
+	auditRec := &mcpAuditRecorder{}
+	clientR, serverW := io.Pipe()
+	serverR, clientW := io.Pipe()
+	srv := mcp.NewServer(mcp.ServerConfig{
+		Tools:       []agent.Tool{&guardedPutAssetTool{inner: innerPutAsset}},
+		AuditWriter: auditRec,
+		PrepareCtx: func(ctx context.Context) context.Context {
+			return permission.WithPolicyChecker(ctx, checker)
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx, serverR, serverW) }()
+	t.Cleanup(func() {
+		cancel()
+		_ = clientW.Close()
+		_ = clientR.Close()
+		<-done
+	})
+
+	reqBytes, err := json.Marshal(mcp.Request{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("1"),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"put_asset","arguments":{"name":"prod-ssh","type":"ssh","config":{"host":"attacker.example","port":22,"username":"root","password":"SUPER_SECRET_PASSWORD_123"}}}`),
+	})
+	require.NoError(t, err)
+	_, err = clientW.Write(append(reqBytes, '\n'))
+	require.NoError(t, err)
+	_, err = bufio.NewReader(clientR).ReadBytes('\n')
+	require.NoError(t, err)
+
+	require.False(t, innerCalled)
+	require.Contains(t, seenDetail, "attacker.example", "approval detail must show safe non-secret host to prevent blind approval")
+	require.NotContains(t, seenDetail, "SUPER_SECRET_PASSWORD_123")
+
+	auditRec.mu.Lock()
+	defer auditRec.mu.Unlock()
+	require.Len(t, auditRec.entries, 1)
+	require.NotContains(t, auditRec.entries[0].ArgsJSON, "SUPER_SECRET_PASSWORD_123", "denied put_asset must never leak plaintext config secrets into audit_logs")
+}
+
+func TestGuardedCpToolBlocksGlobIntermediateSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Symlink creation on Windows may require elevated privileges; skip only if symlink creation fails.
+		dir := t.TempDir()
+		if err := os.Symlink(dir, filepath.Join(dir, "probe")); err != nil {
+			t.Skipf("symlink creation unavailable on this Windows host: %v", err)
+		}
+	}
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+	mockAsset.EXPECT().FindByName(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(&asset_entity.Asset{ID: 1, Name: "web-01", Type: asset_entity.AssetTypeSSH}, nil).AnyTimes()
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+	t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+
+	allowedDir := t.TempDir()
+	outsideDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outsideDir, "secret.key"), []byte("top-secret"), 0o600))
+	require.NoError(t, os.Symlink(outsideDir, filepath.Join(allowedDir, "sub1")))
+
+	normDirs, err := normalizeAllowedLocalDirs([]string{allowedDir})
+	require.NoError(t, err)
+
+	called := false
+	innerCp := &cagotool.RawTool{
+		NameStr: "cp",
+		Handler: func(_ context.Context, _ map[string]any) (*agent.ToolResultBlock, error) {
+			called = true
+			return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: "copied"}}}, nil
+		},
+	}
+	whitelisted := &guardedCpTool{inner: innerCp, allowedLocalDirs: normDirs}
+	globEscape := filepath.Join(allowedDir, "sub*", "secret.key")
+	_, err = whitelisted.Call(context.Background(), map[string]any{"src": globEscape, "dst": "1:/tmp/exfil"})
+	require.Error(t, err, "glob through intermediate symlink must be blocked by --allow-local-dir")
+	require.False(t, called)
+}
+
+type recordingGrantRepo struct {
+	grant_repo.GrantRepo
+	saved []*grant_entity.GrantItem
+}
+
+func (r *recordingGrantRepo) GetSession(_ context.Context, id string) (*grant_entity.GrantSession, error) {
+	return &grant_entity.GrantSession{ID: id, Status: grant_entity.GrantStatusApproved}, nil
+}
+
+func (r *recordingGrantRepo) CreateItems(_ context.Context, items []*grant_entity.GrantItem) error {
+	r.saved = append(r.saved, items...)
+	return nil
+}
+
+func TestMCPGrantPersisterSplitsMultilineAndResolvesAssetType(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+	mockAsset.EXPECT().Find(gomock.Any(), int64(7)).Return(&asset_entity.Asset{ID: 7, Name: "web-01", Type: asset_entity.AssetTypeSSH}, nil).AnyTimes()
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+	t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+
+	recGrant := &recordingGrantRepo{}
+	origGrant := grant_repo.Grant()
+	grant_repo.RegisterGrant(recGrant)
+	t.Cleanup(func() { grant_repo.RegisterGrant(origGrant) })
+
+	persister := newMCPGrantPersister("mcp_sess")
+	ctx := aictx.WithAuditSource(context.Background(), mcpAuditSource)
+	raw := []permission.ApprovalItem{{Type: "grant", AssetID: 7, AssetName: "web-01", Command: "ls *"}}
+	edited := []permission.ApprovalItem{{Type: "grant", AssetID: 7, AssetName: "web-01", Command: "ls /tmp\npwd"}}
+
+	patterns, err := persister(ctx, raw, edited)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ls /tmp", "pwd"}, patterns)
+	require.Len(t, recGrant.saved, 2)
+	require.Equal(t, "exec", recGrant.saved[0].ToolName)
+	require.Equal(t, "ls /tmp", recGrant.saved[0].Command)
+	require.Equal(t, "exec", recGrant.saved[1].ToolName)
+	require.Equal(t, "pwd", recGrant.saved[1].Command)
 }

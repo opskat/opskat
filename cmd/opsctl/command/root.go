@@ -54,6 +54,17 @@ func Execute() int {
 	}
 
 	verb := remaining[0]
+	// Protect MCP JSON-RPC stdout before bootstrap/extension registration can emit
+	// any diagnostic text to os.Stdout.
+	if verb == "mcp" {
+		realOut := os.Stdout
+		mcpRealStdout = realOut
+		os.Stdout = os.Stderr
+		defer func() {
+			os.Stdout = realOut
+			mcpRealStdout = nil
+		}()
+	}
 	hoisted, args, err := hoistGlobalFlags(verb, remaining[1:])
 	if err == nil {
 		err = globalFlags.Parse(hoisted)

@@ -22,6 +22,7 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/localipc"
 	"github.com/opskat/opskat/internal/sshagent"
 )
 
@@ -1144,4 +1145,249 @@ func TestServerAuditDoesNotMisattributeGroupScopedToolsAndAuditsExtraTools(t *te
 	require.Equal(t, "list_audit", rec.entries[1].ToolName)
 	require.Equal(t, "mcp", rec.sources[0])
 	require.Equal(t, "mcp", rec.sources[1])
+}
+
+func TestExternalSerialToolsRemainSerializedAfterResume(t *testing.T) {
+	approver, err := NewExternalApprover(ExternalApproverConfig{
+		Secret:             testStrongSecret,
+		TTL:                5 * time.Second,
+		AuthFailureBackoff: -1,
+		SubjectsResolver:   func(_ context.Context, item permission.ApprovalItem) []string { return []string{item.Command} },
+	})
+	require.NoError(t, err)
+	sockPath, stopCtrl := startTestControlServer(t, approver)
+	defer stopCtrl()
+
+	var inExec atomic.Int32
+	var maxInExec atomic.Int32
+	bothResumedGate := make(chan struct{})
+	firstEntered := make(chan struct{}, 1)
+
+	serialExec := &tool.RawTool{
+		NameStr:   "exec",
+		SchemaVal: agent.Schema{Type: "object"},
+		IsSerial:  true,
+		Handler: func(ctx context.Context, in map[string]any) (*agent.ToolResultBlock, error) {
+			resp := approver.ConfirmFunc(ctx, permission.ApprovalKindSingle, []permission.ApprovalItem{
+				{Type: "exec", AssetID: 1, AssetName: "web-01", Command: in["cmd"].(string)},
+			})
+			if resp.Decision == "deny" {
+				return &agent.ToolResultBlock{IsError: true, Content: []agent.ContentBlock{agent.TextBlock{Text: "denied"}}}, nil
+			}
+			cur := inExec.Add(1)
+			for {
+				prev := maxInExec.Load()
+				if cur <= prev || maxInExec.CompareAndSwap(prev, cur) {
+					break
+				}
+			}
+			select {
+			case firstEntered <- struct{}{}:
+				<-bothResumedGate
+			default:
+			}
+			inExec.Add(-1)
+			return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: "ok:" + in["cmd"].(string)}}}, nil
+		},
+	}
+
+	client, cleanup := startTestServer(t, ServerConfig{
+		Tools:    []agent.Tool{serialExec},
+		Approver: approver,
+	})
+	defer cleanup()
+
+	p1 := decodeStructured[PauseRef](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+		"name":      "exec",
+		"arguments": map[string]any{"cmd": "op1"},
+	})))
+	p2 := decodeStructured[PauseRef](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+		"name":      "exec",
+		"arguments": map[string]any{"cmd": "op2"},
+	})))
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = ResolveViaControlSocket(context.Background(), sockPath, ResolveRequest{
+			ApprovalID: p1.ApprovalID, Secret: testStrongSecret, Decision: DecisionAllow, WaitMs: 2000,
+		})
+	}()
+	<-firstEntered
+	go func() {
+		defer wg.Done()
+		_, _ = ResolveViaControlSocket(context.Background(), sockPath, ResolveRequest{
+			ApprovalID: p2.ApprovalID, Secret: testStrongSecret, Decision: DecisionAllow, WaitMs: 2000,
+		})
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(bothResumedGate)
+	wg.Wait()
+
+	require.Equal(t, int32(1), maxInExec.Load(), "resumed Serial tools in external mode must never execute concurrently")
+}
+
+func TestServerRejectsUnsupportedProtocolVersionAndDuplicateInFlightID(t *testing.T) {
+	gate := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	slow := &tool.RawTool{
+		NameStr:   "slow",
+		SchemaVal: agent.Schema{Type: "object"},
+		Handler: func(ctx context.Context, _ map[string]any) (*agent.ToolResultBlock, error) {
+			entered <- struct{}{}
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: "done"}}}, nil
+		},
+	}
+
+	client, cleanup := startTestServer(t, ServerConfig{Tools: []agent.Tool{slow}})
+	defer cleanup()
+
+	// Unsupported protocol version must fall back to server's ProtocolVersion, never echo arbitrary string
+	initResp := client.call("initialize", map[string]any{"protocolVersion": "9999-99-99"})
+	require.Nil(t, initResp.Error)
+	initMap := decodeResult[map[string]any](t, initResp)
+	require.Equal(t, ProtocolVersion, initMap["protocolVersion"])
+
+	// Duplicate in-flight JSON-RPC id must be rejected instead of overwriting cancel handle
+	reqBytes, err := json.Marshal(Request{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage("42"),
+		Method:  "tools/call",
+		Params:  json.RawMessage(`{"name":"slow","arguments":{}}`),
+	})
+	require.NoError(t, err)
+	_, err = client.writer.Write(append(reqBytes, '\n'))
+	require.NoError(t, err)
+	<-entered
+
+	_, err = client.writer.Write(append(reqBytes, '\n'))
+	require.NoError(t, err)
+	dupLine, err := client.reader.ReadBytes('\n')
+	require.NoError(t, err)
+	var dupResp Response
+	require.NoError(t, json.Unmarshal(dupLine, &dupResp))
+	require.NotNil(t, dupResp.Error)
+	require.Equal(t, CodeInvalidRequest, dupResp.Error.Code)
+
+	close(gate)
+	firstLine, err := client.reader.ReadBytes('\n')
+	require.NoError(t, err)
+	var firstResp Response
+	require.NoError(t, json.Unmarshal(firstLine, &firstResp))
+	require.Nil(t, firstResp.Error)
+}
+
+func TestExternalApproverGetAssetSecretIsOneShotOnGetTask(t *testing.T) {
+	approver, err := NewExternalApprover(ExternalApproverConfig{
+		Secret:             testStrongSecret,
+		TTL:                5 * time.Second,
+		AuthFailureBackoff: -1,
+	})
+	require.NoError(t, err)
+	sockPath, stopCtrl := startTestControlServer(t, approver)
+	defer stopCtrl()
+
+	secretTool := &tool.RawTool{
+		NameStr:   "get_asset_secret",
+		SchemaVal: agent.Schema{Type: "object"},
+		Handler: func(ctx context.Context, _ map[string]any) (*agent.ToolResultBlock, error) {
+			resp := approver.ConfirmFunc(ctx, permission.ApprovalKindOnce, []permission.ApprovalItem{
+				{Type: "generic", AssetID: 1, AssetName: "vault", Command: "secret:api_token"},
+			})
+			if resp.Decision != "allow" {
+				return &agent.ToolResultBlock{IsError: true, Content: []agent.ContentBlock{agent.TextBlock{Text: "denied"}}}, nil
+			}
+			return &agent.ToolResultBlock{Content: []agent.ContentBlock{agent.TextBlock{Text: "sk-live-secret-999"}}}, nil
+		},
+	}
+
+	client, cleanup := startTestServer(t, ServerConfig{
+		Tools:    []agent.Tool{secretTool},
+		Approver: approver,
+	})
+	defer cleanup()
+
+	pauseRef := decodeStructured[PauseRef](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+		"name":      "get_asset_secret",
+		"arguments": map[string]any{},
+	})))
+
+	_, err = ResolveViaControlSocket(context.Background(), sockPath, ResolveRequest{
+		ApprovalID: pauseRef.ApprovalID, Secret: testStrongSecret, Decision: DecisionAllow, WaitMs: 2000,
+	})
+	require.NoError(t, err)
+
+	// First get_task delivers secret
+	first := decodeStructured[TaskResultPayload](t, decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+		"name":      GetTaskToolName,
+		"arguments": map[string]any{"task_id": pauseRef.TaskID},
+	})))
+	require.Equal(t, StatusCompleted, first.Status)
+	require.Equal(t, "sk-live-secret-999", first.Output)
+
+	// Second get_task must fail: plaintext secret must not be retained for 30 minutes
+	second := decodeResult[CallToolResult](t, client.call("tools/call", map[string]any{
+		"name":      GetTaskToolName,
+		"arguments": map[string]any{"task_id": pauseRef.TaskID},
+	}))
+	require.True(t, second.IsError)
+	require.NotContains(t, second.Content[0].Text, "sk-live-secret-999")
+}
+
+func TestControlServerEnforcesReadTimeoutAndMaxConns(t *testing.T) {
+	approver, err := NewExternalApprover(ExternalApproverConfig{
+		Secret:             testStrongSecret,
+		TTL:                5 * time.Second,
+		AuthFailureBackoff: -1,
+	})
+	require.NoError(t, err)
+
+	ctrl := NewControlServer(approver)
+	ctrl.ReadTimeout = 60 * time.Millisecond
+	ctrl.MaxConns = 1
+	sockPath := shortSocketPath(t, "ctrl-timeout.sock")
+	require.NoError(t, ctrl.Start(sockPath))
+	defer ctrl.Stop()
+
+	// Slowloris connection that sends nothing must receive timeout error promptly
+	conn, err := localipc.DialContext(context.Background(), sockPath)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var resp ControlResponse
+	require.NoError(t, json.NewDecoder(conn).Decode(&resp))
+	require.False(t, resp.OK)
+	require.Contains(t, resp.Error, "invalid control request")
+}
+
+func TestServerExitsCleanlyOnContextCancelWhileStdinRemainsOpen(t *testing.T) {
+	serverR, clientW := io.Pipe()
+	clientR, serverW := io.Pipe()
+	defer func() {
+		_ = clientW.Close()
+		_ = clientR.Close()
+	}()
+
+	srv := NewServer(ServerConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.Serve(ctx, serverR, serverW)
+	}()
+
+	// Cancel context WITHOUT closing clientW (simulating SIGINT while stdin pipe stays open)
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Server.Serve hung on ctx cancel while stdin remained open")
+	}
 }

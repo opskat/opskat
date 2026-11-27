@@ -54,6 +54,7 @@ const (
 // ApprovalItemView is the client-agnostic representation of one item needing approval.
 type ApprovalItemView struct {
 	Type            string            `json:"type"`
+	CheckType       string            `json:"check_type,omitempty"`
 	AssetID         int64             `json:"asset_id,omitempty"`
 	AssetName       string            `json:"asset_name,omitempty"`
 	GroupID         int64             `json:"group_id,omitempty"`
@@ -201,6 +202,9 @@ type ExternalApprover struct {
 	onResolveAudit      func(ctx context.Context, ev ResolveAuditEvent)
 	authBackoff         time.Duration
 
+	authMu          sync.Mutex
+	authNextAllowed time.Time
+
 	mu      sync.Mutex
 	pending map[string]*pendingPause
 	tasks   map[string]*taskRun
@@ -214,12 +218,13 @@ type resolveAnswer struct {
 }
 
 type pendingPause struct {
-	payload   PausePayload
-	rawItems  []permission.ApprovalItem
-	run       *taskRun
-	respCh    chan resolveAnswer
-	expiresAt time.Time
-	resolving bool
+	payload               PausePayload
+	rawItems              []permission.ApprovalItem
+	run                   *taskRun
+	respCh                chan resolveAnswer
+	expiresAt             time.Time
+	resolving             bool
+	expiredWhileResolving bool
 }
 
 type runOutcome struct {
@@ -230,6 +235,7 @@ type runOutcome struct {
 type taskRun struct {
 	id         string
 	toolName   string
+	ctx        context.Context
 	cancel     context.CancelFunc
 	mu         sync.Mutex
 	completed  bool
@@ -239,13 +245,30 @@ type taskRun struct {
 	changed    chan struct{}
 }
 
-func newTaskRun(id, toolName string, cancel context.CancelFunc) *taskRun {
+func newTaskRun(id, toolName string, ctx context.Context, cancel context.CancelFunc) *taskRun {
 	return &taskRun{
 		id:       id,
 		toolName: toolName,
+		ctx:      ctx,
 		cancel:   cancel,
 		changed:  make(chan struct{}),
 	}
+}
+
+type pauseHooks struct {
+	onPark   func()
+	onResume func(ctx context.Context) bool
+}
+
+type pauseHooksKey struct{}
+
+func withPauseHooks(ctx context.Context, hooks pauseHooks) context.Context {
+	return context.WithValue(ctx, pauseHooksKey{}, hooks)
+}
+
+func pauseHooksFrom(ctx context.Context) (pauseHooks, bool) {
+	h, ok := ctx.Value(pauseHooksKey{}).(pauseHooks)
+	return h, ok
 }
 
 // signalLocked wakes every waiter observing state transitions on r. Caller must hold r.mu.
@@ -295,7 +318,11 @@ func NewExternalApprover(cfg ExternalApproverConfig) (*ExternalApprover, error) 
 	resolver := cfg.SubjectsResolver
 	if resolver == nil {
 		resolver = func(ctx context.Context, item permission.ApprovalItem) []string {
-			return permission.ApprovalRuleSubjects(ctx, item.Type, item)
+			face := item.CheckType
+			if face == "" {
+				face = item.Type
+			}
+			return permission.ApprovalRuleSubjects(ctx, face, item)
 		}
 	}
 	return &ExternalApprover{
@@ -338,6 +365,9 @@ func (a *ExternalApprover) Close() {
 	}
 	for _, r := range runs {
 		r.cancel()
+		r.mu.Lock()
+		r.outcome.output = ""
+		r.mu.Unlock()
 	}
 }
 
@@ -346,7 +376,7 @@ func (a *ExternalApprover) Close() {
 // immediately with an opaque PauseRef handle while the goroutine stays parked.
 func (a *ExternalApprover) Run(parentCtx context.Context, reqCtx context.Context, toolName string, fn func(ctx context.Context) (string, bool)) *CallToolResult {
 	runCtx, cancel := context.WithCancel(parentCtx)
-	run := newTaskRun("tsk_"+uuid.NewString(), toolName, cancel)
+	run := newTaskRun("tsk_"+uuid.NewString(), toolName, runCtx, cancel)
 
 	a.mu.Lock()
 	if a.closed {
@@ -355,6 +385,15 @@ func (a *ExternalApprover) Run(parentCtx context.Context, reqCtx context.Context
 		return textResult("MCP server is shutting down", true)
 	}
 	a.pruneExpiredTasksLocked(time.Now())
+	maxTasks := maxRetainedTasks
+	if a.maxPending*4 > maxTasks {
+		maxTasks = a.maxPending * 4
+	}
+	if len(a.tasks) >= maxTasks {
+		a.mu.Unlock()
+		cancel()
+		return textResult("too many active or retained MCP tasks; try again later", true)
+	}
 	a.tasks[run.id] = run
 	a.mu.Unlock()
 
@@ -428,6 +467,7 @@ func (a *ExternalApprover) ConfirmFunc(ctx context.Context, kind string, items [
 		}
 		views = append(views, ApprovalItemView{
 			Type:            item.Type,
+			CheckType:       item.CheckType,
 			AssetID:         item.AssetID,
 			AssetName:       item.AssetName,
 			GroupID:         item.GroupID,
@@ -623,9 +663,17 @@ func (a *ExternalApprover) parkAndWait(ctx context.Context, run *taskRun, payloa
 		expiresAt: expiresAt,
 	}
 
+	hooks, hasHooks := pauseHooksFrom(ctx)
+	if hasHooks && hooks.onPark != nil {
+		hooks.onPark()
+	}
+
 	a.mu.Lock()
 	if a.closed {
 		a.mu.Unlock()
+		if hasHooks && hooks.onResume != nil {
+			_ = hooks.onResume(ctx)
+		}
 		return resolveAnswer{decision: DecisionDeny}, false
 	}
 	if len(a.pending) >= a.maxPending {
@@ -633,15 +681,19 @@ func (a *ExternalApprover) parkAndWait(ctx context.Context, run *taskRun, payloa
 		logger.Ctx(ctx).Warn("mcp external approval rejected: max pending limit reached",
 			zap.Int("maxPending", a.maxPending),
 			zap.String("taskID", run.id))
+		if hasHooks && hooks.onResume != nil {
+			_ = hooks.onResume(ctx)
+		}
 		return resolveAnswer{decision: DecisionDeny}, false
 	}
+	// Preserve strict lock order a.mu -> run.mu so no caller can observe
+	// a.pending[approvalID] before run.active is set, preventing stale run.active races.
 	a.pending[approvalID] = p
-	a.mu.Unlock()
-
 	run.mu.Lock()
 	run.active = p
 	run.signalLocked()
 	run.mu.Unlock()
+	a.mu.Unlock()
 
 	logger.Ctx(ctx).Info("mcp external approval paused",
 		zap.String("approvalID", approvalID),
@@ -652,33 +704,73 @@ func (a *ExternalApprover) parkAndWait(ctx context.Context, run *taskRun, payloa
 	timer := time.NewTimer(a.ttl)
 	defer timer.Stop()
 
+	var (
+		ans      resolveAnswer
+		resolved bool
+	)
 	select {
-	case ans := <-p.respCh:
+	case ans = <-p.respCh:
+		resolved = true
 		logger.Ctx(ctx).Info("mcp external approval resolved",
 			zap.String("approvalID", approvalID),
 			zap.String("taskID", run.id),
 			zap.String("decision", ans.decision))
-		return ans, true
 	case <-timer.C:
-		a.removePending(approvalID, run)
-		logger.Ctx(ctx).Warn("mcp external approval expired",
-			zap.String("approvalID", approvalID),
-			zap.String("taskID", run.id))
-		return resolveAnswer{decision: DecisionDeny}, false
+		a.mu.Lock()
+		_, stillPending := a.pending[approvalID]
+		resolving := stillPending && p.resolving
+		if resolving {
+			// Resolve already validated TTL and is running permanentRuleWriter; wait for it
+			// instead of racing and leaving a ghost permanent rule behind.
+			p.expiredWhileResolving = true
+		} else if stillPending {
+			a.removePendingLocked(approvalID, run)
+		}
+		a.mu.Unlock()
+
+		if !stillPending || resolving {
+			select {
+			case ans = <-p.respCh:
+				resolved = true
+			case <-ctx.Done():
+				a.removePending(approvalID, run)
+				ans = resolveAnswer{decision: DecisionDeny}
+			}
+		} else {
+			logger.Ctx(ctx).Warn("mcp external approval expired",
+				zap.String("approvalID", approvalID),
+				zap.String("taskID", run.id))
+			ans = resolveAnswer{decision: DecisionDeny}
+		}
 	case <-ctx.Done():
 		a.removePending(approvalID, run)
 		logger.Ctx(ctx).Info("mcp external approval canceled",
 			zap.String("approvalID", approvalID),
 			zap.String("taskID", run.id))
-		return resolveAnswer{decision: DecisionDeny}, false
+		ans = resolveAnswer{decision: DecisionDeny}
 	}
+
+	if hasHooks && hooks.onResume != nil {
+		if !hooks.onResume(ctx) {
+			return resolveAnswer{decision: DecisionDeny}, false
+		}
+	}
+	return ans, resolved
 }
 
 func (a *ExternalApprover) removePending(approvalID string, run *taskRun) {
 	a.mu.Lock()
-	delete(a.pending, approvalID)
+	a.removePendingLocked(approvalID, run)
 	a.mu.Unlock()
+}
 
+// removePendingLocked removes approvalID from a.pending and clears run.active if it matches.
+// Caller must hold a.mu (strict lock order: a.mu -> run.mu).
+func (a *ExternalApprover) removePendingLocked(approvalID string, run *taskRun) {
+	delete(a.pending, approvalID)
+	if run == nil {
+		return
+	}
 	run.mu.Lock()
 	if run.active != nil && run.active.payload.ApprovalID == approvalID {
 		run.active = nil
@@ -722,7 +814,7 @@ func (a *ExternalApprover) GetPending(ctx context.Context, secret, approvalID st
 		return nil, fmt.Errorf("approval %q not found or expired", approvalID)
 	}
 	if now.After(p.expiresAt) {
-		delete(a.pending, approvalID)
+		a.removePendingLocked(approvalID, p.run)
 		return nil, fmt.Errorf("approval %q expired", approvalID)
 	}
 	if p.resolving {
@@ -765,9 +857,16 @@ func (a *ExternalApprover) Resolve(ctx context.Context, req ResolveRequest) (*Ta
 		return nil, err
 	}
 	if time.Now().After(p.expiresAt) {
-		delete(a.pending, req.ApprovalID)
+		a.removePendingLocked(req.ApprovalID, p.run)
 		a.mu.Unlock()
 		err := fmt.Errorf("approval %q expired", req.ApprovalID)
+		a.emitAudit(ctx, ResolveAuditEvent{ApprovalID: req.ApprovalID, TaskID: p.run.id, Kind: p.payload.Kind, Decision: req.Decision, Success: false, Error: err.Error()})
+		return nil, err
+	}
+	if p.run.ctx != nil && p.run.ctx.Err() != nil {
+		a.removePendingLocked(req.ApprovalID, p.run)
+		a.mu.Unlock()
+		err := fmt.Errorf("approval %q canceled", req.ApprovalID)
 		a.emitAudit(ctx, ResolveAuditEvent{ApprovalID: req.ApprovalID, TaskID: p.run.id, Kind: p.payload.Kind, Decision: req.Decision, Success: false, Error: err.Error()})
 		return nil, err
 	}
@@ -808,7 +907,13 @@ func (a *ExternalApprover) Resolve(ctx context.Context, req ResolveRequest) (*Ta
 			a.emitAudit(ctx, ResolveAuditEvent{ApprovalID: req.ApprovalID, TaskID: p.run.id, Kind: p.payload.Kind, Decision: req.Decision, Success: false, Error: err.Error()})
 			return nil, err
 		}
-		if err := a.permanentRuleWriter(ctx, p.rawItems, validatedEdited); err != nil {
+		ruleCtx, cancelRule := context.WithCancel(ctx)
+		if p.run.ctx != nil {
+			stopWatch := context.AfterFunc(p.run.ctx, cancelRule)
+			defer stopWatch()
+		}
+		defer cancelRule()
+		if err := a.permanentRuleWriter(ruleCtx, p.rawItems, validatedEdited); err != nil {
 			a.clearResolving(req.ApprovalID)
 			logger.Ctx(ctx).Warn("mcp permanent allow rule write failed",
 				zap.String("approvalID", req.ApprovalID), zap.Error(err))
@@ -898,11 +1003,24 @@ func (a *ExternalApprover) verifySecret(ctx context.Context, provided, approvalI
 	logger.Ctx(ctx).Warn("mcp external approval rejected: invalid secret",
 		zap.String("approvalID", approvalID))
 	if a.authBackoff > 0 {
-		t := time.NewTimer(a.authBackoff)
-		defer t.Stop()
-		select {
-		case <-t.C:
-		case <-ctx.Done():
+		// Global auth failure pacing prevents concurrent connections from bypassing per-request backoff.
+		a.authMu.Lock()
+		now := time.Now()
+		waitUntil := now.Add(a.authBackoff)
+		if a.authNextAllowed.After(now) {
+			waitUntil = a.authNextAllowed.Add(a.authBackoff)
+		}
+		a.authNextAllowed = waitUntil
+		a.authMu.Unlock()
+
+		delay := time.Until(waitUntil)
+		if delay > 0 {
+			t := time.NewTimer(delay)
+			defer t.Stop()
+			select {
+			case <-t.C:
+			case <-ctx.Done():
+			}
 		}
 	}
 	return false
@@ -916,10 +1034,21 @@ func (a *ExternalApprover) emitAudit(ctx context.Context, ev ResolveAuditEvent) 
 
 func (a *ExternalApprover) clearResolving(approvalID string) {
 	a.mu.Lock()
+	var expiredPause *pendingPause
 	if p, ok := a.pending[approvalID]; ok {
 		p.resolving = false
+		if p.expiredWhileResolving || time.Now().After(p.expiresAt) {
+			a.removePendingLocked(approvalID, p.run)
+			expiredPause = p
+		}
 	}
 	a.mu.Unlock()
+	if expiredPause != nil {
+		select {
+		case expiredPause.respCh <- resolveAnswer{decision: DecisionDeny}:
+		default:
+		}
+	}
 }
 
 // GetTask polls or waits for a previously paused task to finish or emit another pause.
@@ -939,7 +1068,16 @@ func (a *ExternalApprover) GetTask(ctx context.Context, taskID string, waitMs in
 	run.mu.Lock()
 	if run.completed {
 		outcome := run.outcome
+		isSecretTool := run.toolName == "get_asset_secret"
+		if isSecretTool {
+			run.outcome.output = ""
+		}
 		run.mu.Unlock()
+		if isSecretTool {
+			a.mu.Lock()
+			delete(a.tasks, taskID)
+			a.mu.Unlock()
+		}
 		return &TaskResultPayload{
 			Status:  StatusCompleted,
 			TaskID:  run.id,
@@ -965,7 +1103,16 @@ func (a *ExternalApprover) GetTask(ctx context.Context, taskID string, waitMs in
 			wait = maxTaskPollWait
 		}
 	}
-	return toDataPlaneTaskResult(a.waitForRun(ctx, run, wait)), nil
+	res := toDataPlaneTaskResult(a.waitForRun(ctx, run, wait))
+	if res != nil && res.Status == StatusCompleted && run.toolName == "get_asset_secret" {
+		run.mu.Lock()
+		run.outcome.output = ""
+		run.mu.Unlock()
+		a.mu.Lock()
+		delete(a.tasks, taskID)
+		a.mu.Unlock()
+	}
+	return res, nil
 }
 
 func toDataPlaneTaskResult(res *TaskResultPayload) *TaskResultPayload {

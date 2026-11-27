@@ -63,6 +63,21 @@ func withConnectionPathMFA(ctx context.Context) context.Context {
 	return credential_resolver.WithConnectionPathMFA(ctx, src.newCaller)
 }
 
+// withDesktopOnlyMFA / withDesktopOnlyConnectionPathMFA wire MFA for stdio MCP desktop
+// mode where os.Stdin carries the JSON-RPC stream and must never be read for terminal
+// MFA prompts even if the process is started under a PTY.
+func withDesktopOnlyMFA(ctx context.Context) context.Context {
+	ctx, src := withMFASources(ctx)
+	src.interactive = false
+	return credential_resolver.WithMFA(ctx, src.newCaller)
+}
+
+func withDesktopOnlyConnectionPathMFA(ctx context.Context) context.Context {
+	ctx, src := withMFASources(ctx)
+	src.interactive = false
+	return credential_resolver.WithConnectionPathMFA(ctx, src.newCaller)
+}
+
 // withMFASources 组出一次执行的应答来源，并把记录「没有应答来源」拒绝的 mfaRefusals
 // 挂到 ctx（mfaRefusalOf 据此认回拒绝）。
 func withMFASources(ctx context.Context) (context.Context, mfaSources) {

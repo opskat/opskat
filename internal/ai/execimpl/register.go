@@ -62,7 +62,7 @@ func init() {
 	permission.RegisterExecutor(asset_entity.AssetTypeOSS,
 		func(ctx context.Context, asset *asset_entity.Asset, command, scope string) (string, error) {
 			return helper.ExecOSSOnAsset(ctx, asset, command, scope)
-		}, mustSkillDoc(asset_entity.AssetTypeOSS), permission.CanonicalizeWithoutContext(helper.CanonicalizeOSSCommand))
+		}, mustSkillDoc(asset_entity.AssetTypeOSS), helper.CanonicalizeOSSCommandWithContext)
 	// OSS 是唯一一条命令请求多项权限的类型（`object move` 同时读源、写目的、删源），
 	// 所以它比其它类型多一条接线：permission 只声明 RegisterPolicyStrings 这个入口，
 	// 派生函数由这里推上来。方向是被逼出来的而不是选的——internal/ai/helper 已经

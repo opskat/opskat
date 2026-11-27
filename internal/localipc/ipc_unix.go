@@ -47,5 +47,27 @@ func Listen(path string) (net.Listener, error) {
 		_ = listener.Close()
 		return nil, fmt.Errorf("restrict socket %s: %w", path, err)
 	}
-	return listener, nil
+	return &peerVerifiedListener{Listener: listener, expectedUID: os.Geteuid()}, nil
+}
+
+// peerVerifiedListener checks OS-level peer credentials on every accepted Unix
+// connection, closing the Listen -> Chmod umask window and rejecting any client
+// running under a different UID.
+type peerVerifiedListener struct {
+	net.Listener
+	expectedUID int
+}
+
+func (l *peerVerifiedListener) Accept() (net.Conn, error) {
+	for {
+		conn, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		if err := verifyUnixPeerUID(conn, l.expectedUID); err != nil {
+			_ = conn.Close()
+			continue
+		}
+		return conn, nil
+	}
 }

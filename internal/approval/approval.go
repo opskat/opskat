@@ -2,6 +2,7 @@ package approval
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -278,8 +279,9 @@ func (s *Server) handleConn(conn net.Conn) {
 		}
 	}()
 
+	const maxApprovalRequestBytes = 4 << 20 // 4 MiB
 	var req ApprovalRequest
-	decoder := json.NewDecoder(conn)
+	decoder := json.NewDecoder(io.LimitReader(conn, maxApprovalRequestBytes))
 	if err := decoder.Decode(&req); err != nil {
 		resp := ApprovalResponse{Approved: false, Reason: "invalid request"}
 		if err := json.NewEncoder(conn).Encode(resp); err != nil {
@@ -288,8 +290,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		return
 	}
 
-	// 校验认证 token
-	if s.authToken != "" && req.Token != s.authToken {
+	// 校验认证 token（常量时间比较，避免侧信道）
+	if s.authToken != "" && subtle.ConstantTimeCompare([]byte(req.Token), []byte(s.authToken)) != 1 {
 		resp := ApprovalResponse{Approved: false, Reason: "authentication failed"}
 		if err := json.NewEncoder(conn).Encode(resp); err != nil {
 			logger.Default().Warn("encode auth error response", zap.Error(err))

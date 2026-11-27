@@ -11,7 +11,11 @@ import (
 
 // ApprovalItem 统一审批项，AI 和 opsctl 共用
 type ApprovalItem struct {
-	Type      string `json:"type"` // "exec", "k8s", "sql", "redis", "mongo", "kafka", "cp", "grant", "delete"
+	Type string `json:"type"` // "exec", "k8s", "sql", "redis", "mongo", "kafka", "cp", "grant", "delete"
+	// CheckType carries the directional permission face when it differs from Type
+	// (e.g. "cp:read" / "cp:write" while Type stays "cp") so permanent rule writers
+	// and rule-subject derivation never lose transfer direction.
+	CheckType string `json:"check_type,omitempty"`
 	AssetID   int64  `json:"asset_id"`
 	AssetName string `json:"asset_name"`
 	GroupID   int64  `json:"group_id,omitempty"`
@@ -45,7 +49,7 @@ type ApprovalItem struct {
 // request read the same item.
 func ApprovalItemOfRequest(req approval.ApprovalRequest) ApprovalItem {
 	return ApprovalItem{
-		Type: req.Type, AssetID: req.AssetID, AssetName: req.AssetName,
+		Type: req.Type, CheckType: req.CheckType, AssetID: req.AssetID, AssetName: req.AssetName,
 		GroupID: req.GroupID, GroupName: req.GroupName,
 		Command: req.Command, Detail: req.Detail,
 		Action: req.Action, Resource: req.Resource, Resources: req.Resources, RememberPattern: req.RememberPattern,

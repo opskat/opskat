@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -27,8 +26,11 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/approval"
+	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/bootstrap"
 	"github.com/opskat/opskat/internal/mcp"
+	"github.com/opskat/opskat/internal/model/entity/asset_entity"
+	"github.com/opskat/opskat/internal/service/asset_put_svc"
 	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/audit_svc"
 	"github.com/opskat/opskat/internal/service/credential_resolver"
@@ -41,11 +43,20 @@ const (
 	mcpMaxAuditListLimit = 200
 )
 
+// mcpRealStdout preserves the original process stdout captured in Execute() before
+// redirecting os.Stdout -> os.Stderr for MCP stdio framing protection.
+var mcpRealStdout *os.File
+
 // mcpStdio holds the streams used by cmdMCP; overridden in tests.
 var mcpStdio = func() (io.Reader, io.Writer) { return os.Stdin, os.Stderr }
 
 // mcpStdout holds the JSON-RPC output stream used by cmdMCP; overridden in tests.
-var mcpStdout = func() io.Writer { return os.Stdout }
+var mcpStdout = func() io.Writer {
+	if mcpRealStdout != nil {
+		return mcpRealStdout
+	}
+	return os.Stdout
+}
 
 type serialTool interface {
 	Serial() bool
@@ -96,7 +107,7 @@ func cmdMCP(ctx context.Context, args []string) int {
 		return 1
 	}
 
-	normalizedLocalDirs, err := normalizeAllowedLocalDirs(allowLocalDirs)
+	normalizedLocalDirs, err := helper.NormalizeAllowedLocalDirs(allowLocalDirs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
@@ -180,11 +191,16 @@ func cmdMCP(ctx context.Context, args []string) int {
 			callCtx = tool.WithDocGate(callCtx, docGate)
 			callCtx = permission.WithPolicyChecker(callCtx, checker)
 			callCtx = helper.WithLocalWriteGate(callCtx, localWriteGate)
+			if len(normalizedLocalDirs) > 0 {
+				callCtx = helper.WithAllowedLocalDirs(callCtx, normalizedLocalDirs)
+			} else {
+				callCtx = helper.WithLocalReadGate(callCtx, newMCPLocalReadGate())
+			}
 			if approver != nil {
 				callCtx = credential_resolver.WithMFA(callCtx, approver.NewMFACaller)
 				callCtx = credential_resolver.WithConnectionPathMFA(callCtx, approver.NewMFACaller)
 			} else {
-				callCtx = withMFA(withConnectionPathMFA(callCtx))
+				callCtx = withDesktopOnlyMFA(withDesktopOnlyConnectionPathMFA(callCtx))
 			}
 			return callCtx
 		},
@@ -386,6 +402,11 @@ func (g *guardedPutAssetTool) Schema() agent.Schema { return g.inner.Schema() }
 func (g *guardedPutAssetTool) Serial() bool         { return isToolSerial(g.inner) }
 
 func (g *guardedPutAssetTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
+	// Always install the fail-closed top-level audit projection immediately so any
+	// early error or user denial never falls back to marshaling raw input["config"]
+	// (which may carry plaintext passwords, private keys, or secret tokens) into audit_logs.
+	aictx.RecordAuditRequest(ctx, tool.PutAssetTopLevelAuditArgs(input))
+
 	ref := aictx.ArgString(input, "asset")
 	if ref != "" {
 		if err := activateExtensionsForRef(ctx, ref); err != nil {
@@ -402,23 +423,17 @@ func (g *guardedPutAssetTool) Call(ctx context.Context, input map[string]any) (*
 		return nil, errors.New("put_asset requires an interactive approval channel, none is wired")
 	}
 
-	op := "create"
-	var assetID int64
-	assetName := aictx.ArgString(input, "name")
-	if ref != "" {
-		op = "update"
-		if asset, rerr := assetref.Resolve(ctx, ref); rerr == nil && asset != nil {
-			assetID = asset.ID
-			if assetName == "" {
-				assetName = asset.Name
-			}
-		}
+	op, assetID, assetName, prepared, err := preparePutAssetForMCPApproval(ctx, input)
+	if err != nil {
+		return nil, err
 	}
+	aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgs())
+
 	cmdSummary := fmt.Sprintf("%s asset %q", op, assetName)
-	if typ := aictx.ArgString(input, "type"); typ != "" {
-		cmdSummary += fmt.Sprintf(" (type=%s)", typ)
+	if typ := prepared.SafeApprovalDetail()["type"]; typ != nil && typ != "" {
+		cmdSummary += fmt.Sprintf(" (type=%v)", typ)
 	}
-	detail := buildSafePutAssetApprovalDetail(op, input)
+	detail := buildSafePutAssetApprovalDetail(op, ref, input, prepared)
 	items := []permission.ApprovalItem{{
 		Type:      op,
 		AssetID:   assetID,
@@ -443,23 +458,88 @@ func isOneShotApproved(resp permission.ApprovalResponse, items []permission.Appr
 	return err == nil && parsed.Decision == permission.ApprovalAllow
 }
 
-func buildSafePutAssetApprovalDetail(op string, input map[string]any) string {
-	safe := map[string]any{"operation": op}
-	for _, k := range []string{"asset", "name", "type", "description", "icon"} {
-		if s := aictx.ArgString(input, k); s != "" {
-			safe[k] = s
+func preparePutAssetForMCPApproval(ctx context.Context, input map[string]any) (op string, assetID int64, assetName string, prepared *asset_put_svc.Prepared, err error) {
+	config := map[string]any{}
+	if raw, exists := input["config"]; exists {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			return "", 0, "", nil, fmt.Errorf("parameter config must be an object, got %T", raw)
 		}
+		config = m
+	}
+
+	ref := aictx.ArgString(input, "asset")
+	var asset *asset_entity.Asset
+	if ref == "" {
+		op = "create"
+		name := aictx.ArgString(input, "name")
+		if name == "" {
+			return "", 0, "", nil, errors.New("missing required parameter: name (creating an asset needs a name; pass asset=<id-or-name> instead to update an existing one)")
+		}
+		assetType := aictx.ArgString(input, "type")
+		if assetType == "" {
+			assetType = asset_entity.AssetTypeSSH
+		}
+		asset, err = assettype.NewAsset(ctx, assetType)
+		if errors.Is(err, assettype.ErrUnknownType) {
+			return "", 0, "", nil, fmt.Errorf("unsupported asset type %q; supported: %s, or a custom type slug",
+				assetType, strings.Join(permission.RegisteredHelpTypes(), ", "))
+		}
+		if err != nil {
+			return "", 0, "", nil, err
+		}
+		asset.Name = name
+		asset.Icon = aictx.ArgString(input, "icon")
+		asset.GroupID = aictx.ArgInt64(input, "group_id")
+		asset.Description = aictx.ArgString(input, "description")
+	} else {
+		op = "update"
+		asset, err = assetref.Resolve(ctx, ref)
+		if err != nil {
+			return "", 0, "", nil, err
+		}
+		if declared := aictx.ArgString(input, "type"); declared != "" {
+			if err := permission.AssertAssetType(asset, declared); err != nil {
+				return "", 0, "", nil, err
+			}
+		}
+		cloned := *asset
+		if name := aictx.ArgString(input, "name"); name != "" {
+			cloned.Name = name
+		}
+		if _, ok := input["description"]; ok {
+			cloned.Description = aictx.ArgString(input, "description")
+		}
+		if gid := aictx.ArgInt64(input, "group_id"); gid > 0 {
+			cloned.GroupID = gid
+		}
+		if icon := aictx.ArgString(input, "icon"); icon != "" {
+			cloned.Icon = icon
+		}
+		asset = &cloned
+	}
+
+	prepared, err = asset_put_svc.Prepare(ctx, asset_put_svc.Request{
+		Asset:  asset,
+		Config: config,
+	})
+	if err != nil {
+		return "", 0, "", nil, fmt.Errorf("failed to %s asset: %w", op, err)
+	}
+	return op, asset.ID, asset.Name, prepared, nil
+}
+
+func buildSafePutAssetApprovalDetail(op, ref string, input map[string]any, prepared *asset_put_svc.Prepared) string {
+	safe := prepared.SafeApprovalDetail()
+	safe["operation"] = op
+	if ref != "" {
+		safe["asset"] = ref
 	}
 	if gid := aictx.ArgInt64(input, "group_id"); gid > 0 {
 		safe["group_id"] = gid
 	}
-	if cfg, ok := input["config"].(map[string]any); ok && len(cfg) > 0 {
-		keys := make([]string, 0, len(cfg))
-		for k := range cfg {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		safe["config_keys"] = keys
+	if desc := aictx.ArgString(input, "description"); desc != "" {
+		safe["description"] = desc
 	}
 	b, err := json.Marshal(safe)
 	if err != nil {
@@ -572,12 +652,12 @@ func (g *guardedCpTool) Call(ctx context.Context, input map[string]any) (*agent.
 	// Enforce --allow-local-dir whitelist on every local endpoint (both read and write).
 	if len(g.allowedLocalDirs) > 0 {
 		if srcErr == nil && srcAsset == nil {
-			if err := verifyLocalPathAllowed(srcPath, g.allowedLocalDirs); err != nil {
+			if err := helper.VerifyLocalPathAllowed(srcPath, g.allowedLocalDirs); err != nil {
 				return nil, fmt.Errorf("local source path blocked by --allow-local-dir: %w", err)
 			}
 		}
 		if dstErr == nil && dstAsset == nil {
-			if err := verifyLocalPathAllowed(dstPath, g.allowedLocalDirs); err != nil {
+			if err := helper.VerifyLocalPathAllowed(dstPath, g.allowedLocalDirs); err != nil {
 				return nil, fmt.Errorf("local destination path blocked by --allow-local-dir: %w", err)
 			}
 		}
@@ -587,102 +667,56 @@ func (g *guardedCpTool) Call(ctx context.Context, input map[string]any) (*agent.
 		if !filepath.IsAbs(srcPath) {
 			return g.inner.Call(ctx, input)
 		}
-		checker, err := permission.RequireChecker(ctx)
-		if err != nil {
+		if err := confirmMCPLocalRead(ctx, dstAsset.ID, dstAsset.Name, srcPath, fmt.Sprintf("cp %s → %s", srcRaw, dstRaw)); err != nil {
+			if errors.Is(err, errMCPLocalReadDenied) {
+				aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny})
+				return &agent.ToolResultBlock{
+					Content: []agent.ContentBlock{agent.TextBlock{Text: "USER DENIED: The user has denied reading the local file for upload. Stop the current task immediately."}},
+					IsError: true,
+				}, nil
+			}
 			return nil, err
-		}
-		confirm := checker.ConfirmFunc()
-		if confirm == nil {
-			return nil, errors.New("uploading a local file requires an interactive approval channel, none is wired")
-		}
-		detail := fmt.Sprintf("cp %s → %s", srcRaw, dstRaw)
-		items := []permission.ApprovalItem{{
-			Type:      "local_read",
-			AssetID:   dstAsset.ID,
-			AssetName: dstAsset.Name,
-			Command:   fmt.Sprintf("read local %s -> %s", filepath.Clean(srcPath), dstRaw),
-			Detail:    detail,
-		}}
-		resp := confirm(ctx, permission.ApprovalKindOnce, items)
-		if !isOneShotApproved(resp, items) {
-			aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny})
-			return &agent.ToolResultBlock{
-				Content: []agent.ContentBlock{agent.TextBlock{Text: "USER DENIED: The user has denied reading the local file for upload. Stop the current task immediately."}},
-				IsError: true,
-			}, nil
 		}
 	}
 
 	return g.inner.Call(ctx, input)
 }
 
-func normalizeAllowedLocalDirs(rawDirs []string) ([]string, error) {
-	if len(rawDirs) == 0 {
-		return nil, nil
-	}
-	out := make([]string, 0, len(rawDirs))
-	for _, raw := range rawDirs {
-		trimmed := strings.TrimSpace(raw)
-		if trimmed == "" {
-			return nil, errors.New("--allow-local-dir must not be empty")
-		}
-		abs, err := filepath.Abs(trimmed)
-		if err != nil {
-			return nil, fmt.Errorf("resolve --allow-local-dir %q: %w", raw, err)
-		}
-		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-			abs = resolved
-		}
-		out = append(out, filepath.Clean(abs))
-	}
-	return out, nil
-}
+var errMCPLocalReadDenied = errors.New("USER DENIED: The user has denied reading the local file for upload. Stop the current task immediately.")
 
-func verifyLocalPathAllowed(localPath string, allowedDirs []string) error {
-	if !filepath.IsAbs(localPath) {
-		return fmt.Errorf("local path %q must be absolute", localPath)
-	}
-	resolved, err := resolvePathWithExistingAncestors(localPath)
+func confirmMCPLocalRead(ctx context.Context, assetID int64, assetName, localPath, detail string) error {
+	checker, err := permission.RequireChecker(ctx)
 	if err != nil {
 		return err
 	}
-	for _, dir := range allowedDirs {
-		rel, rerr := filepath.Rel(dir, resolved)
-		if rerr != nil {
-			continue
-		}
-		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
-			return nil
-		}
+	confirm := checker.ConfirmFunc()
+	if confirm == nil {
+		return errors.New("uploading a local file requires an interactive approval channel, none is wired")
 	}
-	return fmt.Errorf("path %q is outside allowed directories", localPath)
+	items := []permission.ApprovalItem{{
+		Type:      "local_read",
+		AssetID:   assetID,
+		AssetName: assetName,
+		Command:   fmt.Sprintf("read local %s (%s)", filepath.Clean(localPath), detail),
+		Detail:    detail,
+	}}
+	resp := confirm(ctx, permission.ApprovalKindOnce, items)
+	if !isOneShotApproved(resp, items) {
+		return errMCPLocalReadDenied
+	}
+	return nil
 }
 
-// resolvePathWithExistingAncestors resolves symlinks along the longest existing prefix
-// of p, then re-attaches non-existent trailing segments so symlink escapes fail closed
-// even when creating a new file or subdirectory.
-func resolvePathWithExistingAncestors(p string) (string, error) {
-	clean := filepath.Clean(p)
-	var tail []string
-	cur := clean
-	for {
-		resolved, err := filepath.EvalSymlinks(cur)
-		if err == nil {
-			for i := len(tail) - 1; i >= 0; i-- {
-				resolved = filepath.Join(resolved, tail[i])
-			}
-			return filepath.Clean(resolved), nil
-		}
-		if !os.IsNotExist(err) {
-			return "", err
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return clean, nil
-		}
-		tail = append(tail, filepath.Base(cur))
-		cur = parent
-	}
+type mcpLocalReadGate struct{}
+
+func newMCPLocalReadGate() helper.LocalReadGate { return mcpLocalReadGate{} }
+
+func (mcpLocalReadGate) CheckLocalRead(ctx context.Context, assetID int64, assetName, localPath, detail string) error {
+	return confirmMCPLocalRead(ctx, assetID, assetName, localPath, detail)
+}
+
+func normalizeAllowedLocalDirs(rawDirs []string) ([]string, error) {
+	return helper.NormalizeAllowedLocalDirs(rawDirs)
 }
 
 func lookupMCPAssetName(ctx context.Context, assetID int64) string {
@@ -715,15 +749,32 @@ func writeMCPPermanentRules(ctx context.Context, items []permission.ApprovalItem
 		if err != nil {
 			return err
 		}
+		face := item.CheckType
+		if face == "" {
+			face = item.Type
+		}
 		canonical := asset.Type
-		if item.Type == permission.GrantToolCpRead || item.Type == permission.GrantToolCpWrite {
-			canonical = item.Type
+		if item.Type == permission.GrantToolCp || face == permission.GrantToolCpRead || face == permission.GrantToolCpWrite {
+			if face != permission.GrantToolCpRead && face != permission.GrantToolCpWrite {
+				return fmt.Errorf("cannot write permanent cp rule for asset %q without transfer direction (cp:read or cp:write)", asset.Name)
+			}
+			canonical = face
 		}
 		var patterns []string
 		if i < len(edited) && strings.TrimSpace(edited[i].Command) != "" {
-			patterns = []string{strings.TrimSpace(edited[i].Command)}
+			if item.Action != "" {
+				patterns = []string{strings.TrimSpace(edited[i].Command)}
+			} else {
+				for _, line := range strings.Split(edited[i].Command, "\n") {
+					line = strings.TrimSpace(line)
+					if line == "" {
+						continue
+					}
+					patterns = append(patterns, permission.NormalizeGrantPatternsFor(ctx, item.AssetID, face, line, permission.GrantOriginUser)...)
+				}
+			}
 		} else {
-			patterns = permission.ApprovalRuleSubjects(ctx, item.Type, item)
+			patterns = permission.ApprovalRuleSubjects(ctx, face, item)
 		}
 		if len(patterns) == 0 {
 			return fmt.Errorf("no rule subject available for asset %q", asset.Name)
@@ -786,12 +837,29 @@ func newMCPGrantPersister(sessionID string) mcp.GrantPersister {
 				}
 				continue
 			}
-			permission.SaveGrantPatternsForApproval(ctx, sessionID, item.AssetID, item.AssetName, item.Type, cmd, origin)
-			allPatterns = append(allPatterns, cmd)
-			entry := byAsset[item.AssetID]
-			entry.name = item.AssetName
-			entry.patterns = append(entry.patterns, cmd)
-			byAsset[item.AssetID] = entry
+			approvalType := item.Type
+			if approvalType == "grant" && item.AssetID > 0 {
+				if svc := asset_svc.Asset(); svc != nil {
+					if asset, aerr := svc.Get(ctx, item.AssetID); aerr == nil && asset != nil {
+						approvalType = permission.ApprovalTypeFor(asset.Type)
+					}
+				}
+			}
+			for _, line := range strings.Split(cmd, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				normalized := permission.NormalizeGrantPatternsFor(ctx, item.AssetID, approvalType, line, origin)
+				for _, p := range normalized {
+					permission.SaveGrantPattern(ctx, sessionID, item.AssetID, item.AssetName, approvalType, p)
+					allPatterns = append(allPatterns, p)
+					entry := byAsset[item.AssetID]
+					entry.name = item.AssetName
+					entry.patterns = append(entry.patterns, p)
+					byAsset[item.AssetID] = entry
+				}
+			}
 		}
 		for assetID, entry := range byAsset {
 			audit.WriteGrantSubmitAudit(ctx, assetID, entry.name, entry.patterns)

@@ -55,7 +55,7 @@ func handlePutAsset(ctx context.Context, args map[string]any) (string, error) {
 	// 把可能携带 write-only 秘密的 config 原样写进审计。这里只投影顶层非 config 字段
 	// （config 是自由对象、可能带秘密）；Prepare/Commit 成功后再用 producer 投影覆盖。
 	// 该投影是独立 map，绝不改写 args——执行/审批/ToolBlock/历史仍见原值。
-	aictx.RecordAuditRequest(ctx, putAssetTopLevelAuditArgs(args))
+	aictx.RecordAuditRequest(ctx, PutAssetTopLevelAuditArgs(args))
 
 	config, err := putArgs(args)
 	if err != nil {
@@ -111,8 +111,8 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 	return asset_put_svc.ResultJSON(result, "asset created successfully")
 }
 
-// putAssetTopLevelAuditArgs 把 put_asset 顶层非 config 字段按类型 fail-closed 投影给
-// Audit，作为 handlePutAsset 入口的基线（record 在 putArgs/校验/lookup 之前）。config 是
+// PutAssetTopLevelAuditArgs 把 put_asset 顶层非 config 字段按类型 fail-closed 投影给
+// Audit，作为 handlePutAsset 及外层包装器入口的基线（record 在 putArgs/校验/lookup 之前）。config 是
 // 自由对象、可能携带 write-only 秘密，任何 Prepare 之前的失败都绝不回退原始 config；顶层
 // 字段也只有类型正确的值才进入投影：string 身份字段（asset/name/type/description/icon）
 // 仅在实际值为 string 时保留，group_id 仅在实际值为工具边界支持的数值
@@ -121,7 +121,7 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 // 嵌套秘密不能借任何允许键进入 Audit；非有限 float64（NaN/±Inf）与非法 json.Number 会让
 // audit middleware 的 json.Marshal 失败，同样省略。Prepare/Commit 成功后再用 producer
 // 投影覆盖基线。该投影是独立 map，绝不改写 args——执行/审批/ToolBlock/历史仍见原值。
-func putAssetTopLevelAuditArgs(args map[string]any) map[string]any {
+func PutAssetTopLevelAuditArgs(args map[string]any) map[string]any {
 	out := make(map[string]any)
 	for _, key := range []string{"asset", "name", "type", "description", "icon"} {
 		if s, ok := args[key].(string); ok {

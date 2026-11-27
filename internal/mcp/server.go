@@ -144,16 +144,43 @@ func NewServer(cfg ServerConfig) *Server {
 
 func boolPtr(v bool) *bool { return &v }
 
+var supportedProtocolVersions = map[string]bool{
+	ProtocolVersion: true,
+	"2024-11-05":    true,
+}
+
 // toolAnnotationsFor returns MCP 2025-03-26 behavioral hints for known OpsKat tools.
 func toolAnnotationsFor(name string) *ToolAnnotations {
 	switch name {
 	case "list_assets", "get_asset", "list_groups", "get_group",
 		"list_credentials", "get_credential", "help", "list_audit", GetTaskToolName:
-		return &ToolAnnotations{ReadOnlyHint: boolPtr(true), DestructiveHint: boolPtr(false)}
-	case "exec", "batch_exec", "cp", "delete_asset", "delete_group":
-		return &ToolAnnotations{ReadOnlyHint: boolPtr(false), DestructiveHint: boolPtr(true)}
+		return &ToolAnnotations{
+			ReadOnlyHint:    boolPtr(true),
+			DestructiveHint: boolPtr(false),
+			IdempotentHint:  boolPtr(true),
+			OpenWorldHint:   boolPtr(false),
+		}
+	case "exec", "batch_exec", "cp":
+		return &ToolAnnotations{
+			ReadOnlyHint:    boolPtr(false),
+			DestructiveHint: boolPtr(true),
+			IdempotentHint:  boolPtr(false),
+			OpenWorldHint:   boolPtr(true),
+		}
+	case "delete_asset", "delete_group":
+		return &ToolAnnotations{
+			ReadOnlyHint:    boolPtr(false),
+			DestructiveHint: boolPtr(true),
+			IdempotentHint:  boolPtr(false),
+			OpenWorldHint:   boolPtr(false),
+		}
 	case "put_asset", "put_group", "request_permission", "get_asset_secret":
-		return &ToolAnnotations{ReadOnlyHint: boolPtr(false), DestructiveHint: boolPtr(false)}
+		return &ToolAnnotations{
+			ReadOnlyHint:    boolPtr(false),
+			DestructiveHint: boolPtr(false),
+			IdempotentHint:  boolPtr(false),
+			OpenWorldHint:   boolPtr(false),
+		}
 	default:
 		return nil
 	}
@@ -209,10 +236,41 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 		zap.Int("tools", len(s.specs)),
 		zap.Bool("externalApproval", s.approver != nil))
 
-	reader := bufio.NewReaderSize(r, 64*1024)
+	type readResult struct {
+		line []byte
+		err  error
+	}
+	lineCh := make(chan readResult, 1)
+	go func() {
+		defer close(lineCh)
+		reader := bufio.NewReaderSize(r, 64*1024)
+		for {
+			line, err := readLineLimited(reader, s.maxRequestBytes)
+			select {
+			case lineCh <- readResult{line: line, err: err}:
+			case <-serveCtx.Done():
+				return
+			}
+			if err != nil && !errors.Is(err, errLineTooLong) {
+				return
+			}
+		}
+	}()
 
 	for {
-		line, err := readLineLimited(reader, s.maxRequestBytes)
+		var res readResult
+		select {
+		case <-serveCtx.Done():
+			logger.Ctx(serveCtx).Info("opsctl mcp server stopped: context canceled")
+			return serveCtx.Err()
+		case item, ok := <-lineCh:
+			if !ok {
+				logger.Ctx(serveCtx).Info("opsctl mcp server stopped: stdin closed")
+				return nil
+			}
+			res = item
+		}
+		line, err := res.line, res.err
 		if errors.Is(err, errLineTooLong) {
 			_ = s.writeResponse(w, Response{
 				JSONRPC: "2.0",
@@ -238,7 +296,16 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 					case s.reqSem <- struct{}{}:
 						reqCtx, reqCancel := context.WithCancel(serveCtx)
 						reqKey := canonicalRequestID(req.ID)
-						s.registerInFlight(reqKey, reqCancel)
+						if !s.registerInFlight(reqKey, reqCancel) {
+							reqCancel()
+							<-s.reqSem
+							_ = s.writeResponse(w, Response{
+								JSONRPC: "2.0",
+								ID:      req.ID,
+								Error:   &RPCError{Code: CodeInvalidRequest, Message: "duplicate in-flight request id"},
+							})
+							break
+						}
 						wg.Add(1)
 						go func(req Request, rCtx context.Context, rCancel context.CancelFunc, key string) {
 							defer wg.Done()
@@ -270,12 +337,6 @@ func (s *Server) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 			logger.Ctx(serveCtx).Error("opsctl mcp read error", zap.Error(err))
 			return err
 		}
-		select {
-		case <-serveCtx.Done():
-			logger.Ctx(serveCtx).Info("opsctl mcp server stopped: context canceled")
-			return serveCtx.Err()
-		default:
-		}
 	}
 }
 
@@ -299,16 +360,37 @@ func readLineLimited(r *bufio.Reader, limit int) ([]byte, error) {
 }
 
 func canonicalRequestID(raw json.RawMessage) string {
-	return string(bytes.TrimSpace(raw))
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return ""
+	}
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return string(trimmed)
+	}
+	switch typed := v.(type) {
+	case string:
+		return "s:" + typed
+	case json.Number:
+		return "n:" + typed.String()
+	default:
+		return string(trimmed)
+	}
 }
 
-func (s *Server) registerInFlight(key string, cancel context.CancelFunc) {
+func (s *Server) registerInFlight(key string, cancel context.CancelFunc) bool {
 	if key == "" {
-		return
+		return true
 	}
 	s.inFlightMu.Lock()
+	defer s.inFlightMu.Unlock()
+	if _, exists := s.inFlight[key]; exists {
+		return false
+	}
 	s.inFlight[key] = cancel
-	s.inFlightMu.Unlock()
+	return true
 }
 
 func (s *Server) unregisterInFlight(key string) {
@@ -381,7 +463,7 @@ func (s *Server) handleRequest(serveCtx, reqCtx context.Context, req Request) (r
 			_ = json.Unmarshal(req.Params, &params)
 		}
 		version := ProtocolVersion
-		if params.ProtocolVersion != "" {
+		if supportedProtocolVersions[params.ProtocolVersion] {
 			version = params.ProtocolVersion
 		}
 		return Response{
@@ -457,16 +539,51 @@ func (s *Server) callTool(serveCtx, reqCtx context.Context, name string, args ma
 		return nil, &RPCError{Code: CodeInvalidParams, Message: fmt.Sprintf("unknown tool: %s", name)}
 	}
 
+	isSerial := false
 	if st, ok := t.(serialTool); ok && st.Serial() {
-		select {
-		case s.serialSem <- struct{}{}:
-			defer func() { <-s.serialSem }()
-		case <-reqCtx.Done():
-			return textResult("request canceled", true), nil
-		}
+		isSerial = true
 	}
 
 	execFn := func(callCtx context.Context) (string, bool) {
+		if !isSerial {
+			return s.executeAgentTool(callCtx, t, args)
+		}
+		select {
+		case s.serialSem <- struct{}{}:
+		case <-callCtx.Done():
+			return "request canceled", true
+		}
+		held := true
+		defer func() {
+			if held {
+				<-s.serialSem
+			}
+		}()
+		if s.approver != nil {
+			// Release serialSem while parked waiting for human approval so other requests
+			// can enter and return their PauseRef without deadlocking, then re-acquire
+			// serialSem before resuming execution so Serial tools never execute concurrently.
+			callCtx = withPauseHooks(callCtx, pauseHooks{
+				onPark: func() {
+					if held {
+						held = false
+						<-s.serialSem
+					}
+				},
+				onResume: func(resumeCtx context.Context) bool {
+					if held {
+						return true
+					}
+					select {
+					case s.serialSem <- struct{}{}:
+						held = true
+						return true
+					case <-resumeCtx.Done():
+						return false
+					}
+				},
+			})
+		}
 		return s.executeAgentTool(callCtx, t, args)
 	}
 
