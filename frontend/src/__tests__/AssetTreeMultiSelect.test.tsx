@@ -5,6 +5,7 @@ import { TooltipProvider } from "@opskat/ui";
 import { AssetTree } from "@/components/layout/AssetTree";
 import { GroupDialog } from "@/components/asset/GroupDialog";
 import { useAssetStore } from "@/stores/assetStore";
+import { DEFAULT_SHORTCUTS, useShortcutStore } from "@/stores/shortcutStore";
 import { asset_entity, group_entity } from "../../wailsjs/go/models";
 import { CreateGroup, DeleteAssets, ListAssets, ListGroups, ReorderAssets } from "../../wailsjs/go/system/System";
 
@@ -63,6 +64,8 @@ describe("AssetTree multi-select, batch actions & directory sub-group creation",
 
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    useShortcutStore.setState({ shortcuts: { ...DEFAULT_SHORTCUTS }, isRecording: false });
     vi.mocked(ListAssets).mockResolvedValue(defaultAssets);
     vi.mocked(ListGroups).mockResolvedValue(defaultGroups);
     useAssetStore.setState({
@@ -102,7 +105,7 @@ describe("AssetTree multi-select, batch actions & directory sub-group creation",
     expect(screen.queryByTestId("asset-selection-bar")).not.toBeInTheDocument();
 
     // Cmd+A selects all visible assets, clicking blank space clears selection
-    fireEvent.keyDown(sidebar, { key: "a", ctrlKey: true });
+    fireEvent.keyDown(sidebar, { key: "a", code: "KeyA", ctrlKey: true });
     expect(useAssetStore.getState().selectedAssetIds).toEqual([101, 102, 103, 104]);
     fireEvent.click(sidebar.querySelector('[data-slot="scroll-area"]') ?? sidebar.lastElementChild!);
     expect(useAssetStore.getState().selectedAssetIds).toEqual([]);
@@ -195,7 +198,7 @@ describe("AssetTree multi-select, batch actions & directory sub-group creation",
 
     // Exact boundary = 6 connectable + 2 generic (8 total) -> prompts ConfirmDialog, connects only 6 connectable
     onConnectAsset.mockClear();
-    fireEvent.keyDown(screen.getByTestId("asset-tree"), { key: "a", ctrlKey: true });
+    fireEvent.keyDown(screen.getByTestId("asset-tree"), { key: "a", code: "KeyA", ctrlKey: true });
     fireEvent.click(screen.getByTestId("selection-bar-connect"));
     expect(onConnectAsset).not.toHaveBeenCalled();
 
@@ -224,15 +227,15 @@ describe("AssetTree multi-select, batch actions & directory sub-group creation",
     // Pressing Escape inside search input does not clear selection; Delete inside search input does not open confirm
     const searchInput = screen.getByTestId("asset-tree-search");
     fireEvent.keyDown(searchInput, { key: "Escape" });
-    fireEvent.keyDown(searchInput, { key: "Delete" });
+    fireEvent.keyDown(searchInput, { key: "Delete", code: "Delete" });
     expect(useAssetStore.getState().selectedAssetIds).toEqual([101, 102]);
     expect(screen.queryByTestId("confirm-batch-delete-assets")).not.toBeInTheDocument();
 
     // Open MoveAssetsDialog (portal): shortcuts inside modal must not trigger sidebar clear/delete
     fireEvent.click(screen.getByTestId("selection-bar-move"));
     const moveDialog = await screen.findByTestId("move-assets-dialog");
-    fireEvent.keyDown(moveDialog, { key: "Delete" });
-    fireEvent.keyDown(moveDialog, { key: "a", ctrlKey: true });
+    fireEvent.keyDown(moveDialog, { key: "Delete", code: "Delete" });
+    fireEvent.keyDown(moveDialog, { key: "a", code: "KeyA", ctrlKey: true });
     expect(screen.queryByTestId("confirm-batch-delete-assets")).not.toBeInTheDocument();
     expect(useAssetStore.getState().selectedAssetIds).toEqual([101, 102]);
 
@@ -307,7 +310,7 @@ describe("AssetTree multi-select, batch actions & directory sub-group creation",
 
     fireEvent.click(screen.getByText("web-1"));
     fireEvent.click(screen.getByText("web-2"), { ctrlKey: true });
-    fireEvent.keyDown(screen.getByTestId("asset-tree"), { key: "Delete" });
+    fireEvent.keyDown(screen.getByTestId("asset-tree"), { key: "Delete", code: "Delete" });
 
     const confirmBtn = await screen.findByTestId("confirm-batch-delete-assets");
     fireEvent.click(confirmBtn);
@@ -315,6 +318,38 @@ describe("AssetTree multi-select, batch actions & directory sub-group creation",
     await waitFor(() => {
       expect(DeleteAssets).toHaveBeenCalledWith([101, 102]);
     });
+  });
+
+  it("uses the configurable asset.selectAll / asset.delete bindings instead of hard-coded keys", async () => {
+    useShortcutStore.getState().updateShortcut("asset.selectAll", {
+      code: "KeyL",
+      mod: true,
+      ctrl: false,
+      shift: true,
+      alt: false,
+    });
+    useShortcutStore.getState().updateShortcut("asset.delete", {
+      code: "KeyX",
+      mod: true,
+      ctrl: false,
+      shift: true,
+      alt: false,
+    });
+    renderTree();
+    const sidebar = screen.getByTestId("asset-tree");
+
+    // The default keys no longer do anything once rebound
+    fireEvent.keyDown(sidebar, { key: "a", code: "KeyA", ctrlKey: true });
+    expect(useAssetStore.getState().selectedAssetIds).toEqual([]);
+
+    fireEvent.keyDown(sidebar, { key: "L", code: "KeyL", ctrlKey: true, shiftKey: true });
+    expect(useAssetStore.getState().selectedAssetIds).toEqual([101, 102, 103, 104]);
+
+    fireEvent.keyDown(sidebar, { key: "Delete", code: "Delete" });
+    expect(screen.queryByTestId("confirm-batch-delete-assets")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(sidebar, { key: "X", code: "KeyX", ctrlKey: true, shiftKey: true });
+    expect(await screen.findByTestId("confirm-batch-delete-assets")).toBeInTheDocument();
   });
 
   it("supports right-clicking a group to create a sub-group and blank area to create a root group", async () => {

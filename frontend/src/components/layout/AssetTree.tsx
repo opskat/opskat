@@ -68,7 +68,7 @@ import { getAssetType } from "@/lib/assetTypes";
 import { useAssetTypeOptions, matchSelectedTypes } from "@/lib/assetTypes/options";
 import { AssetTypeFilterButton } from "@/components/asset/AssetTypeFilterButton";
 import { selectLoadError, useAssetStore } from "@/stores/assetStore";
-import { formatBinding, useShortcutStore } from "@/stores/shortcutStore";
+import { eventMatchesBinding, formatBinding, useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useActiveAssetIds } from "@/hooks/useActiveAssetIds";
 import { MoveAsset, MoveGroup, ReorderAssets, ReorderGroup } from "../../../wailsjs/go/system/System";
@@ -599,23 +599,19 @@ export function AssetTree({
         return;
       }
 
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "a") {
+      const { shortcuts } = useShortcutStore.getState();
+      if (eventMatchesBinding(e.nativeEvent, shortcuts["asset.selectAll"])) {
         e.preventDefault();
         e.stopPropagation();
         useAssetStore.getState().selectAllAssets(visibleAssetIdsRef.current);
         return;
       }
 
-      if (e.key === "Delete" || (e.metaKey && e.key === "Backspace")) {
-        const selected = getSelectedVisibleAssets();
-        if (selected.length === 0) return;
+      if (eventMatchesBinding(e.nativeEvent, shortcuts["asset.delete"])) {
+        if (getSelectedVisibleAssets().length === 0) return;
         e.preventDefault();
         e.stopPropagation();
-        if (selected.length === 1) {
-          setDeleteAssetConfirm(selected[0]);
-        } else {
-          setBatchDeleteConfirm(selected);
-        }
+        handleRequestBatchDelete();
       }
     },
     [
@@ -626,6 +622,7 @@ export function AssetTree({
       batchConnectConfirm,
       moveAssetsTarget,
       getSelectedVisibleAssets,
+      handleRequestBatchDelete,
     ]
   );
 

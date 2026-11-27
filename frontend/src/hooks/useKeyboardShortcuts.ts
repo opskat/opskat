@@ -28,7 +28,8 @@ export function useKeyboardShortcuts({ onToggleAIPanel, onToggleSidebar, onToggl
         void copySelectedAssetMarkdownRef();
         return;
       }
-      if (!action || action === "asset.copyRef") return;
+      // asset.* 只在资产侧栏聚焦时由侧栏处理（copyRef 已在上面按焦点判断过），全局不接管。
+      if (!action || action.startsWith("asset.")) return;
       if (action.startsWith("terminal.")) return;
       // 表设计器的保存由设计器自己监听;这里不能 preventDefault,否则别的视图(如远程文件编辑器的 ⌘S)收不到。
       if (action === "designer.save") return;

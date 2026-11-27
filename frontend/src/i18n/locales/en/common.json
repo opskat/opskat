@@ -1913,6 +1913,8 @@
     "terminal.selectAll": "Terminal Select All",
     "terminal.find": "Terminal Search",
     "asset.copyRef": "Copy Asset Reference (asset sidebar focused)",
+    "asset.selectAll": "Select All Assets (asset sidebar focused)",
+    "asset.delete": "Delete Selected Assets (asset sidebar focused)",
     "designer.save": "Save Table Design",
     "page.home": "Switch to Home",
     "page.settings": "Switch to Settings",

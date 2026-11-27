@@ -1913,6 +1913,8 @@
     "terminal.selectAll": "终端全选",
     "terminal.find": "终端搜索",
     "asset.copyRef": "复制资产引用(资产侧栏聚焦时)",
+    "asset.selectAll": "全选资产(资产侧栏聚焦时)",
+    "asset.delete": "删除所选资产(资产侧栏聚焦时)",
     "designer.save": "保存表设计",
     "page.home": "切换到首页",
     "page.settings": "切换到设置",
