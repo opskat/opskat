@@ -604,6 +604,19 @@ opsctl policy attach web-01 builtin:linux-readonly
 opsctl policy detach --group production builtin:sql-readonly
 ```
 
+## mcp
+
+### `mcp [--toolset core|full] [--session <id>] [--allow-local-dir <dir>]...`
+
+Run a stdio MCP server exposing OpsKat's tools, for an MCP client (Claude Code, Codex, pi, ...) to launch — not a command to run in a shell yourself. `core` (default) exposes `list_assets`, `get_asset`, `help`, `exec`, `batch_exec`, `cp` and `request_permission`; `full` adds the remaining asset/group/credential tools and a `list_audit` scoped to this server's session. Each server process has its own grant session unless `--session` names one; it never reuses the CLI's session.
+
+Policy, grants and audit are the same as for the CLI (audit rows carry source `mcp`). An operation that needs a human decision is asked in the client's own prompt when the client supports form elicitation — allow once, allow for this session (where a grant can be saved), or deny — and otherwise in the desktop app's dialog; with neither it is denied. Permanent rules are never offered there, and SSH MFA is always answered in the desktop app. `put_asset` / `put_group` and uploading a local file with `cp` always ask; `--allow-local-dir` instead limits `cp`'s local endpoints to the given directories.
+
+```bash
+claude mcp add opskat -- opsctl mcp
+codex mcp add opskat -- opsctl mcp --toolset full
+```
+
 ## version
 
 Print CLI version.

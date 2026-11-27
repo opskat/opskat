@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,40 +15,30 @@ import (
 	"github.com/cago-frame/agents/agent"
 	cagotool "github.com/cago-frame/agents/tool"
 	"github.com/cago-frame/cago/configs"
-	"github.com/cago-frame/cago/pkg/logger"
 	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	"go.uber.org/zap"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
-	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/tool"
-	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/mcp"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/asset_put_svc"
-	"github.com/opskat/opskat/internal/service/asset_svc"
 	"github.com/opskat/opskat/internal/service/audit_svc"
-	"github.com/opskat/opskat/internal/service/credential_resolver"
-	"github.com/opskat/opskat/internal/service/policy_rule_svc"
 )
 
-const (
-	mcpApprovalSecretEnv = "OPSKAT_MCP_APPROVAL_SECRET" //nolint:gosec // env var name, not a credential
-	mcpMaxAuditListLimit = 200
-)
+const mcpMaxAuditListLimit = 200
 
 // mcpRealStdout is the process stdout captured in Execute() before os.Stdout is
 // redirected to os.Stderr, so only the MCP transport ever writes JSON-RPC frames to it.
 var mcpRealStdout *os.File
 
-// mcpStdio returns the MCP transport and the diagnostics stream; overridden in tests.
-var mcpStdio = func() (mcpsdk.Transport, io.Writer) {
-	return &mcpsdk.IOTransport{Reader: os.Stdin, Writer: mcpRealStdout}, os.Stderr
+// mcpStdio returns the MCP transport; overridden in tests.
+var mcpStdio = func() mcpsdk.Transport {
+	return &mcpsdk.IOTransport{Reader: os.Stdin, Writer: mcpRealStdout}
 }
 
 type serialTool interface {
@@ -66,11 +55,7 @@ func isToolSerial(t agent.Tool) bool {
 func cmdMCP(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	approvalModeRaw := fs.String("approval-mode", string(mcp.ApprovalModeDesktop), "Approval handling mode: desktop or external")
-	controlSocket := fs.String("approval-control-socket", "", "Out-of-band local IPC socket path for resolving external approvals (required in external mode)")
-	allowPermanent := fs.Bool("allow-permanent", false, "Allow external approvals to write permanent asset allow rules (disabled by default)")
 	toolsetRaw := fs.String("toolset", string(mcp.ToolsetCore), "Exposed toolset: core or full")
-	approvalTTL := fs.Duration("approval-ttl", 30*time.Minute, "Pending approval expiration duration in external mode (max 2h)")
 	sessionFlag := fs.String("session", "", "Explicit grant session ID (default: isolated per-process UUID; never inherits CLI session)")
 	var allowLocalDirs stringSliceFlag
 	fs.Var(&allowLocalDirs, "allow-local-dir", "Restrict cp local filesystem endpoints to this directory (repeatable)")
@@ -86,21 +71,11 @@ func cmdMCP(ctx context.Context, args []string) int {
 		return 1
 	}
 
-	mode, err := mcp.ParseApprovalMode(*approvalModeRaw)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return 1
-	}
 	toolset, err := mcp.ParseToolset(*toolsetRaw)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
-	if *approvalTTL <= 0 || *approvalTTL > mcp.MaxApprovalTTL {
-		fmt.Fprintf(os.Stderr, "Error: --approval-ttl must be positive and at most %s\n", mcp.MaxApprovalTTL)
-		return 1
-	}
-
 	normalizedLocalDirs, err := helper.NormalizeAllowedLocalDirs(allowLocalDirs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -114,56 +89,9 @@ func cmdMCP(ctx context.Context, args []string) int {
 		session = "mcp_" + uuid.New().String()
 	}
 
-	transport, stderr := mcpStdio()
-
-	var approver *mcp.ExternalApprover
-	var controlSrv *mcp.ControlServer
-	var checker *permission.CommandPolicyChecker
-	var localWriteGate *tool.LocalToolGate
-
-	if mode == mcp.ApprovalModeExternal {
-		if strings.TrimSpace(*controlSocket) == "" {
-			fmt.Fprintln(os.Stderr, "Error: --approval-control-socket is required in external approval mode")
-			return 1
-		}
-		secret := os.Getenv(mcpApprovalSecretEnv)
-		approver, err = mcp.NewExternalApprover(mcp.ExternalApproverConfig{
-			Secret:              secret,
-			TTL:                 *approvalTTL,
-			AllowPermanent:      *allowPermanent,
-			PermanentRuleWriter: writeMCPPermanentRules,
-			GrantPersister:      newMCPGrantPersister(session),
-			AssetNameLookup:     lookupMCPAssetName,
-			OnResolveAudit:      newMCPResolveAuditor(session),
-		})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v (set %s)\n", err, mcpApprovalSecretEnv)
-			return 1
-		}
-		controlSrv = mcp.NewControlServer(approver)
-		if err := controlSrv.Start(strings.TrimSpace(*controlSocket)); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			return 1
-		}
-		defer controlSrv.Stop()
-		_, _ = fmt.Fprintf(stderr, "OPSKAT_MCP_CONTROL_ADDR=%s\n", controlSrv.Addr())
-
-		checker = permission.NewCommandPolicyChecker(approver.ConfirmFunc)
-		checker.SetGrantRequestFunc(approver.GrantRequestFunc)
-		localWriteGate = tool.NewLocalToolGate(func(callCtx context.Context, req tool.LocalToolApprovalRequest) permission.ApprovalResponse {
-			return approver.ConfirmLocalWrite(callCtx, mcp.LocalWritePrompt{
-				ToolName:        req.ToolName,
-				Command:         req.Command,
-				Detail:          req.Detail,
-				Paths:           req.SubCommands,
-				DefaultPatterns: req.DefaultPatterns,
-			})
-		})
-	} else {
-		checker = newDesktopMCPChecker(session)
-		localWriteGate = tool.NewLocalToolGate(newDesktopMCPLocalConfirmFunc(session))
-	}
-
+	approver := mcpApprover{sessionID: session}
+	checker := approver.checker()
+	localWriteGate := approver.localToolGate()
 	docGate := tool.NewDocGate()
 	tools := wrapMCPTools(mcp.FilterTools(tool.Tools(), toolset), normalizedLocalDirs)
 	if toolset == mcp.ToolsetFull {
@@ -173,7 +101,6 @@ func cmdMCP(ctx context.Context, args []string) int {
 	srv := mcp.NewServer(mcp.ServerConfig{
 		ServerVersion: configs.Version,
 		Tools:         tools,
-		Approver:      approver,
 		AuditWriter:   opsctlAuditWriter,
 		SessionID:     session,
 		PrepareCtx: func(callCtx context.Context) context.Context {
@@ -185,13 +112,7 @@ func cmdMCP(ctx context.Context, args []string) int {
 			} else {
 				callCtx = helper.WithLocalReadGate(callCtx, newMCPLocalReadGate())
 			}
-			if approver != nil {
-				callCtx = credential_resolver.WithMFA(callCtx, approver.NewMFACaller)
-				callCtx = credential_resolver.WithConnectionPathMFA(callCtx, approver.NewMFACaller)
-			} else {
-				callCtx = withDesktopOnlyMFA(withDesktopOnlyConnectionPathMFA(callCtx))
-			}
-			return callCtx
+			return withDesktopOnlyMFA(withDesktopOnlyConnectionPathMFA(callCtx))
 		},
 		OnMutate: func(toolName string) {
 			if refreshesDesktopUI(toolName) {
@@ -203,7 +124,7 @@ func cmdMCP(ctx context.Context, args []string) int {
 	serveCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 
-	if err := srv.Run(serveCtx, transport); err != nil && !errors.Is(err, context.Canceled) {
+	if err := srv.Run(serveCtx, mcpStdio()); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return 1
 	}
@@ -216,29 +137,18 @@ func printMCPUsage() {
 
 Run a stdio MCP (Model Context Protocol) server exposing OpsKat tools.
 
+Operations that need a human decision are asked in the MCP client's own prompt when
+the client supports it (form elicitation: Claude Code, Codex, pi, ...), otherwise in
+the running OpsKat desktop app. With neither available they are denied. SSH MFA is
+always answered in the desktop app.
+
 Flags:
-  --approval-mode <desktop|external>
-        How NeedConfirm operations are approved (default: desktop).
-        desktop  - Delegate to the running OpsKat desktop approval dialog.
-        external - Pause and return an opaque PauseRef (needs_approval / needs_mfa)
-                   on the MCP data plane; external hosts fetch details and resolve
-                   decisions over --approval-control-socket (get_pending / list_pending /
-                   resolve; requires OPSKAT_MCP_APPROVAL_SECRET >= 16 chars).
-  --approval-control-socket <path>
-        Out-of-band local IPC socket path for human approval resolution
-        (required in external mode; never exposed on the MCP data plane).
-  --allow-permanent
-        Permit external approvals to persist permanent asset allow rules
-        (default: false).
   --toolset <core|full>
         Which tools to expose via tools/list (default: core).
-        core - list_assets, get_asset, help, exec, batch_exec, cp,
-               request_permission (+ get_task in external mode).
+        core - list_assets, get_asset, help, exec, batch_exec, cp, request_permission.
         full - All core tools plus list_groups, get_group, list_credentials,
                get_credential, put_asset, put_group, delete_asset,
                delete_group, get_asset_secret, list_audit (session-scoped).
-  --approval-ttl <duration>
-        Expiration timeout for pending external approvals (default: 30m, max: 2h).
   --session <id>
         Explicit grant session ID (default: isolated per-process UUID).
   --allow-local-dir <dir>
@@ -701,217 +611,6 @@ func (mcpLocalReadGate) CheckLocalRead(ctx context.Context, assetID int64, asset
 		return fmt.Errorf("%s", mcpLocalReadDeniedMsg)
 	}
 	return err
-}
-
-// lookupMCPAssetName names the asset in an external MFA challenge view; an asset that
-// can no longer be read is shown without a name rather than failing the challenge.
-func lookupMCPAssetName(ctx context.Context, assetID int64) string {
-	asset, err := asset_svc.Asset().Get(ctx, assetID)
-	if err != nil {
-		logger.Ctx(ctx).Warn("resolve asset name for mcp MFA challenge", zap.Int64("assetID", assetID), zap.Error(err))
-		return ""
-	}
-	return asset.Name
-}
-
-func writeMCPPermanentRules(ctx context.Context, items []permission.ApprovalItem, edited []permission.ApprovalItem) error {
-	if len(items) == 0 {
-		return errors.New("no approval items to persist")
-	}
-	svc := policy_rule_svc.PolicyRule()
-	if svc == nil {
-		return errors.New("policy rule service unavailable")
-	}
-
-	targets := make([]policy_rule_svc.Target, 0, len(items))
-	for i, item := range items {
-		if item.AssetID <= 0 {
-			return errors.New("permanent allow rule requires a target asset")
-		}
-		asset, err := svc.FindAsset(ctx, item.AssetID)
-		if err != nil {
-			return err
-		}
-		face := item.CheckType
-		if face == "" {
-			face = item.Type
-		}
-		canonical := asset.Type
-		if item.Type == permission.GrantToolCp || face == permission.GrantToolCpRead || face == permission.GrantToolCpWrite {
-			if face != permission.GrantToolCpRead && face != permission.GrantToolCpWrite {
-				return fmt.Errorf("cannot write permanent cp rule for asset %q without transfer direction (cp:read or cp:write)", asset.Name)
-			}
-			canonical = face
-		}
-		var patterns []string
-		if i < len(edited) && strings.TrimSpace(edited[i].Command) != "" {
-			if item.Action != "" {
-				patterns = []string{strings.TrimSpace(edited[i].Command)}
-			} else {
-				for _, line := range strings.Split(edited[i].Command, "\n") {
-					line = strings.TrimSpace(line)
-					if line == "" {
-						continue
-					}
-					patterns = append(patterns, permission.NormalizeGrantPatternsFor(ctx, item.AssetID, face, line, permission.GrantOriginUser)...)
-				}
-			}
-		} else {
-			patterns = permission.ApprovalRuleSubjects(ctx, face, item)
-		}
-		if len(patterns) == 0 {
-			return fmt.Errorf("no rule subject available for asset %q", asset.Name)
-		}
-		targets = append(targets, policy_rule_svc.Target{
-			Asset:     asset,
-			Canonical: canonical,
-			Patterns:  patterns,
-		})
-	}
-	return svc.AppendRules(ctx, permission.RuleAllow, targets)
-}
-
-// newMCPGrantPersister persists an approved request_permission the same way the desktop
-// AI grant dialog does (internal/app/ai makeGrantRequestFunc): each item through
-// permission.SaveGrantPatternsForApproval, system-derived subjects as GrantOriginSystem
-// and human edits as GrantOriginUser. Edits were already held to the items' syntax by
-// permission.ParseApprovalResponse in ExternalApprover.Resolve.
-func newMCPGrantPersister(sessionID string) mcp.GrantPersister {
-	return func(ctx context.Context, items []permission.ApprovalItem, edited []permission.ApprovalItem) ([]string, error) {
-		persist, origin := items, permission.GrantOriginSystem
-		if len(edited) > 0 {
-			persist, origin = edited, permission.GrantOriginUser
-		}
-		final := make([]string, 0, len(persist))
-		for _, item := range persist {
-			cmd := strings.TrimSpace(item.Command)
-			if cmd == "" {
-				continue
-			}
-			final = append(final, cmd)
-			permission.SaveGrantPatternsForApproval(ctx, sessionID, item.AssetID, item.AssetName, item.Type, cmd, origin)
-		}
-		return final, nil
-	}
-}
-
-func newMCPResolveAuditor(sessionID string) func(ctx context.Context, ev mcp.ResolveAuditEvent) {
-	return func(ctx context.Context, ev mcp.ResolveAuditEvent) {
-		if opsctlAuditWriter == nil {
-			return
-		}
-		auditCtx := aictx.WithAuditSource(context.Background(), mcp.AuditSource)
-		auditCtx = aictx.WithSessionID(auditCtx, sessionID)
-
-		argsMap := map[string]any{
-			"approval_id":  ev.ApprovalID,
-			"task_id":      ev.TaskID,
-			"kind":         ev.Kind,
-			"decision":     ev.Decision,
-			"edited_count": ev.EditedCount,
-		}
-		argsJSON, _ := json.Marshal(argsMap)
-
-		var errVal error
-		if !ev.Success && ev.Error != "" {
-			errVal = errors.New(ev.Error)
-		}
-		var dec *aictx.CheckResult
-		switch ev.Decision {
-		case mcp.DecisionDeny:
-			dec = &aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny}
-		case mcp.DecisionAllow, mcp.DecisionAllowSession, mcp.DecisionAllowPermanent:
-			if ev.Success {
-				dec = &aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow}
-			} else {
-				dec = &aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny}
-			}
-		}
-		opsctlAuditWriter.WriteToolCall(auditCtx, audit.ToolCallInfo{
-			ToolName: "approval_resolve",
-			ArgsJSON: string(argsJSON),
-			Command:  fmt.Sprintf("%s %s (%s)", ev.Decision, ev.ApprovalID, ev.Kind),
-			Result:   ev.Decision,
-			Error:    errVal,
-			Decision: dec,
-		})
-	}
-}
-
-// newDesktopMCPChecker routes every NeedConfirm decision of an MCP session to the
-// running desktop app's approval dialog. The desktop persists session grants itself
-// (keyed by the request's SessionID), so a desktop allow maps to a plain "allow" here.
-// An unreachable desktop, an IPC error or a denial all fail closed.
-func newDesktopMCPChecker(sessionID string) *permission.CommandPolicyChecker {
-	checker := permission.NewCommandPolicyChecker(func(ctx context.Context, kind string, items []permission.ApprovalItem) permission.ApprovalResponse {
-		req := approval.ApprovalRequest{Kind: kind, SessionID: sessionID}
-		if kind == permission.ApprovalKindBatch {
-			req.Type = "batch"
-			for _, it := range items {
-				req.BatchItems = append(req.BatchItems, approval.BatchItem{
-					Type: it.Type, AssetID: it.AssetID, AssetName: it.AssetName, Command: it.Command, Detail: it.Detail,
-					Action: it.Action, Resource: it.Resource, Resources: it.Resources, RememberPattern: it.RememberPattern,
-					Review: it.Review,
-				})
-			}
-		} else {
-			it := items[0] // non-batch kinds always carry exactly one item (CommandPolicyChecker)
-			req.Type, req.AssetID, req.AssetName, req.GroupID, req.GroupName = it.Type, it.AssetID, it.AssetName, it.GroupID, it.GroupName
-			req.Command, req.Detail, req.Review = it.Command, it.Detail, it.Review
-			req.Action, req.Resource, req.Resources, req.RememberPattern = it.Action, it.Resource, it.Resources, it.RememberPattern
-		}
-		return desktopMCPDecision(ctx, req)
-	})
-	checker.SetGrantRequestFunc(func(ctx context.Context, items []permission.ApprovalItem, reason string) (bool, []string) {
-		req := approval.ApprovalRequest{Type: "grant", SessionID: sessionID, Description: reason}
-		for _, it := range items {
-			req.GrantItems = append(req.GrantItems, approval.GrantItem{
-				Type: it.Type, AssetID: it.AssetID, AssetName: it.AssetName,
-				GroupID: it.GroupID, GroupName: it.GroupName, Command: it.Command, Detail: it.Detail,
-			})
-		}
-		resp, err := requestDesktopContext(ctx, req)
-		if err != nil || !resp.Approved {
-			logDesktopMCPRefusal(ctx, req, err)
-			return false, nil
-		}
-		final := resp.EditedItems
-		if len(final) == 0 {
-			final = req.GrantItems
-		}
-		patterns := make([]string, 0, len(final))
-		for _, it := range final {
-			patterns = append(patterns, it.Command)
-		}
-		return true, patterns
-	})
-	return checker
-}
-
-func newDesktopMCPLocalConfirmFunc(sessionID string) tool.LocalToolConfirmFunc {
-	return func(ctx context.Context, req tool.LocalToolApprovalRequest) permission.ApprovalResponse {
-		return desktopMCPDecision(ctx, approval.ApprovalRequest{
-			Type: req.ToolName, Kind: permission.ApprovalKindOnce, Command: req.Command, Detail: req.Detail, SessionID: sessionID,
-		})
-	}
-}
-
-// desktopMCPDecision sends one approval request to the desktop and maps the answer onto
-// the checker's decision; anything but an explicit approval is a denial.
-func desktopMCPDecision(ctx context.Context, req approval.ApprovalRequest) permission.ApprovalResponse {
-	resp, err := requestDesktopContext(ctx, req)
-	if err != nil || !resp.Approved {
-		logDesktopMCPRefusal(ctx, req, err)
-		return permission.ApprovalResponse{Decision: "deny"}
-	}
-	return permission.ApprovalResponse{Decision: "allow"}
-}
-
-func logDesktopMCPRefusal(ctx context.Context, req approval.ApprovalRequest, err error) {
-	if err != nil {
-		logger.Ctx(ctx).Warn("mcp desktop approval unavailable; denying",
-			zap.String("approvalType", req.Type), zap.String("sessionID", req.SessionID), zap.Error(err))
-	}
 }
 
 // mcpListAuditTool is list_audit: an ordinary agent tool (so it runs through the same

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/cago-frame/agents/agent"
 	"github.com/cago-frame/cago/pkg/logger"
@@ -20,9 +22,6 @@ import (
 	"github.com/opskat/opskat/internal/ai/runner"
 	aitool "github.com/opskat/opskat/internal/ai/tool"
 )
-
-// GetTaskToolName polls or waits for a backgrounded task after out-of-band approval.
-const GetTaskToolName = "get_task"
 
 // AuditSource is the audit_logs.source value of every tool call made through opsctl mcp.
 const AuditSource = "mcp"
@@ -53,30 +52,34 @@ type behaviorTool interface {
 type ServerConfig struct {
 	ServerVersion string
 	Tools         []agent.Tool
-	Approver      *ExternalApprover // non-nil in external approval mode
 	AuditWriter   audit.AuditWriter
 	SessionID     string
 	PrepareCtx    func(ctx context.Context) context.Context
 	OnMutate      func(toolName string)
+	// AnswerTimeout bounds how long a call waits for the human to answer a question
+	// asked through the client (Ask); zero means DefaultAnswerTimeout.
+	AnswerTimeout time.Duration
 }
 
 // Server exposes OpsKat tools over MCP. The protocol (handshake, tools/list,
-// tools/call, cancellation, framing) is handled by the official go-sdk; this type
-// only adapts OpsKat's agent tools onto it. Each call runs through the same cago
-// ToolDispatcher + runner.AuditMiddleware chain as the built-in AI, so both entry
-// points share one audit implementation.
+// tools/call, cancellation, framing, multi round-trip requests) is handled by the
+// official go-sdk; this type only adapts OpsKat's agent tools onto it. Each call runs
+// through the same cago ToolDispatcher + runner.AuditMiddleware chain as the built-in
+// AI, so both entry points share one audit implementation.
 type Server struct {
-	sdk        *mcpsdk.Server
-	dispatcher *agent.ToolDispatcher
-	approver   *ExternalApprover
-	sessionID  string
-	prepareCtx func(ctx context.Context) context.Context
-	onMutate   func(toolName string)
-	serialSem  chan struct{}
+	sdk           *mcpsdk.Server
+	dispatcher    *agent.ToolDispatcher
+	sessionID     string
+	prepareCtx    func(ctx context.Context) context.Context
+	onMutate      func(toolName string)
+	serialSem     chan struct{}
+	answerTimeout time.Duration
 
-	// serveCtx parents background tasks that must outlive the tools/call that
-	// started them (external approval); set once in Run before any request is served.
+	// serveCtx parents calls that stay paused between rounds of a multi round-trip
+	// request; set once in Run before any request is served.
 	serveCtx context.Context
+	mu       sync.Mutex
+	paused   map[string]*pausedCall
 }
 
 // NewServer constructs an MCP server from the given configuration.
@@ -92,11 +95,15 @@ func NewServer(cfg ServerConfig) *Server {
 				{Matcher: ".*", Fn: runner.AuditMiddleware(cfg.AuditWriter)},
 			},
 		},
-		approver:   cfg.Approver,
-		sessionID:  cfg.SessionID,
-		prepareCtx: cfg.PrepareCtx,
-		onMutate:   cfg.OnMutate,
-		serialSem:  make(chan struct{}, 1),
+		sessionID:     cfg.SessionID,
+		prepareCtx:    cfg.PrepareCtx,
+		onMutate:      cfg.OnMutate,
+		serialSem:     make(chan struct{}, 1),
+		answerTimeout: cfg.AnswerTimeout,
+		paused:        map[string]*pausedCall{},
+	}
+	if s.answerTimeout <= 0 {
+		s.answerTimeout = DefaultAnswerTimeout
 	}
 	for _, t := range cfg.Tools {
 		s.sdk.AddTool(&mcpsdk.Tool{
@@ -106,9 +113,6 @@ func NewServer(cfg ServerConfig) *Server {
 			Annotations: annotationsFor(t),
 		}, s.toolHandler(t))
 	}
-	if s.approver != nil {
-		s.registerExternalTaskTool()
-	}
 	return s
 }
 
@@ -117,11 +121,8 @@ func (s *Server) Run(ctx context.Context, t mcpsdk.Transport) error {
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	s.serveCtx = serveCtx
-	if s.approver != nil {
-		defer s.approver.Close()
-	}
 
-	logger.Ctx(ctx).Info("opsctl mcp server started", zap.Bool("externalApproval", s.approver != nil))
+	logger.Ctx(ctx).Info("opsctl mcp server started")
 	err := s.sdk.Run(serveCtx, t)
 	switch {
 	case err == nil, errors.Is(err, io.EOF):
@@ -169,59 +170,35 @@ func (s *Server) toolHandler(t agent.Tool) mcpsdk.ToolHandler {
 			args = map[string]any{}
 		}
 
-		execFn := func(callCtx context.Context) (string, bool) {
-			if !isSerial {
-				return s.dispatch(callCtx, name, args)
+		run := func(ctx context.Context) *mcpsdk.CallToolResult {
+			if isSerial {
+				return textResult(s.dispatchSerial(ctx, name, args))
 			}
-			return s.dispatchSerial(callCtx, name, args)
+			return textResult(s.dispatch(ctx, name, args))
 		}
-		if s.approver != nil {
-			// Parent is serveCtx so a parked background task survives after tools/call returns
-			// its PauseRef; reqCtx (canceled by the client's cancellation notification) still stops it before it parks.
-			return s.approver.Run(s.serveCtx, reqCtx, name, execFn), nil
+		if req.Params.RequestState == "" && !clientCanPrompt(req) {
+			return run(reqCtx), nil
 		}
-		out, isErr := execFn(reqCtx)
-		return textResult(out, isErr), nil
+		binding, err := callBinding(name, args)
+		if err != nil {
+			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "invalid tool arguments: " + err.Error()}
+		}
+		if req.Params.RequestState != "" {
+			return s.resume(reqCtx, req.Params, binding), nil
+		}
+		return s.startPrompting(reqCtx, binding, run), nil
 	}
 }
 
-// dispatchSerial runs a Serial tool exclusively. In external mode the lock is released
-// while the call is parked waiting for a human, so other requests can still return their
-// PauseRef, and re-acquired before execution resumes.
+// dispatchSerial runs a Serial tool exclusively. A call paused on a question keeps the
+// lock: the human is deciding about this very operation.
 func (s *Server) dispatchSerial(ctx context.Context, name string, args map[string]any) (string, bool) {
 	select {
 	case s.serialSem <- struct{}{}:
 	case <-ctx.Done():
 		return "request canceled", true
 	}
-	held := true
-	defer func() {
-		if held {
-			<-s.serialSem
-		}
-	}()
-	if s.approver != nil {
-		ctx = withPauseHooks(ctx, pauseHooks{
-			onPark: func() {
-				if held {
-					held = false
-					<-s.serialSem
-				}
-			},
-			onResume: func(resumeCtx context.Context) bool {
-				if held {
-					return true
-				}
-				select {
-				case s.serialSem <- struct{}{}:
-					held = true
-					return true
-				case <-resumeCtx.Done():
-					return false
-				}
-			},
-		})
-	}
+	defer func() { <-s.serialSem }()
 	return s.dispatch(ctx, name, args)
 }
 
@@ -276,72 +253,10 @@ func blockText(block *agent.ToolResultBlock) string {
 	return b.String()
 }
 
-// registerExternalTaskTool exposes only read-only get_task on the MCP data plane.
-// Approval resolution intentionally lives on the out-of-band ControlServer socket,
-// never as a model-callable MCP tool.
-func (s *Server) registerExternalTaskTool() {
-	s.sdk.AddTool(&mcpsdk.Tool{
-		Name: GetTaskToolName,
-		Description: "Wait for or retrieve the result of a previously approved OpsKat operation that is still running in the background. " +
-			"Pass the task_id returned after approval.",
-		InputSchema: agent.Schema{
-			Type: "object",
-			Properties: map[string]*agent.Property{
-				"task_id": {Type: "string", Description: "Task ID returned when an approved operation continued running in the background."},
-				"wait_ms": {Type: "number", Description: "Optional maximum time in milliseconds to wait for completion (default 15000, max 60000)."},
-			},
-			Required: []string{"task_id"},
-		},
-		Annotations: &mcpsdk.ToolAnnotations{
-			ReadOnlyHint:    true,
-			DestructiveHint: new(false),
-			IdempotentHint:  true,
-			OpenWorldHint:   new(false),
-		},
-	}, func(ctx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
-		var args map[string]any
-		if raw := req.Params.Arguments; len(raw) > 0 {
-			if err := json.Unmarshal(raw, &args); err != nil {
-				return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "invalid tool arguments: " + err.Error()}
-			}
-		}
-		res, err := s.approver.GetTask(ctx, aictx.ArgString(args, "task_id"), aictx.ArgInt(args, "wait_ms"))
-		if err != nil {
-			return textResult(err.Error(), true), nil
-		}
-		return taskResultToMCP(res), nil
-	})
-}
-
 func textResult(text string, isError bool) *mcpsdk.CallToolResult {
 	return &mcpsdk.CallToolResult{
 		Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: text}},
 		IsError: isError,
-	}
-}
-
-func structuredResult(text string, structured any, isError bool) *mcpsdk.CallToolResult {
-	res := textResult(text, isError)
-	res.StructuredContent = structured
-	return res
-}
-
-func taskResultToMCP(res *TaskResultPayload) *mcpsdk.CallToolResult {
-	safe := toDataPlaneTaskResult(res)
-	switch safe.Status {
-	case StatusCompleted:
-		return structuredResult(safe.Output, safe, safe.IsError)
-	case StatusNeedsApproval, StatusNeedsMFA:
-		if safe.PauseRef != nil {
-			summary := fmt.Sprintf("Task %s paused (%s, approval_id=%s). Wait for the user to decide before continuing.",
-				safe.TaskID, safe.Status, safe.PauseRef.ApprovalID)
-			return structuredResult(summary, safe, false)
-		}
-		return structuredResult(fmt.Sprintf("Task %s paused (%s).", safe.TaskID, safe.Status), safe, false)
-	default:
-		summary := fmt.Sprintf("Task %s is still running in the background. Call %s(task_id=%q) to wait for its result.",
-			safe.TaskID, GetTaskToolName, safe.TaskID)
-		return structuredResult(summary, safe, false)
 	}
 }
 

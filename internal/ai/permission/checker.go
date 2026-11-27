@@ -491,9 +491,6 @@ func buildApprovalItem(ctx context.Context, assetID int64, assetName, assetType,
 		AssetName: assetName,
 		Command:   command,
 	}
-	if assetType == GrantToolCpRead || assetType == GrantToolCpWrite {
-		item.CheckType = assetType
-	}
 	if len(detail) > 0 {
 		item.Detail = detail[0]
 	}

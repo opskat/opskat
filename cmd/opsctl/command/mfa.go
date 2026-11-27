@@ -63,8 +63,8 @@ func withConnectionPathMFA(ctx context.Context) context.Context {
 	return credential_resolver.WithConnectionPathMFA(ctx, src.newCaller)
 }
 
-// withDesktopOnlyMFA / withDesktopOnlyConnectionPathMFA wire MFA for stdio MCP desktop
-// mode where os.Stdin carries the JSON-RPC stream and must never be read for terminal
+// withDesktopOnlyMFA / withDesktopOnlyConnectionPathMFA wire MFA for opsctl mcp (stdio), answered
+// only in the desktop app: os.Stdin carries the JSON-RPC stream and must never be read for terminal
 // MFA prompts even if the process is started under a PTY.
 func withDesktopOnlyMFA(ctx context.Context) context.Context {
 	ctx, src := withMFASources(ctx)

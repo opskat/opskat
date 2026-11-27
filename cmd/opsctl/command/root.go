@@ -229,7 +229,7 @@ Commands:
   batch     Execute multiple commands in parallel across assets
   policy    Manage permanent permission rules (show / allow / deny / rm, group, attach / detach)
   ext       Manage extensions (list, search, install, update, dev)
-  mcp       Run a stdio MCP server exposing OpsKat tools (--approval-mode desktop|external)
+  mcp       Run a stdio MCP server exposing OpsKat tools to MCP clients (Claude Code, Codex, ...)
   version   Print version information
 
 Note:
