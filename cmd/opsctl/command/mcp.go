@@ -671,7 +671,7 @@ func (g *guardedCpTool) Call(ctx context.Context, input map[string]any) (*agent.
 			if errors.Is(err, errMCPLocalReadDenied) {
 				aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny})
 				return &agent.ToolResultBlock{
-					Content: []agent.ContentBlock{agent.TextBlock{Text: "USER DENIED: The user has denied reading the local file for upload. Stop the current task immediately."}},
+					Content: []agent.ContentBlock{agent.TextBlock{Text: mcpLocalReadDeniedMsg}},
 					IsError: true,
 				}, nil
 			}
@@ -682,7 +682,9 @@ func (g *guardedCpTool) Call(ctx context.Context, input map[string]any) (*agent.
 	return g.inner.Call(ctx, input)
 }
 
-var errMCPLocalReadDenied = errors.New("USER DENIED: The user has denied reading the local file for upload. Stop the current task immediately.")
+const mcpLocalReadDeniedMsg = "USER DENIED: The user has denied reading the local file for upload. Stop the current task immediately."
+
+var errMCPLocalReadDenied = errors.New("local file read denied by user")
 
 func confirmMCPLocalRead(ctx context.Context, assetID int64, assetName, localPath, detail string) error {
 	checker, err := permission.RequireChecker(ctx)
@@ -712,7 +714,11 @@ type mcpLocalReadGate struct{}
 func newMCPLocalReadGate() helper.LocalReadGate { return mcpLocalReadGate{} }
 
 func (mcpLocalReadGate) CheckLocalRead(ctx context.Context, assetID int64, assetName, localPath, detail string) error {
-	return confirmMCPLocalRead(ctx, assetID, assetName, localPath, detail)
+	err := confirmMCPLocalRead(ctx, assetID, assetName, localPath, detail)
+	if errors.Is(err, errMCPLocalReadDenied) {
+		return fmt.Errorf("%s", mcpLocalReadDeniedMsg)
+	}
+	return err
 }
 
 func normalizeAllowedLocalDirs(rawDirs []string) ([]string, error) {
