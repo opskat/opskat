@@ -102,24 +102,18 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v8
+      - name: Build date
+        id: date
+        run: echo "value=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/publish-release
         with:
-          path: artifacts
-          pattern: nightly-*
-          merge-multiple: true
-
-      - name: Generate checksums
-        run: cd artifacts && sha256sum * > SHA256SUMS.txt
-
-      - name: Update nightly release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release delete nightly -y --cleanup-tag 2>/dev/null || true
-          gh release create nightly --prerelease \
-            --target ${{ needs.prepare.outputs.sha }} \
-            --title "${{ needs.prepare.outputs.version }}" \
-            --notes "Nightly build from \`nightly\` branch
-          Commit: ${{ needs.prepare.outputs.sha }}
-          Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            artifacts/*
+          artifact-pattern: nightly-*
+          tag: nightly
+          title: ${{ needs.prepare.outputs.version }}
+          prerelease: "true"
+          target: ${{ needs.prepare.outputs.sha }}
+          notes: |-
+            Nightly build from `nightly` branch
+            Commit: ${{ needs.prepare.outputs.sha }}
+            Date: ${{ steps.date.outputs.value }}
