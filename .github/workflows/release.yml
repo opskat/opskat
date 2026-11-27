@@ -23,36 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/download-artifact@v8
+      - uses: ./.github/actions/publish-release
         with:
-          path: artifacts
-          pattern: release-*
-          merge-multiple: true
-
-      - name: Generate checksums
-        run: cd artifacts && sha256sum * > SHA256SUMS.txt
-
-      - name: Determine prerelease
-        id: prerelease
-        run: |
-          if [[ "${{ github.ref_name }}" == *-beta* ]] || [[ "${{ github.ref_name }}" == *-rc* ]]; then
-            echo "flag=--prerelease" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release delete ${{ github.ref_name }} -y 2>/dev/null || true
-          gh release create ${{ github.ref_name }} \
-            --title "${{ github.ref_name }}" \
-            --generate-notes \
-            ${{ steps.prerelease.outputs.flag }} \
-            artifacts/*
-
-      - name: Upload release info for mirror fallback
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh api repos/opskat/opskat/releases/tags/${{ github.ref_name }} > release-info.json
-          gh release upload ${{ github.ref_name }} release-info.json --clobber
+          artifact-pattern: release-*
+          tag: ${{ github.ref_name }}
+          title: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') }}

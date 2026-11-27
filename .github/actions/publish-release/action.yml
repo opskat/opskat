@@ -1,0 +1,82 @@
+name: Publish GitHub Release
+description: >-
+  Download build artifacts, generate SHA256SUMS.txt, (re)create the GitHub
+  release with them, then upload release-info.json for the client's mirror
+  fallback (internal/service/update_svc). Requires `contents: write` and a
+  prior actions/checkout.
+
+inputs:
+  artifact-pattern:
+    description: download-artifact pattern of the build artifacts to publish
+    required: true
+  tag:
+    description: release tag
+    required: true
+  title:
+    description: release title (the nightly client reads it as the version)
+    required: true
+  notes:
+    description: release notes; empty means --generate-notes
+    default: ""
+  prerelease:
+    description: "'true' marks the release as a prerelease"
+    default: "false"
+  target:
+    description: >-
+      commit to point the tag at; when set, the old tag is deleted with the old
+      release so the tag moves. Leave empty when the tag already exists (tag push).
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v8
+      with:
+        path: ${{ runner.temp }}/release-assets
+        pattern: ${{ inputs.artifact-pattern }}
+        merge-multiple: true
+
+    - name: Generate checksums
+      shell: bash
+      working-directory: ${{ runner.temp }}/release-assets
+      run: sha256sum * > SHA256SUMS.txt
+
+    - name: Create GitHub release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        TAG: ${{ inputs.tag }}
+        TITLE: ${{ inputs.title }}
+        NOTES: ${{ inputs.notes }}
+        PRERELEASE: ${{ inputs.prerelease }}
+        TARGET: ${{ inputs.target }}
+        ASSETS: ${{ runner.temp }}/release-assets
+      run: |
+        delete_args=(-y)
+        create_args=(--title "$TITLE")
+        if [ -n "$TARGET" ]; then
+          delete_args+=(--cleanup-tag)
+          create_args+=(--target "$TARGET")
+        fi
+        if [ -n "$NOTES" ]; then
+          create_args+=(--notes "$NOTES")
+        else
+          create_args+=(--generate-notes)
+        fi
+        if [ "$PRERELEASE" = "true" ]; then
+          create_args+=(--prerelease)
+        fi
+        gh release delete "$TAG" "${delete_args[@]}" 2>/dev/null || true
+        gh release create "$TAG" "${create_args[@]}" "$ASSETS"/*
+
+    - name: Upload release info for mirror fallback
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+        TAG: ${{ inputs.tag }}
+        INFO: ${{ runner.temp }}/release-info.json
+      run: |
+        gh api "repos/$GH_REPO/releases/tags/$TAG" > "$INFO"
+        gh release upload "$TAG" "$INFO" --clobber
