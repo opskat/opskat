@@ -13,8 +13,6 @@ import {
   resolveTerminalFontFamily,
 } from "@/data/terminalFonts";
 import {
-  isTerminalSelectionAction,
-  mapLegacyCopyBehavior,
   migrateLegacyCopyBehaviorStorage,
   TERMINAL_THEME_STORAGE_KEY,
   type TerminalSelectionAction,
@@ -199,18 +197,7 @@ export const useTerminalThemeStore = create<TerminalThemeState>()(
       // 短路条件失效,字体链就锁死在升级前的旧值上。
       partialize: ({ fontFamily: _omit, ...rest }) => rest,
       merge: (persistedState, currentState) => {
-        const raw = ((persistedState as Record<string, unknown> | undefined) ?? {}) as Record<string, unknown>;
-        const { copyBehavior: legacyCopyBehavior, ...cleanPersisted } = raw;
-        const migrated = mapLegacyCopyBehavior(legacyCopyBehavior);
-        const merged = {
-          ...currentState,
-          ...(cleanPersisted as Partial<TerminalThemeState>),
-        };
-        if (migrated && !isTerminalSelectionAction(cleanPersisted.selectionAction)) {
-          merged.selectionAction = migrated.selectionAction;
-        } else if (!isTerminalSelectionAction(merged.selectionAction)) {
-          merged.selectionAction = "popover";
-        }
+        const merged = { ...currentState, ...((persistedState as Partial<TerminalThemeState>) ?? {}) };
         merged.fontFamily = deriveFontFamily(merged.fontPresetId, merged.customFontFamily);
         return merged;
       },

@@ -4,7 +4,7 @@ export const TERMINAL_SELECTION_ACTIONS: readonly TerminalSelectionAction[] = ["
 
 const VALID_SELECTION_ACTIONS = new Set<string>(TERMINAL_SELECTION_ACTIONS);
 
-export function isTerminalSelectionAction(value: unknown): value is TerminalSelectionAction {
+function isTerminalSelectionAction(value: unknown): value is TerminalSelectionAction {
   return typeof value === "string" && VALID_SELECTION_ACTIONS.has(value);
 }
 
@@ -115,7 +115,7 @@ interface LegacyCopyBehaviorMigration {
   rightClickAction: TerminalMouseAction;
 }
 
-export function mapLegacyCopyBehavior(value: unknown): LegacyCopyBehaviorMigration | null {
+function mapLegacyCopyBehavior(value: unknown): LegacyCopyBehaviorMigration | null {
   switch (value) {
     case "popover-menu":
       return { selectionAction: "popover", rightClickAction: "terminal.contextMenu" };
@@ -157,7 +157,8 @@ export function migrateLegacyCopyBehaviorStorage(): void {
     }
 
     localStorage.setItem(TERMINAL_THEME_STORAGE_KEY, JSON.stringify(parsed));
-  } catch {
-    // Malformed localStorage JSON is ignored; stores fall back to defaults.
+  } catch (err) {
+    // 存储内容损坏时保持原样：terminal_theme 交给 persist 自己报错并回到默认值，鼠标快捷键按默认值加载。
+    console.error("migrate legacy terminal copyBehavior failed", err);
   }
 }
