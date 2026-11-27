@@ -20,6 +20,7 @@ import {
   Link2,
   Trash2,
   TerminalSquare,
+  RotateCcw,
   ExternalLink,
   Settings2,
 } from "lucide-react";
@@ -69,7 +70,9 @@ import { useAssetTypeOptions, matchSelectedTypes } from "@/lib/assetTypes/option
 import { AssetTypeFilterButton } from "@/components/asset/AssetTypeFilterButton";
 import { selectLoadError, useAssetStore } from "@/stores/assetStore";
 import { eventMatchesBinding, formatBinding, useShortcutStore } from "@/stores/shortcutStore";
+import { useTabStore } from "@/stores/tabStore";
 import { useTerminalStore } from "@/stores/terminalStore";
+import { findExistingAssetTabs } from "@/lib/openAsset";
 import { useActiveAssetIds } from "@/hooks/useActiveAssetIds";
 import { MoveAsset, MoveGroup, ReorderAssets, ReorderGroup } from "../../../wailsjs/go/system/System";
 import { asset_entity, group_entity } from "../../../wailsjs/go/models";
@@ -108,6 +111,7 @@ interface AssetTreeProps {
   onEditAsset: (asset: asset_entity.Asset) => void;
   onCopyAsset: (asset: asset_entity.Asset) => void;
   onConnectAsset: (asset: asset_entity.Asset) => void;
+  onReconnectAsset?: (asset: asset_entity.Asset) => void;
   onConnectAssetInNewTab?: (asset: asset_entity.Asset) => void;
   onOpenFileManager?: (asset: asset_entity.Asset) => void;
   onSelectAsset: (asset: asset_entity.Asset) => void;
@@ -314,6 +318,7 @@ export function AssetTree({
   onEditAsset,
   onCopyAsset,
   onConnectAsset,
+  onReconnectAsset,
   onConnectAssetInNewTab,
   onOpenFileManager,
   onSelectAsset,
@@ -1068,6 +1073,7 @@ export function AssetTree({
                 isConnecting={connectingAssetIds.has(contextMenu.asset.ID)}
                 t={t}
                 onConnectAsset={onConnectAsset}
+                onReconnectAsset={onReconnectAsset}
                 onConnectAssetInNewTab={onConnectAssetInNewTab}
                 onOpenFileManager={onOpenFileManager}
                 onOpenInfoTab={onOpenInfoTab}
@@ -1272,6 +1278,7 @@ function AssetContextMenuContent({
   isConnecting,
   t,
   onConnectAsset,
+  onReconnectAsset,
   onConnectAssetInNewTab,
   onOpenFileManager,
   onOpenInfoTab,
@@ -1285,6 +1292,7 @@ function AssetContextMenuContent({
   isConnecting: boolean;
   t: (key: string) => string;
   onConnectAsset: (asset: asset_entity.Asset) => void;
+  onReconnectAsset?: (asset: asset_entity.Asset) => void;
   onConnectAssetInNewTab?: (asset: asset_entity.Asset) => void;
   onOpenFileManager?: (asset: asset_entity.Asset) => void;
   onOpenInfoTab?: (type: "asset" | "group", id: number, name: string, icon?: string) => void;
@@ -1302,7 +1310,7 @@ function AssetContextMenuContent({
   return (
     <>
       {getAssetType(asset.Type)?.canConnect && (
-        <ContextMenuItem onClick={() => run(() => onConnectAsset(asset))} disabled={isConnecting}>
+        <ContextMenuItem onClick={() => run(() => onConnectAsset(asset))}>
           {isConnecting ? (
             <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
           ) : (
@@ -1310,6 +1318,9 @@ function AssetContextMenuContent({
           )}
           {t("asset.connect")}
         </ContextMenuItem>
+      )}
+      {getAssetType(asset.Type)?.canConnect && onReconnectAsset && (
+        <ReconnectAssetMenuItem asset={asset} t={t} onReconnect={() => run(() => onReconnectAsset(asset))} />
       )}
       {getAssetType(asset.Type)?.canConnectInNewTab && onConnectAssetInNewTab && (
         <ContextMenuItem onClick={() => run(() => onConnectAssetInNewTab(asset))} disabled={isConnecting}>
@@ -1749,6 +1760,26 @@ function AssetRowDraggable({ id, assetID, children }: { id: string; assetID: num
     >
       {children}
     </div>
+  );
+}
+
+function ReconnectAssetMenuItem({
+  asset,
+  t,
+  onReconnect,
+}: {
+  asset: asset_entity.Asset;
+  t: (key: string) => string;
+  onReconnect: () => void;
+}) {
+  // 仅在菜单展开时订阅 tabStore，避免为所有资产行引入额外的状态订阅。
+  const hasOpenTab = useTabStore((s) => findExistingAssetTabs(asset, s.tabs).length > 0);
+  if (!hasOpenTab) return null;
+  return (
+    <ContextMenuItem data-testid="asset-context-reconnect" onClick={onReconnect}>
+      <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+      {t("asset.reconnect")}
+    </ContextMenuItem>
   );
 }
 

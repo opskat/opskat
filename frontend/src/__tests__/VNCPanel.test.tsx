@@ -14,6 +14,8 @@ import { DisconnectSSH, OpenSFTPSession } from "../../wailsjs/go/ssh/SSH";
 import { ClipboardSetText } from "../../wailsjs/runtime";
 import { ReadClipboardText } from "../../wailsjs/go/system/System";
 import { VNCPanel } from "@/components/vnc/VNCPanel";
+import { getTabConnectionPhase, reconnectTabIfNeeded } from "@/lib/tabReconnect";
+import type { Tab } from "@/stores/tabStore";
 import { toast } from "sonner";
 
 const { approveServer, FakeRFB } = vi.hoisted(() => {
@@ -517,5 +519,45 @@ describe("VNCPanel", () => {
     FakeRFB.latest!.dispatchEvent(new CustomEvent("clipboard", { detail: { text: "hello" } }));
     await new Promise((r) => setTimeout(r, 20));
     expect(ClipboardSetText).not.toHaveBeenCalled();
+  });
+
+  it("reports waiting_input during server identity verification and reconnects via live handle after failure", async () => {
+    const tab: Tab = {
+      id: "vnc-1-custom",
+      type: "page",
+      label: "test-vnc",
+      meta: { type: "page", pageId: "vnc", assetId: 1 },
+    };
+    const asset = new asset_entity.Asset({ ID: 1, Name: "test-vnc", Type: "vnc" });
+
+    vi.mocked(ConnectVNC).mockClear();
+    vi.mocked(ConnectVNC).mockRejectedValueOnce(new Error("connection refused"));
+    const { unmount } = render(<VNCPanel tabId={tab.id} asset={asset} />);
+
+    await waitFor(() => expect(getTabConnectionPhase(tab)).toBe("failed"));
+    expect(ConnectVNC).toHaveBeenCalledTimes(1);
+
+    // Trigger reconnect via tabReconnect live handle
+    vi.mocked(ConnectVNC).mockResolvedValueOnce({
+      id: "vnc-session-2",
+      username: "vnc-user",
+      password: "secret",
+      fileSshAssetId: 0,
+    } as never);
+    expect(await reconnectTabIfNeeded(tab)).toBe(true);
+    await waitFor(() => expect(FakeRFB.latest).toBeDefined());
+
+    // Simulate RA2 server identity prompt -> waiting_input must NOT be auto-reconnected
+    FakeRFB.latest!.dispatchEvent(
+      new CustomEvent("serververification", { detail: { type: "RSA", publickey: new Uint8Array([1, 2, 3]) } })
+    );
+    await screen.findByTestId("vnc-verify-trust");
+    expect(screen.queryByTestId("vnc-reconnect-connecting")).not.toBeInTheDocument();
+    expect(getTabConnectionPhase(tab)).toBe("waiting_input");
+    expect(await reconnectTabIfNeeded(tab)).toBe(false);
+    expect(ConnectVNC).toHaveBeenCalledTimes(2);
+
+    unmount();
+    expect(getTabConnectionPhase(tab)).toBeNull();
   });
 });

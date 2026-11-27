@@ -36,7 +36,7 @@ import { getAssetType, pageTabPrefix } from "@/lib/assetTypes";
 import { openPageTab, openSettingsTab, useTabStore } from "@/stores/tabStore";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { bootstrapExtensions } from "@/extension/init";
-import { openAssetConnection } from "@/lib/openAsset";
+import { openAssetConnection, reconnectAssetConnection } from "@/lib/openAsset";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useExternalEditStore } from "@/stores/externalEditStore";
 import { useAIStore } from "@/stores/aiStore";
@@ -303,6 +303,10 @@ function App() {
     await openAssetConnection(asset);
   };
 
+  const handleReconnectAsset = async (asset: asset_entity.Asset) => {
+    await reconnectAssetConnection(asset);
+  };
+
   const handleConnectAssetInNewTab = async (asset: asset_entity.Asset) => {
     const def = getAssetType(asset.Type);
     if (!def?.canConnectInNewTab) return;
@@ -422,6 +426,7 @@ function App() {
                           onEditAsset={handleEditAsset}
                           onCopyAsset={handleCopyAsset}
                           onConnectAsset={handleConnectAsset}
+                          onReconnectAsset={handleReconnectAsset}
                           onConnectAssetInNewTab={handleConnectAssetInNewTab}
                           onOpenFileManager={handleOpenFileManager}
                           onSelectAsset={handleSelectAsset}
@@ -460,6 +465,7 @@ function App() {
                       onEditAsset={handleEditAsset}
                       onCopyAsset={handleCopyAsset}
                       onConnectAsset={handleConnectAsset}
+                      onReconnectAsset={handleReconnectAsset}
                       onConnectAssetInNewTab={handleConnectAssetInNewTab}
                       onOpenFileManager={handleOpenFileManager}
                       onSelectAsset={handleSelectAsset}

@@ -525,6 +525,7 @@
     "selectPasswordPlaceholder": "Select a managed password",
     "noManagedPasswords": "No managed passwords yet. Add one in Settings first.",
     "connect": "Connect",
+    "reconnect": "Reconnect",
     "connectInNewTab": "Connect in New Tab",
     "copyRef": "Copy Reference",
     "copyRefCopied": "Asset reference copied",

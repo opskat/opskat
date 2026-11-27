@@ -326,4 +326,24 @@ describe("ConnectionProgress 失败与取消后的操作", () => {
     expect(useTerminalStore.getState().tabData.s1.splitTree).toEqual({ type: "terminal", sessionId: "s1" });
     expect(useTabStore.getState().tabs.map((t) => t.id)).toEqual(["s1"]);
   });
+
+  it("连接中提供一键重新连接按钮，点击后取消当前连接并重新发起", async () => {
+    seedSplitTab({
+      connectionId: "conn-1",
+      assetId: 1,
+      assetName: "Server 1",
+      transport: "ssh",
+      password: "",
+      logs: [{ message: "connecting...", timestamp: Date.now(), type: "info" }],
+      status: "connecting",
+      currentStep: "connect",
+    });
+    const u = userEvent.setup();
+    render(<ConnectionProgress connectionId="conn-1" isTabActive isPaneActive />);
+
+    await u.click(screen.getByTestId("ssh-connecting-retry"));
+
+    expect(CancelSSHConnect).toHaveBeenCalledWith("conn-1");
+    expect(ConnectSSHAsync).toHaveBeenCalledTimes(1);
+  });
 });

@@ -35,6 +35,17 @@ export function RemoteConnectionOverlay({
             {host}:{port}
           </div>
         )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-1 gap-1.5"
+          data-testid={reconnectTestId ? `${reconnectTestId}-connecting` : undefined}
+          onClick={onReconnect}
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          {labels.reconnect}
+        </Button>
       </div>
     );
   }

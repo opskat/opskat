@@ -40,6 +40,7 @@ import { kafka_svc } from "../../wailsjs/go/models";
 import { registerTabCloseHook, type QueryTabMeta } from "./tabStore";
 import { useTabStore } from "./tabStore";
 import { errorMessage } from "@/lib/errorMessage";
+import { registerTabReconnectAdapter } from "@/lib/tabReconnect";
 
 export type KafkaView = "overview" | "brokers" | "topics" | "consumerGroups" | "acls" | "schemas" | "connect";
 export type KafkaMessageStartMode = "newest" | "oldest" | "offset" | "timestamp";
@@ -1572,4 +1573,41 @@ registerTabCloseHook((tab) => {
     delete states[tab.id];
     return { states };
   });
+});
+
+function isKafkaTabLoading(state: KafkaTabState): boolean {
+  return (
+    state.loadingOverview ||
+    state.loadingBrokers ||
+    state.loadingTopics ||
+    state.loadingGroups ||
+    state.loadingACLs ||
+    state.loadingSchemaSubjects ||
+    state.loadingConnectClusters ||
+    state.loadingConnectors
+  );
+}
+
+function hasKafkaLoadedData(state: KafkaTabState): boolean {
+  return Boolean(
+    state.overview ||
+    state.brokers.length > 0 ||
+    state.topics.length > 0 ||
+    state.consumerGroups.length > 0 ||
+    state.acls.length > 0 ||
+    state.schemaSubjects.length > 0 ||
+    state.connectClusters.length > 0
+  );
+}
+
+registerTabReconnectAdapter({
+  match: (tab) => tab.type === "query" && (tab.meta as QueryTabMeta).assetType === "kafka",
+  getPhase: (tab) => {
+    const state = useKafkaStore.getState().states[tab.id];
+    if (!state) return "disconnected";
+    if (isKafkaTabLoading(state)) return "connecting";
+    if (state.error && !hasKafkaLoadedData(state)) return "failed";
+    return "connected";
+  },
+  reconnect: (tab) => useKafkaStore.getState().refreshActiveView(tab.id),
 });

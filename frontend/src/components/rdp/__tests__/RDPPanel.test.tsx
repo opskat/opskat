@@ -18,6 +18,8 @@ import { useActiveAssetIds } from "@/hooks/useActiveAssetIds";
 import { useTabStore } from "@/stores/tabStore";
 import { useTerminalStore } from "@/stores/terminalStore";
 import { useRDPStore } from "@/stores/rdpStore";
+import { getTabConnectionPhase, reconnectTabIfNeeded } from "@/lib/tabReconnect";
+import type { Tab } from "@/stores/tabStore";
 
 vi.mock("../../../../wailsjs/go/rdp/RDP", () => ({
   ConnectRDP: vi.fn(),
@@ -728,5 +730,34 @@ describe("RDPPanel", () => {
 
       expect(putImageData).not.toHaveBeenCalled();
     });
+  });
+
+  it("registers a live tab reconnector across connecting, connected, failed, and unmounted states", async () => {
+    const tab: Tab = {
+      id: "rdp-7",
+      type: "page",
+      label: "win-01",
+      meta: { type: "page", pageId: "rdp", assetId: 7 },
+    };
+    let rejectFirst: (err: Error) => void = () => {};
+    vi.mocked(ConnectRDP).mockReturnValueOnce(new Promise((_, rej) => (rejectFirst = rej)));
+
+    const { unmount } = render(<RDPPanel tabId="rdp-7" asset={asset()} />);
+    await waitFor(() => expect(getTabConnectionPhase(tab)).toBe("connecting"));
+    expect(await reconnectTabIfNeeded(tab)).toBe(false);
+    expect(ConnectRDP).toHaveBeenCalledTimes(1);
+
+    await act(async () => rejectFirst(new Error("dial timeout")));
+    await waitFor(() => expect(getTabConnectionPhase(tab)).toBe("failed"));
+
+    vi.mocked(ConnectRDP).mockResolvedValueOnce("sess-2");
+    await act(async () => {
+      expect(await reconnectTabIfNeeded(tab)).toBe(true);
+    });
+    await waitFor(() => expect(ConnectRDP).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getTabConnectionPhase(tab)).toBe("connected"));
+
+    unmount();
+    expect(getTabConnectionPhase(tab)).toBeNull();
   });
 });
