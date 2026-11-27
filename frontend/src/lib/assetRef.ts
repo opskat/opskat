@@ -3,6 +3,7 @@
 
 import i18n from "@/i18n";
 import { notifyCopied } from "@/lib/notify";
+import { buildTreeIndex, flattenTree } from "@/lib/assetTreeDnd";
 import { useAssetStore } from "@/stores/assetStore";
 
 const OPSCTL_ASSET_HREF_RE = /^opsctl:\/\/asset\/(\d+)$/i;
@@ -87,8 +88,18 @@ export function splitOpsctlAssetRefs(text: string): OpsctlAssetRefPart[] {
   return parts.length > 0 ? parts : [{ type: "text", text }];
 }
 
+export function formatAssetMarkdownRefs(assets: ReadonlyArray<{ Name: string; ID: number }>): string {
+  return assets.map((asset) => formatAssetMarkdownRef(asset.Name, asset.ID)).join("\n");
+}
+
 export async function writeAssetMarkdownRef(name: string, id: number): Promise<string> {
   const text = formatAssetMarkdownRef(name, id);
+  await navigator.clipboard.writeText(text);
+  return text;
+}
+
+export async function writeAssetMarkdownRefs(assets: ReadonlyArray<{ Name: string; ID: number }>): Promise<string> {
+  const text = formatAssetMarkdownRefs(assets);
   await navigator.clipboard.writeText(text);
   return text;
 }
@@ -99,12 +110,52 @@ export async function copyAssetMarkdownRef(name: string, id: number): Promise<st
   return text;
 }
 
+export async function copyAssetMarkdownRefs(
+  assets: ReadonlyArray<{ Name: string; ID: number }>
+): Promise<string | null> {
+  if (assets.length === 0) return null;
+  if (assets.length === 1) return copyAssetMarkdownRef(assets[0].Name, assets[0].ID);
+  const text = await writeAssetMarkdownRefs(assets);
+  notifyCopied(i18n.t("asset.copyRefsCopied", { count: assets.length }));
+  return text;
+}
+
 export async function copySelectedAssetMarkdownRef(): Promise<string | null> {
-  const { assets, selectedAssetId } = useAssetStore.getState();
-  if (selectedAssetId == null) return null;
-  const asset = assets.find((item) => item.ID === selectedAssetId);
-  if (!asset) return null;
-  return copyAssetMarkdownRef(asset.Name, asset.ID);
+  const { assets, groups, collapsedGroupIds, selectedAssetId, selectedAssetIds } = useAssetStore.getState();
+  const targetIds = selectedAssetIds.length > 0 ? selectedAssetIds : selectedAssetId != null ? [selectedAssetId] : [];
+  if (targetIds.length === 0) return null;
+
+  const targetSet = new Set(targetIds);
+  const assetById = new Map(assets.map((item) => [item.ID, item] as const));
+
+  // 多选时按当前可见树顺序排列，确保复制结果与列表顺序一致；不在可见树中的项按 targetIds 顺序兜底。
+  const ordered: Array<{ Name: string; ID: number }> = [];
+  const added = new Set<number>();
+  if (targetIds.length > 1) {
+    const rows = flattenTree({
+      index: buildTreeIndex(groups, assets),
+      collapsedGroupIDs: new Set(collapsedGroupIds),
+      shouldHideEmpty: false,
+    });
+    for (const row of rows) {
+      if (row.kind === "asset" && targetSet.has(row.assetID) && !added.has(row.assetID)) {
+        const asset = assetById.get(row.assetID);
+        if (asset) {
+          ordered.push(asset);
+          added.add(row.assetID);
+        }
+      }
+    }
+  }
+  for (const id of targetIds) {
+    if (added.has(id)) continue;
+    const asset = assetById.get(id);
+    if (asset) {
+      ordered.push(asset);
+      added.add(id);
+    }
+  }
+  return copyAssetMarkdownRefs(ordered);
 }
 
 export function shouldCopyAssetRef(target: EventTarget | null): boolean {
@@ -121,5 +172,6 @@ export function shouldCopyAssetRef(target: EventTarget | null): boolean {
   if (selection && !selection.isCollapsed && (selection.toString() ?? "").length > 0) {
     return false;
   }
-  return useAssetStore.getState().selectedAssetId != null;
+  const { selectedAssetId, selectedAssetIds } = useAssetStore.getState();
+  return selectedAssetIds.length > 0 || selectedAssetId != null;
 }

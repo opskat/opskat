@@ -1,5 +1,7 @@
 package asset_repo
 
+//go:generate mockgen -source=asset.go -destination=mock_asset_repo/asset.go -package=mock_asset_repo
+
 import (
 	"context"
 
@@ -12,16 +14,19 @@ import (
 // AssetRepo 资产数据访问接口
 type AssetRepo interface {
 	Find(ctx context.Context, id int64) (*asset_entity.Asset, error)
+	FindByIDs(ctx context.Context, ids []int64) ([]*asset_entity.Asset, error)
 	FindByName(ctx context.Context, name string) ([]*asset_entity.Asset, error)
 	List(ctx context.Context, opts ListOptions) ([]*asset_entity.Asset, error)
 	Create(ctx context.Context, asset *asset_entity.Asset) error
 	Update(ctx context.Context, asset *asset_entity.Asset) error
 	Delete(ctx context.Context, id int64) error
+	DeleteByIDs(ctx context.Context, ids []int64) error
 	MoveToGroup(ctx context.Context, fromGroupID, toGroupID int64) error
 	DeleteByGroupID(ctx context.Context, groupID int64) error
 	FindByCredentialID(ctx context.Context, credentialID int64) ([]*asset_entity.Asset, error)
 	UpdateSortOrder(ctx context.Context, id int64, sortOrder int) error
 	UpdateGroupID(ctx context.Context, id, groupID int64) error
+	UpdateGroupIDs(ctx context.Context, ids []int64, groupID int64) error
 	CountByTypes(ctx context.Context, types []string) (int64, error)
 	// CountAgentAuthBySourceID 统计引用了指定 SSH Agent 来源的活动 SSH 资产数：
 	// Agent 认证（auth_type=agent 且 agent_source_id 匹配）与 Agent 转发
@@ -77,6 +82,18 @@ func (r *assetRepo) Find(ctx context.Context, id int64) (*asset_entity.Asset, er
 	return &asset, nil
 }
 
+func (r *assetRepo) FindByIDs(ctx context.Context, ids []int64) ([]*asset_entity.Asset, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var assets []*asset_entity.Asset
+	if err := db.Ctx(ctx).Where("id IN ? AND status = ?", ids, asset_entity.StatusActive).
+		Order("sort_order ASC, id ASC").Find(&assets).Error; err != nil {
+		return nil, err
+	}
+	return assets, nil
+}
+
 func (r *assetRepo) FindByName(ctx context.Context, name string) ([]*asset_entity.Asset, error) {
 	var assets []*asset_entity.Asset
 	if err := db.Ctx(ctx).Where("name = ? AND status = ?", name, asset_entity.StatusActive).Find(&assets).Error; err != nil {
@@ -122,6 +139,19 @@ func (r *assetRepo) Delete(ctx context.Context, id int64) error {
 		}).Error
 }
 
+func (r *assetRepo) DeleteByIDs(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return db.Ctx(ctx).Model(&asset_entity.Asset{}).
+		Where("id IN ? AND status = ?", ids, asset_entity.StatusActive).
+		Updates(map[string]interface{}{
+			"status":         asset_entity.StatusDeleted,
+			"config":         "", // 清除敏感配置（含加密密码/密钥）
+			"command_policy": "",
+		}).Error
+}
+
 func (r *assetRepo) MoveToGroup(ctx context.Context, fromGroupID, toGroupID int64) error {
 	return db.Ctx(ctx).Model(&asset_entity.Asset{}).
 		Where("group_id = ? AND status = ?", fromGroupID, asset_entity.StatusActive).
@@ -144,6 +174,15 @@ func (r *assetRepo) UpdateSortOrder(ctx context.Context, id int64, sortOrder int
 
 func (r *assetRepo) UpdateGroupID(ctx context.Context, id, groupID int64) error {
 	return db.Ctx(ctx).Model(&asset_entity.Asset{}).Where("id = ?", id).Update("group_id", groupID).Error
+}
+
+func (r *assetRepo) UpdateGroupIDs(ctx context.Context, ids []int64, groupID int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return db.Ctx(ctx).Model(&asset_entity.Asset{}).
+		Where("id IN ? AND status = ?", ids, asset_entity.StatusActive).
+		Update("group_id", groupID).Error
 }
 
 func (r *assetRepo) FindByCredentialID(ctx context.Context, credentialID int64) ([]*asset_entity.Asset, error) {

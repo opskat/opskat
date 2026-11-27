@@ -6,39 +6,83 @@ import "fmt"
 // beforeID == 0 或未在 siblings 中找到时，追加到末尾。
 // 返回重排后的切片；若 movedID 未在 siblings 中找到，原样返回。
 func ReorderSiblings[T any](siblings []T, movedID, beforeID int64, getID func(T) int64) []T {
-	if movedID == beforeID {
+	return ReorderSiblingsBatch(siblings, []int64{movedID}, beforeID, getID)
+}
+
+// ReorderSiblingsBatch 把 movedIDs（去重并保持调用方顺序）从 siblings 中抽出，整体插到 beforeID 之前；
+// beforeID == 0 或未在剩余元素中找到时，追加到末尾。若 beforeID 落在 movedIDs 内，则插到其后首个未移动元素之前。
+// 返回重排后的切片；若 movedIDs 中没有任何元素在 siblings 中，原样返回。
+func ReorderSiblingsBatch[T any](siblings []T, movedIDs []int64, beforeID int64, getID func(T) int64) []T {
+	if len(movedIDs) == 0 || len(siblings) == 0 {
 		return siblings
 	}
 
-	var moved T
-	var foundMoved bool
-	rest := make([]T, 0, len(siblings))
+	byID := make(map[int64]T, len(siblings))
 	for _, item := range siblings {
-		if getID(item) == movedID {
-			moved = item
-			foundMoved = true
+		byID[getID(item)] = item
+	}
+
+	movedSet := make(map[int64]struct{}, len(movedIDs))
+	moved := make([]T, 0, len(movedIDs))
+	for _, id := range movedIDs {
+		if _, dup := movedSet[id]; dup {
+			continue
+		}
+		item, ok := byID[id]
+		if !ok {
+			continue
+		}
+		movedSet[id] = struct{}{}
+		moved = append(moved, item)
+	}
+	if len(moved) == 0 {
+		return siblings
+	}
+
+	effectiveBeforeID := beforeID
+	if effectiveBeforeID != 0 {
+		if _, inMoved := movedSet[effectiveBeforeID]; inMoved {
+			effectiveBeforeID = 0
+			foundAnchor := false
+			for _, item := range siblings {
+				id := getID(item)
+				if !foundAnchor {
+					if id == beforeID {
+						foundAnchor = true
+					}
+					continue
+				}
+				if _, m := movedSet[id]; !m {
+					effectiveBeforeID = id
+					break
+				}
+			}
+		}
+	}
+
+	rest := make([]T, 0, len(siblings)-len(moved))
+	for _, item := range siblings {
+		if _, m := movedSet[getID(item)]; m {
 			continue
 		}
 		rest = append(rest, item)
 	}
-	if !foundMoved {
-		return siblings
+
+	if effectiveBeforeID == 0 {
+		return append(rest, moved...)
 	}
 
-	if beforeID == 0 {
-		return append(rest, moved)
-	}
 	result := make([]T, 0, len(siblings))
 	inserted := false
 	for _, item := range rest {
-		if !inserted && getID(item) == beforeID {
-			result = append(result, moved)
+		if !inserted && getID(item) == effectiveBeforeID {
+			result = append(result, moved...)
 			inserted = true
 		}
 		result = append(result, item)
 	}
 	if !inserted {
-		result = append(result, moved)
+		result = append(result, moved...)
 	}
 	return result
 }

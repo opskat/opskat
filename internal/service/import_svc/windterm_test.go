@@ -303,7 +303,11 @@ func (r *windTermAssetRepo) Update(_ context.Context, asset *asset_entity.Asset)
 	return nil
 }
 
+func (r *windTermAssetRepo) FindByIDs(context.Context, []int64) ([]*asset_entity.Asset, error) {
+	return nil, nil
+}
 func (r *windTermAssetRepo) Delete(context.Context, int64) error             { return nil }
+func (r *windTermAssetRepo) DeleteByIDs(context.Context, []int64) error      { return nil }
 func (r *windTermAssetRepo) MoveToGroup(context.Context, int64, int64) error { return nil }
 func (r *windTermAssetRepo) DeleteByGroupID(context.Context, int64) error    { return nil }
 func (r *windTermAssetRepo) FindByCredentialID(context.Context, int64) ([]*asset_entity.Asset, error) {
@@ -311,6 +315,7 @@ func (r *windTermAssetRepo) FindByCredentialID(context.Context, int64) ([]*asset
 }
 func (r *windTermAssetRepo) UpdateSortOrder(context.Context, int64, int) error     { return nil }
 func (r *windTermAssetRepo) UpdateGroupID(context.Context, int64, int64) error     { return nil }
+func (r *windTermAssetRepo) UpdateGroupIDs(context.Context, []int64, int64) error  { return nil }
 func (r *windTermAssetRepo) CountByTypes(context.Context, []string) (int64, error) { return 0, nil }
 func (r *windTermAssetRepo) CountAgentAuthBySourceID(context.Context, int64) (int64, error) {
 	return 0, nil

@@ -52,6 +52,14 @@ func TestGroupSvc_Create(t *testing.T) {
 			err := Group().Create(ctx, group)
 			assert.Error(t, err)
 		})
+
+		convey.Convey("指定不存在的父级时拒绝创建", func() {
+			group := &group_entity.Group{Name: "子组", ParentID: 999}
+			mockGroupRepo.EXPECT().List(gomock.Any()).Return([]*group_entity.Group{{ID: 1, ParentID: 0}}, nil)
+
+			err := Group().Create(ctx, group)
+			assert.Error(t, err)
+		})
 	})
 }
 
@@ -73,6 +81,24 @@ func TestGroupSvc_Update(t *testing.T) {
 
 			err := Group().Update(ctx, group)
 			assert.Error(t, err)
+		})
+
+		convey.Convey("父级设为自身或子孙成环时拒绝更新", func() {
+			all := []*group_entity.Group{
+				{ID: 1, ParentID: 0},
+				{ID: 2, ParentID: 1},
+				{ID: 3, ParentID: 2},
+			}
+			mockGroupRepo.EXPECT().List(gomock.Any()).Return(all, nil).Times(2)
+
+			assert.Error(t, Group().Update(ctx, &group_entity.Group{ID: 1, Name: "A", ParentID: 1}))
+			assert.Error(t, Group().Update(ctx, &group_entity.Group{ID: 1, Name: "A", ParentID: 3}))
+		})
+
+		convey.Convey("父级不存在时拒绝更新", func() {
+			mockGroupRepo.EXPECT().List(gomock.Any()).Return([]*group_entity.Group{{ID: 1, ParentID: 0}}, nil)
+
+			assert.Error(t, Group().Update(ctx, &group_entity.Group{ID: 1, Name: "A", ParentID: 999}))
 		})
 	})
 }
@@ -353,6 +379,16 @@ func TestGroupSvc_Reorder(t *testing.T) {
 		mockGroupRepo.EXPECT().List(gomock.Any()).Return(all, nil)
 		// 尝试把 1 拖到 3 下 → 应被拒绝
 		err := Group().Reorder(ctx, 1, 3, 0)
+		assert.Error(t, err)
+	})
+
+	convey.Convey("Reorder：目标父级不存在被拒", t, func() {
+		ctx, mockGroupRepo, _ := setupTest(t)
+		moving := &group_entity.Group{ID: 1, ParentID: 0}
+		mockGroupRepo.EXPECT().Find(gomock.Any(), int64(1)).Return(moving, nil)
+		mockGroupRepo.EXPECT().List(gomock.Any()).Return([]*group_entity.Group{moving}, nil)
+
+		err := Group().Reorder(ctx, 1, 999, 0)
 		assert.Error(t, err)
 	})
 }

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/assetref"
@@ -208,17 +207,14 @@ func handlePutGroup(ctx context.Context, args map[string]any) (string, error) {
 		if name == "" {
 			return "", fmt.Errorf("missing required parameter: name (creating a group needs a name; pass id=<group id> instead to update an existing one)")
 		}
-		now := time.Now().Unix()
 		group := &group_entity.Group{
 			Name:        name,
 			ParentID:    aictx.ArgInt64(args, "parent_id"),
 			Icon:        aictx.ArgString(args, "icon"),
 			Description: aictx.ArgString(args, "description"),
 			SortOrder:   aictx.ArgInt(args, "sort_order"),
-			Createtime:  now,
-			Updatetime:  now,
 		}
-		if err := group_repo.Group().Create(ctx, group); err != nil {
+		if err := group_svc.Group().Create(ctx, group); err != nil {
 			return "", fmt.Errorf("failed to create group: %w", err)
 		}
 		aictx.NotifyDataChanged("group")
@@ -245,8 +241,7 @@ func handlePutGroup(ctx context.Context, args map[string]any) (string, error) {
 	if _, ok := args["sort_order"]; ok {
 		group.SortOrder = aictx.ArgInt(args, "sort_order")
 	}
-	group.Updatetime = time.Now().Unix()
-	if err := group_repo.Group().Update(ctx, group); err != nil {
+	if err := group_svc.Group().Update(ctx, group); err != nil {
 		return "", fmt.Errorf("failed to update group: %w", err)
 	}
 	aictx.NotifyDataChanged("group")

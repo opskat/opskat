@@ -38,6 +38,8 @@ export type ShortcutAction =
   | "terminal.selectAll"
   | "terminal.find"
   | "asset.copyRef"
+  | "asset.selectAll"
+  | "asset.delete"
   | "designer.save"
   | "page.home"
   | "page.settings"
@@ -69,6 +71,8 @@ export const SHORTCUT_ACTIONS: ShortcutAction[] = [
   "terminal.selectAll",
   "terminal.find",
   "asset.copyRef",
+  "asset.selectAll",
+  "asset.delete",
   "designer.save",
   "page.home",
   "page.settings",
@@ -103,6 +107,12 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutAction, ShortcutBinding> = {
   // Standard copy key (Ctrl+C / Cmd+C). On macOS this overlaps terminal.copy;
   // the keyboard handler yields to the terminal / native copy when those own focus.
   "asset.copyRef": { code: "KeyC", mod: true, ctrl: false, shift: false, alt: false },
+  // 下面两个只在资产侧栏聚焦时由侧栏自己处理（与 terminal.selectAll 同键、各管各的焦点区域）。
+  "asset.selectAll": { code: "KeyA", mod: true, ctrl: false, shift: false, alt: false },
+  // macOS 键盘没有独立的 Delete 键，沿用 Finder 的 ⌘⌫。
+  "asset.delete": isMac
+    ? { code: "Backspace", mod: true, ctrl: false, shift: false, alt: false }
+    : { code: "Delete", mod: false, ctrl: false, shift: false, alt: false },
   // 表设计器的保存:只在设计表标签在前台时由设计器自己处理,全局快捷键不接管。
   "designer.save": { code: "KeyS", mod: true, ctrl: false, shift: false, alt: false },
   "page.home": { code: "KeyH", mod: true, ctrl: false, shift: true, alt: false },
@@ -181,7 +191,9 @@ export function findShortcutConflict(
       (action === "terminal.find" && candidateAction === "panel.filter") ||
       (action === "panel.filter" && candidateAction === "terminal.find") ||
       (action === "asset.copyRef" && candidateAction === "terminal.copy") ||
-      (action === "terminal.copy" && candidateAction === "asset.copyRef")
+      (action === "terminal.copy" && candidateAction === "asset.copyRef") ||
+      (action === "asset.selectAll" && candidateAction === "terminal.selectAll") ||
+      (action === "terminal.selectAll" && candidateAction === "asset.selectAll")
     ) {
       continue;
     }
