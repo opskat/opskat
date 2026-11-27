@@ -304,8 +304,8 @@ github.com/ncruces/julianday v1.0.0 h1:fH0OKwa7NWvniGQtxdJRxAgkBMolni2BjDHaWTxqt
 github.com/ncruces/julianday v1.0.0/go.mod h1:Dusn2KvZrrovOMJuOt0TNXL6tB7U2E8kvza5fFc9G7g=
 github.com/opskat/gopher-rdp v0.0.0-20261112054432-7717ec6da048 h1:qEn4kpcOUNQGwQhoxA37EyyyEClxdeDpnECJudktGwM=
 github.com/opskat/gopher-rdp v0.0.0-20261112054432-7717ec6da048/go.mod h1:9We1wOmmq02Ubigr2zNbmsNJ/NudFAAj6lW85y+cPds=
-github.com/opskat/wails/v2 v2.0.0-20261116090547-fb6236b76d57 h1:YlNiIugFMg22C/JJI/pUfEmQtfjjMhzAa1EEhIl8/B4=
-github.com/opskat/wails/v2 v2.0.0-20261116090547-fb6236b76d57/go.mod h1:oj2ZhYZ3ob7KKOtmYtfm6v5pmacg8IKdA+qY2J1/iWQ=
+github.com/opskat/wails/v2 v2.0.0-20261127061626-ea2a927a3e13 h1:ak8Yfr8AkM3TC1yGqcIgjzoLPA74LzP0mB38Ssg5S2U=
+github.com/opskat/wails/v2 v2.0.0-20261127061626-ea2a927a3e13/go.mod h1:oj2ZhYZ3ob7KKOtmYtfm6v5pmacg8IKdA+qY2J1/iWQ=
 github.com/paulmach/orb v0.13.0 h1:r7n7mQGGF+cj/CbcivEj9J3HGK+XR+yXnvzRdq9saIw=
 github.com/paulmach/orb v0.13.0/go.mod h1:6scRWINywA2Jf05dcjOfLfxrUIMECvTSG2MVbRLxu/k=
 github.com/pelletier/go-toml/v2 v2.4.3 h1:GTRvJQutkOSftxIFD5xw9aepkYNuPWmVJpffdDPYVpY=

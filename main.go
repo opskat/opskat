@@ -281,6 +281,11 @@ func main() {
 		MinWidth:  minWindowWidth,
 		MinHeight: minWindowHeight,
 		Frameless: runtime.GOOS == "windows",
+		// 窗口隐藏启动，index.html 的加载界面进入 DOM 后再显示（System.BootScreenShown，带超时兜底），
+		// 不再露出窗口出现到网页请求之间的空窗口。
+		StartHidden: true,
+		// 上次的主题背景色：窗口显示到网页首帧之间、以及网页透明处透出的是它，而不是 Wails 默认的白色。
+		BackgroundColour: system.WindowBackgroundColor(bootstrap.GetConfig()),
 		AssetServer: &assetserver.Options{
 			Assets:  assets,
 			Handler: opsctl.NewExtensionAssetHandler(filepath.Join(dataDir, "extensions"), nil),
