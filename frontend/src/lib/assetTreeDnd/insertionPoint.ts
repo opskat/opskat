@@ -123,11 +123,15 @@ export function computeInsertionPoint({
         return { kind: "invalid" };
       }
       // 三段热区：上 25% 插入该分组之前，中 50% 移入成为子分组，下 25% 插入该分组之后。
+      // 展开且下方紧跟着它自己的子项时，标题下沿就是"第一个子项之前"——排到整棵子树之后
+      // 会与画在标题下沿的提示线不符，所以这一段也按移入处理。
       const offsetY = pointerY - rect.top;
       if (offsetY < rect.height * 0.25) {
         return { kind: "before-group", groupID: row.groupID, depth: row.depth };
       }
-      if (offsetY >= rect.height * 0.75) {
+      const next = rows[hitIdx + 1];
+      const hasVisibleChildren = !row.collapsed && next !== undefined && next.depth > row.depth;
+      if (offsetY >= rect.height * 0.75 && !hasVisibleChildren) {
         return { kind: "after-group", groupID: row.groupID, depth: row.depth };
       }
       return { kind: "into-group-first", groupID: row.groupID, depth: row.depth };
@@ -139,4 +143,12 @@ export function computeInsertionPoint({
       return { kind: "into-group-first", groupID: row.groupID, depth: row.depth };
     }
   }
+}
+
+/**
+ * 拖拽悬停在折叠分组上时应自动展开的分组：只有"插到它前面"和"移入它"需要看见里面。
+ * after-group 是"排在它后面"，展开会把同一位置的落点语义换成移入，因此不展开。
+ */
+export function hoverExpandGroupID(point: InsertionPoint): number | null {
+  return point.kind === "before-group" || point.kind === "into-group-first" ? point.groupID : null;
 }

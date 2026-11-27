@@ -1,6 +1,7 @@
 export { buildTreeIndex, flattenTree, type Row, type FlattenInput, type TreeIndex } from "./flattenTree";
 export {
   computeInsertionPoint,
+  hoverExpandGroupID,
   rowKey,
   type DragActive,
   type InsertionPoint,

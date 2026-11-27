@@ -52,6 +52,7 @@ import {
   buildTreeIndex,
   flattenTree,
   computeInsertionPoint,
+  hoverExpandGroupID,
   insertionToReorderArgs,
   rowKey,
   useAssetTreeDndStore,
@@ -739,10 +740,7 @@ export function AssetTree({
     }
 
     // 折叠 group hover 500ms 自动展开
-    const hoverGroupID =
-      point.kind === "before-group" || point.kind === "after-group" || point.kind === "into-group-first"
-        ? point.groupID
-        : null;
+    const hoverGroupID = hoverExpandGroupID(point);
     const hoverRow =
       hoverGroupID !== null
         ? rowsRef.current.find((r) => r.kind === "group-header" && r.groupID === hoverGroupID)
