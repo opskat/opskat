@@ -45,6 +45,8 @@ type AppConfig struct {
 	DebugMode       bool  `json:"debug_mode,omitempty"`        // 开启后日志级别降为 debug
 	WindowWidth     int   `json:"window_width,omitempty"`      // 上次正常窗口宽度
 	WindowHeight    int   `json:"window_height,omitempty"`     // 上次正常窗口高度
+	// 上次主题解析出的页面背景色（#rrggbb）：启动时作为原生窗口底色，网页画出来之前不再是 Wails 默认的白色
+	WindowBackground string `json:"window_background,omitempty"`
 
 	// SSH 空闲保活心跳的全局默认间隔（秒），作用于所有出站 SSH 连接（终端会话 +
 	// 连接池）。<=0 = 采用内置默认（30s）。单个资产可在其 SSH 配置里覆盖此值。
