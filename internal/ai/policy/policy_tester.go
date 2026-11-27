@@ -731,8 +731,16 @@ func resolveTestScope(ctx context.Context, assetID, groupID int64) (*asset_entit
 	}
 
 	var chain []*group_entity.Group
+	visited := make(map[int64]struct{})
+	if assetID == 0 && groupID > 0 {
+		visited[groupID] = struct{}{}
+	}
 	currentID := startGroupID
-	for i := 0; i < 5 && currentID > 0; i++ {
+	for currentID > 0 {
+		if _, seen := visited[currentID]; seen {
+			break
+		}
+		visited[currentID] = struct{}{}
 		g, err := group_svc.Group().Get(ctx, currentID)
 		if err != nil || g == nil {
 			break

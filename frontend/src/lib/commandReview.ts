@@ -110,9 +110,6 @@ export function unusableReasonLabel(t: TFunction, reason: string | undefined): s
   return t(`commandReview.settings.unusableReason.${known}`);
 }
 
-// 与后端 policy.ResolveGroupChain 一致：最多向上找 5 层。
-const MAX_GROUP_DEPTH = 5;
-
 interface GroupLike {
   ID: number;
   ParentID: number;
@@ -126,18 +123,40 @@ export interface InheritedPermissionMode<G extends GroupLike = GroupLike> {
   from: G | null;
 }
 
-/** 从 groupId 起沿分组链向上找第一个设置了权限模式的分组；都没有（或分组不存在）就是默认。 */
+/** 从 groupId 起沿分组链向上找第一个设置了权限模式的分组；通过 visited 集合防止成环死循环，都没有就是默认。 */
 export function resolveInheritedPermissionMode<G extends GroupLike>(
   groupId: number,
   groups: readonly G[]
 ): InheritedPermissionMode<G> {
   const byId = new Map(groups.map((g) => [g.ID, g]));
+  const visited = new Set<number>();
   let id = groupId;
-  for (let depth = 0; depth < MAX_GROUP_DEPTH && id > 0; depth++) {
+  while (id > 0 && !visited.has(id)) {
+    visited.add(id);
     const g = byId.get(id);
     if (!g) break;
     if (g.permissionMode) return { mode: g.permissionMode as EffectivePermissionMode, from: g };
     id = g.ParentID;
   }
   return { mode: "default", from: null };
+}
+
+const PERMISSION_MODE_PERMISSIVENESS: Record<EffectivePermissionMode, number> = {
+  default: 0,
+  assisted: 1,
+  autopilot: 2,
+};
+
+/** 解析资产当前生效的权限模式（自身显式配置优先，否则沿所属分组链向上继承）。 */
+export function resolveEffectivePermissionMode<G extends GroupLike>(
+  asset: { GroupID?: number; permissionMode?: string },
+  groups: readonly G[]
+): EffectivePermissionMode {
+  if (asset.permissionMode) return asset.permissionMode as EffectivePermissionMode;
+  return resolveInheritedPermissionMode(asset.GroupID || 0, groups).mode;
+}
+
+/** 判断迁移后的权限模式是否比之前更宽松（default < assisted < autopilot）。 */
+export function isMorePermissiveMode(before: EffectivePermissionMode, after: EffectivePermissionMode): boolean {
+  return PERMISSION_MODE_PERMISSIVENESS[after] > PERMISSION_MODE_PERMISSIVENESS[before];
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeInsertionPoint, rowKey } from "../insertionPoint";
+import { computeInsertionPoint, hoverExpandGroupID, rowKey } from "../insertionPoint";
 import type { Row } from "../flattenTree";
 import { group_entity } from "../../../../wailsjs/go/models";
 
@@ -104,6 +104,31 @@ describe("computeInsertionPoint - group active", () => {
     ).toEqual({ kind: "before-group", groupID: 1, depth: 0 });
   });
 
+  it("group 拖到另一 group header 中间 50% → into-group-first（移入子分组）", () => {
+    expect(
+      computeInsertionPoint({ rows, rowRects: rects, pointerY: 12, active: { kind: "group", id: 2 }, groups })
+    ).toEqual({ kind: "into-group-first", groupID: 1, depth: 0 });
+  });
+
+  it("group 拖到折叠 group header 下方 25% → after-group（排在该分组之后）", () => {
+    expect(
+      computeInsertionPoint({ rows, rowRects: rects, pointerY: 24 + 20, active: { kind: "group", id: 2 }, groups })
+    ).toEqual({ kind: "after-group", groupID: 11, depth: 1 });
+  });
+
+  it("group 拖到展开且有可见子项的 group header 下方 25% → into-group-first（紧贴标题下方就是它的第一个子项位置）", () => {
+    // 分组 1 展开、下一行是它的子分组 11：落点在标题与首个子项之间，排到整棵子树之后会与提示线不符。
+    expect(
+      computeInsertionPoint({ rows, rowRects: rects, pointerY: 20, active: { kind: "group", id: 2 }, groups })
+    ).toEqual({ kind: "into-group-first", groupID: 1, depth: 0 });
+  });
+
+  it("group 拖到展开但没有可见子项的 group header 下方 25% → after-group", () => {
+    expect(
+      computeInsertionPoint({ rows, rowRects: rects, pointerY: 48 + 20, active: { kind: "group", id: 11 }, groups })
+    ).toEqual({ kind: "after-group", groupID: 2, depth: 0 });
+  });
+
   it("group 拖到自己或自己的子孙 → invalid", () => {
     expect(
       computeInsertionPoint({ rows, rowRects: rects, pointerY: 24 + 5, active: { kind: "group", id: 1 }, groups })
@@ -111,6 +136,14 @@ describe("computeInsertionPoint - group active", () => {
     expect(
       computeInsertionPoint({ rows, rowRects: rects, pointerY: 24 + 18, active: { kind: "group", id: 1 }, groups })
     ).toEqual({ kind: "invalid" });
+  });
+
+  it("悬停自动展开只针对 before-group / into-group-first，after-group 不展开", () => {
+    expect(hoverExpandGroupID({ kind: "before-group", groupID: 1, depth: 0 })).toBe(1);
+    expect(hoverExpandGroupID({ kind: "into-group-first", groupID: 11, depth: 1 })).toBe(11);
+    // after-group 表示"排在它后面"：悬停展开会让落点语义在悬停中途变成移入该分组。
+    expect(hoverExpandGroupID({ kind: "after-group", groupID: 11, depth: 1 })).toBeNull();
+    expect(hoverExpandGroupID({ kind: "before-asset", assetID: 10, groupID: 1, depth: 1 })).toBeNull();
   });
 
   it("group 拖到 ungrouped 桶 header → invalid（group 不能嵌入未分组）", () => {
@@ -154,5 +187,77 @@ describe("computeInsertionPoint - empty placeholder & ungrouped", () => {
         groups,
       })
     ).toEqual({ kind: "into-group-first", groupID: 0, depth: 0 });
+  });
+
+  it("动态未分组投放区命中时 → into-group-first(groupID: 0)", () => {
+    expect(
+      computeInsertionPoint({
+        rows,
+        rowRects: rects,
+        pointerY: 110,
+        active: { kind: "asset", id: 99, ids: [99, 100] },
+        groups,
+        ungroupedZoneRect: { top: 100, bottom: 132, height: 32 },
+      })
+    ).toEqual({ kind: "into-group-first", groupID: 0, depth: 0 });
+  });
+});
+
+describe("computeInsertionPoint - multi-asset & filtered mode", () => {
+  const groups = [g(1), g(2)];
+  const rows: Row[] = [
+    { kind: "group-header", groupID: 1, depth: 0, collapsed: false },
+    { kind: "asset", assetID: 10, groupID: 1, depth: 1 },
+    { kind: "asset", assetID: 11, groupID: 1, depth: 1 },
+    { kind: "group-header", groupID: 2, depth: 0, collapsed: false },
+    { kind: "asset", assetID: 20, groupID: 2, depth: 1 },
+  ];
+  const rects = makeRects(rows);
+
+  it("多选拖拽落在选中集自身任一行上 → invalid", () => {
+    expect(
+      computeInsertionPoint({
+        rows,
+        rowRects: rects,
+        pointerY: 48 + 5,
+        active: { kind: "asset", id: 10, ids: [10, 11] },
+        groups,
+      })
+    ).toEqual({ kind: "invalid" });
+  });
+
+  it("搜索/筛选态：允许资产拖入分组，禁止资产行插队排序线和分组拖拽", () => {
+    expect(
+      computeInsertionPoint({
+        rows,
+        rowRects: rects,
+        pointerY: 72 + 10,
+        active: { kind: "asset", id: 10, ids: [10, 11] },
+        groups,
+        isFiltered: true,
+      })
+    ).toEqual({ kind: "into-group-first", groupID: 2, depth: 0 });
+
+    expect(
+      computeInsertionPoint({
+        rows,
+        rowRects: rects,
+        pointerY: 96 + 5,
+        active: { kind: "asset", id: 10, ids: [10, 11] },
+        groups,
+        isFiltered: true,
+      })
+    ).toEqual({ kind: "invalid" });
+
+    expect(
+      computeInsertionPoint({
+        rows,
+        rowRects: rects,
+        pointerY: 5,
+        active: { kind: "group", id: 2 },
+        groups,
+        isFiltered: true,
+      })
+    ).toEqual({ kind: "invalid" });
   });
 });
