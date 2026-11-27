@@ -270,11 +270,6 @@ func (s *System) DeleteAsset(id int64) error {
 func (s *System) DeleteAssets(ids []int64) error {
 	ctx := s.desktopCtx()
 	logger.Ctx(ctx).Info("delete assets started", zap.Int("count", len(ids)))
-	if len(ids) == 0 {
-		err := fmt.Errorf("资产 ID 列表不能为空")
-		logger.Ctx(ctx).Error("delete assets failed", zap.Error(err))
-		return err
-	}
 	deleted, err := asset_svc.Asset().DeleteBatch(ctx, ids)
 	if err != nil {
 		logger.Ctx(ctx).Error("delete assets failed", zap.Int("count", len(ids)), zap.Error(err))
@@ -311,16 +306,7 @@ func (s *System) ReorderAssets(ids []int64, targetGroupID, beforeID int64) error
 		zap.Int("count", len(ids)),
 		zap.Int64("targetGroupID", targetGroupID),
 		zap.Int64("beforeID", beforeID))
-	if len(ids) == 0 {
-		err := fmt.Errorf("资产 ID 列表不能为空")
-		logger.Ctx(ctx).Error("reorder assets failed", zap.Error(err))
-		return err
-	}
-	if targetGroupID < 0 {
-		err := fmt.Errorf("目标分组 ID 无效")
-		logger.Ctx(ctx).Error("reorder assets failed", zap.Int64("targetGroupID", targetGroupID), zap.Error(err))
-		return err
-	}
+	// ID 列表与分组 ID 的取值由 ReorderBatch 校验；这里只补它查不到的：目标分组必须存在。
 	if targetGroupID > 0 {
 		if _, err := group_svc.Group().Get(ctx, targetGroupID); err != nil {
 			logger.Ctx(ctx).Error("reorder assets failed",

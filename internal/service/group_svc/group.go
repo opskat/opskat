@@ -47,10 +47,7 @@ func (s *groupSvc) Create(ctx context.Context, group *group_entity.Group) error 
 	if err := group.Validate(); err != nil {
 		return err
 	}
-	if group.ParentID < 0 {
-		return fmt.Errorf("上级分组 ID 无效")
-	}
-	if group.ParentID > 0 {
+	if group.ParentID != 0 {
 		allGroups, err := group_repo.Group().List(ctx)
 		if err != nil {
 			return err
@@ -69,10 +66,7 @@ func (s *groupSvc) Update(ctx context.Context, group *group_entity.Group) error 
 	if err := group.Validate(); err != nil {
 		return err
 	}
-	if group.ParentID < 0 {
-		return fmt.Errorf("上级分组 ID 无效")
-	}
-	if group.ParentID > 0 {
+	if group.ParentID != 0 {
 		allGroups, err := group_repo.Group().List(ctx)
 		if err != nil {
 			return err
