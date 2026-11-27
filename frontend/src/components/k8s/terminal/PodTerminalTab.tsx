@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Loader2, RotateCcw, Search, TerminalSquare, Unplug } from "lucide-react";
 import {
@@ -18,7 +18,11 @@ import { useK8sStore, type K8sTerminalState } from "@/stores/k8sStore";
 import { formatBinding, useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalThemeStore, useXtermTheme } from "@/stores/terminalThemeStore";
 import { TerminalSearchBar } from "@/components/terminal/TerminalSearchBar";
-import { getTerminalContextMenuAction } from "@/components/terminal/terminalContextMenuPolicy";
+import { TerminalSelectionToolbar } from "@/components/terminal/TerminalSelectionToolbar";
+import {
+  TERMINAL_COPIED_TOAST_ID,
+  useTerminalMouseInteraction,
+} from "@/components/terminal/useTerminalMouseInteraction";
 import {
   disconnectPodTerminal,
   fitPodTerminal,
@@ -55,18 +59,19 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
     query: null,
     token: 0,
   });
+  const [hasSelection, setHasSelection] = useState(false);
+  const [floatingCopyPosition, setFloatingCopyPosition] = useState<{ left: number; top: number } | null>(null);
   const xtermTheme = useXtermTheme();
   const fontSize = useTerminalThemeStore((s) => s.fontSize);
   const fontFamily = useTerminalThemeStore((s) => s.fontFamily);
   const scrollback = useTerminalThemeStore((s) => s.scrollback);
-  const copyBehavior = useTerminalThemeStore((s) => s.copyBehavior);
   const shortcuts = useShortcutStore((s) => s.shortcuts);
   const terminal = getPodTerminal(assetId, tabId);
 
   const copyText = useCallback(
     (text: string) => {
       ClipboardSetText(text)
-        .then(() => notifyCopied(t("ssh.contextMenu.copied")))
+        .then(() => notifyCopied(t("ssh.contextMenu.copied"), { id: TERMINAL_COPIED_TOAST_ID }))
         .catch(console.error);
     },
     [t]
@@ -86,10 +91,28 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
       .catch(console.error);
   }, [assetId, tabId]);
   const selectAll = useCallback(() => getPodTerminal(assetId, tabId)?.term.selectAll(), [assetId, tabId]);
+  const clearTerminal = useCallback(() => getPodTerminal(assetId, tabId)?.term.clear(), [assetId, tabId]);
   const openSearch = useCallback((query: string | null = null) => {
     setSearchRequest((req) => ({ query, token: req.token + 1 }));
     setShowSearch(true);
   }, []);
+  const handleFindSelection = useCallback(() => {
+    const selection = getPodTerminal(assetId, tabId)?.term.getSelection();
+    if (!selection) return;
+    openSearch(selection);
+  }, [assetId, tabId, openSearch]);
+
+  const { onMouseDownCapture, onContextMenuCapture, onAuxClickCapture, resetLastAutoCopied } =
+    useTerminalMouseInteraction({
+      wrapperRef,
+      getTerm: () => getPodTerminal(assetId, tabId)?.term,
+      onCopy: copySelection,
+      onCopyText: copyText,
+      onPaste: paste,
+      onClear: clearTerminal,
+      onSelectionPresenceChange: setHasSelection,
+      onFloatingPopoverChange: setFloatingCopyPosition,
+    });
 
   useEffect(() => {
     const wrapper = wrapperRef.current;
@@ -110,9 +133,19 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
     pt.bridge.setOnPaste(paste);
     pt.bridge.setOnSelectAll(selectAll);
     pt.bridge.setOnFind(() => openSearch());
+    const selDispose = pt.term.onSelectionChange(() => {
+      const nextSelection = pt.term.getSelection();
+      setHasSelection(!!nextSelection);
+      if (!nextSelection) {
+        setFloatingCopyPosition(null);
+        resetLastAutoCopied();
+      }
+    });
+    setHasSelection(!!pt.term.getSelection());
     return () => {
       cancelAnimationFrame(frame);
       clearTimeout(resizeTimer);
+      selDispose.dispose();
       observer.disconnect();
       // The terminal may already be gone (its tab closed); otherwise drop the handlers bound to this view.
       if (getPodTerminal(assetId, tabId) === pt) {
@@ -123,7 +156,7 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
       }
       if (pt.host.parentElement === wrapper) wrapper.removeChild(pt.host);
     };
-  }, [assetId, tabId, copySelection, paste, selectAll, openSearch]);
+  }, [assetId, tabId, copySelection, paste, selectAll, openSearch, resetLastAutoCopied]);
 
   useEffect(() => {
     const pt = getPodTerminal(assetId, tabId);
@@ -138,24 +171,6 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
   useEffect(() => {
     getPodTerminal(assetId, tabId)?.bridge.setShortcuts(shortcuts);
   }, [assetId, tabId, shortcuts]);
-
-  const handleMouseUp = useCallback(() => {
-    if (copyBehavior !== "select-copy-right-paste") return;
-    requestAnimationFrame(() => copySelection());
-  }, [copyBehavior, copySelection]);
-
-  const handleContextMenuCapture = useCallback(
-    (event: ReactMouseEvent<HTMLDivElement>) => {
-      const selection = getPodTerminal(assetId, tabId)?.term.getSelection();
-      const action = getTerminalContextMenuAction(copyBehavior, selection);
-      if (action === "menu") return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (action === "copy" && selection) copyText(selection);
-      else paste();
-    },
-    [assetId, tabId, copyBehavior, copyText, paste]
-  );
 
   if (!state) return null;
 
@@ -266,13 +281,22 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
           <ContextMenuTrigger className="min-h-0 flex-1">
             <div
               ref={wrapperRef}
-              className="h-full w-full p-1"
-              onMouseUp={handleMouseUp}
-              onContextMenuCapture={handleContextMenuCapture}
-            />
+              className="relative h-full w-full p-1"
+              onMouseDownCapture={onMouseDownCapture}
+              onContextMenuCapture={onContextMenuCapture}
+              onAuxClickCapture={onAuxClickCapture}
+            >
+              {hasSelection && floatingCopyPosition && (
+                <TerminalSelectionToolbar
+                  position={floatingCopyPosition}
+                  onCopy={() => copySelection()}
+                  onFind={handleFindSelection}
+                />
+              )}
+            </div>
           </ContextMenuTrigger>
           <ContextMenuContent>
-            <ContextMenuItem onClick={() => copySelection()}>
+            <ContextMenuItem onClick={() => copySelection()} disabled={!hasSelection}>
               {t("ssh.contextMenu.copy")}
               <ContextMenuShortcut>{formatBinding(shortcuts["terminal.copy"])}</ContextMenuShortcut>
             </ContextMenuItem>
@@ -289,6 +313,7 @@ export function PodTerminalTab({ assetId, tabId }: Props) {
               {t("ssh.contextMenu.find")}
               <ContextMenuShortcut>{formatBinding(shortcuts["terminal.find"])}</ContextMenuShortcut>
             </ContextMenuItem>
+            <ContextMenuItem onClick={clearTerminal}>{t("ssh.contextMenu.clear")}</ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
         {state.status === "ended" && state.end && (

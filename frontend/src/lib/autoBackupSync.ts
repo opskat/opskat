@@ -1,19 +1,19 @@
 import { RequestAutoBackupCheck, SetAutoBackupClientSnapshot } from "../../wailsjs/go/system/System";
 import { EventsOn } from "../../wailsjs/runtime/runtime";
-import { customShortcuts, useShortcutStore } from "@/stores/shortcutStore";
+import { serializeShortcutsForBackup, useShortcutStore } from "@/stores/shortcutStore";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
 import { useAssetStore } from "@/stores/assetStore";
 
 /**
  * 自动备份需要的前端侧数据同步（docs/specs/2026-11-17-auto-backup-targets.md「检查与写入流程」）：
- * - 快捷键自定义项、自定义终端主题只存在前端本地存储，变化时推给后端；后端收到第一份之后才开始检查。
+ * - 快捷键自定义项（含终端鼠标快捷键）、自定义终端主题只存在前端本地存储，变化时推给后端；后端收到第一份之后才开始检查。
  * - 界面上改了资产、分组、凭据、策略组、端口转发后请求一次检查（后端 2 秒防抖）；
  *   内置 AI / opsctl 的改动经 data:changed 事件同样请求检查，其余由定时检查兜底。
  */
 
 function shortcutsSnapshot(): string {
-  const custom = customShortcuts(useShortcutStore.getState().shortcuts);
-  return Object.keys(custom).length > 0 ? JSON.stringify(custom) : "";
+  const { shortcuts, mouseShortcuts } = useShortcutStore.getState();
+  return serializeShortcutsForBackup(shortcuts, mouseShortcuts) ?? "";
 }
 
 function themesSnapshot(): string {
@@ -36,7 +36,7 @@ export function requestAutoBackupCheck() {
 export function installAutoBackupSync(): () => void {
   pushSnapshot();
   const unsubShortcuts = useShortcutStore.subscribe((state, prev) => {
-    if (state.shortcuts !== prev.shortcuts) pushSnapshot();
+    if (state.shortcuts !== prev.shortcuts || state.mouseShortcuts !== prev.mouseShortcuts) pushSnapshot();
   });
   const unsubThemes = useTerminalThemeStore.subscribe((state, prev) => {
     if (state.customThemes !== prev.customThemes) pushSnapshot();

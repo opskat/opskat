@@ -9,9 +9,12 @@ const hoisted = vi.hoisted(() => {
   const focusSpy = vi.fn();
   const term = {
     getSelection: vi.fn(() => ""),
+    clearSelection: vi.fn(),
+    clear: vi.fn(),
     selectAll: vi.fn(),
     focus: focusSpy,
     options: {},
+    modes: { mouseTrackingMode: "none" as const },
     onSelectionChange: vi.fn(() => ({ dispose: vi.fn() })),
   };
   const fitAddon = {
@@ -41,7 +44,6 @@ const hoisted = vi.hoisted(() => {
     },
   };
   return {
-    copyBehavior: "popover-menu",
     pasteFromClipboardSpy,
     resizeSpy,
     setOnPasteSpy,
@@ -82,6 +84,7 @@ vi.mock("@/stores/terminalStore", () => ({
       splitPane: vi.fn(),
       reconnect: vi.fn(),
       closePane: vi.fn(),
+      setActivePaneId: vi.fn(),
     }),
 }));
 
@@ -94,13 +97,14 @@ vi.mock("@/stores/terminalThemeStore", () => ({
       scrollback: 1000,
       webglEnabled: false,
       highlightLinks: false,
-      copyBehavior: hoisted.copyBehavior,
+      selectionAction: "popover",
       selectedThemeId: "default",
       customThemes: [],
     }),
 }));
 
 vi.mock("@/stores/shortcutStore", () => ({
+  isMac: false,
   formatBinding: vi.fn(() => "shortcut"),
   useShortcutStore: (selector: (state: unknown) => unknown) =>
     selector({
@@ -112,6 +116,12 @@ vi.mock("@/stores/shortcutStore", () => ({
         "split.horizontal": {},
         "split.vertical": {},
         "tab.close": {},
+      },
+      mouseShortcuts: {
+        right: "terminal.contextMenu",
+        middle: "terminal.paste",
+        back: "tab.prev",
+        forward: "tab.next",
       },
     }),
 }));
@@ -126,6 +136,8 @@ vi.mock("@/stores/sftpStore", () => ({
 }));
 
 vi.mock("@/stores/tabStore", () => ({
+  registerTabCloseHook: vi.fn(),
+  registerTabRestoreHook: vi.fn(),
   useTabStore: (selector: (state: unknown) => unknown) => selector({ closeTab: vi.fn() }),
 }));
 

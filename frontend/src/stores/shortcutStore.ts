@@ -1,4 +1,16 @@
 import { create } from "zustand";
+import {
+  cloneDefaultMouseShortcuts,
+  customMouseShortcuts,
+  DEFAULT_TERMINAL_MOUSE_BINDINGS,
+  migrateLegacyCopyBehaviorStorage,
+  MOUSE_SHORTCUTS_BACKUP_KEY,
+  normalizeMouseShortcuts,
+  TERMINAL_MOUSE_STORAGE_KEY,
+  type TerminalMouseAction,
+  type TerminalMouseBindings,
+  type TerminalMouseButton,
+} from "./terminalMouseShortcuts";
 
 export const isMac = /Macintosh|Mac OS/.test(navigator.userAgent);
 
@@ -124,6 +136,8 @@ export const DEFAULT_SHORTCUTS: Record<ShortcutAction, ShortcutBinding> = {
 const STORAGE_KEY = "keyboard_shortcuts";
 const DISABLE_IN_TERMINAL_KEY = "disable_shortcuts_in_terminal";
 
+const VALID_SHORTCUT_ACTION_SET = new Set<string>(SHORTCUT_ACTIONS);
+
 function loadDisableInTerminal(): boolean {
   try {
     return localStorage.getItem(DISABLE_IN_TERMINAL_KEY) === "true";
@@ -145,11 +159,83 @@ function loadCustom(): Partial<Record<ShortcutAction, ShortcutBinding>> {
     // field, so default it to false here rather than re-defaulting at every consumer.
     const normalized: Partial<Record<ShortcutAction, ShortcutBinding>> = {};
     for (const [action, binding] of Object.entries(parsed)) {
+      if (!VALID_SHORTCUT_ACTION_SET.has(action) || !binding || typeof binding.code !== "string") continue;
       normalized[action as ShortcutAction] = { ...binding, ctrl: binding.ctrl ?? false };
     }
     return normalized;
   } catch {
     return {};
+  }
+}
+
+function loadMouseShortcuts(): TerminalMouseBindings {
+  migrateLegacyCopyBehaviorStorage();
+  try {
+    const raw = localStorage.getItem(TERMINAL_MOUSE_STORAGE_KEY);
+    if (!raw) return cloneDefaultMouseShortcuts();
+    return normalizeMouseShortcuts(JSON.parse(raw));
+  } catch {
+    return cloneDefaultMouseShortcuts();
+  }
+}
+
+function saveMouseShortcuts(bindings: TerminalMouseBindings) {
+  const custom = customMouseShortcuts(bindings);
+  if (Object.keys(custom).length > 0) {
+    localStorage.setItem(TERMINAL_MOUSE_STORAGE_KEY, JSON.stringify(custom));
+  } else {
+    localStorage.removeItem(TERMINAL_MOUSE_STORAGE_KEY);
+  }
+}
+
+/**
+ * Serialize customized keyboard + terminal mouse shortcuts for backup/auto-backup.
+ * Keeps the legacy flat JSON object shape when only keyboard shortcuts are customized,
+ * and embeds `$mouseShortcuts` (customized slots only) inside the same JSON object
+ * when mouse shortcuts differ from defaults so older backups remain readable and Go backup schema stays unchanged.
+ */
+export function serializeShortcutsForBackup(
+  shortcuts: Record<ShortcutAction, ShortcutBinding>,
+  mouseShortcuts: TerminalMouseBindings
+): string | null {
+  const customKb = customShortcuts(shortcuts);
+  const customMouse = customMouseShortcuts(mouseShortcuts);
+  const hasCustomKb = Object.keys(customKb).length > 0;
+  const hasCustomMouse = Object.keys(customMouse).length > 0;
+  if (!hasCustomKb && !hasCustomMouse) return null;
+  if (!hasCustomMouse) return JSON.stringify(customKb);
+  return JSON.stringify({
+    ...customKb,
+    [MOUSE_SHORTCUTS_BACKUP_KEY]: customMouse,
+  });
+}
+
+/**
+ * Restore keyboard (and optional `$mouseShortcuts`) from a backup JSON payload.
+ * Older backups that lack `$mouseShortcuts` leave existing mouse shortcuts intact.
+ */
+export function applyShortcutsBackup(rawJson: string): void {
+  const parsed = JSON.parse(rawJson) as Record<string, unknown>;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+
+  const store = useShortcutStore.getState();
+  store.resetAll();
+  for (const [action, rawBinding] of Object.entries(parsed)) {
+    if (action === MOUSE_SHORTCUTS_BACKUP_KEY) continue;
+    if (!VALID_SHORTCUT_ACTION_SET.has(action) || !rawBinding || typeof rawBinding !== "object") continue;
+    const b = rawBinding as Partial<ShortcutBinding>;
+    if (typeof b.code !== "string") continue;
+    store.updateShortcut(action as ShortcutAction, {
+      code: b.code,
+      mod: Boolean(b.mod),
+      ctrl: Boolean(b.ctrl),
+      shift: Boolean(b.shift),
+      alt: Boolean(b.alt),
+    });
+  }
+
+  if (MOUSE_SHORTCUTS_BACKUP_KEY in parsed) {
+    store.setMouseShortcuts(normalizeMouseShortcuts(parsed[MOUSE_SHORTCUTS_BACKUP_KEY]));
   }
 }
 
@@ -210,6 +296,7 @@ export function eventMatchesBinding(e: KeyboardEvent, binding: ShortcutBinding):
 
 interface ShortcutState {
   shortcuts: Record<ShortcutAction, ShortcutBinding>;
+  mouseShortcuts: TerminalMouseBindings;
   // When true, app shortcuts pass through to a focused terminal pane instead of
   // being handled here — so keystrokes reach the remote shell. Scoped to the
   // terminal only; shortcuts keep working everywhere else. Persisted, default off.
@@ -221,10 +308,15 @@ interface ShortcutState {
   resetShortcut: (action: ShortcutAction) => void;
   resetAll: () => void;
   swapCmdCtrl: () => void;
+  updateMouseShortcut: (button: TerminalMouseButton, action: TerminalMouseAction) => void;
+  resetMouseShortcut: (button: TerminalMouseButton) => void;
+  resetAllMouseShortcuts: () => void;
+  setMouseShortcuts: (bindings: Partial<TerminalMouseBindings>) => void;
 }
 
 export const useShortcutStore = create<ShortcutState>((set) => ({
   shortcuts: { ...DEFAULT_SHORTCUTS, ...loadCustom() },
+  mouseShortcuts: loadMouseShortcuts(),
   disableShortcutsInTerminal: loadDisableInTerminal(),
   isRecording: false,
 
@@ -272,6 +364,37 @@ export const useShortcutStore = create<ShortcutState>((set) => ({
       saveCustom(shortcuts);
       return { shortcuts };
     });
+  },
+
+  updateMouseShortcut: (button, action) => {
+    set((state) => {
+      const mouseShortcuts = { ...state.mouseShortcuts, [button]: action };
+      saveMouseShortcuts(mouseShortcuts);
+      return { mouseShortcuts };
+    });
+  },
+
+  resetMouseShortcut: (button) => {
+    set((state) => {
+      const mouseShortcuts = {
+        ...state.mouseShortcuts,
+        [button]: DEFAULT_TERMINAL_MOUSE_BINDINGS[button],
+      };
+      saveMouseShortcuts(mouseShortcuts);
+      return { mouseShortcuts };
+    });
+  },
+
+  resetAllMouseShortcuts: () => {
+    const mouseShortcuts = cloneDefaultMouseShortcuts();
+    localStorage.removeItem(TERMINAL_MOUSE_STORAGE_KEY);
+    set({ mouseShortcuts });
+  },
+
+  setMouseShortcuts: (bindings) => {
+    const mouseShortcuts = normalizeMouseShortcuts(bindings);
+    saveMouseShortcuts(mouseShortcuts);
+    set({ mouseShortcuts });
   },
 }));
 

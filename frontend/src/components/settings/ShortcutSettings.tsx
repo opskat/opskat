@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { cn, Button, Switch, Label } from "@opskat/ui";
-import { RotateCcw } from "lucide-react";
+import { ArrowRight, Mouse, RotateCcw } from "lucide-react";
+import { useSettingsUiStore } from "@/stores/settingsUiStore";
 import {
   useShortcutStore,
   SHORTCUT_ACTIONS,
@@ -25,6 +26,7 @@ export function ShortcutSettings() {
     swapCmdCtrl,
     setIsRecording,
   } = useShortcutStore();
+  const openSettingsSection = useSettingsUiStore((s) => s.openSettingsSection);
   const [recording, setRecording] = useState<ShortcutAction | null>(null);
   const [conflict, setConflict] = useState<{ action: ShortcutAction; conflictAction: ShortcutAction } | null>(null);
 
@@ -122,6 +124,26 @@ export function ShortcutSettings() {
           checked={disableShortcutsInTerminal}
           onCheckedChange={setDisableShortcutsInTerminal}
         />
+      </div>
+      <div className="flex items-center justify-between gap-3 py-2.5 px-3 rounded border bg-muted/30">
+        <div className="flex items-start gap-2.5 min-w-0">
+          <Mouse className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+          <div className="space-y-0.5 min-w-0">
+            <p className="text-sm font-medium">{t("shortcut.terminalMouseLinkTitle")}</p>
+            <p className="text-xs text-muted-foreground">{t("shortcut.terminalMouseLinkDesc")}</p>
+          </div>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0 gap-1"
+          data-testid="shortcut-jump-terminal-mouse"
+          onClick={() => openSettingsSection("terminal", "mouse-selection")}
+        >
+          {t("shortcut.terminalMouseLinkAction")}
+          <ArrowRight className="h-3.5 w-3.5" />
+        </Button>
       </div>
       <div className="space-y-0.5">
         {SHORTCUT_ACTIONS.map((action) => (
