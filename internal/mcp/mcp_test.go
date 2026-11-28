@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -87,7 +88,10 @@ func startTestServerOn(t *testing.T, cfg ServerConfig, clientOpts *mcpsdk.Client
 		_ = session.Close()
 		cancel()
 		select {
-		case <-done:
+		case err := <-done:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Errorf("mcp server stopped with %v", err)
+			}
 		case <-time.After(3 * time.Second):
 			t.Fatalf("mcp server did not shut down cleanly")
 		}
