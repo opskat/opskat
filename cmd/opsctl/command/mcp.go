@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/cago-frame/agents/agent"
@@ -46,7 +47,7 @@ func cmdMCP(ctx context.Context, args []string) int {
 	toolsetRaw := fs.String("toolset", string(mcp.ToolsetCore), "Exposed toolset: core or full")
 	sessionFlag := fs.String("session", "", "Explicit grant session ID (default: isolated per-process UUID; never inherits CLI session)")
 	var allowLocalDirs stringSliceFlag
-	fs.Var(&allowLocalDirs, "allow-local-dir", "Restrict cp local filesystem endpoints to this directory (repeatable)")
+	fs.Var(&allowLocalDirs, "allow-local-dir", "Restrict local files read or written by cp and object storage --file to this directory (repeatable)")
 	fs.Usage = printMCPUsage
 
 	if err := fs.Parse(args); err != nil {
@@ -86,7 +87,9 @@ func cmdMCP(ctx context.Context, args []string) int {
 		PrepareCtx:    mcpCallContext(mcpApprover{sessionID: session}, normalizedLocalDirs),
 	})
 
-	serveCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	// Clients stop a stdio server with SIGTERM as often as with SIGINT; either way the
+	// in-flight calls are canceled and their audit rows written before the process exits.
+	serveCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	if err := srv.Run(serveCtx, mcpStdio()); err != nil && !errors.Is(err, context.Canceled) {
@@ -164,7 +167,8 @@ Flags:
   --session <id>
         Explicit grant session ID (default: isolated per-process UUID).
   --allow-local-dir <dir>
-        Restrict cp local filesystem endpoints to this directory (repeatable).
+        Restrict the local files cp and object storage --file read or write to
+        this directory (repeatable). Uploads from it are then not asked about.
 `, strings.Join(mcpToolNames(mcp.ToolsetCore, nil), ", "),
 		strings.Join(mcpToolNames(mcp.ToolsetFull, mcpToolNames(mcp.ToolsetCore, nil)), ", "))
 }
