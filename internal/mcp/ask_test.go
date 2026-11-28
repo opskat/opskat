@@ -152,6 +152,61 @@ func TestAskUnansweredBeforeTheDeadlineIsReportedAsUnanswered(t *testing.T) {
 	require.True(t, res.IsError, "a late answer must not reach the expired call")
 }
 
+// olderProtocol predates multi round-trip requests (SEP-2322): the server asks with
+// elicitation/create while the call is in flight.
+const olderProtocol = "2025-06-18"
+
+// olderClient is a client of olderProtocol: it answers elicitation/create and knows
+// nothing of retrying a call with input responses (the Go SDK's client would).
+func olderClient(opts *mcpsdk.ClientOptions) *mcpsdk.ClientOptions {
+	opts.MultiRoundTrip = &mcpsdk.MultiRoundTripOptions{Disabled: true}
+	return opts
+}
+
+func TestAskOnAnOlderProtocolAsksEveryQuestionOfOneCall(t *testing.T) {
+	var runs atomic.Int32
+	var shown []string
+	var mu sync.Mutex
+	client, cleanup := startTestServerOn(t, ServerConfig{Tools: []agent.Tool{askingTool(&runs, "first?", "second?")}},
+		olderClient(answeringClient("accept", "deny", &shown, &mu)), olderProtocol)
+	defer cleanup()
+
+	res := callText(t, client, "ask", map[string]any{})
+	require.False(t, res.IsError)
+	require.Equal(t, "[accept:deny][accept:deny]", res.Content[0].Text, "the second question gets an answer too, not an empty result")
+	require.Equal(t, []string{"first?", "second?"}, shown)
+	require.Equal(t, int32(1), runs.Load())
+}
+
+// A prompt the client fails to show is unanswered there and then: the call ends at once
+// and the next serial tool runs, instead of both waiting for the answer timeout.
+func TestAskOnAnOlderProtocolAFailedPromptEndsTheCallAndFreesTheSerialLock(t *testing.T) {
+	var runs atomic.Int32
+	serialAsk := askingTool(&runs, "q?")
+	serialAsk.IsSerial = true
+	other := &tool.RawTool{NameStr: "other", SchemaVal: agent.Schema{Type: "object"}, IsSerial: true,
+		Handler: func(context.Context, map[string]any) (*agent.ToolResultBlock, error) {
+			return tool.TextResult("ran"), nil
+		}}
+	client, cleanup := startTestServerOn(t, ServerConfig{Tools: []agent.Tool{serialAsk, other}},
+		olderClient(&mcpsdk.ClientOptions{ElicitationHandler: func(context.Context, *mcpsdk.ElicitRequest) (*mcpsdk.ElicitResult, error) {
+			return nil, fmt.Errorf("the user dismissed the prompt")
+		}}), olderProtocol)
+	defer cleanup()
+
+	res := callText(t, client, "ask", map[string]any{})
+	require.Equal(t, "[unanswered]", res.Content[0].Text, "an unshown prompt must read as unanswered so callers fail closed")
+
+	done := make(chan wireToolResult, 1)
+	go func() { done <- callText(t, client, "other", map[string]any{}) }()
+	select {
+	case out := <-done:
+		require.Equal(t, "ran", out.Content[0].Text)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the serial lock is still held by the call whose prompt failed")
+	}
+}
+
 func TestAskRejectsAnAnswerReplayedOntoDifferentArguments(t *testing.T) {
 	var runs atomic.Int32
 	client, cleanup := startTestServerWith(t, ServerConfig{Tools: []agent.Tool{askingTool(&runs, "q")}},

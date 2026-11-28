@@ -61,6 +61,12 @@ func startTestServer(t *testing.T, cfg ServerConfig) (*mcpTestClient, func()) {
 
 func startTestServerWith(t *testing.T, cfg ServerConfig, clientOpts *mcpsdk.ClientOptions) (*mcpTestClient, func()) {
 	t.Helper()
+	return startTestServerOn(t, cfg, clientOpts, "")
+}
+
+// startTestServerOn connects a client speaking protocolVersion ("" for the latest).
+func startTestServerOn(t *testing.T, cfg ServerConfig, clientOpts *mcpsdk.ClientOptions, protocolVersion string) (*mcpTestClient, func()) {
+	t.Helper()
 	if cfg.AuditWriter == nil {
 		cfg.AuditWriter = &recordingAuditWriter{}
 	}
@@ -74,7 +80,7 @@ func startTestServerWith(t *testing.T, cfg ServerConfig, clientOpts *mcpsdk.Clie
 	}()
 
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "1.0.0"}, clientOpts)
-	session, err := client.Connect(ctx, clientT, nil)
+	session, err := client.Connect(ctx, clientT, &mcpsdk.ClientSessionOptions{ProtocolVersion: protocolVersion})
 	require.NoError(t, err)
 
 	cleanup := func() {

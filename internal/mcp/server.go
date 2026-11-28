@@ -186,6 +186,9 @@ func (s *Server) toolHandler(t agent.Tool) mcpsdk.ToolHandler {
 		if req.Params.RequestState == "" && !clientCanPrompt(req) {
 			return run(reqCtx), nil
 		}
+		if req.Params.RequestState == "" && !retriesWithAnswers(req) {
+			return run(context.WithValue(reqCtx, askerKey{}, askDuringCall(req.Session))), nil
+		}
 		binding, err := callBinding(name, args)
 		if err != nil {
 			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: "invalid tool arguments: " + err.Error()}
