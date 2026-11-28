@@ -778,6 +778,86 @@ func TestHandlePutGroup_CreateThenUpdate(t *testing.T) {
 
 // 删除恒需确认：即使策略里有 allow * 的 grant，也必须弹确认。
 // 实现方式决定了这一点——delete 根本不查策略/grant，直接调 ConfirmFunc。
+// The desktop AI writes assets and groups without asking; an entry that installs
+// WithDataWriteConfirmation (opsctl mcp) asks once per write, showing only safe config:
+// an asset's connection settings decide where its stored credentials are sent.
+func TestHandlePutAsset_ConfirmsOnlyWhereTheEntryAsksShowingOnlySafeConfig(t *testing.T) {
+	env := setupCRUD(t)
+	credential_svc.SetDefault(credential_svc.New("tool-put-master-key", []byte("tool-put-salt-16")))
+	create := func(name string) map[string]any {
+		return map[string]any{
+			"name": name, "type": "ssh",
+			"config": map[string]any{"host": "attacker.example", "port": float64(22), "username": "root", "password": "SUPER_SECRET_PASSWORD_123"},
+		}
+	}
+
+	_, err := handlePutAsset(env.ctx, create("desktop-ssh"))
+	require.NoError(t, err)
+	require.Equal(t, 0, env.confirmCalls, "the desktop AI does not confirm asset writes")
+	require.Equal(t, 1, env.assetCount())
+
+	ctx := WithDataWriteConfirmation(env.ctx)
+	env.confirmDecision = "deny"
+	slot := &aictx.CheckResult{}
+	out, err := handlePutAsset(aictx.WithCheckResultSlot(ctx, slot), create("prod-ssh"))
+	require.NoError(t, err, "a denial is an answer for the model, not a failed call")
+	require.Contains(t, out, "USER DENIED")
+	require.Equal(t, 1, env.assetCount(), "nothing is written before the human says yes")
+	require.Equal(t, permission.ApprovalKindOnce, env.lastConfirmKind, "an asset write is never grantable")
+	require.Len(t, env.lastConfirmItems, 1)
+	item := env.lastConfirmItems[0]
+	require.Equal(t, "create", item.Type)
+	require.Equal(t, `create asset "prod-ssh" (type=ssh)`, item.Command)
+	require.Contains(t, item.Detail, `"host":"attacker.example"`, "the human must see where the credentials will go")
+	require.NotContains(t, item.Detail, "SUPER_SECRET_PASSWORD_123")
+	require.Equal(t, aictx.SourceUserDeny, slot.DecisionSource)
+
+	env.confirmDecision = "allow"
+	slot = &aictx.CheckResult{}
+	_, err = handlePutAsset(aictx.WithCheckResultSlot(ctx, slot), create("prod-ssh"))
+	require.NoError(t, err)
+	require.Equal(t, 2, env.assetCount())
+	require.Equal(t, aictx.SourceUserAllow, slot.DecisionSource)
+
+	env.confirmDecision = "deny"
+	out, err = handlePutAsset(ctx, map[string]any{"asset": "prod-ssh", "config": map[string]any{"host": "10.9.9.9"}})
+	require.NoError(t, err)
+	require.Contains(t, out, "USER DENIED")
+	require.Equal(t, "update", env.lastConfirmItems[0].Type)
+	cfg, err := env.asset("prod-ssh").GetSSHConfig()
+	require.NoError(t, err)
+	require.Equal(t, "attacker.example", cfg.Host, "a denied update leaves the asset as it was")
+}
+
+func TestHandlePutGroup_ConfirmsOnlyWhereTheEntryAsks(t *testing.T) {
+	env := setupCRUD(t)
+
+	_, err := handlePutGroup(env.ctx, map[string]any{"name": "desktop"})
+	require.NoError(t, err)
+	require.Equal(t, 0, env.confirmCalls, "the desktop AI does not confirm group writes")
+
+	ctx := WithDataWriteConfirmation(env.ctx)
+	env.confirmDecision = "deny"
+	out, err := handlePutGroup(ctx, map[string]any{"name": "prod"})
+	require.NoError(t, err)
+	require.Contains(t, out, "USER DENIED")
+	require.Equal(t, 1, env.groupCount())
+	require.Equal(t, permission.ApprovalKindOnce, env.lastConfirmKind)
+	require.Equal(t, `create group "prod"`, env.lastConfirmItems[0].Command)
+
+	env.confirmDecision = "allow"
+	_, err = handlePutGroup(ctx, map[string]any{"name": "prod"})
+	require.NoError(t, err)
+	require.Equal(t, 2, env.groupCount())
+
+	// A rename names the group being renamed; the new name is in the detail.
+	env.confirmDecision = "deny"
+	_, err = handlePutGroup(ctx, map[string]any{"id": float64(env.group("prod").ID), "name": "test"})
+	require.NoError(t, err)
+	require.Equal(t, `update group "prod"`, env.lastConfirmItems[0].Command)
+	require.Contains(t, env.lastConfirmItems[0].Detail, `"name":"test"`)
+}
+
 func TestHandleDeleteAsset_AlwaysConfirmsAndIsNotGrantable(t *testing.T) {
 	env := setupCRUD(t)
 	env.grantEverything() // 往策略里塞一条 allow * ——对 delete 必须无效

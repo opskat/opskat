@@ -31,8 +31,26 @@ func (localAdapter) NormalizeTransferPath(p string) string {
 }
 
 func (localAdapter) List(
-	_ context.Context, _ *asset_entity.Asset, pattern string, recursive bool,
+	ctx context.Context, _ *asset_entity.Asset, pattern string, recursive bool,
 ) (*ListResult, error) {
+	if err := VerifyAllowedLocalPath(ctx, pattern); err != nil {
+		return nil, fmt.Errorf("local source path blocked by --allow-local-dir: %w", err)
+	}
+	res, err := listLocalUnchecked(pattern, recursive)
+	if err != nil {
+		return nil, err
+	}
+	if dirs := AllowedLocalDirs(ctx); len(dirs) > 0 {
+		for _, entry := range res.Entries {
+			if err := VerifyLocalPathAllowed(entry.Path, dirs); err != nil {
+				return nil, fmt.Errorf("local source path blocked by --allow-local-dir: %w", err)
+			}
+		}
+	}
+	return res, nil
+}
+
+func listLocalUnchecked(pattern string, recursive bool) (*ListResult, error) {
 	if hasGlobMeta(pattern) {
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
@@ -162,9 +180,9 @@ func walkLocal(root, base string, res *ListResult) error {
 }
 
 func (localAdapter) OpenRead(
-	_ context.Context, _ *asset_entity.Asset, path string,
+	ctx context.Context, _ *asset_entity.Asset, path string,
 ) (io.ReadCloser, int64, error) {
-	f, err := os.Open(path) //nolint:gosec // 路径来自已经过端点审批的传输清单
+	f, err := openAllowedLocalFile(ctx, path)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to open local file: %w", err)
 	}
@@ -183,7 +201,22 @@ func (localAdapter) Write(
 	if scope == "" {
 		scope = filepath.Dir(path)
 	}
-	root, err := openOrCreateLocalRoot(scope)
+	var (
+		root *os.Root
+		err  error
+	)
+	if dirs := AllowedLocalDirs(ctx); len(dirs) > 0 {
+		allowedDir, _, merr := matchAllowedLocalDir(path, dirs)
+		if merr != nil {
+			return fmt.Errorf("local destination path blocked by --allow-local-dir: %w", merr)
+		}
+		if _, _, serr := matchAllowedLocalDir(scope, dirs); serr != nil {
+			return fmt.Errorf("local destination scope blocked by --allow-local-dir: %w", serr)
+		}
+		root, err = openOrCreateLocalRootUnder(allowedDir, scope)
+	} else {
+		root, err = openOrCreateLocalRoot(scope)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to open approved local destination: %w", err)
 	}
@@ -219,6 +252,36 @@ func (localAdapter) Write(
 	}
 	closed = true
 	return nil
+}
+
+func openOrCreateLocalRootUnder(allowedDir, scope string) (*os.Root, error) {
+	anchor, err := os.OpenRoot(allowedDir)
+	if err != nil {
+		return nil, err
+	}
+	resolvedScope, err := resolvePathWithExistingAncestors(scope)
+	if err != nil {
+		_ = anchor.Close()
+		return nil, err
+	}
+	rel, err := filepath.Rel(allowedDir, resolvedScope)
+	if err != nil || (rel != "." && !filepath.IsLocal(rel)) {
+		_ = anchor.Close()
+		return nil, fmt.Errorf("destination scope %q escapes allowed directory %q", scope, allowedDir)
+	}
+	if rel == "." {
+		return anchor, nil
+	}
+	if err := anchor.MkdirAll(rel, 0o755); err != nil {
+		_ = anchor.Close()
+		return nil, err
+	}
+	sub, err := anchor.OpenRoot(rel)
+	_ = anchor.Close()
+	if err != nil {
+		return nil, err
+	}
+	return sub, nil
 }
 
 func openOrCreateLocalRoot(scope string) (*os.Root, error) {

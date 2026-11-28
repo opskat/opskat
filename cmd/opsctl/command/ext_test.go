@@ -880,6 +880,33 @@ func TestCmdExec_ExtensionDriverDisabledInDesktopIsDriverUnavailable(t *testing.
 	assert.Empty(t, env.approvals, "an unavailable driver is refused before any approval is asked")
 }
 
+// opsctl mcp lives as long as its client and activates per call: an extension the user
+// disables in the desktop meanwhile is refused from the next call on, although this
+// process already runs it, and works again once re-enabled.
+func TestMCPActivationFollowsTheExtensionBeingDisabledAndReenabled(t *testing.T) {
+	setupDriverExt(t)
+	ctx := context.Background()
+	setEnabled := func(enabled bool) {
+		state, err := extension_state_repo.ExtensionState().Find(ctx, extensiontest.DBDriverFixtureName)
+		if err != nil {
+			state = &extension_state_entity.ExtensionState{Name: extensiontest.DBDriverFixtureName}
+			require.NoError(t, extension_state_repo.ExtensionState().Create(ctx, state))
+		}
+		state.Enabled = enabled
+		require.NoError(t, extension_state_repo.ExtensionState().Update(ctx, state))
+	}
+
+	require.NoError(t, activateExtensionsForRef(ctx, "fx-db"))
+
+	setEnabled(false)
+	err := activateExtensionsForRef(ctx, "fx-db")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "disabled")
+
+	setEnabled(true)
+	require.NoError(t, activateExtensionsForRef(ctx, "fx-db"))
+}
+
 // Built-in drivers never trigger an extension activation.
 func TestCmdExec_BuiltinDriverAssetActivatesNoExtension(t *testing.T) {
 	env := setupDriverExt(t)

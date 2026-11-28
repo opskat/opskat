@@ -34,8 +34,8 @@ export function decisionLabel(decision: string, t: TFunction): string {
   return decision === "allow" || decision === "deny" ? t(`audit.decisions.${decision}`) : decision || "-";
 }
 
-// 来源（ai/opsctl/desktop）的译文；未知值原样显示
-export const AUDIT_SOURCES = ["opsctl", "ai", "desktop"] as const;
+// 来源（opsctl/mcp/ai/desktop）的译文；未知值原样显示
+export const AUDIT_SOURCES = ["opsctl", "mcp", "ai", "desktop"] as const;
 export function sourceLabel(source: string, t: TFunction): string {
   return (AUDIT_SOURCES as readonly string[]).includes(source) ? t(`audit.sources.${source}`) : source || "-";
 }

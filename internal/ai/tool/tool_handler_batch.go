@@ -39,6 +39,45 @@ type batchResultItem struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// parseBatchCommands 解析 batch_exec 的 commands 参数：JSON 数组，或 LLM 偶尔传成的
+// 字符串形式的 JSON 数组。
+func parseBatchCommands(args map[string]any) ([]batchCommandItem, error) {
+	commandsRaw, ok := args["commands"]
+	if !ok {
+		return nil, fmt.Errorf("missing required parameter: commands")
+	}
+	commandsJSON, err := json.Marshal(commandsRaw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid commands parameter: %w", err)
+	}
+	var commands []batchCommandItem
+	if err := json.Unmarshal(commandsJSON, &commands); err != nil {
+		var str string
+		if jerr := json.Unmarshal(commandsJSON, &str); jerr != nil {
+			return nil, fmt.Errorf("invalid commands format: %w", err)
+		}
+		if uerr := json.Unmarshal([]byte(str), &commands); uerr != nil {
+			return nil, fmt.Errorf("invalid commands format: %w", uerr)
+		}
+	}
+	return commands, nil
+}
+
+// BatchCommandAssets returns the asset references a batch_exec call names, parsed the
+// way batch_exec parses them; a malformed call names none (batch_exec itself reports
+// why). opsctl mcp reads it to activate the extensions those assets need first.
+func BatchCommandAssets(args map[string]any) []string {
+	commands, err := parseBatchCommands(args)
+	if err != nil {
+		return nil
+	}
+	refs := make([]string, 0, len(commands))
+	for _, c := range commands {
+		refs = append(refs, c.Asset)
+	}
+	return refs
+}
+
 // handleBatchCommand 并发执行多条命令并聚合返回。
 // 单条 per-item 流程与 handleExec 同一顺序、同一理由（见 handleExec 的文档注释）：
 // 解析 → 可选类型断言 → 执行器查找 → 门禁（IsDocumented）→ 规范化 → precheck →
@@ -47,26 +86,9 @@ type batchResultItem struct {
 // permission.ExecutorFor，覆盖面与统一 exec 工具一致（含 database/redis/mongodb/etcd/
 // kafka/k8s）。
 func handleBatchCommand(ctx context.Context, args map[string]any) (string, error) {
-	commandsRaw, ok := args["commands"]
-	if !ok {
-		return "", fmt.Errorf("missing required parameter: commands")
-	}
-
-	commandsJSON, err := json.Marshal(commandsRaw)
+	commands, err := parseBatchCommands(args)
 	if err != nil {
-		return "", fmt.Errorf("invalid commands parameter: %w", err)
-	}
-	var commands []batchCommandItem
-	// LLM 偶尔会把 commands 当字符串 JSON 传，兜底再 unmarshal 一层。
-	if err := json.Unmarshal(commandsJSON, &commands); err != nil {
-		var str string
-		if jerr := json.Unmarshal(commandsJSON, &str); jerr == nil {
-			if uerr := json.Unmarshal([]byte(str), &commands); uerr != nil {
-				return "", fmt.Errorf("invalid commands format: %w", uerr)
-			}
-		} else {
-			return "", fmt.Errorf("invalid commands format: %w", err)
-		}
+		return "", err
 	}
 
 	if len(commands) == 0 {

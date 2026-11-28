@@ -29,7 +29,7 @@ Read-only listing of stored audit log rows: time, source, asset, tool, command s
 
 **Flags** (combine freely; each narrows the result):
 - `--asset <asset>` — Filter by asset (name, group/name, or numeric ID); repeat to match any of several assets
-- `--source <ai|opsctl|desktop>` — Filter by source
+- `--source <ai|opsctl|desktop|mcp>` — Filter by source
 - `--tool <name>` — Filter by tool name (e.g. `exec`, `cp`, `exec_sql`)
 - `--result <success|failed>` — Filter by result
 - `--decision <allow|deny>` — Filter by decision
@@ -602,6 +602,19 @@ opsctl policy group list --type query
 opsctl policy group copy builtin:linux-readonly --name my-readonly
 opsctl policy attach web-01 builtin:linux-readonly
 opsctl policy detach --group production builtin:sql-readonly
+```
+
+## mcp
+
+### `mcp [--toolset core|full] [--session <id>] [--allow-local-dir <dir>]...`
+
+Run a stdio MCP server exposing OpsKat's tools, for an MCP client (Claude Code, Codex, pi, ...) to launch — not a command to run in a shell yourself. `core` (default) exposes `list_assets`, `get_asset`, `help`, `exec`, `batch_exec`, `cp` and `request_permission`; `full` adds the remaining asset/group/credential tools (except `get_asset_secret`: a secret's value is never handed to an external agent) and a `list_audit` scoped to this server's session. Each server process has its own grant session unless `--session` names one; it never reuses the CLI's session.
+
+Policy, grants and audit are the same as for the CLI (audit rows carry source `mcp`). An operation that needs a human decision is asked in the client's own prompt when the client supports form elicitation — allow once, allow for this session (where a grant can be saved), or deny — and otherwise in the desktop app's dialog; with neither it is denied. Permanent rules are never offered there, and SSH MFA is always answered in the desktop app. Unlike the desktop AI, every `put_asset` / `put_group` asks, and uploading a local file asks too unless the transfer was already prompted for; `--allow-local-dir` instead limits the local files `cp` and object storage `--file` read or write to the given directories.
+
+```bash
+claude mcp add opskat -- opsctl mcp
+codex mcp add opskat -- opsctl mcp --toolset full
 ```
 
 ## version

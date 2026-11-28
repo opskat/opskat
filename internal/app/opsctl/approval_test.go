@@ -13,17 +13,17 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/opskat/opskat/internal/ai/permission"
-	approvalpkg "github.com/opskat/opskat/internal/approval"
 )
 
 func TestGrantItemsForPersistenceKeepsRawSubjects(t *testing.T) {
 	secret := "grant-" + "credential-sentinel"
-	reqItems := []approvalpkg.GrantItem{{
+	reqItems := []permission.ApprovalItem{{
 		Type: "exec", AssetID: 1, AssetName: "web-1",
 		Command: "--password " + secret, Detail: "raw " + secret,
 	}}
 
-	got := grantItemsForPersistence("session-1", reqItems, nil)
+	got, err := grantItemsForPersistence(context.Background(), "session-1", reqItems, permission.GrantOriginSystem)
+	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.Equal(t, reqItems[0].Command, got[0].Command)
 	require.Equal(t, reqItems[0].Detail, got[0].Detail)

@@ -361,6 +361,10 @@ function detailSummaryKey(item: { type: string; action?: string }): string {
       return "ai.approvalLocalToolEditPreview";
     case "delete":
       return "ai.approvalDeleteDetail";
+    case "create":
+    case "update":
+      // put_asset / put_group：detail 是即将写入的去密数据
+      return "ai.approvalDataWriteDetail";
     default:
       return approvalTypePresentation(item.type).pinnedDetailLabelKey ?? "ai.approvalTransferDetail";
   }

@@ -261,6 +261,52 @@ func TestMFACaller_TerminalAndCodeComeBeforeDesktop(t *testing.T) {
 	assert.Empty(t, desk.calls)
 }
 
+// opsctl mcp opens connections for as long as its client runs: a code it was started
+// with is stale by the next connection, so MFA is asked in the desktop app instead.
+func TestDesktopOnlyMFAIgnoresTheCodeTheServerWasStartedWith(t *testing.T) {
+	_, src := desktopOnlyMFASources(withMFACode(context.Background(), "111111"))
+	desk := &fakeDesktop{resp: approval.ApprovalResponse{Approved: true, MFAAnswers: []string{"424242"}}}
+	src.desktop = desk.send
+
+	answers, err := src.newCaller(7).SubmitChallenge(context.Background(), otpChallenge)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"424242"}, answers)
+}
+
+// A caller that gives up (an MCP call canceled, the process interrupted) takes the
+// desktop's MFA dialog with it instead of leaving it open for nobody.
+func TestDesktopMFACancelClosesTheDialog(t *testing.T) {
+	dir, err := os.MkdirTemp("", "mfa-ipc-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := approval.SocketPath(dir)
+	dialogClosed := make(chan struct{})
+	server := approval.NewServer(func(ctx context.Context, _ approval.ApprovalRequest) approval.ApprovalResponse {
+		<-ctx.Done()
+		close(dialogClosed)
+		return approval.ApprovalResponse{}
+	}, "tok")
+	require.NoError(t, server.Start(path))
+	t.Cleanup(server.Stop)
+
+	ctrl := gomock.NewController(t)
+	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+	mockAsset.EXPECT().Find(gomock.Any(), int64(9)).Return(&asset_entity.Asset{ID: 9, Name: "bastion"}, nil).AnyTimes()
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+	t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, err = mfaSources{desktop: desktopMFASender(path, "tok")}.newCaller(9).SubmitChallenge(ctx, otpChallenge)
+	require.Error(t, err)
+	select {
+	case <-dialogClosed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the desktop MFA request outlived its caller")
+	}
+}
+
 // 经真实 approval.sock 往返：桌面端回的答案原样到达应答方。
 func TestDesktopMFAOverRealIPC(t *testing.T) {
 	dir, err := os.MkdirTemp("", "mfa-ipc-")

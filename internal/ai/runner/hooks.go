@@ -18,17 +18,35 @@ import (
 	"github.com/opskat/opskat/internal/ai/permission"
 )
 
-// auditMiddleware 是 cago tool dispatch 的"around"中间件，负责审计落库。
+// auditMiddleware 是 AI runner 挂的审计中间件：经 [AuditMiddleware] 落库，写入走
+// 包级 auditWriter 并起 goroutine 异步完成，不拖慢对话里的工具返回。
+func auditMiddleware(c *agent.ToolContext) {
+	AuditMiddleware(asyncAuditWriter{})(c)
+}
+
+// asyncAuditWriter 在调用时读包级 auditWriter（测试会替换它），再异步写入。
+type asyncAuditWriter struct{}
+
+func (asyncAuditWriter) WriteToolCall(ctx context.Context, info audit.ToolCallInfo) {
+	go auditWriter.WriteToolCall(ctx, info)
+}
+
+// AuditMiddleware 返回 cago tool dispatch 的"around"审计中间件，经 w 落库。AI runner
+// 与 opsctl mcp 的工具调用都走它，两条入口的审计列语义因此只有这一份实现。
 //
 // 工作流：
 //  1. 建一个 *aictx.CheckResult slot，挂到 c.ctx（通过 c.WithContext）。
 //  2. c.Next() 推链：后续 mw（如 aitool.LocalToolGate）+ 终端 tool.Call 全跑；tool
 //     内部用 aictx.RecordDecision(ctx, r) 把决策写进 slot。
 //  3. c.Next() 返回后，从 c.Output 抽出文本 / 错误，组合成 audit.ToolCallInfo，
-//     起 goroutine 异步写入审计仓库。
+//     交给 w 写入（脱离调用方 ctx 的取消）。
 //
 // 每次调用的状态都保存在当前 ctx 和闭包内，不通过全局索引跨调用共享。
-func auditMiddleware(c *agent.ToolContext) {
+func AuditMiddleware(w audit.AuditWriter) agent.ToolMiddleware {
+	return func(c *agent.ToolContext) { runAuditMiddleware(c, w) }
+}
+
+func runAuditMiddleware(c *agent.ToolContext, w audit.AuditWriter) {
 	slot := &aictx.CheckResult{}
 	commandSlot := ""
 	auditRequestSlot := aictx.NewAuditRequestSlot()
@@ -89,8 +107,7 @@ func auditMiddleware(c *agent.ToolContext) {
 		AssetName: assetName,
 		Command:   command,
 	}
-	auditCtx := detachAuditContext(c.Context())
-	go auditWriter.WriteToolCall(auditCtx, info)
+	w.WriteToolCall(detachAuditContext(c.Context()), info)
 }
 
 func resolveResultAssetForAudit(ctx context.Context, result string) (int64, string) {

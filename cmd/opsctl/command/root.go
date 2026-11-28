@@ -54,6 +54,17 @@ func Execute() int {
 	}
 
 	verb := remaining[0]
+	// Protect MCP JSON-RPC stdout before bootstrap/extension registration can emit
+	// any diagnostic text to os.Stdout.
+	if verb == "mcp" {
+		realOut := os.Stdout
+		mcpRealStdout = realOut
+		os.Stdout = os.Stderr
+		defer func() {
+			os.Stdout = realOut
+			mcpRealStdout = nil
+		}()
+	}
 	hoisted, args, err := hoistGlobalFlags(verb, remaining[1:])
 	if err == nil {
 		err = globalFlags.Parse(hoisted)
@@ -94,6 +105,9 @@ func Execute() int {
 	assettype.SetCustomTypeSlugLookup(assettype.CustomTypeSlugExists)
 	registerExtensionAssetTypes()
 	defer releaseExtensions(ctx)
+
+	// 工具改了资产/分组数据就通知桌面端刷新：与桌面端 AI 同一个接缝，工具自己声明改动。
+	aictx.SetDataChangeNotifier(desktopDataNotifier{})
 
 	// 策略消息语言跟随系统 locale（LC_ALL → LC_MESSAGES → LANG）
 	ctx = aictx.WithPolicyLang(ctx, resolvePolicyLang(
@@ -146,6 +160,11 @@ func Execute() int {
 		return cmdPolicy(ctx, args, resolvedSession)
 	case "ext":
 		return cmdExt(ctx, args)
+	case "mcp":
+		if err := bootstrap.InitLogger(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to initialize file logger: %v\n", err)
+		}
+		return cmdMCP(ctx, args)
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown command %q\n\nRun 'opsctl help' for usage.\n", verb)
 		return 1
@@ -213,6 +232,7 @@ Commands:
   batch     Execute multiple commands in parallel across assets
   policy    Manage permanent permission rules (show / allow / deny / rm, group, attach / detach)
   ext       Manage extensions (list, search, install, update, dev)
+  mcp       Run a stdio MCP server exposing OpsKat tools to MCP clients (Claude Code, Codex, ...)
   version   Print version information
 
 Note:

@@ -183,6 +183,9 @@ func cpSingleSource(
 	if err := gateLocalWrites(ctx, checker, dst, []string{dst.path}, detail, srcPrompted || dstPrompted); err != nil {
 		return "", err
 	}
+	if err := gateLocalReads(ctx, checker, src, detail, srcPrompted || dstPrompted); err != nil {
+		return "", err
+	}
 
 	// 展开排在审批之后：单源的两端在解析时就已完全确定，先连上去 Stat 一次只会让"这个
 	// 路径存在吗"变成一次不需要授权就能问的问题。List 而不是直接 OpenRead，是为了拿到
@@ -235,6 +238,9 @@ func cpMultiSource(
 		{ep: dst, path: dst.path, dir: helper.DirWriteScope},
 	}, detail)
 	if err != nil {
+		return "", err
+	}
+	if err := gateLocalReads(ctx, checker, src, detail, transferPrompted); err != nil {
 		return "", err
 	}
 
@@ -489,6 +495,18 @@ func gateLocalWrites(
 		return err
 	}
 	return nil
+}
+
+// gateLocalReads 是 gateLocalWrites 的读侧：源端在本机、这次传输一个弹框都没有时，本机
+// 文件交给入口的本地读门禁（helper.GateLocalReads；入口没装门禁就不问）。排在展开之前，
+// 被拒时本机连列都没列。多源形态问的是源基点（目录或通配），与审批范围一致。
+func gateLocalReads(
+	ctx context.Context, checker *permission.CommandPolicyChecker, src *cpEndpoint, detail string, prompted bool,
+) error {
+	if src.isRemote() {
+		return nil
+	}
+	return helper.GateLocalReads(ctx, checker, prompted, []string{src.path}, detail)
 }
 
 // expandSource 展开源端，并把"什么都没匹配上"翻译成错误。

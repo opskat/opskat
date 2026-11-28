@@ -60,6 +60,33 @@ describe("ApprovalBlock", () => {
     expect(screen.getByText(/upload \/tmp\/payload/)).toHaveClass("select-text");
   });
 
+  it("labels a put_asset / put_group detail as what will be saved, not as a transfer", () => {
+    render(
+      <ApprovalBlock
+        block={
+          {
+            type: "approval",
+            status: "pending_confirm",
+            confirmId: "confirm-1",
+            approvalKind: "once",
+            approvalItems: [
+              {
+                type: "update",
+                asset_id: 1,
+                asset_name: "mock-ssh",
+                command: 'update asset "mock-ssh" (type=ssh)',
+                detail: '{"description":"web tier","operation":"update"}',
+              },
+            ],
+          } as ContentBlock
+        }
+      />
+    );
+
+    expect(screen.getByText("ai.approvalDataWriteDetail")).toBeInTheDocument();
+    expect(screen.queryByText("ai.approvalTransferDetail")).not.toBeInTheDocument();
+  });
+
   it("renders a cp approval with its remote path as the subject", () => {
     render(<ApprovalBlock block={cpBlock()} />);
 

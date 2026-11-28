@@ -315,7 +315,7 @@ exactly as stored.
 Flags (combine freely; each narrows the result):
   --asset <asset>       Filter by asset (name, group/name, or numeric ID).
                         Repeat to match any of several assets.
-  --source <source>     ai | opsctl | desktop
+  --source <source>     ai | opsctl | desktop | mcp
   --tool <name>         Tool name, e.g. exec, cp, exec_sql
   --result <result>     success | failed
   --decision <d>        allow | deny

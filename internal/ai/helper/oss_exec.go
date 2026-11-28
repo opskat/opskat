@@ -16,6 +16,7 @@ import (
 	"github.com/cago-frame/cago/pkg/logger"
 	"go.uber.org/zap"
 
+	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/service/oss_svc"
 )
@@ -82,12 +83,25 @@ func ExecOSSOnAsset(ctx context.Context, asset *asset_entity.Asset, command, _ s
 //     `object.read mybucket/*` 从 exec 面递进去会绕过 DSL 解析器直接参与规则匹配，
 //     撞上一条整桶 allow 就被判成 Allow 并落成 grant，之后才在执行器里因为解析不了而失败。
 //     ParseOSSCommand 只认 bucket / object 两个 family，`object.read` 在这里就报错。
-func CanonicalizeOSSCommand(_ *asset_entity.Asset, command string) (string, error) {
+//
+// CanonicalizeOSSCommandWithContext extends CanonicalizeOSSCommand with context-aware
+// local filesystem allowlist validation (--allow-local-dir) so disallowed --file paths
+// fail closed before any human approval prompt is shown.
+func CanonicalizeOSSCommandWithContext(ctx context.Context, _ *asset_entity.Asset, command string) (string, error) {
 	c, err := resolveOSSCommand(command)
 	if err != nil {
 		return "", err
 	}
+	if file, ok := c.Flags["file"]; ok {
+		if err := VerifyAllowedLocalPath(ctx, file); err != nil {
+			return "", fmt.Errorf("--file blocked by --allow-local-dir: %w", err)
+		}
+	}
 	return c.Render()
+}
+
+func CanonicalizeOSSCommand(_ *asset_entity.Asset, command string) (string, error) {
+	return CanonicalizeOSSCommandWithContext(context.Background(), nil, command)
 }
 
 // resolveOSSCommand 解析并做"解析器够不着、但执行前就能判定"的那一层校验。
@@ -225,6 +239,12 @@ func (e ossExecutor) getObject(ctx context.Context, asset *asset_entity.Asset, c
 func (e ossExecutor) downloadObject(
 	ctx context.Context, asset *asset_entity.Asset, bucket, key, file string,
 ) (string, error) {
+	if err := VerifyAllowedLocalPath(ctx, file); err != nil {
+		aictx.RecordDecision(ctx, aictx.CheckResult{
+			Decision: aictx.Deny, DecisionSource: aictx.SourcePolicyDeny, Message: err.Error(),
+		})
+		return "", fmt.Errorf("local destination path blocked by --allow-local-dir: %w", err)
+	}
 	if err := gateExecLocalWrite(ctx, file,
 		fmt.Sprintf("object get %s/%s --file=%s", bucket, key, file)); err != nil {
 		return "", err
@@ -310,6 +330,11 @@ func (e ossExecutor) readObjectInline(
 func (e ossExecutor) putObject(ctx context.Context, asset *asset_entity.Asset, c *OSSCommand) (string, error) {
 	bucket, key := cutOSSPath(c.Target)
 	file := c.Flags["file"] // ossFlagRules 里是必填，validateOSSFlags 已经拦过空值
+
+	if err := gateExecLocalRead(ctx, file,
+		fmt.Sprintf("object put %s/%s --file=%s", bucket, key, file)); err != nil {
+		return "", err
+	}
 
 	reader, size, err := localTransfer.OpenRead(ctx, nil, file)
 	if err != nil {

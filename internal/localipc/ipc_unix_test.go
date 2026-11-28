@@ -11,6 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The socket's owner and root may connect, as they always could through its 0600 mode;
+// any other user is turned away.
+func TestPeerUIDAllowedAdmitsTheOwnerAndRootOnly(t *testing.T) {
+	require.True(t, peerUIDAllowed(501, 501))
+	require.True(t, peerUIDAllowed(0, 501), "sudo opsctl reaching the user's desktop app")
+	require.False(t, peerUIDAllowed(502, 501))
+}
+
 func TestUnixStaleSocketAndPermissions(t *testing.T) {
 	path := filepath.Join(ipcTestDir(t), "stale.sock")
 	stale, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})

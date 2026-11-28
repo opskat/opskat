@@ -51,6 +51,7 @@ func fixture() []*audit_entity.AuditLog {
 		{ID: 6, Source: "ai", ToolName: "grant_submit", AssetID: 12, AssetName: "web-02", Command: "uptime", Success: 1, Decision: "allow", SessionID: "s2", Createtime: 250},
 		{ID: 7, Source: "ai", ToolName: "grant_submit", AssetID: 13, AssetName: "web-03", Command: "", Success: 1, Decision: "allow", SessionID: "s1", Createtime: 260},
 		{ID: 8, Source: "ai", ToolName: "batch_exec", Success: 1, Decision: "allow", DecisionSource: "future_source", Createtime: 500},
+		{ID: 9, Source: "mcp", ToolName: "exec", AssetID: 11, Success: 1, Decision: "allow", DecisionSource: aictx.SourcePolicyAllow, SessionID: "mcp-s1", Createtime: 600},
 	}
 }
 
@@ -66,7 +67,8 @@ func TestListTranslatesFilters(t *testing.T) {
 		{"exec_gate decider covers every exec_* source", Query{Decider: aictx.DeciderExecGate}, []int64{3, 2}},
 		{"none decider matches rows without a decision source", Query{Decider: aictx.DeciderNone}, []int64{7, 6, 5, 4}},
 		{"result failed", Query{Result: ResultFailed}, []int64{3, 2}},
-		{"result success with decision allow", Query{Result: ResultSuccess, Decision: "allow", Decider: aictx.DeciderPolicy}, []int64{1}},
+		{"result success with decision allow", Query{Result: ResultSuccess, Decision: "allow", Decider: aictx.DeciderPolicy}, []int64{9, 1}},
+		{"source mcp filter", Query{Source: "mcp"}, []int64{9}},
 		{"asset ids union with session", Query{AssetIDs: []int64{11, 12}, SessionID: "s1"}, []int64{5, 2, 1}},
 	}
 	for _, c := range cases {

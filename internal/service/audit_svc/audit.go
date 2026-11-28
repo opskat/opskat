@@ -22,7 +22,7 @@ const (
 
 // 可选值，供校验与 CLI 提示
 var (
-	Sources   = []string{"ai", "opsctl", "desktop"}
+	Sources   = []string{"ai", "opsctl", "mcp", "desktop"}
 	Results   = []string{ResultSuccess, ResultFailed}
 	Decisions = []string{"allow", "deny"}
 )

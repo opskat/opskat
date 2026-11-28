@@ -9,6 +9,9 @@ import (
 	"net"
 	"os"
 	"syscall"
+
+	"github.com/cago-frame/cago/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // DialContext connects to a Unix-domain socket.
@@ -47,5 +50,36 @@ func Listen(path string) (net.Listener, error) {
 		_ = listener.Close()
 		return nil, fmt.Errorf("restrict socket %s: %w", path, err)
 	}
-	return listener, nil
+	return &peerVerifiedListener{Listener: listener, expectedUID: os.Geteuid()}, nil
+}
+
+// peerUIDAllowed reports whether a peer running as uid may talk to a listener owned by
+// owner: the same user, or root — which the socket's 0600 mode never kept out, so
+// `sudo opsctl …` reaching the user's desktop keeps working.
+func peerUIDAllowed(uid, owner int) bool {
+	return uid == owner || uid == 0
+}
+
+// peerVerifiedListener checks OS-level peer credentials on every accepted Unix
+// connection, closing the Listen -> Chmod umask window and rejecting any client
+// running under another (non-root) UID.
+type peerVerifiedListener struct {
+	net.Listener
+	expectedUID int
+}
+
+func (l *peerVerifiedListener) Accept() (net.Conn, error) {
+	for {
+		conn, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		if err := verifyUnixPeerUID(conn, l.expectedUID); err != nil {
+			logger.Default().Warn("local IPC connection rejected: peer is not the current user",
+				zap.String("addr", l.Addr().String()), zap.Error(err))
+			_ = conn.Close()
+			continue
+		}
+		return conn, nil
+	}
 }

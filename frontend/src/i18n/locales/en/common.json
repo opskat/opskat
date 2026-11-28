@@ -1732,6 +1732,7 @@
     "approvalGrantTitle": "Permission Request",
     "approvalDeleteTitle": "Confirm deletion",
     "approvalDeleteDetail": "What gets deleted",
+    "approvalDataWriteDetail": "What will be saved",
     "approvalDeny": "Deny",
     "approvalAllow": "Allow",
     "approvalAlwaysAllow": "Always Allow",
@@ -2569,6 +2570,7 @@
     "refresh": "Refresh",
     "sources": {
       "opsctl": "opsctl",
+      "mcp": "MCP",
       "ai": "AI",
       "desktop": "Desktop"
     },

@@ -14,14 +14,12 @@ import (
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/ai/runner"
-	"github.com/opskat/opskat/internal/ai/skills"
 	"github.com/opskat/opskat/internal/ai/tool"
 	"github.com/opskat/opskat/internal/app/i18n"
 	"github.com/opskat/opskat/internal/model/entity/ai_provider_entity"
 	"github.com/opskat/opskat/internal/model/entity/conversation_entity"
 	"github.com/opskat/opskat/internal/service/ai_provider_svc"
 	"github.com/opskat/opskat/internal/service/conversation_svc"
-	"github.com/opskat/opskat/internal/service/custom_type_svc"
 
 	"github.com/cago-frame/agents/agent"
 	"github.com/cago-frame/agents/app/coding"
@@ -102,52 +100,6 @@ func (e *runnerEntry) abandon() {
 		e.emitFn(runner.StreamEvent{Type: "stopped"})
 	}
 	e.emitFn(runner.StreamEvent{Type: "done"})
-}
-
-// allAssetTypeSkills 返回全部有用法文档的资产类型（skills.Types()——内嵌的 9 个 exec
-// 类型 + rdp/vnc/local 3 个 doc-only 类型，见 permission.RegisterHelpDoc，外加已启用
-// 扩展在加载期登记的类型）的一行技能描述（skills.Description），用于 PromptBuilder
-// 的技能清单。
-//
-// 无条件全量返回，不看 openTabs：这份清单是**发现**用的，让模型知道 help 存在、以及
-// exec 覆盖了哪些类型。doc-only 类型（有 help 无 exec）也混在这同一份返回值里——
-// 拆成"exec 真的覆盖"与"仅有配置文档"两段是 PromptBuilder.buildAssetTypeSkills 的
-// 职责（按 permission.ExecutorFor 拆分），本函数只负责提供全量的 类型→一行描述 映射，
-// 不在这里预判归属。按 Tab 过滤会让没开对应 Tab 的会话完全看不到这条路径。一行一
-// 类型，成本可以忽略。
-//
-// 它**不**满足 exec 的门禁——门禁只认模型显式调用过 help（见 tool.DocGate 的注释）。
-// 扩展提供的类型不再走单独的 SKILL.md 注入：它们在加载期经 internal/extreg 登记进同一张
-// skills 表，因此和内置类型一样只在这里露一行、正文靠 help(asset) 取。
-func allAssetTypeSkills() map[string]string {
-	out := make(map[string]string)
-	for _, assetType := range skills.Types() {
-		if desc, ok := skills.Description(assetType); ok {
-			out[assetType] = desc
-		}
-	}
-	return out
-}
-
-// definedCustomTypeSummaries returns slug+name pairs for every currently defined custom
-// type for PromptBuilder.SetCustomTypes (which owns the ordering) — the "Defined custom types"
-// discovery section of the skill list (spec "帮助、技能与门禁"). Like
-// allAssetTypeSkills it is a pure discovery aid, not a doc-gate signal.
-//
-// A listing failure degrades to an empty (nil) result instead of failing the whole
-// prompt build / Send call: the custom-type list is a convenience for the model to spot
-// slugs it has never seen an asset of, not a required part of the system prompt.
-func definedCustomTypeSummaries(ctx context.Context) []runner.CustomTypeSummary {
-	types, err := custom_type_svc.CustomType().List(ctx)
-	if err != nil {
-		logger.Ctx(ctx).Warn("list custom types for system prompt", zap.Error(err))
-		return nil
-	}
-	out := make([]runner.CustomTypeSummary, 0, len(types))
-	for _, ct := range types {
-		out = append(out, runner.CustomTypeSummary{Slug: ct.Slug, Name: ct.Name})
-	}
-	return out
 }
 
 // normalizeConversationTitle 统一会话标题规则。
@@ -554,8 +506,8 @@ func (a *AI) SendAIMessage(convID int64, messages []runner.Message, aiCtx runner
 	// covers. It deliberately does NOT mark anything documented on the doc gate: the only
 	// thing that satisfies the gate is an explicit help(asset) call, handled inside
 	// handleHelp (internal/ai/tool/tool_handlers_unified.go).
-	builder.SetAssetTypeSkills(allAssetTypeSkills())
-	builder.SetCustomTypes(definedCustomTypeSummaries(ctx))
+	builder.SetAssetTypeSkills(runner.AssetTypeSkills())
+	builder.SetCustomTypes(runner.DefinedCustomTypes(ctx))
 
 	systemPrompt := builder.Build()
 

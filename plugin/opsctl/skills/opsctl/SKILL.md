@@ -167,7 +167,7 @@ opsctl cp 'web-01:/var/log/*.log' ./logs/                   # remote glob: quote
 
 ## Commands
 
-Core commands: `list`, `get`, `help`, `create`, `update`, `delete`, `ssh`, `exec`, `secret`, `batch`, `cp`, `policy`, `ext`, `version`.
+Core commands: `list`, `get`, `help`, `create`, `update`, `delete`, `ssh`, `exec`, `secret`, `batch`, `cp`, `policy`, `ext`, `mcp` (stdio MCP server for MCP clients), `version`.
 
 For full command reference with flags and examples, see [references/commands.md](references/commands.md).
 

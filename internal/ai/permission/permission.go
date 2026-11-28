@@ -876,25 +876,48 @@ func NormalizeGrantPatterns(approvalType, command string, origin GrantOrigin) []
 	return handler.grantPatterns(cmd, origin)
 }
 
-// SaveGrantPatternsForApproval 用 NormalizeGrantPatterns 拆出 patterns 后依次落库。
-// 适合 app 层在多种审批回调（opsctl 单审批、AI grant 流）里调用，避免每个路径重复拆分逻辑。
+// GrantPatternsForApproval 给出一条审批输入落库时的工具面（grant_items.tool_name）与
+// pattern 列表。所有把审批结果落成会话授权的路径都经它（SaveGrantPatternsForApproval、
+// 桌面端 opsctl 授权弹窗），拆分与落点因此只有这一份。
 //
-// 扩展类型的 pattern 是规则语法（`<action>[:<resource-glob>]`），经 extensionGrantFor 落成
-// ext:<policyType>:… ——扩展调用只匹配这种形状。不合法的不落库：上游
-// （SubmitGrantMulti、ParseApprovalResponse）已拒绝它们，走到这里的只会是合法的。
-func SaveGrantPatternsForApproval(ctx context.Context, sessionID string, assetID int64, assetName, approvalType, command string, origin GrantOrigin) {
+//   - request_permission 给内置类型资产的审批项标的是 grantApprovalItemType（弹窗里的
+//     「授权」标记），不是工具面：按它归一化会跳过资产类型注册的拆分（复合命令按子命令、
+//     OSS 的 DSL 派生策略串），整串落库后任何一次检查都匹配不上。这里先换成资产的真实审批面。
+//     它的 pattern 是模型写的规则、人照原样批准，通配就是要授的范围：按 GrantOriginUser
+//     归一化，不像系统从一条命令推出的主体那样收窄（否则 OSS / 通用资产的 `*` 被转义）。
+//   - 扩展类型的 pattern 是规则语法（`<action>[:<resource-glob>]`），经 extensionGrantFor
+//     落成 ext:<policyType>:… ——扩展调用只匹配这种形状；不合法时返回错误，什么也不落。
+//   - 其余类型经 NormalizeGrantPatternsFor 按类型注册的拆法归一化。
+func GrantPatternsForApproval(ctx context.Context, assetID int64, approvalType, command string, origin GrantOrigin) (toolName string, patterns []string, err error) {
+	if approvalType == grantApprovalItemType && assetID > 0 {
+		if asset := resolveAssetForPolicy(ctx, assetID); asset != nil {
+			approvalType = ApprovalTypeFor(asset.Type)
+			origin = GrantOriginUser
+		}
+	}
 	grant, isExt, err := extensionGrantFor(approvalType, command)
-	patterns := grant.Rules
 	switch {
 	case !isExt:
-		patterns = NormalizeGrantPatternsFor(ctx, assetID, approvalType, command, origin)
+		return approvalType, NormalizeGrantPatternsFor(ctx, assetID, approvalType, command, origin), nil
 	case err != nil:
+		return "", nil, err
+	}
+	return grant.Type, grant.Rules, nil
+}
+
+// SaveGrantPatternsForApproval 按 GrantPatternsForApproval 拆出 patterns 后依次落库。
+// 适合 app 层在多种审批回调（opsctl 单审批、AI grant 流）里调用，避免每个路径重复拆分逻辑。
+// 不合法的扩展 pattern 不落库：上游（SubmitGrantMulti、ParseApprovalResponse）已拒绝它们，
+// 走到这里的只会是合法的。
+func SaveGrantPatternsForApproval(ctx context.Context, sessionID string, assetID int64, assetName, approvalType, command string, origin GrantOrigin) {
+	toolName, patterns, err := GrantPatternsForApproval(ctx, assetID, approvalType, command, origin)
+	if err != nil {
 		logger.Ctx(ctx).Warn("extension grant pattern invalid; nothing persisted",
 			zap.Int64("assetID", assetID), zap.String("approvalType", approvalType), zap.Error(err))
 		return
 	}
 	for _, p := range patterns {
-		SaveGrantPattern(ctx, sessionID, assetID, assetName, approvalType, p)
+		SaveGrantPattern(ctx, sessionID, assetID, assetName, toolName, p)
 	}
 }
 
