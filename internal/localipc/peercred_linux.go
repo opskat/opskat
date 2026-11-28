@@ -30,7 +30,7 @@ func verifyUnixPeerUID(conn net.Conn, expectedUID int) error {
 	if scErr != nil {
 		return scErr
 	}
-	if int(ucred.Uid) != expectedUID {
+	if !peerUIDAllowed(int(ucred.Uid), expectedUID) {
 		return fmt.Errorf("peer uid %d does not match expected uid %d", ucred.Uid, expectedUID)
 	}
 	return nil

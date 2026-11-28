@@ -53,9 +53,16 @@ func Listen(path string) (net.Listener, error) {
 	return &peerVerifiedListener{Listener: listener, expectedUID: os.Geteuid()}, nil
 }
 
+// peerUIDAllowed reports whether a peer running as uid may talk to a listener owned by
+// owner: the same user, or root — which the socket's 0600 mode never kept out, so
+// `sudo opsctl …` reaching the user's desktop keeps working.
+func peerUIDAllowed(uid, owner int) bool {
+	return uid == owner || uid == 0
+}
+
 // peerVerifiedListener checks OS-level peer credentials on every accepted Unix
 // connection, closing the Listen -> Chmod umask window and rejecting any client
-// running under a different UID.
+// running under another (non-root) UID.
 type peerVerifiedListener struct {
 	net.Listener
 	expectedUID int
