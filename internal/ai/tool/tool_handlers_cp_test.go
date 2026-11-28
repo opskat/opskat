@@ -136,6 +136,70 @@ func TestCpAutoAllowedTransferGatesTheLocalWrite(t *testing.T) {
 	})
 }
 
+// 上传是本地写的镜像：远端写被策略自动放行、一个弹框都没有时，入口装了本地读门禁
+// （opsctl mcp）就要先过 local_read，否则一个放开写的资产能零交互带走 ~/.ssh/id_rsa。
+// 没装门禁的入口（桌面端 AI：它自己的 local_read 工具本就不设门禁）照旧直接传。
+func TestCpAutoAllowedUploadGatesTheLocalReadWhenTheEntryHasAGate(t *testing.T) {
+	Convey("两端零弹框的上传按入口的本地读门禁把关", t, func() {
+		src := filepath.Join(t.TempDir(), "id_rsa")
+		So(os.WriteFile(src, []byte("PRIVATE KEY"), 0o600), ShouldBeNil)
+		withReadGate := func(ctx context.Context, decision string) (context.Context, *[]LocalToolApprovalRequest) {
+			reqs := &[]LocalToolApprovalRequest{}
+			gate := NewLocalToolGate(func(_ context.Context, req LocalToolApprovalRequest) permission.ApprovalResponse {
+				*reqs = append(*reqs, req)
+				return permission.ApprovalResponse{Decision: decision}
+			})
+			return helper.WithLocalReadGate(ctx, gate), reqs
+		}
+
+		Convey("门禁拒绝：报错，一个字节都没写到远端", func() {
+			ctx, seen := setupCp(t, "deny")
+			ctx, reqs := withReadGate(ctx, "deny")
+
+			_, err := handleCp(ctx, map[string]any{"src": src, "dst": "auto-rw-01:/loot/id_rsa"})
+
+			So(err, ShouldNotBeNil)
+			So(err.Error(), ShouldContainSubstring, "USER DENIED")
+			So(*seen, ShouldHaveLength, 0)
+			So(*reqs, ShouldHaveLength, 1)
+			So((*reqs)[0].ToolName, ShouldEqual, LocalReadToolName)
+			So((*reqs)[0].SubCommands, ShouldResemble, []string{src})
+			So(cpFake.written, ShouldBeEmpty)
+		})
+
+		Convey("门禁放行：照常上传", func() {
+			ctx, _ := setupCp(t, "deny")
+			ctx, reqs := withReadGate(ctx, "allow")
+
+			_, err := handleCp(ctx, map[string]any{"src": src, "dst": "auto-rw-01:/loot/id_rsa"})
+
+			So(err, ShouldBeNil)
+			So(*reqs, ShouldHaveLength, 1)
+			So(string(cpFake.written["/loot/id_rsa"]), ShouldEqual, "PRIVATE KEY")
+		})
+
+		Convey("入口没装本地读门禁：不问", func() {
+			ctx, _ := setupCp(t, "deny")
+
+			_, err := handleCp(ctx, map[string]any{"src": src, "dst": "auto-rw-01:/loot/id_rsa"})
+
+			So(err, ShouldBeNil)
+			So(string(cpFake.written["/loot/id_rsa"]), ShouldEqual, "PRIVATE KEY")
+		})
+
+		Convey("远端写弹过框：人已经看过两端原文，不再追问", func() {
+			ctx, seen := setupCp(t, "allow")
+			ctx, reqs := withReadGate(ctx, "deny")
+
+			_, err := handleCp(ctx, map[string]any{"src": src, "dst": "sink-01:/in/id_rsa"})
+
+			So(err, ShouldBeNil)
+			So(*seen, ShouldNotBeEmpty)
+			So(*reqs, ShouldHaveLength, 0)
+		})
+	})
+}
+
 // TestCpAutoAllowedRecursiveGatesEveryLandingPathAtOnce：多源形态下门禁看到的是**展开后
 // 的每一条落点**，一次问完。给一条 dst 基点等于让用户批一片目录，而批的必须是真正会被
 // 写出来的那些路径（D16/D17 在本地这一侧的同一条要求）。

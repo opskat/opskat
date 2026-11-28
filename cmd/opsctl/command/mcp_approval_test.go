@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -62,12 +63,14 @@ func withPromptingClient[T any](t *testing.T, answer *mcpsdk.ElicitResult, lang 
 	t.Cleanup(func() {
 		_ = session.Close()
 		cancel()
-		<-done
+		if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf("mcp server stopped with %v", err)
+		}
 	})
 
 	res, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "probe", Arguments: map[string]any{}})
 	require.NoError(t, err)
-	require.False(t, res.IsError)
+	require.False(t, res.IsError, "%v", res.Content[0].(*mcpsdk.TextContent).Text)
 	mu.Lock()
 	defer mu.Unlock()
 	return got, shown
@@ -90,7 +93,21 @@ func accept(decision string) *mcpsdk.ElicitResult {
 
 var sshExecItem = permission.ApprovalItem{Type: "exec", AssetID: 3, AssetName: "web-01", Command: "systemctl restart nginx"}
 
+// withSSHAssets serves every asset lookup as an SSH asset: the prompt for a grantable
+// approval derives what "allow for this session" saves from the asset's type.
+func withSSHAssets(t *testing.T) {
+	t.Helper()
+	mockAsset := mock_asset_repo.NewMockAssetRepo(gomock.NewController(t))
+	mockAsset.EXPECT().Find(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, id int64) (*asset_entity.Asset, error) {
+		return &asset_entity.Asset{ID: id, Name: "mock-ssh", Type: asset_entity.AssetTypeSSH}, nil
+	}).AnyTimes()
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+	t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+}
+
 func TestMCPApproverOffersSessionAllowOnlyWhereAGrantCanBeSaved(t *testing.T) {
+	withSSHAssets(t)
 	a := mcpApprover{sessionID: "mcp_s"}
 
 	resp, shown := withPromptingClient(t, accept("allowAll"), "en", func(ctx context.Context) permission.ApprovalResponse {
@@ -136,7 +153,9 @@ func TestMCPApproverDeniesAForgedChoiceThatWasNotOffered(t *testing.T) {
 	t.Cleanup(func() {
 		_ = session.Close()
 		cancel()
-		<-done
+		if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf("mcp server stopped with %v", err)
+		}
 	})
 
 	first, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "probe", Arguments: map[string]any{}})
@@ -154,6 +173,7 @@ func TestMCPApproverDeniesAForgedChoiceThatWasNotOffered(t *testing.T) {
 }
 
 func TestMCPApproverTreatsAnythingButAnAcceptedChoiceAsDenial(t *testing.T) {
+	withSSHAssets(t)
 	a := mcpApprover{sessionID: "mcp_s"}
 	for _, answer := range []*mcpsdk.ElicitResult{{Action: "decline"}, {Action: "cancel"}} {
 		resp, _ := withPromptingClient(t, answer, "en", func(ctx context.Context) permission.ApprovalResponse {
@@ -188,12 +208,7 @@ func TestMCPApproverPromptNamesTheAssetAndCommandInTheUserLanguage(t *testing.T)
 // extension call touching several resources as one wildcard rule. The human picking it
 // must see that, as the terminal prompt shows its subjects.
 func TestMCPApproverPromptSaysWhatAllowForThisSessionWouldGrant(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
-	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(&asset_entity.Asset{ID: 1, Name: "mock-ssh", Type: asset_entity.AssetTypeSSH}, nil).AnyTimes()
-	origAsset := asset_repo.Asset()
-	asset_repo.RegisterAsset(mockAsset)
-	t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+	withSSHAssets(t)
 
 	a := mcpApprover{sessionID: "mcp_s"}
 	review := &aictx.ReviewInfo{Outcome: aictx.ReviewReject, Failed: []string{"may_interrupt_service"},

@@ -8,7 +8,8 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,11 +23,9 @@ import (
 	"github.com/opskat/opskat/internal/ai/assetref"
 	"github.com/opskat/opskat/internal/ai/helper"
 	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/ai/runner"
 	"github.com/opskat/opskat/internal/ai/tool"
-	"github.com/opskat/opskat/internal/assettype"
 	"github.com/opskat/opskat/internal/mcp"
-	"github.com/opskat/opskat/internal/model/entity/asset_entity"
-	"github.com/opskat/opskat/internal/service/asset_put_svc"
 	"github.com/opskat/opskat/internal/service/audit_svc"
 )
 
@@ -39,17 +38,6 @@ var mcpRealStdout *os.File
 // mcpStdio returns the MCP transport; overridden in tests.
 var mcpStdio = func() mcpsdk.Transport {
 	return &mcpsdk.IOTransport{Reader: os.Stdin, Writer: mcpRealStdout}
-}
-
-type serialTool interface {
-	Serial() bool
-}
-
-func isToolSerial(t agent.Tool) bool {
-	if st, ok := t.(serialTool); ok {
-		return st.Serial()
-	}
-	return false
 }
 
 func cmdMCP(ctx context.Context, args []string) int {
@@ -91,33 +79,28 @@ func cmdMCP(ctx context.Context, args []string) int {
 
 	approver := mcpApprover{sessionID: session}
 	checker := approver.checker()
-	localWriteGate := approver.localToolGate()
+	// One gate for both directions of local file access, as the desktop AI uses one for
+	// its local tools: "allow for this session" on a path is one record.
+	localGate := approver.localToolGate()
 	docGate := tool.NewDocGate()
-	tools := wrapMCPTools(mcp.FilterTools(tool.Tools(), toolset), normalizedLocalDirs)
-	if toolset == mcp.ToolsetFull {
-		tools = append(tools, newMCPListAuditTool(session))
-	}
 
 	srv := mcp.NewServer(mcp.ServerConfig{
 		ServerVersion: configs.Version,
-		Tools:         tools,
+		Tools:         mcpTools(toolset, session),
 		AuditWriter:   opsctlAuditWriter,
 		SessionID:     session,
+		Instructions:  runner.ToolGuidance(runner.AssetTypeSkills(), runner.DefinedCustomTypes(ctx)),
 		PrepareCtx: func(callCtx context.Context) context.Context {
 			callCtx = tool.WithDocGate(callCtx, docGate)
 			callCtx = permission.WithPolicyChecker(callCtx, checker)
-			callCtx = helper.WithLocalWriteGate(callCtx, localWriteGate)
+			callCtx = helper.WithLocalWriteGate(callCtx, localGate)
+			// Unlike the desktop AI, an external agent's uploads of local files go through
+			// a gate too (helper.LocalReadGate explains why); --allow-local-dir replaces it.
+			callCtx = helper.WithLocalReadGate(callCtx, localGate)
 			if len(normalizedLocalDirs) > 0 {
 				callCtx = helper.WithAllowedLocalDirs(callCtx, normalizedLocalDirs)
-			} else {
-				callCtx = helper.WithLocalReadGate(callCtx, newMCPLocalReadGate())
 			}
 			return withDesktopOnlyMFA(withDesktopOnlyConnectionPathMFA(callCtx))
-		},
-		OnMutate: func(toolName string) {
-			if refreshesDesktopUI(toolName) {
-				notifyDesktopAssetChanged()
-			}
 		},
 	})
 
@@ -131,8 +114,26 @@ func cmdMCP(ctx context.Context, args []string) int {
 	return 0
 }
 
+// mcpTools is what opsctl mcp serves for toolset: the built-in AI's tools, the ones
+// naming assets wrapped to activate those assets' extensions first, plus list_audit
+// in the full toolset.
+func mcpTools(toolset mcp.Toolset, session string) []agent.Tool {
+	served := mcp.FilterTools(tool.Tools(), toolset)
+	tools := make([]agent.Tool, 0, len(served)+1)
+	for _, t := range served {
+		if refs, ok := mcpToolAssetRefs[t.Name()]; ok {
+			t = extensionActivatingTool{Tool: t, refs: refs}
+		}
+		tools = append(tools, t)
+	}
+	if toolset == mcp.ToolsetFull {
+		tools = append(tools, newMCPListAuditTool(session))
+	}
+	return tools
+}
+
 func printMCPUsage() {
-	fmt.Fprint(os.Stderr, `Usage:
+	fmt.Fprintf(os.Stderr, `Usage:
   opsctl mcp [flags]
 
 Run a stdio MCP (Model Context Protocol) server exposing OpsKat tools.
@@ -145,54 +146,81 @@ always answered in the desktop app.
 Flags:
   --toolset <core|full>
         Which tools to expose via tools/list (default: core).
-        core - list_assets, get_asset, help, exec, batch_exec, cp, request_permission.
-        full - All core tools plus list_groups, get_group, list_credentials,
-               get_credential, put_asset, put_group, delete_asset,
-               delete_group, get_asset_secret, list_audit (session-scoped).
+        core - %s.
+        full - All core tools plus %s.
   --session <id>
         Explicit grant session ID (default: isolated per-process UUID).
   --allow-local-dir <dir>
         Restrict cp local filesystem endpoints to this directory (repeatable).
-`)
+`, strings.Join(mcpToolNames(mcp.ToolsetCore, nil), ", "),
+		strings.Join(mcpToolNames(mcp.ToolsetFull, mcpToolNames(mcp.ToolsetCore, nil)), ", "))
 }
 
-// wrapMCPTools wraps MCP-exposed tools with:
-//   - on-demand extension activation & live disable checks (exec, batch_exec, help, put_asset, cp)
-//   - mandatory human confirmation gates on metadata writes (put_asset, put_group)
-//   - local filesystem read/write guardrails (cp)
-func wrapMCPTools(tools []agent.Tool, allowedLocalDirs []string) []agent.Tool {
-	out := make([]agent.Tool, 0, len(tools))
-	for _, t := range tools {
-		switch t.Name() {
-		case "exec":
-			out = append(out, &extensionActivatingTool{inner: t})
-		case "batch_exec":
-			out = append(out, &batchExtensionActivatingTool{inner: t})
-		case "help":
-			out = append(out, &helpExtensionActivatingTool{inner: t})
-		case "put_asset":
-			out = append(out, &guardedPutAssetTool{inner: t})
-		case "put_group":
-			out = append(out, &guardedPutGroupTool{inner: t})
-		case "cp":
-			out = append(out, &guardedCpTool{inner: t, allowedLocalDirs: allowedLocalDirs})
-		default:
-			out = append(out, t)
+// mcpToolNames lists the tools toolset serves, leaving out those in except.
+func mcpToolNames(toolset mcp.Toolset, except []string) []string {
+	var names []string
+	for _, t := range mcpTools(toolset, "") {
+		if !slices.Contains(except, t.Name()) {
+			names = append(names, t.Name())
 		}
 	}
-	return out
+	return names
 }
 
+// mcpToolAssetRefs names, per tool, the assets a call operates on. opsctl loads an
+// extension only when a command needs it (registerExtensionAssetTypes keeps just the
+// descriptions), and this server lives as long as its client, so each call activates
+// the extensions its assets need before running.
+var mcpToolAssetRefs = map[string]func(ctx context.Context, input map[string]any) []string{
+	"exec":       assetArgRef,
+	"help":       assetArgRef,
+	"put_asset":  assetArgRef,
+	"batch_exec": func(_ context.Context, input map[string]any) []string { return tool.BatchCommandAssets(input) },
+	"cp": func(ctx context.Context, input map[string]any) []string {
+		var refs []string
+		for _, key := range []string{"src", "dst"} {
+			asset, _, err := helper.ParseTransferEndpoint(ctx, aictx.ArgString(input, key), assetref.Resolve)
+			if err == nil && asset != nil {
+				refs = append(refs, strconv.FormatInt(asset.ID, 10))
+			}
+		}
+		return refs
+	},
+}
+
+func assetArgRef(_ context.Context, input map[string]any) []string {
+	return []string{aictx.ArgString(input, "asset")}
+}
+
+// extensionActivatingTool runs its tool after activating, in this process, the
+// extensions owning the assets the call names.
+type extensionActivatingTool struct {
+	agent.Tool
+	refs func(ctx context.Context, input map[string]any) []string
+}
+
+func (e extensionActivatingTool) Serial() bool { return mcp.IsSerial(e.Tool) }
+
+func (e extensionActivatingTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
+	for _, ref := range e.refs(ctx, input) {
+		if err := activateExtensionsForRef(ctx, ref); err != nil {
+			return nil, err
+		}
+	}
+	return e.Tool.Call(ctx, input)
+}
+
+// activateExtensionsForRef activates the extension providing the referenced asset's
+// type and its database driver. An extension disabled since this server started is
+// revoked and refused by name. A reference that does not resolve activates nothing:
+// the tool reports the canonical resolution error itself.
 func activateExtensionsForRef(ctx context.Context, ref string) error {
 	if strings.TrimSpace(ref) == "" {
 		return nil
 	}
 	asset, err := resolveAsset(ctx, ref)
-	if err != nil {
-		return nil //nolint:nilerr // let underlying tool surface the canonical asset resolution error
-	}
-	if asset == nil {
-		return nil
+	if err != nil || asset == nil {
+		return nil //nolint:nilerr // the tool surfaces the canonical asset resolution error
 	}
 	if err := refusedExtensionError(ctx, asset); err != nil {
 		revokeDisabledExtension(asset.Type)
@@ -216,401 +244,6 @@ func revokeDisabledExtension(assetType string) {
 		return
 	}
 	extensionContributions.Revoke(extName)
-}
-
-type extensionActivatingTool struct {
-	inner agent.Tool
-}
-
-func (e *extensionActivatingTool) Name() string         { return e.inner.Name() }
-func (e *extensionActivatingTool) Description() string  { return e.inner.Description() }
-func (e *extensionActivatingTool) Schema() agent.Schema { return e.inner.Schema() }
-func (e *extensionActivatingTool) Serial() bool         { return isToolSerial(e.inner) }
-
-func (e *extensionActivatingTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
-	if err := activateExtensionsForRef(ctx, aictx.ArgString(input, "asset")); err != nil {
-		return nil, err
-	}
-	return e.inner.Call(ctx, input)
-}
-
-type helpExtensionActivatingTool struct {
-	inner agent.Tool
-}
-
-func (h *helpExtensionActivatingTool) Name() string         { return h.inner.Name() }
-func (h *helpExtensionActivatingTool) Description() string  { return h.inner.Description() }
-func (h *helpExtensionActivatingTool) Schema() agent.Schema { return h.inner.Schema() }
-func (h *helpExtensionActivatingTool) Serial() bool         { return isToolSerial(h.inner) }
-
-func (h *helpExtensionActivatingTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
-	if err := activateExtensionsForRef(ctx, aictx.ArgString(input, "asset")); err != nil {
-		return nil, err
-	}
-	return h.inner.Call(ctx, input)
-}
-
-type batchExtensionActivatingTool struct {
-	inner agent.Tool
-}
-
-func (b *batchExtensionActivatingTool) Name() string         { return b.inner.Name() }
-func (b *batchExtensionActivatingTool) Description() string  { return b.inner.Description() }
-func (b *batchExtensionActivatingTool) Schema() agent.Schema { return b.inner.Schema() }
-func (b *batchExtensionActivatingTool) Serial() bool         { return isToolSerial(b.inner) }
-
-func (b *batchExtensionActivatingTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
-	if raw := input["commands"]; raw != nil {
-		var items []struct {
-			Asset string `json:"asset"`
-		}
-		if bts, err := json.Marshal(raw); err == nil {
-			if err := json.Unmarshal(bts, &items); err != nil {
-				var s string
-				if json.Unmarshal(bts, &s) == nil {
-					_ = json.Unmarshal([]byte(s), &items)
-				}
-			}
-			for _, item := range items {
-				if err := activateExtensionsForRef(ctx, item.Asset); err != nil {
-					return nil, err
-				}
-			}
-		}
-	}
-	return b.inner.Call(ctx, input)
-}
-
-// guardedPutAssetTool requires one-shot human confirmation (never grantable or permanent)
-// before creating or updating an asset, matching opsctl create/update's security contract.
-// Only non-secret metadata and config key names are displayed in the approval prompt.
-type guardedPutAssetTool struct {
-	inner agent.Tool
-}
-
-func (g *guardedPutAssetTool) Name() string         { return g.inner.Name() }
-func (g *guardedPutAssetTool) Description() string  { return g.inner.Description() }
-func (g *guardedPutAssetTool) Schema() agent.Schema { return g.inner.Schema() }
-func (g *guardedPutAssetTool) Serial() bool         { return isToolSerial(g.inner) }
-
-func (g *guardedPutAssetTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
-	// Always install the fail-closed top-level audit projection immediately so any
-	// early error or user denial never falls back to marshaling raw input["config"]
-	// (which may carry plaintext passwords, private keys, or secret tokens) into audit_logs.
-	aictx.RecordAuditRequest(ctx, tool.PutAssetTopLevelAuditArgs(input))
-
-	ref := aictx.ArgString(input, "asset")
-	if ref != "" {
-		if err := activateExtensionsForRef(ctx, ref); err != nil {
-			return nil, err
-		}
-	}
-
-	checker, err := permission.RequireChecker(ctx)
-	if err != nil {
-		return nil, err
-	}
-	confirm := checker.ConfirmFunc()
-	if confirm == nil {
-		return nil, errors.New("put_asset requires an interactive approval channel, none is wired")
-	}
-
-	op, assetID, assetName, prepared, err := preparePutAssetForMCPApproval(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-	aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgs())
-
-	cmdSummary := fmt.Sprintf("%s asset %q", op, assetName)
-	if typ := prepared.SafeApprovalDetail()["type"]; typ != nil && typ != "" {
-		cmdSummary += fmt.Sprintf(" (type=%v)", typ)
-	}
-	detail := buildSafePutAssetApprovalDetail(op, ref, input, prepared)
-	items := []permission.ApprovalItem{{
-		Type:      op,
-		AssetID:   assetID,
-		AssetName: assetName,
-		Command:   cmdSummary,
-		Detail:    detail,
-	}}
-	resp := confirm(ctx, permission.ApprovalKindOnce, items)
-	if !isOneShotApproved(resp, items) {
-		aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny})
-		return &agent.ToolResultBlock{
-			Content: []agent.ContentBlock{agent.TextBlock{Text: fmt.Sprintf("USER DENIED: The user has denied %s. Stop the current task immediately.", cmdSummary)}},
-			IsError: true,
-		}, nil
-	}
-	aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow})
-	return g.inner.Call(ctx, input)
-}
-
-func isOneShotApproved(resp permission.ApprovalResponse, items []permission.ApprovalItem) bool {
-	parsed, err := permission.ParseApprovalResponse(permission.ApprovalKindOnce, resp, items)
-	return err == nil && parsed.Decision == permission.ApprovalAllow
-}
-
-func preparePutAssetForMCPApproval(ctx context.Context, input map[string]any) (op string, assetID int64, assetName string, prepared *asset_put_svc.Prepared, err error) {
-	config := map[string]any{}
-	if raw, exists := input["config"]; exists {
-		m, ok := raw.(map[string]any)
-		if !ok {
-			return "", 0, "", nil, fmt.Errorf("parameter config must be an object, got %T", raw)
-		}
-		config = m
-	}
-
-	ref := aictx.ArgString(input, "asset")
-	var asset *asset_entity.Asset
-	if ref == "" {
-		op = "create"
-		name := aictx.ArgString(input, "name")
-		if name == "" {
-			return "", 0, "", nil, errors.New("missing required parameter: name (creating an asset needs a name; pass asset=<id-or-name> instead to update an existing one)")
-		}
-		assetType := aictx.ArgString(input, "type")
-		if assetType == "" {
-			assetType = asset_entity.AssetTypeSSH
-		}
-		asset, err = assettype.NewAsset(ctx, assetType)
-		if errors.Is(err, assettype.ErrUnknownType) {
-			return "", 0, "", nil, fmt.Errorf("unsupported asset type %q; supported: %s, or a custom type slug",
-				assetType, strings.Join(permission.RegisteredHelpTypes(), ", "))
-		}
-		if err != nil {
-			return "", 0, "", nil, err
-		}
-		asset.Name = name
-		asset.Icon = aictx.ArgString(input, "icon")
-		asset.GroupID = aictx.ArgInt64(input, "group_id")
-		asset.Description = aictx.ArgString(input, "description")
-	} else {
-		op = "update"
-		asset, err = assetref.Resolve(ctx, ref)
-		if err != nil {
-			return "", 0, "", nil, err
-		}
-		if declared := aictx.ArgString(input, "type"); declared != "" {
-			if err := permission.AssertAssetType(asset, declared); err != nil {
-				return "", 0, "", nil, err
-			}
-		}
-		cloned := *asset
-		if name := aictx.ArgString(input, "name"); name != "" {
-			cloned.Name = name
-		}
-		if _, ok := input["description"]; ok {
-			cloned.Description = aictx.ArgString(input, "description")
-		}
-		if gid := aictx.ArgInt64(input, "group_id"); gid > 0 {
-			cloned.GroupID = gid
-		}
-		if icon := aictx.ArgString(input, "icon"); icon != "" {
-			cloned.Icon = icon
-		}
-		asset = &cloned
-	}
-
-	prepared, err = asset_put_svc.Prepare(ctx, asset_put_svc.Request{
-		Asset:  asset,
-		Config: config,
-	})
-	if err != nil {
-		return "", 0, "", nil, fmt.Errorf("failed to %s asset: %w", op, err)
-	}
-	return op, asset.ID, asset.Name, prepared, nil
-}
-
-func buildSafePutAssetApprovalDetail(op, ref string, input map[string]any, prepared *asset_put_svc.Prepared) string {
-	safe := prepared.SafeApprovalDetail()
-	safe["operation"] = op
-	if ref != "" {
-		safe["asset"] = ref
-	}
-	if gid := aictx.ArgInt64(input, "group_id"); gid > 0 {
-		safe["group_id"] = gid
-	}
-	if desc := aictx.ArgString(input, "description"); desc != "" {
-		safe["description"] = desc
-	}
-	b, err := json.Marshal(safe)
-	if err != nil {
-		return op + " asset"
-	}
-	return string(b)
-}
-
-// guardedPutGroupTool requires one-shot human confirmation before creating or updating a group.
-type guardedPutGroupTool struct {
-	inner agent.Tool
-}
-
-func (g *guardedPutGroupTool) Name() string         { return g.inner.Name() }
-func (g *guardedPutGroupTool) Description() string  { return g.inner.Description() }
-func (g *guardedPutGroupTool) Schema() agent.Schema { return g.inner.Schema() }
-func (g *guardedPutGroupTool) Serial() bool         { return isToolSerial(g.inner) }
-
-func (g *guardedPutGroupTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
-	checker, err := permission.RequireChecker(ctx)
-	if err != nil {
-		return nil, err
-	}
-	confirm := checker.ConfirmFunc()
-	if confirm == nil {
-		return nil, errors.New("put_group requires an interactive approval channel, none is wired")
-	}
-
-	id := aictx.ArgInt64(input, "id")
-	name := aictx.ArgString(input, "name")
-	op := "create"
-	if id > 0 {
-		op = "update"
-	}
-	cmdSummary := fmt.Sprintf("%s group %q", op, name)
-	if id > 0 {
-		cmdSummary = fmt.Sprintf("update group #%d", id)
-		if name != "" {
-			cmdSummary += fmt.Sprintf(" (%q)", name)
-		}
-	}
-	detailMap := map[string]any{"operation": op}
-	if id > 0 {
-		detailMap["id"] = id
-	}
-	if name != "" {
-		detailMap["name"] = name
-	}
-	if pid := aictx.ArgInt64(input, "parent_id"); pid > 0 {
-		detailMap["parent_id"] = pid
-	}
-	detailBytes, _ := json.Marshal(detailMap)
-
-	items := []permission.ApprovalItem{{
-		Type:      op,
-		GroupID:   id,
-		GroupName: name,
-		Command:   cmdSummary,
-		Detail:    string(detailBytes),
-	}}
-	resp := confirm(ctx, permission.ApprovalKindOnce, items)
-	if !isOneShotApproved(resp, items) {
-		aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny})
-		return &agent.ToolResultBlock{
-			Content: []agent.ContentBlock{agent.TextBlock{Text: fmt.Sprintf("USER DENIED: The user has denied %s. Stop the current task immediately.", cmdSummary)}},
-			IsError: true,
-		}, nil
-	}
-	aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow})
-	return g.inner.Call(ctx, input)
-}
-
-// guardedCpTool enforces local filesystem guardrails on cp:
-//   - when --allow-local-dir is set, every local endpoint (read or write) must reside within
-//     an allowed directory (after symlink resolution);
-//   - when --allow-local-dir is NOT set and src is a local path (upload), an explicit one-shot
-//     human confirmation is required so a permissive remote cp:write policy cannot silently
-//     exfiltrate host files like ~/.ssh/id_rsa or opskat.db.
-type guardedCpTool struct {
-	inner            agent.Tool
-	allowedLocalDirs []string
-}
-
-func (g *guardedCpTool) Name() string         { return g.inner.Name() }
-func (g *guardedCpTool) Description() string  { return g.inner.Description() }
-func (g *guardedCpTool) Schema() agent.Schema { return g.inner.Schema() }
-func (g *guardedCpTool) Serial() bool         { return isToolSerial(g.inner) }
-
-func (g *guardedCpTool) Call(ctx context.Context, input map[string]any) (*agent.ToolResultBlock, error) {
-	srcRaw := aictx.ArgString(input, "src")
-	dstRaw := aictx.ArgString(input, "dst")
-	if srcRaw == "" || dstRaw == "" {
-		return g.inner.Call(ctx, input)
-	}
-
-	srcAsset, srcPath, srcErr := helper.ParseTransferEndpoint(ctx, srcRaw, assetref.Resolve)
-	dstAsset, dstPath, dstErr := helper.ParseTransferEndpoint(ctx, dstRaw, assetref.Resolve)
-
-	if srcErr == nil && srcAsset != nil {
-		if err := activateExtensionsForRef(ctx, fmt.Sprintf("%d", srcAsset.ID)); err != nil {
-			return nil, err
-		}
-	}
-	if dstErr == nil && dstAsset != nil {
-		if err := activateExtensionsForRef(ctx, fmt.Sprintf("%d", dstAsset.ID)); err != nil {
-			return nil, err
-		}
-	}
-
-	// Enforce --allow-local-dir whitelist on every local endpoint (both read and write).
-	if len(g.allowedLocalDirs) > 0 {
-		if srcErr == nil && srcAsset == nil {
-			if err := helper.VerifyLocalPathAllowed(srcPath, g.allowedLocalDirs); err != nil {
-				return nil, fmt.Errorf("local source path blocked by --allow-local-dir: %w", err)
-			}
-		}
-		if dstErr == nil && dstAsset == nil {
-			if err := helper.VerifyLocalPathAllowed(dstPath, g.allowedLocalDirs); err != nil {
-				return nil, fmt.Errorf("local destination path blocked by --allow-local-dir: %w", err)
-			}
-		}
-	} else if srcErr == nil && srcAsset == nil && dstErr == nil && dstAsset != nil {
-		// No directory whitelist configured: require explicit confirmation before reading
-		// any local host file for upload to a remote asset.
-		if !filepath.IsAbs(srcPath) {
-			return g.inner.Call(ctx, input)
-		}
-		if err := confirmMCPLocalRead(ctx, dstAsset.ID, dstAsset.Name, srcPath, fmt.Sprintf("cp %s → %s", srcRaw, dstRaw)); err != nil {
-			if errors.Is(err, errMCPLocalReadDenied) {
-				aictx.RecordDecision(ctx, aictx.CheckResult{Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny})
-				return &agent.ToolResultBlock{
-					Content: []agent.ContentBlock{agent.TextBlock{Text: mcpLocalReadDeniedMsg}},
-					IsError: true,
-				}, nil
-			}
-			return nil, err
-		}
-	}
-
-	return g.inner.Call(ctx, input)
-}
-
-const mcpLocalReadDeniedMsg = "USER DENIED: The user has denied reading the local file for upload. Stop the current task immediately."
-
-var errMCPLocalReadDenied = errors.New("local file read denied by user")
-
-func confirmMCPLocalRead(ctx context.Context, assetID int64, assetName, localPath, detail string) error {
-	checker, err := permission.RequireChecker(ctx)
-	if err != nil {
-		return err
-	}
-	confirm := checker.ConfirmFunc()
-	if confirm == nil {
-		return errors.New("uploading a local file requires an interactive approval channel, none is wired")
-	}
-	items := []permission.ApprovalItem{{
-		Type:      "local_read",
-		AssetID:   assetID,
-		AssetName: assetName,
-		Command:   fmt.Sprintf("read local %s (%s)", filepath.Clean(localPath), detail),
-		Detail:    detail,
-	}}
-	resp := confirm(ctx, permission.ApprovalKindOnce, items)
-	if !isOneShotApproved(resp, items) {
-		return errMCPLocalReadDenied
-	}
-	return nil
-}
-
-type mcpLocalReadGate struct{}
-
-func newMCPLocalReadGate() helper.LocalReadGate { return mcpLocalReadGate{} }
-
-func (mcpLocalReadGate) CheckLocalRead(ctx context.Context, assetID int64, assetName, localPath, detail string) error {
-	err := confirmMCPLocalRead(ctx, assetID, assetName, localPath, detail)
-	if errors.Is(err, errMCPLocalReadDenied) {
-		return fmt.Errorf("%s", mcpLocalReadDeniedMsg)
-	}
-	return err
 }
 
 // mcpListAuditTool is list_audit: an ordinary agent tool (so it runs through the same

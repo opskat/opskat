@@ -155,56 +155,67 @@ func openAllowedLocalFile(ctx context.Context, path string) (*os.File, error) {
 	return root.Open(rel)
 }
 
-// LocalReadGate gates local filesystem reads initiated by exec commands (e.g. OSS
-// `object put --file=P`) when no --allow-local-dir whitelist is active and the
-// remote operation was auto-allowed without human interaction.
+// LocalReadGate is the seam for "a local file is about to be read and sent to a
+// remote asset, and no human approved this operation": the read-side twin of
+// LocalWriteGate, implemented by internal/ai/tool.LocalToolGate (as local_read).
+//
+// An entry opts in by attaching one (WithLocalReadGate). opsctl mcp does: the
+// external agent reaches OpsKat through tools whose policies may auto-allow a remote
+// write, and nothing else stands between it and uploading ~/.ssh/id_rsa. The desktop
+// AI does not: its own local_read tool reads any local file ungated, so gating
+// uploads there would add a prompt without closing anything. An --allow-local-dir
+// allowlist (WithAllowedLocalDirs) confines reads by itself and replaces the gate.
 type LocalReadGate interface {
-	CheckLocalRead(ctx context.Context, assetID int64, assetName, localPath, detail string) error
+	// CheckLocalReads asks about a set of local paths; nil allows, non-nil is the
+	// refusal to return to the model. paths must be non-empty.
+	CheckLocalReads(ctx context.Context, paths []string, detail string) error
 }
 
 type localReadGateKeyType struct{}
 
-// WithLocalReadGate attaches a LocalReadGate to ctx (used by opsctl mcp when
-// --allow-local-dir is unset so permissive remote write policies cannot silently
-// exfiltrate local host files via OSS object put --file=).
+// WithLocalReadGate attaches the entry's local read gate to ctx.
 func WithLocalReadGate(ctx context.Context, gate LocalReadGate) context.Context {
-	if gate == nil {
-		return ctx
-	}
 	return context.WithValue(ctx, localReadGateKeyType{}, gate)
 }
 
-// gateExecLocalRead enforces AllowedLocalDirs (when set) or LocalReadGate (when set
-// and no human confirmation occurred yet) before reading a local file for upload.
-func gateExecLocalRead(ctx context.Context, assetID int64, assetName, localPath, detail string) error {
-	if err := VerifyAllowedLocalPath(ctx, localPath); err != nil {
-		aictx.RecordDecision(ctx, aictx.CheckResult{
-			Decision: aictx.Deny, DecisionSource: aictx.SourcePolicyDeny, Message: err.Error(),
-		})
-		return fmt.Errorf("local source path blocked by --allow-local-dir: %w", err)
-	}
-	if len(AllowedLocalDirs(ctx)) > 0 {
-		return nil
-	}
+// GateLocalReads puts local reads no human approved through the entry's local read
+// gate, when it has one and no allowlist confines the reads. checker is the caller's
+// permission.RequireCheckerOrPreapproved result: nil is opsctl's preapproved command
+// line, whose paths the user typed, so it is not asked. prompted reports that a human
+// already approved this very operation (an endpoint or command prompt), whose text
+// named the local path. A refusal is recorded as the user's denial on the audit slot.
+func GateLocalReads(ctx context.Context, checker *permission.CommandPolicyChecker, prompted bool, paths []string, detail string) error {
 	gate, _ := ctx.Value(localReadGateKeyType{}).(LocalReadGate)
-	if gate == nil {
+	if gate == nil || len(AllowedLocalDirs(ctx)) > 0 || checker == nil || prompted {
 		return nil
 	}
-	checker, err := permission.RequireCheckerOrPreapproved(ctx)
-	if err != nil {
-		return err
-	}
-	if checker == nil {
-		return nil
-	}
-	if res := aictx.GetCheckResult(ctx); res != nil && res.DecisionSource == aictx.SourceUserAllow {
-		return nil
-	}
-	if err := gate.CheckLocalRead(ctx, assetID, assetName, localPath, detail); err != nil {
+	if err := gate.CheckLocalReads(ctx, paths, detail); err != nil {
 		aictx.RecordDecision(ctx, aictx.CheckResult{
 			Decision: aictx.Deny, DecisionSource: aictx.SourceUserDeny, Message: err.Error(),
 		})
 		return err
 	}
 	return nil
+}
+
+// gateExecLocalRead is the exec side of the read gate (today only OSS `object put
+// --file=P`), judged like gateExecLocalWrite: the command was prompted when its
+// decision is user_allow.
+func gateExecLocalRead(ctx context.Context, localPath, detail string) error {
+	if err := VerifyAllowedLocalPath(ctx, localPath); err != nil {
+		aictx.RecordDecision(ctx, aictx.CheckResult{
+			Decision: aictx.Deny, DecisionSource: aictx.SourcePolicyDeny, Message: err.Error(),
+		})
+		return fmt.Errorf("local source path blocked by --allow-local-dir: %w", err)
+	}
+	if _, gated := ctx.Value(localReadGateKeyType{}).(LocalReadGate); !gated {
+		return nil
+	}
+	checker, err := permission.RequireCheckerOrPreapproved(ctx)
+	if err != nil {
+		return err
+	}
+	res := aictx.GetCheckResult(ctx)
+	prompted := res != nil && res.DecisionSource == aictx.SourceUserAllow
+	return GateLocalReads(ctx, checker, prompted, []string{localPath}, detail)
 }

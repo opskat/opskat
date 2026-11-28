@@ -21,7 +21,7 @@ type stubLocalReadGate struct {
 	err    error
 }
 
-func (g *stubLocalReadGate) CheckLocalRead(_ context.Context, _ int64, _, _, _ string) error {
+func (g *stubLocalReadGate) CheckLocalReads(_ context.Context, _ []string, _ string) error {
 	g.called = true
 	return g.err
 }

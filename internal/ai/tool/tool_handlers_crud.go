@@ -49,11 +49,14 @@ func putArgs(args map[string]any) (map[string]any, error) {
 // SKILL.md（同一份 help 文档）说明，校验回到本就该负责的 assettype.ValidateCreateArgs。
 // 旧的巨型 schema 把 10 种类型的字段并集写进 JSON Schema，既是我们正在移除的类型分支的
 // 另一种写法，又漏掉了 oss——那类资产此前经 AI 完全无法创建。
+//
+// 顺序：解析 → Prepare（校验、算出去密投影）→ 人确认（confirmDataWrite）→ Commit。确认
+// 排在 Prepare 之后，人看到的是即将写入的去密配置，不会为一次注定失败的写入点头。
 func handlePutAsset(ctx context.Context, args map[string]any) (string, error) {
 	// 一进来就落审计投影的基线：putArgs/校验/lookup 这些 Prepare 之前的早期返回没有
 	// producer 投影可用，若不先投影，runner 的 auditMiddleware 会回退到原始 c.Input，
 	// 把可能携带 write-only 秘密的 config 原样写进审计。这里只投影顶层非 config 字段
-	// （config 是自由对象、可能带秘密）；Prepare/Commit 成功后再用 producer 投影覆盖。
+	// （config 是自由对象、可能带秘密）；Prepare 成功后再用 producer 投影覆盖。
 	// 该投影是独立 map，绝不改写 args——执行/审批/ToolBlock/历史仍见原值。
 	aictx.RecordAuditRequest(ctx, PutAssetTopLevelAuditArgs(args))
 
@@ -62,17 +65,52 @@ func handlePutAsset(ctx context.Context, args map[string]any) (string, error) {
 		return "", err
 	}
 	ref := aictx.ArgString(args, "asset")
-
+	op := "create"
+	var asset *asset_entity.Asset
 	if ref == "" {
-		return createAsset(ctx, args, config)
+		asset, err = newAssetFromArgs(ctx, args)
+	} else {
+		op = "update"
+		asset, err = updatedAssetFromArgs(ctx, ref, args)
 	}
-	return updateAsset(ctx, ref, args, config)
+	if err != nil {
+		return "", err
+	}
+
+	prepared, err := asset_put_svc.Prepare(ctx, asset_put_svc.Request{Asset: asset, Config: config})
+	if err != nil {
+		// 顶层基线已在入口记录，这里不重复。
+		return "", fmt.Errorf("failed to %s asset: %w", op, err)
+	}
+	aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgs())
+
+	summary := fmt.Sprintf("%s asset %q", op, asset.Name)
+	if typ := prepared.SafeApprovalDetail()["type"]; typ != nil && typ != "" {
+		summary += fmt.Sprintf(" (type=%v)", typ)
+	}
+	denied, err := confirmDataWrite(ctx, "put_asset", permission.ApprovalItem{
+		Type: op, AssetID: asset.ID, AssetName: asset.Name, Command: summary,
+		Detail: putAssetApprovalDetail(op, ref, args, prepared),
+	})
+	if err != nil || denied != "" {
+		return denied, err
+	}
+
+	result, err := asset_put_svc.Commit(ctx, prepared)
+	if err != nil {
+		// commit/仓库失败：上面已落 producer 投影（SafeAuditArgs）。
+		return "", fmt.Errorf("failed to %s asset: %w", op, err)
+	}
+	aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgsForResult(result))
+	aictx.NotifyDataChanged("asset")
+	return asset_put_svc.ResultJSON(result, "asset "+op+"d successfully")
 }
 
-func createAsset(ctx context.Context, args, config map[string]any) (string, error) {
+// newAssetFromArgs builds the asset put_asset creates from its top-level arguments.
+func newAssetFromArgs(ctx context.Context, args map[string]any) (*asset_entity.Asset, error) {
 	name := aictx.ArgString(args, "name")
 	if name == "" {
-		return "", fmt.Errorf("missing required parameter: name (creating an asset needs a name; pass asset=<id-or-name> instead to update an existing one)")
+		return nil, fmt.Errorf("missing required parameter: name (creating an asset needs a name; pass asset=<id-or-name> instead to update an existing one)")
 	}
 	assetType := aictx.ArgString(args, "type")
 	if assetType == "" {
@@ -81,34 +119,63 @@ func createAsset(ctx context.Context, args, config map[string]any) (string, erro
 	// type 可以是内置类型名，也可以是自定义类型标识（落成绑定该类型的通用资产）。
 	asset, err := assettype.NewAsset(ctx, assetType)
 	if errors.Is(err, assettype.ErrUnknownType) {
-		return "", fmt.Errorf("unsupported asset type %q; supported: %s, or a custom type slug",
+		return nil, fmt.Errorf("unsupported asset type %q; supported: %s, or a custom type slug",
 			assetType, strings.Join(permission.RegisteredHelpTypes(), ", "))
 	}
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	asset.Name = name
 	asset.Icon = aictx.ArgString(args, "icon")
 	asset.GroupID = aictx.ArgInt64(args, "group_id")
 	asset.Description = aictx.ArgString(args, "description")
-	req := asset_put_svc.Request{
-		Asset:  asset,
-		Config: config,
+	return asset, nil
+}
+
+// putAssetApprovalDetail is the approval item's detail: the non-secret config the type
+// declares safe to show (asset_put_svc.Prepared.SafeApprovalDetail) plus the top-level
+// fields being set — enough to see where the asset will connect, never a secret.
+func putAssetApprovalDetail(op, ref string, args map[string]any, prepared *asset_put_svc.Prepared) string {
+	safe := prepared.SafeApprovalDetail()
+	safe["operation"] = op
+	if ref != "" {
+		safe["asset"] = ref
 	}
-	prepared, err := asset_put_svc.Prepare(ctx, req)
+	if gid := aictx.ArgInt64(args, "group_id"); gid > 0 {
+		safe["group_id"] = gid
+	}
+	if desc := aictx.ArgString(args, "description"); desc != "" {
+		safe["description"] = desc
+	}
+	b, err := json.Marshal(safe)
 	if err != nil {
-		// 顶层基线已在 handlePutAsset 入口记录，这里不重复。
-		return "", fmt.Errorf("failed to create asset: %w", err)
+		return op + " asset"
 	}
-	result, err := asset_put_svc.Commit(ctx, prepared)
-	if err != nil {
-		// commit/仓库失败：Prepare 已产出 producer 投影（SafeAuditArgs），直接落审计。
-		aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgs())
-		return "", fmt.Errorf("failed to create asset: %w", err)
+	return string(b)
+}
+
+// confirmDataWrite asks the human once before put_asset / put_group writes. Asset and
+// group data is not a command pattern a policy or grant can pre-approve, and an asset's
+// connection settings decide where its stored credentials are sent, so every write is
+// confirmed (kind once: no "allow for this session"), like delete. A caller marked
+// permission.WithPreapproved — opsctl create/update, which confirmed on its own command
+// line — is not asked again. denied is the message for the model when the human says no.
+func confirmDataWrite(ctx context.Context, toolName string, item permission.ApprovalItem) (denied string, err error) {
+	checker, err := permission.RequireCheckerOrPreapproved(ctx)
+	if err != nil || checker == nil {
+		return "", err
 	}
-	aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgsForResult(result))
-	aictx.NotifyDataChanged("asset")
-	return asset_put_svc.ResultJSON(result, "asset created successfully")
+	confirm := checker.ConfirmFunc()
+	if confirm == nil {
+		return "", fmt.Errorf("%s requires an interactive approval channel, none is wired", toolName)
+	}
+	decision := decisionFromApproval(permission.ApprovalKindOnce,
+		confirm(ctx, permission.ApprovalKindOnce, []permission.ApprovalItem{item}))
+	aictx.RecordDecision(ctx, decision)
+	if decision.Decision != aictx.Allow {
+		return fmt.Sprintf("USER DENIED: The user has denied %s. Stop the current task immediately.", item.Command), nil
+	}
+	return "", nil
 }
 
 // PutAssetTopLevelAuditArgs 把 put_asset 顶层非 config 字段按类型 fail-closed 投影给
@@ -152,17 +219,19 @@ func auditSafeGroupID(v any) bool {
 	}
 }
 
-func updateAsset(ctx context.Context, ref string, args, config map[string]any) (string, error) {
+// updatedAssetFromArgs resolves the asset put_asset updates and applies its top-level
+// arguments; config is applied by asset_put_svc.Prepare.
+func updatedAssetFromArgs(ctx context.Context, ref string, args map[string]any) (*asset_entity.Asset, error) {
 	asset, err := assetref.Resolve(ctx, ref)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	// 更新时给出的 type 与 exec 的 type 同语义：断言，不是改类型。
 	// 资产类型是不可变的——改类型等于换协议、换配置形状、换策略组。
 	// 通用资产对外的类型名是其自定义类型标识，与之相符即通过（AssertAssetType 负责）。
 	if declared := aictx.ArgString(args, "type"); declared != "" {
 		if err := permission.AssertAssetType(asset, declared); err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 
@@ -179,24 +248,7 @@ func updateAsset(ctx context.Context, ref string, args, config map[string]any) (
 	if icon := aictx.ArgString(args, "icon"); icon != "" {
 		asset.Icon = icon
 	}
-
-	req := asset_put_svc.Request{
-		Asset:  asset,
-		Config: config,
-	}
-	prepared, err := asset_put_svc.Prepare(ctx, req)
-	if err != nil {
-		// 顶层基线已在 handlePutAsset 入口记录，这里不重复。
-		return "", fmt.Errorf("failed to update asset: %w", err)
-	}
-	result, err := asset_put_svc.Commit(ctx, prepared)
-	if err != nil {
-		aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgs())
-		return "", fmt.Errorf("failed to update asset: %w", err)
-	}
-	aictx.RecordAuditRequest(ctx, prepared.SafeAuditArgsForResult(result))
-	aictx.NotifyDataChanged("asset")
-	return asset_put_svc.ResultJSON(result, "asset updated successfully")
+	return asset, nil
 }
 
 // handlePutGroup 创建或更新分组：带 id → 更新，不带 → 创建。
@@ -207,6 +259,10 @@ func handlePutGroup(ctx context.Context, args map[string]any) (string, error) {
 		name := aictx.ArgString(args, "name")
 		if name == "" {
 			return "", fmt.Errorf("missing required parameter: name (creating a group needs a name; pass id=<group id> instead to update an existing one)")
+		}
+		denied, err := confirmDataWrite(ctx, "put_group", putGroupApprovalItem(args, nil))
+		if err != nil || denied != "" {
+			return denied, err
 		}
 		now := time.Now().Unix()
 		group := &group_entity.Group{
@@ -246,11 +302,39 @@ func handlePutGroup(ctx context.Context, args map[string]any) (string, error) {
 		group.SortOrder = aictx.ArgInt(args, "sort_order")
 	}
 	group.Updatetime = time.Now().Unix()
+	denied, err := confirmDataWrite(ctx, "put_group", putGroupApprovalItem(args, group))
+	if err != nil || denied != "" {
+		return denied, err
+	}
 	if err := group_repo.Group().Update(ctx, group); err != nil {
 		return "", fmt.Errorf("failed to update group: %w", err)
 	}
 	aictx.NotifyDataChanged("group")
 	return fmt.Sprintf(`{"id":%d,"message":"group updated successfully"}`, group.ID), nil
+}
+
+// putGroupApprovalItem is put_group's approval item; existing is the group being
+// updated with the arguments already applied, nil on create.
+func putGroupApprovalItem(args map[string]any, existing *group_entity.Group) permission.ApprovalItem {
+	detail := map[string]any{}
+	for _, key := range []string{"name", "icon", "description"} {
+		if v := aictx.ArgString(args, key); v != "" {
+			detail[key] = v
+		}
+	}
+	if pid := aictx.ArgInt64(args, "parent_id"); pid > 0 {
+		detail["parent_id"] = pid
+	}
+	item := permission.ApprovalItem{Type: "create", GroupName: aictx.ArgString(args, "name")}
+	item.Command = fmt.Sprintf("create group %q", item.GroupName)
+	if existing != nil {
+		item.Type, item.GroupID, item.GroupName = "update", existing.ID, existing.Name
+		item.Command = fmt.Sprintf("update group %q", existing.Name)
+	}
+	detail["operation"] = item.Type
+	b, _ := json.Marshal(detail) // strings and ints only: cannot fail
+	item.Detail = string(b)
+	return item
 }
 
 // decisionFromApproval maps the shared, kind-aware approval parser onto the audit slot.

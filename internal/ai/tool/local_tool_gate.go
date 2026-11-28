@@ -111,6 +111,24 @@ func (g *LocalToolGate) CheckLocalWrites(ctx context.Context, paths []string, de
 	})
 }
 
+// LocalReadToolName 是本地读门禁的名字：上传本机文件（cp 的本地源端、`object put --file=`）
+// 在没有任何人工审批时按它过门禁，白名单与 local_write 分开记。
+const LocalReadToolName = "local_read"
+
+var _ helper.LocalReadGate = (*LocalToolGate)(nil)
+
+// CheckLocalReads 让一批本地读路径过一次 local_read 门禁，实现 helper.LocalReadGate；
+// 与 CheckLocalWrites 同一条判定，只换了门禁名。
+func (g *LocalToolGate) CheckLocalReads(ctx context.Context, paths []string, detail string) error {
+	return g.decide(ctx, paths, LocalToolApprovalRequest{
+		ToolName:        LocalReadToolName,
+		Command:         strings.Join(paths, "\n"),
+		Detail:          detail,
+		SubCommands:     paths,
+		DefaultPatterns: defaultPatterns(LocalReadToolName, paths),
+	})
+}
+
 // decide 是门禁的判定本体：命中会话白名单直接放行，否则弹一次框。返回 nil 表示放行，
 // 非 nil 是拒绝理由。middleware 与 CheckLocalWrites 共用它 —— 两条入口若各写一份，
 // "本次会话允许"的记法迟早分叉。

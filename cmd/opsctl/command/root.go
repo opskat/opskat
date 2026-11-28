@@ -106,6 +106,9 @@ func Execute() int {
 	registerExtensionAssetTypes()
 	defer releaseExtensions(ctx)
 
+	// 工具改了资产/分组数据就通知桌面端刷新：与桌面端 AI 同一个接缝，工具自己声明改动。
+	aictx.SetDataChangeNotifier(desktopDataNotifier{})
+
 	// 策略消息语言跟随系统 locale（LC_ALL → LC_MESSAGES → LANG）
 	ctx = aictx.WithPolicyLang(ctx, resolvePolicyLang(
 		os.Getenv("LC_ALL"), os.Getenv("LC_MESSAGES"), os.Getenv("LANG")))

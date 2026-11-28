@@ -8,7 +8,10 @@ import (
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/audit"
 	"github.com/opskat/opskat/internal/ai/tool"
+	"github.com/opskat/opskat/internal/repository/group_repo"
+	"github.com/opskat/opskat/internal/repository/group_repo/mock_group_repo"
 	. "github.com/smartystreets/goconvey/convey"
+	"go.uber.org/mock/gomock"
 )
 
 // mockAuditWriter 捕获审计日志写入
@@ -135,18 +138,30 @@ func TestBuildHandlerMap_HasEveryToolOpsctlLooksUp(t *testing.T) {
 	})
 }
 
-// TestRefreshesDesktopUI 锁住"哪些工具成功后要通知桌面端刷新 UI"这条判定本身,不只是
-// 判定用到的工具名在派发表里查得到。此前这条规则是 callHandler 里一句内联
-// `if toolName == "put_asset" || toolName == "put_group"`,没有任何测试断言过
-// "调用 put_asset 真的会触发通知"——漏改这条不会有任何测试变红,只会让桌面端在 CLI
-// 改完数据后不刷新。delete_asset/delete_group 补进白名单时正是这样漏掉过一次。
-func TestRefreshesDesktopUI(t *testing.T) {
-	Convey("refreshesDesktopUI 覆盖全部写操作,且不误报只读操作", t, func() {
-		for _, name := range []string{"put_asset", "put_group", "delete_asset", "delete_group"} {
-			So(refreshesDesktopUI(name), ShouldBeTrue)
-		}
-		for _, name := range []string{"exec", "help", "get_asset", "list_assets", "list_groups"} {
-			So(refreshesDesktopUI(name), ShouldBeFalse)
-		}
+// TestDataChangesReachTheDesktop：工具自己声明改动（aictx.NotifyDataChanged），opsctl 装上
+// desktopDataNotifier 后每条改动都转发给桌面端刷新 UI——不靠一份"哪些工具算写操作"的
+// 名单，新增的写工具不用再到这里登记。
+func TestDataChangesReachTheDesktop(t *testing.T) {
+	Convey("opsctl 经 put_group 建分组后通知桌面端刷新分组", t, func() {
+		ctrl := gomock.NewController(t)
+		groups := mock_group_repo.NewMockGroupRepo(ctrl)
+		groups.EXPECT().Create(gomock.Any(), gomock.Any()).Return(nil)
+		origGroups := group_repo.Group()
+		group_repo.RegisterGroup(groups)
+		origSend := sendDesktopNotification
+		var sent []string
+		sendDesktopNotification = func(resource string) { sent = append(sent, resource) }
+		aictx.SetDataChangeNotifier(desktopDataNotifier{})
+		defer func() {
+			group_repo.RegisterGroup(origGroups)
+			sendDesktopNotification = origSend
+			aictx.SetDataChangeNotifier(nil)
+		}()
+
+		code := callHandler(context.Background(), buildHandlerMap(), "put_group", map[string]any{"name": "prod"},
+			&aictx.CheckResult{Decision: aictx.Allow, DecisionSource: aictx.SourceUserAllow})
+
+		So(code, ShouldEqual, 0)
+		So(sent, ShouldResemble, []string{"group"})
 	})
 }

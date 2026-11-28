@@ -25,40 +25,33 @@ func buildHandlerMap() map[string]tool.ToolHandlerFunc {
 	return m
 }
 
-// refreshesDesktopUI reports whether a successful call to toolName changed asset or
-// group data the desktop app's own UI caches — put_asset/put_group/delete_asset/
-// delete_group all do. It is a named, directly-testable predicate rather than an
-// inline `if` precisely because the inline form has no test coverage of its own: a
-// change that mutates data through opsctl (e.g. delete_asset) but is missing from
-// this list produces no failing test anywhere — the desktop just silently stops
-// refreshing after that command. See TestRefreshesDesktopUI.
-func refreshesDesktopUI(toolName string) bool {
-	switch toolName {
-	case "put_asset", "put_group", "delete_asset", "delete_group":
-		return true
-	default:
-		return false
-	}
-}
+// desktopDataNotifier is opsctl's aictx.DataChangeNotifier: the tools announce their
+// own data changes (aictx.NotifyDataChanged), as they do in the desktop AI, and opsctl
+// forwards each one to the running desktop app so its UI refreshes. Installed once at
+// startup (Execute), it serves every opsctl command and opsctl mcp alike.
+type desktopDataNotifier struct{}
 
-func notifyDesktopAssetChanged() {
+func (desktopDataNotifier) NotifyDataChanged(resource string) { sendDesktopNotification(resource) }
+
+// sendDesktopNotification sends one data-change notification over the approval
+// socket; a variable so tests observe it.
+var sendDesktopNotification = func(resource string) {
 	dataDir := bootstrap.ResolvedDataDir()
 	token, tokenErr := bootstrap.ReadAuthToken(dataDir)
 	if tokenErr != nil {
 		logger.Default().Warn("read auth token", zap.Error(tokenErr))
 	}
-	approval.SendNotification(approval.SocketPath(dataDir), token, "asset")
+	approval.SendNotification(approval.SocketPath(dataDir), token, resource)
 }
+
+// notifyDesktopAssetChanged is for opsctl create/update asset, which commits through
+// asset_put_svc directly instead of the put_asset tool.
+func notifyDesktopAssetChanged() { sendDesktopNotification("asset") }
 
 func callHandler(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, toolName string, params map[string]any, decision ...*aictx.CheckResult) int {
 	result, code, ok := runHandler(ctx, handlers, toolName, params, decision...)
 	if !ok {
 		return code
-	}
-
-	// 写操作成功后通知桌面端刷新 UI
-	if refreshesDesktopUI(toolName) {
-		notifyDesktopAssetChanged()
 	}
 
 	// Pretty-print JSON output

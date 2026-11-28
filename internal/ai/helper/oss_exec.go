@@ -331,7 +331,7 @@ func (e ossExecutor) putObject(ctx context.Context, asset *asset_entity.Asset, c
 	bucket, key := cutOSSPath(c.Target)
 	file := c.Flags["file"] // ossFlagRules 里是必填，validateOSSFlags 已经拦过空值
 
-	if err := gateExecLocalRead(ctx, asset.ID, asset.Name, file,
+	if err := gateExecLocalRead(ctx, file,
 		fmt.Sprintf("object put %s/%s --file=%s", bucket, key, file)); err != nil {
 		return "", err
 	}

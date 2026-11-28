@@ -848,7 +848,7 @@ func createGenericGrafanaAsset(t *testing.T, name string, config map[string]any,
 	if description != "" {
 		args["description"] = description
 	}
-	if _, err := handlePutAsset(context.Background(), args); err != nil {
+	if _, err := handlePutAsset(permission.WithPreapproved(context.Background()), args); err != nil {
 		t.Fatalf("handlePutAsset(%s): %v", name, err)
 	}
 	assets, err := asset_repo.Asset().FindByName(context.Background(), name)
@@ -999,7 +999,7 @@ func TestHandleHelp_GenericSecretInBaseURLMaskedAndAuthTemplatesShown(t *testing
 	}))
 	// #nosec G101 -- intentional test fixture used to verify that secret field values never leak.
 	secret := "hook_secret_must_not_leak"
-	_, err := handlePutAsset(context.Background(), map[string]any{
+	_, err := handlePutAsset(permission.WithPreapproved(context.Background()), map[string]any{
 		"name": "hook-prod", "type": "hook", "config": map[string]any{"host": "hook.internal", "token": secret},
 	})
 	require.NoError(t, err)
@@ -1021,7 +1021,7 @@ func TestHandleHelp_GenericUnrenderableAddressIsReportedNotOmitted(t *testing.T)
 		Fields: []custom_type_entity.Field{{Name: "host", Required: true}},
 		HTTP:   &custom_type_entity.HTTPConfig{BaseURL: "{{host}}"},
 	}))
-	_, err := handlePutAsset(context.Background(), map[string]any{
+	_, err := handlePutAsset(permission.WithPreapproved(context.Background()), map[string]any{
 		"name": "bare-prod", "type": "bare-host", "config": map[string]any{"host": "bare.internal"},
 	})
 	require.NoError(t, err)
@@ -1072,7 +1072,7 @@ func TestHandleHelp_GenericOptionalSecretWithoutValueIsNotReportedAsSet(t *testi
 		},
 		HTTP: &custom_type_entity.HTTPConfig{BaseURL: "https://{{host}}"},
 	}))
-	_, err := handlePutAsset(context.Background(), map[string]any{
+	_, err := handlePutAsset(permission.WithPreapproved(context.Background()), map[string]any{
 		"name": "opt-prod", "type": "opt-secret", "config": map[string]any{"host": "opt.internal"},
 	})
 	require.NoError(t, err)
@@ -1138,7 +1138,7 @@ func TestHandleExec_GenericHTTPApprovalShowsTargetButNeverInjectedValues(t *test
 	}); err != nil {
 		t.Fatalf("save custom type: %v", err)
 	}
-	if _, err := handlePutAsset(context.Background(), map[string]any{
+	if _, err := handlePutAsset(permission.WithPreapproved(context.Background()), map[string]any{
 		"name": "echo-prod", "type": "echo-api", "config": map[string]any{"host": host, "token": secret},
 	}); err != nil {
 		t.Fatalf("handlePutAsset: %v", err)

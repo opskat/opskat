@@ -93,27 +93,38 @@ func (b *PromptBuilder) Build() string {
 	// 3. 内联 mention 引导
 	parts = append(parts, b.buildMentionGuidance())
 
-	// 4. 资产知识引导
-	parts = append(parts, b.buildKnowledgeGuidance())
+	// 4. 资产知识引导，紧跟桌面端独有的 local_* 工具引导
+	guidance := b.toolGuidance()
+	parts = append(parts, guidance[0], localToolGuidance)
 
-	// 5. 多资产 / 批量操作引导
-	parts = append(parts, b.buildMultiAssetGuidance())
-
-	// 6. 凭据与敏感信息引导
-	parts = append(parts, b.buildSecretsGuidance())
-
-	// 7. 错误恢复引导
-	parts = append(parts, b.buildErrorRecoveryGuidance())
-
-	// 8. 用户拒绝操作引导
-	parts = append(parts, b.buildUserDenialGuidance())
-
-	// 9. exec/help 用法说明 + 内置资产类型技能清单（只列一行描述，正文由 help 按需加载）。
-	// 无条件渲染：exec/help 是资产操作的主路径，不能只在"恰好开着某个 Tab"时才告诉模型。
-	parts = append(parts, b.buildAssetTypeSkills())
-
-	// 10. Extension tools guide
+	// 5~9. 多资产、凭据、错误恢复、用户拒绝、exec/help 与资产类型清单
+	parts = append(parts, guidance[1:]...)
 	return strings.Join(parts, "\n\n")
+}
+
+// ToolGuidance is the part of the system prompt that teaches a model to use OpsKat's
+// asset tools and holds wherever those tools are offered: discover-then-act, batching
+// and request_permission, secrets, error recovery, stopping on denial, and exec/help
+// with the asset type listing. opsctl mcp sends it as the server's instructions; the
+// desktop AI's prompt is built around the same sections (PromptBuilder.Build), so a
+// change here reaches both.
+func ToolGuidance(assetTypeSkills map[string]string, customTypes []CustomTypeSummary) string {
+	b := &PromptBuilder{assetTypeSkills: assetTypeSkills, customTypes: customTypes}
+	return strings.Join(b.toolGuidance(), "\n\n")
+}
+
+// toolGuidance returns ToolGuidance's sections in prompt order.
+func (b *PromptBuilder) toolGuidance() []string {
+	return []string{
+		b.buildKnowledgeGuidance(),
+		b.buildMultiAssetGuidance(),
+		b.buildSecretsGuidance(),
+		b.buildErrorRecoveryGuidance(),
+		b.buildUserDenialGuidance(),
+		// exec/help 用法说明 + 资产类型技能清单（只列一行描述，正文由 help 按需加载）。无条件
+		// 渲染：exec/help 是资产操作的主路径，不能只在"恰好开着某个 Tab"时才告诉模型。
+		b.buildAssetTypeSkills(),
+	}
 }
 
 func (b *PromptBuilder) buildLanguageHint() string {
@@ -158,14 +169,16 @@ Use the numeric asset-id for tool calls (the number in asset-id="..." or opsctl:
 }
 
 func (b *PromptBuilder) buildKnowledgeGuidance() string {
-	return `Discover before acting: call list_assets / get_asset first, then operate. The asset Description often contains prior findings (OS, services, DB version) — read it to avoid redundant exploration. When you learn new non-secret facts about an asset during work, append them to the asset Description via put_asset.
+	return `Discover before acting: call list_assets / get_asset first, then operate. The asset Description often contains prior findings (OS, services, DB version) — read it to avoid redundant exploration. When you learn new non-secret facts about an asset during work, append them to the asset Description via put_asset — the user confirms every put_asset, so collect them into one update.
 
-Running commands on an asset: use exec(asset, command), preceded by help(asset) the first time you touch a given asset type. exec dispatches on the asset's real type, so it is the only path for running commands on SSH, serial, database, Redis, K8s, etcd, MongoDB, and Kafka assets. Some capabilities are not commands and still have their own tool: cp(src, dst) for file transfer between any two endpoints — a local path, an SSH server, or object storage — and batch_exec for the same operation across several assets.
+Running commands on an asset: use exec(asset, command), preceded by help(asset) the first time you touch a given asset type. exec dispatches on the asset's real type, so it is the only path for running commands on SSH, serial, database, Redis, K8s, etcd, MongoDB, and Kafka assets. Some capabilities are not commands and still have their own tool: cp(src, dst) for file transfer between any two endpoints — a local path, an SSH server, or object storage — and batch_exec for the same operation across several assets.`
+}
 
-Local vs remote — VERY IMPORTANT: every tool whose name starts with ` + "`local_`" + ` (local_bash / local_write / local_edit / local_read / local_grep / local_find / local_ls) operates ONLY on the USER'S OWN MACHINE — they do NOT touch any remote asset. When the scenario targets a specific server / database / Redis / Kafka / K8s asset (an SSH / Database / Redis / SFTP tab is open for it, the user names the asset, or the request is clearly about that asset), you MUST reach it through a remote tool: exec(asset, command) for SSH / serial / database / Redis / K8s / etcd / MongoDB / Kafka assets (use ` + "`cat`/`ls`/`grep`" + ` inside an SSH exec for file inspection), and cp(src, dst) for file transfer, writing the remote side as <asset>:/<path>. Never fall back to a local_* tool even when the command looks identical — running ` + "`local_ls /etc/nginx`" + ` lists YOUR machine's filesystem, not the server the user asked about. local_* tools are only correct when the user explicitly asks about their local machine, or when there is no remote asset in scope.
+// localToolGuidance tells the desktop AI, which also has tools on the user's own
+// machine, never to reach a remote asset through them. Only the desktop AI has them.
+const localToolGuidance = `Local vs remote — VERY IMPORTANT: every tool whose name starts with ` + "`local_`" + ` (local_bash / local_write / local_edit / local_read / local_grep / local_find / local_ls) operates ONLY on the USER'S OWN MACHINE — they do NOT touch any remote asset. When the scenario targets a specific server / database / Redis / Kafka / K8s asset (an SSH / Database / Redis / SFTP tab is open for it, the user names the asset, or the request is clearly about that asset), you MUST reach it through a remote tool: exec(asset, command) for SSH / serial / database / Redis / K8s / etcd / MongoDB / Kafka assets (use ` + "`cat`/`ls`/`grep`" + ` inside an SSH exec for file inspection), and cp(src, dst) for file transfer, writing the remote side as <asset>:/<path>. Never fall back to a local_* tool even when the command looks identical — running ` + "`local_ls /etc/nginx`" + ` lists YOUR machine's filesystem, not the server the user asked about. local_* tools are only correct when the user explicitly asks about their local machine, or when there is no remote asset in scope.
 
 Within the local_* family: prefer local_grep / local_find / local_ls / local_read over local_bash for file exploration on the user's machine (they are faster, .gitignore-aware, and don't require shell escaping). Use local_bash only when you need shell features (pipes, env vars, scripts).`
-}
 
 func (b *PromptBuilder) buildMultiAssetGuidance() string {
 	return `When the same operation targets 2 or more assets, prefer batch_exec over a loop of exec calls — it parallelizes execution and batches approval prompts. When you expect to issue several command patterns that will trigger approval, call request_permission upfront so the user grants them in a single review instead of one popup per call.`

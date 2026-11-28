@@ -42,6 +42,13 @@ type serialTool interface {
 	Serial() bool
 }
 
+// IsSerial reports whether t must run exclusively. A tool wrapping another must answer
+// with its inner tool's IsSerial.
+func IsSerial(t agent.Tool) bool {
+	st, ok := t.(serialTool)
+	return ok && st.Serial()
+}
+
 // behaviorTool lets a tool defined outside the built-in registry (e.g. list_audit)
 // declare its side effects; built-in tools are looked up through aitool.BehaviorOf.
 type behaviorTool interface {
@@ -55,7 +62,9 @@ type ServerConfig struct {
 	AuditWriter   audit.AuditWriter
 	SessionID     string
 	PrepareCtx    func(ctx context.Context) context.Context
-	OnMutate      func(toolName string)
+	// Instructions is sent to the client at initialization, for it to put in front of
+	// the model: how to use these tools (runner.ToolGuidance).
+	Instructions string
 	// AnswerTimeout bounds how long a call waits for the human to answer a question
 	// asked through the client (Ask); zero means DefaultAnswerTimeout.
 	AnswerTimeout time.Duration
@@ -71,7 +80,6 @@ type Server struct {
 	dispatcher    *agent.ToolDispatcher
 	sessionID     string
 	prepareCtx    func(ctx context.Context) context.Context
-	onMutate      func(toolName string)
 	serialSem     chan struct{}
 	answerTimeout time.Duration
 
@@ -88,6 +96,7 @@ func NewServer(cfg ServerConfig) *Server {
 		sdk: mcpsdk.NewServer(&mcpsdk.Implementation{Name: "opsctl", Version: cfg.ServerVersion}, &mcpsdk.ServerOptions{
 			// Only tools: without an explicit value the SDK also advertises logging.
 			Capabilities: &mcpsdk.ServerCapabilities{Tools: &mcpsdk.ToolCapabilities{}},
+			Instructions: cfg.Instructions,
 		}),
 		dispatcher: &agent.ToolDispatcher{
 			Tools: cfg.Tools,
@@ -97,7 +106,6 @@ func NewServer(cfg ServerConfig) *Server {
 		},
 		sessionID:     cfg.SessionID,
 		prepareCtx:    cfg.PrepareCtx,
-		onMutate:      cfg.OnMutate,
 		serialSem:     make(chan struct{}, 1),
 		answerTimeout: cfg.AnswerTimeout,
 		paused:        map[string]*pausedCall{},
@@ -156,8 +164,7 @@ func annotationsFor(t agent.Tool) *mcpsdk.ToolAnnotations {
 
 func (s *Server) toolHandler(t agent.Tool) mcpsdk.ToolHandler {
 	name := t.Name()
-	st, ok := t.(serialTool)
-	isSerial := ok && st.Serial()
+	isSerial := IsSerial(t)
 
 	return func(reqCtx context.Context, req *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
 		var args map[string]any
@@ -219,11 +226,7 @@ func (s *Server) dispatch(ctx context.Context, name string, args map[string]any)
 		ToolUseID: "mcp_" + uuid.NewString(),
 		Input:     args,
 	})
-	out, isErr = blockText(res.Output), res.Output.IsError
-	if !isErr && s.onMutate != nil {
-		s.onMutate(name)
-	}
-	return out, isErr
+	return blockText(res.Output), res.Output.IsError
 }
 
 func (s *Server) enrichContext(ctx context.Context) context.Context {
