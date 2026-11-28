@@ -64,18 +64,26 @@ func withConnectionPathMFA(ctx context.Context) context.Context {
 }
 
 // withDesktopOnlyMFA / withDesktopOnlyConnectionPathMFA wire MFA for opsctl mcp (stdio), answered
-// only in the desktop app: os.Stdin carries the JSON-RPC stream and must never be read for terminal
-// MFA prompts even if the process is started under a PTY.
+// only in the desktop app (desktopOnlyMFASources).
 func withDesktopOnlyMFA(ctx context.Context) context.Context {
-	ctx, src := withMFASources(ctx)
-	src.interactive = false
+	ctx, src := desktopOnlyMFASources(ctx)
 	return credential_resolver.WithMFA(ctx, src.newCaller)
 }
 
 func withDesktopOnlyConnectionPathMFA(ctx context.Context) context.Context {
+	ctx, src := desktopOnlyMFASources(ctx)
+	return credential_resolver.WithConnectionPathMFA(ctx, src.newCaller)
+}
+
+// desktopOnlyMFASources answers MFA only in the desktop app. os.Stdin carries the
+// JSON-RPC stream and must never be read for a terminal prompt, even under a PTY; and a
+// --mfa-code / OPSKAT_MFA_CODE the server was started with is one stale code, while the
+// server opens new connections for as long as its client runs.
+func desktopOnlyMFASources(ctx context.Context) (context.Context, mfaSources) {
 	ctx, src := withMFASources(ctx)
 	src.interactive = false
-	return credential_resolver.WithConnectionPathMFA(ctx, src.newCaller)
+	src.code = ""
+	return ctx, src
 }
 
 // withMFASources 组出一次执行的应答来源，并把记录「没有应答来源」拒绝的 mfaRefusals
@@ -171,7 +179,7 @@ func desktopMFASender(sockPath, token string) func(context.Context, approval.App
 		} else {
 			logger.Default().Warn("resolve asset name for desktop MFA dialog", zap.Int64("assetID", req.AssetID), zap.Error(err))
 		}
-		return approval.RequestApprovalWithToken(sockPath, token, req)
+		return approval.RequestApprovalWithTokenContext(ctx, sockPath, token, req)
 	}
 }
 
