@@ -18,20 +18,22 @@ import (
 // it replaces a describe-only attach of the same name (a cached view, attached
 // without a guest): the contribution registry holds one attach per extension.
 //
-// An extension the user disabled is refused before anything is loaded, and the error
-// names it. An extension this service already has active is left as it is.
+// An extension the user disabled is refused, and the error names it — also when this
+// service already runs it: a long-lived process (opsctl mcp) activates per call and
+// must follow the user disabling it in the desktop app. An enabled extension this
+// service already has active is left as it is.
 func (s *Service) Activate(ctx context.Context, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.bridge.Get(name) != nil {
-		return nil
-	}
 	state, err := s.stateRepo.Find(ctx, name)
 	switch {
 	case err == nil && !state.Enabled:
 		return fmt.Errorf("extension %q is disabled in the desktop app; enable it there to use it", name)
 	case err != nil && !errors.Is(err, gorm.ErrRecordNotFound):
 		return fmt.Errorf("read extension %q state: %w", name, err)
+	}
+	if s.bridge.Get(name) != nil {
+		return nil
 	}
 
 	log := logger.Ctx(ctx).With(zap.String("extension", name))

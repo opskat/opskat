@@ -224,9 +224,10 @@ func (e extensionActivatingTool) Call(ctx context.Context, input map[string]any)
 }
 
 // activateExtensionsForRef activates the extension providing the referenced asset's
-// type and its database driver. An extension disabled since this server started is
-// revoked and refused by name. A reference that does not resolve activates nothing:
-// the tool reports the canonical resolution error itself.
+// type and its database driver. An extension that fails to load, or that the user
+// disabled since this server started, is refused by name (extension_svc.Activate checks
+// on every call) and works again once fixed or re-enabled. A reference that does not
+// resolve activates nothing: the tool reports the canonical resolution error itself.
 func activateExtensionsForRef(ctx context.Context, ref string) error {
 	if strings.TrimSpace(ref) == "" {
 		return nil
@@ -236,7 +237,6 @@ func activateExtensionsForRef(ctx context.Context, ref string) error {
 		return nil //nolint:nilerr // the tool surfaces the canonical asset resolution error
 	}
 	if err := refusedExtensionError(ctx, asset); err != nil {
-		revokeDisabledExtension(asset.Type)
 		return err
 	}
 	extName, isExt, err := extensionOwnerOf(asset.Type)
@@ -249,14 +249,6 @@ func activateExtensionsForRef(ctx context.Context, ref string) error {
 		}
 	}
 	return activateDriverExtension(ctx, asset, activateExtensionFn)
-}
-
-func revokeDisabledExtension(assetType string) {
-	extName, isExt, err := extensionOwnerOf(assetType)
-	if err != nil || !isExt || extName == "" {
-		return
-	}
-	extensionContributions.Revoke(extName)
 }
 
 // mcpListAuditTool is list_audit: an ordinary agent tool (so it runs through the same
