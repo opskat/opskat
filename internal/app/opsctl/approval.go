@@ -2,6 +2,7 @@ package opsctl
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -409,6 +410,11 @@ func (o *Opsctl) handleGrantApproval(reqCtx context.Context, req approval.Approv
 		if parseErr == nil && len(parsed.EditedItems) > 0 {
 			// 用户手写/改写的 pattern：他写的通配就是他要的授权范围（permission.GrantOrigin）。
 			edited, parseErr = grantItemsForPersistence(ctx, sessionID, parsed.EditedItems, permission.GrantOriginUser)
+			if parseErr == nil && len(edited) == 0 {
+				// The request's own rows are already written: approving an edit that grants
+				// nothing would leave those wider rows in force.
+				parseErr = errors.New("edited grant matches no command")
+			}
 		}
 		if parseErr != nil || parsed.Decision != permission.ApprovalAllow {
 			if err := grant_repo.Grant().UpdateSessionStatus(ctx, sessionID, grant_entity.GrantStatusRejected); err != nil {

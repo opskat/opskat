@@ -68,6 +68,22 @@ func TestHandleGrantApprovalSplitsCompoundBuiltinPattern(t *testing.T) {
 	require.Equal(t, []string{"exec", "exec"}, tools)
 }
 
+// The request's rows are written before the human answers. An edit that normalizes to
+// nothing (an unbalanced quote) must not leave those wider rows approved: the human
+// approved less than that.
+func TestHandleGrantApprovalRefusesAnEditThatGrantsNothing(t *testing.T) {
+	repo := withSSHGrantFixture(t)
+	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}
+	approvingGrantDialog(o, permission.ApprovalResponse{Decision: "allow", EditedItems: []permission.ApprovalItem{{
+		Type: "grant", AssetID: 4, AssetName: "web-1", Command: "systemctl restart nginx'",
+	}}})
+
+	resp := o.handleGrantApproval(context.Background(), sshGrantRequest("systemctl * nginx"))
+
+	require.False(t, resp.Approved)
+	require.Equal(t, grant_entity.GrantStatusRejected, repo.sessions["opsctl-sess"].Status)
+}
+
 func TestHandleGrantApprovalSplitsCompoundBuiltinEdit(t *testing.T) {
 	repo := withSSHGrantFixture(t)
 	o := &Opsctl{ctx: context.Background(), appCtx: context.Background(), lang: extTestLang{}}

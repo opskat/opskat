@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/cago-frame/cago/pkg/logger"
+	"github.com/google/uuid"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.uber.org/zap"
 
@@ -74,21 +75,45 @@ func (a mcpApprover) confirm(ctx context.Context, kind string, items []permissio
 	return desktopMCPDecision(ctx, desktopApprovalRequest(a.sessionID, kind, items))
 }
 
-// grant answers request_permission. Approved patterns are persisted the way the
-// desktop AI grant dialog persists them (internal/app/ai): as this session's grants,
-// normalized as system-proposed subjects since the prompt offers no editing.
+// sessionGrant is one grant row request_permission would save: a pattern normalized
+// the way the checker matches it, on the asset's real approval face.
+type sessionGrant struct {
+	item     permission.ApprovalItem
+	toolName string
+	pattern  string
+}
+
+// grant answers request_permission. The client prompt lists the rows that granting
+// saves (permission.GrantPatternsForApproval, the normalization every grant path
+// shares), which is not always the pattern requested: a compound command is saved per
+// sub-command, each then matching on its own. Exactly those rows are saved.
 func (a mcpApprover) grant(ctx context.Context, items []permission.ApprovalItem, reason string) (bool, []string) {
-	decision, asked := askMCPClient(ctx, grantPromptMessage(ctx, items, reason), []mcpChoice{choiceGrant, choiceDeny})
+	var grants []sessionGrant
+	for _, it := range items {
+		toolName, patterns, err := permission.GrantPatternsForApproval(ctx, it.AssetID, it.Type, it.Command, permission.GrantOriginSystem)
+		if err != nil {
+			logger.Ctx(ctx).Warn("mcp grant request has an invalid pattern; denying", zap.Int64("assetID", it.AssetID), zap.Error(err))
+			return false, nil
+		}
+		for _, p := range patterns {
+			grants = append(grants, sessionGrant{item: it, toolName: toolName, pattern: p})
+		}
+	}
+	if len(grants) == 0 {
+		logger.Ctx(ctx).Warn("mcp grant request normalizes to no grant; denying")
+		return false, nil
+	}
+	decision, asked := askMCPClient(ctx, grantPromptMessage(ctx, grants, reason), []mcpChoice{choiceGrant, choiceDeny})
 	if !asked {
 		return a.desktopGrant(ctx, items, reason)
 	}
 	if decision != choiceGrant.decision {
 		return false, nil
 	}
-	patterns := make([]string, 0, len(items))
-	for _, it := range items {
-		permission.SaveGrantPatternsForApproval(ctx, a.sessionID, it.AssetID, it.AssetName, it.Type, it.Command, permission.GrantOriginSystem)
-		patterns = append(patterns, it.Command)
+	patterns := make([]string, 0, len(grants))
+	for _, g := range grants {
+		permission.SaveGrantPattern(ctx, a.sessionID, g.item.AssetID, g.item.AssetName, g.toolName, g.pattern)
+		patterns = append(patterns, g.pattern)
 	}
 	return true, patterns
 }
@@ -176,11 +201,11 @@ func approvalPromptMessage(ctx context.Context, items []permission.ApprovalItem,
 	return b.String()
 }
 
-func grantPromptMessage(ctx context.Context, items []permission.ApprovalItem, reason string) string {
+func grantPromptMessage(ctx context.Context, grants []sessionGrant, reason string) string {
 	var b strings.Builder
 	b.WriteString(policy.PolicyMsg(ctx, "Grant for the rest of this session:", "授权本会话后续操作："))
-	for _, it := range items {
-		fmt.Fprintf(&b, "\n%s: %s", promptTarget(it), it.Command)
+	for _, g := range grants {
+		fmt.Fprintf(&b, "\n%s [%s] %s", promptTarget(g.item), g.toolName, g.pattern)
 	}
 	writePromptLine(ctx, &b, "Reason", "原因", reason)
 	return b.String()
@@ -239,28 +264,32 @@ func desktopApprovalRequest(sessionID, kind string, items []permission.ApprovalI
 	return req
 }
 
-// desktopGrant shows request_permission in the desktop grant dialog, which persists the
-// approved (possibly edited) grants itself.
+// mcpDesktopRequest sends one request to the running desktop app; overridden in tests.
+var mcpDesktopRequest = requestDesktopContext
+
+// desktopGrant shows request_permission in the desktop grant dialog. The dialog's
+// contract is a grant session of its own: it writes the request's rows before the
+// human answers, rejects the whole session on a denial and replaces its rows on an
+// edit. So the request gets a fresh session, and only once approved are its rows (as
+// the desktop normalized them, edits included) copied into this session — a pending,
+// denied or edited request never touches grants this session already holds.
 func (a mcpApprover) desktopGrant(ctx context.Context, items []permission.ApprovalItem, reason string) (bool, []string) {
-	req := approval.ApprovalRequest{Type: "grant", SessionID: a.sessionID, Description: reason}
+	req := approval.ApprovalRequest{Type: "grant", SessionID: a.sessionID + "_grant_" + uuid.NewString(), Description: reason}
 	for _, it := range items {
 		req.GrantItems = append(req.GrantItems, approval.GrantItem{
 			Type: it.Type, AssetID: it.AssetID, AssetName: it.AssetName,
 			GroupID: it.GroupID, GroupName: it.GroupName, Command: it.Command, Detail: it.Detail,
 		})
 	}
-	resp, err := requestDesktopContext(ctx, req)
+	resp, err := mcpDesktopRequest(ctx, req)
 	if err != nil || !resp.Approved {
 		logDesktopMCPRefusal(ctx, req, err)
 		return false, nil
 	}
-	final := resp.EditedItems
-	if len(final) == 0 {
-		final = req.GrantItems
-	}
-	patterns := make([]string, 0, len(final))
-	for _, it := range final {
-		patterns = append(patterns, it.Command)
+	patterns := make([]string, 0, len(resp.EditedItems))
+	for _, row := range resp.EditedItems {
+		permission.SaveGrantPattern(ctx, a.sessionID, row.AssetID, row.AssetName, row.Type, row.Command)
+		patterns = append(patterns, row.Command)
 	}
 	return true, patterns
 }
@@ -268,7 +297,7 @@ func (a mcpApprover) desktopGrant(ctx context.Context, items []permission.Approv
 // desktopMCPDecision sends one approval request to the desktop and maps the answer onto
 // the checker's decision; anything but an explicit approval is a denial.
 func desktopMCPDecision(ctx context.Context, req approval.ApprovalRequest) permission.ApprovalResponse {
-	resp, err := requestDesktopContext(ctx, req)
+	resp, err := mcpDesktopRequest(ctx, req)
 	if err != nil || !resp.Approved {
 		logDesktopMCPRefusal(ctx, req, err)
 		return permission.ApprovalResponse{Decision: "deny"}

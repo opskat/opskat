@@ -15,6 +15,7 @@ import (
 
 	"github.com/opskat/opskat/internal/ai/aictx"
 	"github.com/opskat/opskat/internal/ai/permission"
+	"github.com/opskat/opskat/internal/approval"
 	"github.com/opskat/opskat/internal/mcp"
 	"github.com/opskat/opskat/internal/model/entity/asset_entity"
 	"github.com/opskat/opskat/internal/repository/asset_repo"
@@ -269,13 +270,62 @@ func TestMCPApproverGrantPersistsApprovedPatternsAsSessionGrants(t *testing.T) {
 		return grantResult{ok, p}
 	})
 	require.True(t, granted.ok)
-	require.Equal(t, []string{"ls /tmp && pwd"}, granted.patterns)
+	require.Equal(t, []string{"ls /tmp", "pwd"}, granted.patterns)
 	require.Equal(t, []string{"allow", "deny"}, shown[0].choices)
-	require.Equal(t, "Grant for the rest of this session:\nweb-01: ls /tmp && pwd\nReason: inspect", shown[0].message)
+	// The prompt lists what granting saves: each sub-command then matches on its own,
+	// which the requested compound pattern does not show.
+	require.Equal(t, "Grant for the rest of this session:\nweb-01 [exec] ls /tmp\nweb-01 [exec] pwd\nReason: inspect", shown[0].message)
 	// Persisted on the asset's real approval face, split so each sub-command matches.
 	require.Len(t, recGrant.saved, 2)
 	require.Equal(t, "exec", recGrant.saved[0].ToolName)
 	require.Equal(t, "ls /tmp", recGrant.saved[0].Command)
 	require.Equal(t, "exec", recGrant.saved[1].ToolName)
 	require.Equal(t, "pwd", recGrant.saved[1].Command)
+}
+
+// A client that cannot prompt sends request_permission to the desktop grant dialog,
+// which writes a request's rows before the human answers and rejects or rewrites its
+// whole grant session on a denial or an edit. The request therefore gets a session of
+// its own; this session gains the approved rows only once the human approves.
+func TestMCPApproverDesktopGrantNeverTouchesTheSessionsGrantsUntilApproved(t *testing.T) {
+	withSSHAssets(t)
+	recGrant := &recordingGrantRepo{}
+	origGrant := grant_repo.Grant()
+	grant_repo.RegisterGrant(recGrant)
+	t.Cleanup(func() { grant_repo.RegisterGrant(origGrant) })
+
+	var sent []approval.ApprovalRequest
+	answer := approval.ApprovalResponse{}
+	origDesktop := mcpDesktopRequest
+	mcpDesktopRequest = func(_ context.Context, req approval.ApprovalRequest) (approval.ApprovalResponse, error) {
+		sent = append(sent, req)
+		resp := answer
+		resp.SessionID = req.SessionID
+		return resp, nil
+	}
+	t.Cleanup(func() { mcpDesktopRequest = origDesktop })
+
+	a := mcpApprover{sessionID: "mcp_s"}
+	items := []permission.ApprovalItem{{Type: "grant", AssetID: 7, AssetName: "web-01", Command: "systemctl * nginx"}}
+
+	ok, _ := a.grant(context.Background(), items, "deploy")
+	require.False(t, ok)
+	require.Len(t, sent, 1)
+	require.NotEqual(t, "mcp_s", sent[0].SessionID, "a denial would reject every grant of the session it names")
+	require.True(t, strings.HasPrefix(sent[0].SessionID, "mcp_s_grant_"))
+	require.Empty(t, recGrant.saved)
+
+	// Approved, the desktop answers with the rows it saved for the request (here as the
+	// human edited them); those become this session's grants.
+	answer = approval.ApprovalResponse{Approved: true, EditedItems: []approval.GrantItem{
+		{Type: "exec", AssetID: 7, AssetName: "web-01", Command: "systemctl restart nginx"},
+	}}
+	ok, patterns := a.grant(context.Background(), items, "deploy")
+	require.True(t, ok)
+	require.Equal(t, []string{"systemctl restart nginx"}, patterns)
+	require.NotEqual(t, sent[0].SessionID, sent[1].SessionID, "each request has a session of its own")
+	require.Len(t, recGrant.saved, 1)
+	require.Equal(t, "mcp_s", recGrant.saved[0].GrantSessionID)
+	require.Equal(t, "exec", recGrant.saved[0].ToolName)
+	require.Equal(t, "systemctl restart nginx", recGrant.saved[0].Command)
 }
