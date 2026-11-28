@@ -630,7 +630,7 @@ func setupGenericBatch(t *testing.T) func() int32 {
 	}
 	host := strings.TrimPrefix(srv.URL, "http://")
 	for _, name := range []string{"metrics-a", "metrics-b"} {
-		if _, err := handlePutAsset(permission.WithPreapproved(context.Background()), map[string]any{
+		if _, err := handlePutAsset(context.Background(), map[string]any{
 			"name": name, "type": "metrics", "config": map[string]any{"host": host},
 		}); err != nil {
 			t.Fatalf("put_asset %s: %v", name, err)
@@ -719,7 +719,7 @@ func TestHandleBatchCommand_GenericItemAuditStoresOnlySummary(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save custom type: %v", err)
 	}
-	if _, err := handlePutAsset(permission.WithPreapproved(ctx), map[string]any{
+	if _, err := handlePutAsset(ctx, map[string]any{
 		"name": "echo-a", "type": "echo",
 		"config": map[string]any{"host": strings.TrimPrefix(srv.URL, "http://"), "token": secret},
 	}); err != nil {

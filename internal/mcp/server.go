@@ -263,14 +263,17 @@ func textResult(text string, isError bool) *mcpsdk.CallToolResult {
 	}
 }
 
+// neverServed are built-in AI tools no toolset serves. get_asset_secret hands a stored
+// secret's plaintext to the model; an external agent's host may log or forward it.
+var neverServed = map[string]bool{
+	"get_asset_secret": true,
+}
+
 // FilterTools returns the tools matching the requested Toolset in deterministic order.
 func FilterTools(all []agent.Tool, toolset Toolset) []agent.Tool {
-	if toolset == ToolsetFull {
-		return all
-	}
-	out := make([]agent.Tool, 0, len(coreTools))
+	out := make([]agent.Tool, 0, len(all))
 	for _, t := range all {
-		if coreTools[t.Name()] {
+		if !neverServed[t.Name()] && (toolset == ToolsetFull || coreTools[t.Name()]) {
 			out = append(out, t)
 		}
 	}

@@ -169,7 +169,7 @@ Use the numeric asset-id for tool calls (the number in asset-id="..." or opsctl:
 }
 
 func (b *PromptBuilder) buildKnowledgeGuidance() string {
-	return `Discover before acting: call list_assets / get_asset first, then operate. The asset Description often contains prior findings (OS, services, DB version) — read it to avoid redundant exploration. When you learn new non-secret facts about an asset during work, append them to the asset Description via put_asset — the user confirms every put_asset, so collect them into one update.
+	return `Discover before acting: call list_assets / get_asset first, then operate. The asset Description often contains prior findings (OS, services, DB version) — read it to avoid redundant exploration. When you learn new non-secret facts about an asset during work, append them to the asset Description via put_asset.
 
 Running commands on an asset: use exec(asset, command), preceded by help(asset) the first time you touch a given asset type. exec dispatches on the asset's real type, so it is the only path for running commands on SSH, serial, database, Redis, K8s, etcd, MongoDB, and Kafka assets. Some capabilities are not commands and still have their own tool: cp(src, dst) for file transfer between any two endpoints — a local path, an SSH server, or object storage — and batch_exec for the same operation across several assets.`
 }

@@ -351,8 +351,7 @@ func setupCRUD(t *testing.T) *crudTestEnv {
 	custom_type_repo.RegisterCustomType(customTypes)
 	t.Cleanup(func() { custom_type_repo.RegisterCustomType(origCustomType) })
 
-	// put_asset / put_group 恒需确认：默认点“允许”，测拒绝的用例自己改成 deny。
-	env := &crudTestEnv{assets: assets, groups: groups, confirmDecision: "allow"}
+	env := &crudTestEnv{assets: assets, groups: groups}
 	assets.policyLookups = &env.policyChecks
 
 	// group_svc.Group().Delete wraps its writes in dbutil.WithTransaction; without a
@@ -478,7 +477,7 @@ func TestHandlePutAsset_PlaintextPasswordStaysAssetLocal(t *testing.T) {
 
 	plaintext := "ai-plaintext-must-not-leak"
 	// #nosec G101 -- plaintext is an intentional test fixture used to verify that managed credentials never leak.
-	out, err := handlePutAsset(permission.WithPreapproved(context.Background()), map[string]any{
+	out, err := handlePutAsset(context.Background(), map[string]any{
 		"name": "cache-prod", "type": "redis",
 		"config": map[string]any{"host": "redis.internal", "username": "default", "password": plaintext},
 	})
@@ -530,7 +529,7 @@ func TestHandlePutAsset_ManagedCredentialInputFailuresLeaveNoAsset(t *testing.T)
 		{"host": "redis.internal", "username": "default", "credential_id": float64(key.ID)},
 		{"host": "redis.internal", "username": "default", "credential_id": float64(key.ID), "password": "conflicting-secret"},
 	} {
-		_, err := handlePutAsset(permission.WithPreapproved(context.Background()), map[string]any{"name": "invalid", "type": "redis", "config": config})
+		_, err := handlePutAsset(context.Background(), map[string]any{"name": "invalid", "type": "redis", "config": config})
 		require.Error(t, err)
 		assert.NotContains(t, err.Error(), "conflicting-secret")
 	}
@@ -777,22 +776,33 @@ func TestHandlePutGroup_CreateThenUpdate(t *testing.T) {
 	}
 }
 
-// 新建/修改资产恒需一次性确认：资产的连接配置决定凭据发往哪里，模型改掉 host 就能把
-// 密码送到别处。确认项只带去密后的配置，拒绝时什么都不写。
-func TestHandlePutAsset_AlwaysConfirmsOnceShowingOnlySafeConfig(t *testing.T) {
+// 删除恒需确认：即使策略里有 allow * 的 grant，也必须弹确认。
+// 实现方式决定了这一点——delete 根本不查策略/grant，直接调 ConfirmFunc。
+// The desktop AI writes assets and groups without asking; an entry that installs
+// WithDataWriteConfirmation (opsctl mcp) asks once per write, showing only safe config:
+// an asset's connection settings decide where its stored credentials are sent.
+func TestHandlePutAsset_ConfirmsOnlyWhereTheEntryAsksShowingOnlySafeConfig(t *testing.T) {
 	env := setupCRUD(t)
 	credential_svc.SetDefault(credential_svc.New("tool-put-master-key", []byte("tool-put-salt-16")))
-	create := map[string]any{
-		"name": "prod-ssh", "type": "ssh",
-		"config": map[string]any{"host": "attacker.example", "port": float64(22), "username": "root", "password": "SUPER_SECRET_PASSWORD_123"},
+	create := func(name string) map[string]any {
+		return map[string]any{
+			"name": name, "type": "ssh",
+			"config": map[string]any{"host": "attacker.example", "port": float64(22), "username": "root", "password": "SUPER_SECRET_PASSWORD_123"},
+		}
 	}
 
+	_, err := handlePutAsset(env.ctx, create("desktop-ssh"))
+	require.NoError(t, err)
+	require.Equal(t, 0, env.confirmCalls, "the desktop AI does not confirm asset writes")
+	require.Equal(t, 1, env.assetCount())
+
+	ctx := WithDataWriteConfirmation(env.ctx)
 	env.confirmDecision = "deny"
 	slot := &aictx.CheckResult{}
-	out, err := handlePutAsset(aictx.WithCheckResultSlot(env.ctx, slot), create)
+	out, err := handlePutAsset(aictx.WithCheckResultSlot(ctx, slot), create("prod-ssh"))
 	require.NoError(t, err, "a denial is an answer for the model, not a failed call")
 	require.Contains(t, out, "USER DENIED")
-	require.Equal(t, 0, env.assetCount(), "nothing is written before the human says yes")
+	require.Equal(t, 1, env.assetCount(), "nothing is written before the human says yes")
 	require.Equal(t, permission.ApprovalKindOnce, env.lastConfirmKind, "an asset write is never grantable")
 	require.Len(t, env.lastConfirmItems, 1)
 	item := env.lastConfirmItems[0]
@@ -804,13 +814,13 @@ func TestHandlePutAsset_AlwaysConfirmsOnceShowingOnlySafeConfig(t *testing.T) {
 
 	env.confirmDecision = "allow"
 	slot = &aictx.CheckResult{}
-	_, err = handlePutAsset(aictx.WithCheckResultSlot(env.ctx, slot), create)
+	_, err = handlePutAsset(aictx.WithCheckResultSlot(ctx, slot), create("prod-ssh"))
 	require.NoError(t, err)
-	require.Equal(t, 1, env.assetCount())
+	require.Equal(t, 2, env.assetCount())
 	require.Equal(t, aictx.SourceUserAllow, slot.DecisionSource)
 
 	env.confirmDecision = "deny"
-	out, err = handlePutAsset(env.ctx, map[string]any{"asset": "prod-ssh", "config": map[string]any{"host": "10.9.9.9"}})
+	out, err = handlePutAsset(ctx, map[string]any{"asset": "prod-ssh", "config": map[string]any{"host": "10.9.9.9"}})
 	require.NoError(t, err)
 	require.Contains(t, out, "USER DENIED")
 	require.Equal(t, "update", env.lastConfirmItems[0].Type)
@@ -819,41 +829,35 @@ func TestHandlePutAsset_AlwaysConfirmsOnceShowingOnlySafeConfig(t *testing.T) {
 	require.Equal(t, "attacker.example", cfg.Host, "a denied update leaves the asset as it was")
 }
 
-func TestHandlePutGroup_AlwaysConfirmsOnce(t *testing.T) {
+func TestHandlePutGroup_ConfirmsOnlyWhereTheEntryAsks(t *testing.T) {
 	env := setupCRUD(t)
 
+	_, err := handlePutGroup(env.ctx, map[string]any{"name": "desktop"})
+	require.NoError(t, err)
+	require.Equal(t, 0, env.confirmCalls, "the desktop AI does not confirm group writes")
+
+	ctx := WithDataWriteConfirmation(env.ctx)
 	env.confirmDecision = "deny"
-	out, err := handlePutGroup(env.ctx, map[string]any{"name": "prod"})
+	out, err := handlePutGroup(ctx, map[string]any{"name": "prod"})
 	require.NoError(t, err)
 	require.Contains(t, out, "USER DENIED")
-	require.Equal(t, 0, env.groupCount())
+	require.Equal(t, 1, env.groupCount())
 	require.Equal(t, permission.ApprovalKindOnce, env.lastConfirmKind)
 	require.Equal(t, `create group "prod"`, env.lastConfirmItems[0].Command)
 
 	env.confirmDecision = "allow"
-	_, err = handlePutGroup(env.ctx, map[string]any{"name": "prod"})
-	require.NoError(t, err)
-	require.Equal(t, 1, env.groupCount())
-}
-
-// opsctl create/update 已在命令行上拿到过人的确认（requireApproval）并以 WithPreapproved
-// 调进来，handler 不再问第二次。
-func TestHandlePutAssetAndGroup_PreapprovedCallerIsNotAskedAgain(t *testing.T) {
-	env := setupCRUD(t)
-	ctx := permission.WithPreapproved(dbutil.WithTransactionRunner(context.Background(),
-		func(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) }))
-	_, err := handlePutAsset(ctx, map[string]any{"name": "web-1", "type": "ssh",
-		"config": map[string]any{"host": "10.0.0.1", "port": float64(22), "username": "root"}})
-	require.NoError(t, err)
 	_, err = handlePutGroup(ctx, map[string]any{"name": "prod"})
 	require.NoError(t, err)
-	require.Equal(t, 0, env.confirmCalls)
-	require.Equal(t, 1, env.assetCount())
-	require.Equal(t, 1, env.groupCount())
+	require.Equal(t, 2, env.groupCount())
+
+	// A rename names the group being renamed; the new name is in the detail.
+	env.confirmDecision = "deny"
+	_, err = handlePutGroup(ctx, map[string]any{"id": float64(env.group("prod").ID), "name": "test"})
+	require.NoError(t, err)
+	require.Equal(t, `update group "prod"`, env.lastConfirmItems[0].Command)
+	require.Contains(t, env.lastConfirmItems[0].Detail, `"name":"test"`)
 }
 
-// 删除恒需确认：即使策略里有 allow * 的 grant，也必须弹确认。
-// 实现方式决定了这一点——delete 根本不查策略/grant，直接调 ConfirmFunc。
 func TestHandleDeleteAsset_AlwaysConfirmsAndIsNotGrantable(t *testing.T) {
 	env := setupCRUD(t)
 	env.grantEverything() // 往策略里塞一条 allow * ——对 delete 必须无效
@@ -1159,7 +1163,7 @@ func TestHandlePutAsset_SuccessAuditProjectionOmitsWriteOnlyFieldsAndExecutionGe
 	setupPutAssetDB(t)
 	plaintext := "ai-projection-must-not-leak"
 	slot := aictx.NewAuditRequestSlot()
-	ctx := aictx.WithAuditRequestSlot(permission.WithPreapproved(context.Background()), slot)
+	ctx := aictx.WithAuditRequestSlot(context.Background(), slot)
 
 	out, err := handlePutAsset(ctx, map[string]any{
 		"name": "cache-proj", "type": "redis",
@@ -1308,7 +1312,7 @@ func TestPutAssetTopLevelAuditArgs_TypedFailClosedProjection(t *testing.T) {
 		"group_id":    map[string]any{"id": secret},       // 非法复合
 		"config":      map[string]any{"password": secret}, // config 从不投影
 	}
-	proj := PutAssetTopLevelAuditArgs(args)
+	proj := putAssetTopLevelAuditArgs(args)
 
 	for _, key := range []string{"asset", "name", "type", "description", "icon", "group_id"} {
 		_, ok := proj[key]
@@ -1334,7 +1338,7 @@ func TestPutAssetTopLevelAuditArgs_PreservesTypeCorrectScalars(t *testing.T) {
 		"group_id":    float64(7),
 		"config":      map[string]any{"password": "keep-out"},
 	}
-	proj := PutAssetTopLevelAuditArgs(args)
+	proj := putAssetTopLevelAuditArgs(args)
 
 	assert.Equal(t, "web-9", proj["asset"])
 	assert.Equal(t, "prod", proj["name"])
@@ -1364,7 +1368,7 @@ func TestPutAssetTopLevelAuditArgs_GroupIDAcceptsBoundaryNumerics(t *testing.T) 
 		{name: "json.Number", value: json.Number("7")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proj := PutAssetTopLevelAuditArgs(map[string]any{"group_id": tc.value})
+			proj := putAssetTopLevelAuditArgs(map[string]any{"group_id": tc.value})
 			v, ok := proj["group_id"]
 			assert.True(t, ok, "group_id %T must be preserved", tc.value)
 			assert.Equal(t, tc.value, v)
@@ -1395,7 +1399,7 @@ func TestPutAssetTopLevelAuditArgs_GroupIDOmitsUnsafeOrInvalid(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			proj := PutAssetTopLevelAuditArgs(map[string]any{"group_id": tc.value})
+			proj := putAssetTopLevelAuditArgs(map[string]any{"group_id": tc.value})
 			_, ok := proj["group_id"]
 			assert.False(t, ok, "group_id %#v must be omitted", tc.value)
 			encoded, err := json.Marshal(proj)
@@ -1454,7 +1458,7 @@ func TestHandlePutAsset_CommitFailureProjectsSafeAuditArgs(t *testing.T) {
 	gdb := setupPutAssetDB(t)
 	toolWriteFailure(t, gdb, "create", "assets")
 	slot := aictx.NewAuditRequestSlot()
-	ctx := aictx.WithAuditRequestSlot(permission.WithPreapproved(context.Background()), slot)
+	ctx := aictx.WithAuditRequestSlot(context.Background(), slot)
 
 	_, err := handlePutAsset(ctx, map[string]any{
 		"name": "cache-fail", "type": "redis",
@@ -1549,7 +1553,7 @@ func TestHandlePutAsset_CustomTypeSlugCreatesAndUpdatesGenericAsset(t *testing.T
 	setupGenericPutDB(t)
 	// #nosec G101 -- intentional test fixture used to verify that secret field values never leak.
 	secret := "glsa_ai_must_not_leak"
-	ctx := aictx.WithAuditRequestSlot(permission.WithPreapproved(context.Background()), aictx.NewAuditRequestSlot())
+	ctx := aictx.WithAuditRequestSlot(context.Background(), aictx.NewAuditRequestSlot())
 
 	out, err := handlePutAsset(ctx, map[string]any{
 		"name": "grafana-prod", "type": "grafana",
@@ -1575,7 +1579,7 @@ func TestHandlePutAsset_CustomTypeSlugCreatesAndUpdatesGenericAsset(t *testing.T
 	assert.NotContains(t, view, secret)
 
 	// 更新时 type 仍是断言：写类型标识对得上，写别的类型报错。
-	_, err = handlePutAsset(permission.WithPreapproved(context.Background()), map[string]any{
+	_, err = handlePutAsset(context.Background(), map[string]any{
 		"asset": "grafana-prod", "type": "grafana", "config": map[string]any{"host": "grafana2.internal"},
 	})
 	require.NoError(t, err)
@@ -1585,7 +1589,7 @@ func TestHandlePutAsset_CustomTypeSlugCreatesAndUpdatesGenericAsset(t *testing.T
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"host": "grafana2.internal", "token": secret}, resolved.Values)
 
-	_, err = handlePutAsset(permission.WithPreapproved(context.Background()), map[string]any{
+	_, err = handlePutAsset(context.Background(), map[string]any{
 		"asset": "grafana-prod", "type": "redis", "config": map[string]any{"host": "x"},
 	})
 	require.Error(t, err)
@@ -1598,7 +1602,7 @@ func TestHandlePutAsset_CustomTypeRejectsUnknownFieldAndMissingRequired(t *testi
 		"missing required": {"host": "g"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := handlePutAsset(permission.WithPreapproved(context.Background()), map[string]any{"name": "g", "type": "grafana", "config": config})
+			_, err := handlePutAsset(context.Background(), map[string]any{"name": "g", "type": "grafana", "config": config})
 			require.Error(t, err)
 		})
 	}

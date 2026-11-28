@@ -77,31 +77,13 @@ func cmdMCP(ctx context.Context, args []string) int {
 		session = "mcp_" + uuid.New().String()
 	}
 
-	approver := mcpApprover{sessionID: session}
-	checker := approver.checker()
-	// One gate for both directions of local file access, as the desktop AI uses one for
-	// its local tools: "allow for this session" on a path is one record.
-	localGate := approver.localToolGate()
-	docGate := tool.NewDocGate()
-
 	srv := mcp.NewServer(mcp.ServerConfig{
 		ServerVersion: configs.Version,
 		Tools:         mcpTools(toolset, session),
 		AuditWriter:   opsctlAuditWriter,
 		SessionID:     session,
-		Instructions:  runner.ToolGuidance(runner.AssetTypeSkills(), runner.DefinedCustomTypes(ctx)),
-		PrepareCtx: func(callCtx context.Context) context.Context {
-			callCtx = tool.WithDocGate(callCtx, docGate)
-			callCtx = permission.WithPolicyChecker(callCtx, checker)
-			callCtx = helper.WithLocalWriteGate(callCtx, localGate)
-			// Unlike the desktop AI, an external agent's uploads of local files go through
-			// a gate too (helper.LocalReadGate explains why); --allow-local-dir replaces it.
-			callCtx = helper.WithLocalReadGate(callCtx, localGate)
-			if len(normalizedLocalDirs) > 0 {
-				callCtx = helper.WithAllowedLocalDirs(callCtx, normalizedLocalDirs)
-			}
-			return withDesktopOnlyMFA(withDesktopOnlyConnectionPathMFA(callCtx))
-		},
+		Instructions:  mcpInstructions(ctx),
+		PrepareCtx:    mcpCallContext(mcpApprover{sessionID: session}, normalizedLocalDirs),
 	})
 
 	serveCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
@@ -112,6 +94,37 @@ func cmdMCP(ctx context.Context, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// mcpCallContext equips every tool call with what this entry decides: approvals go to
+// approver, local file access and asset/group writes are confirmed, SSH MFA is answered
+// in the desktop app (stdin carries the protocol).
+func mcpCallContext(approver mcpApprover, allowedLocalDirs []string) func(context.Context) context.Context {
+	checker := approver.checker()
+	// One gate for both directions of local file access, as the desktop AI uses one for
+	// its local tools: "allow for this session" on a path is one record.
+	localGate := approver.localToolGate()
+	docGate := tool.NewDocGate()
+	return func(ctx context.Context) context.Context {
+		ctx = tool.WithDocGate(ctx, docGate)
+		ctx = permission.WithPolicyChecker(ctx, checker)
+		ctx = tool.WithDataWriteConfirmation(ctx)
+		ctx = helper.WithLocalWriteGate(ctx, localGate)
+		// Unlike the desktop AI, an external agent's uploads of local files go through
+		// a gate too (helper.LocalReadGate explains why); --allow-local-dir replaces it.
+		ctx = helper.WithLocalReadGate(ctx, localGate)
+		if len(allowedLocalDirs) > 0 {
+			ctx = helper.WithAllowedLocalDirs(ctx, allowedLocalDirs)
+		}
+		return withDesktopOnlyMFA(withDesktopOnlyConnectionPathMFA(ctx))
+	}
+}
+
+// mcpInstructions is the guidance sent at initialize: the built-in AI's tool guidance
+// plus what only this entry does.
+func mcpInstructions(ctx context.Context) string {
+	return runner.ToolGuidance(runner.AssetTypeSkills(), runner.DefinedCustomTypes(ctx)) +
+		"\n\nEvery put_asset and put_group call asks the user to confirm it and cannot be pre-approved, so put all changes to an asset or group in one call."
 }
 
 // mcpTools is what opsctl mcp serves for toolset: the built-in AI's tools, the ones

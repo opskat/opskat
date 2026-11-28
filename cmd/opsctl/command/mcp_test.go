@@ -12,7 +12,6 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/opskat/opskat/internal/ai/audit"
-	"github.com/opskat/opskat/internal/ai/permission"
 	"github.com/opskat/opskat/internal/mcp"
 	"github.com/opskat/opskat/internal/model/entity/custom_type_entity"
 	"github.com/opskat/opskat/internal/model/entity/grant_entity"
@@ -97,6 +96,15 @@ func TestCmdMCPCoreToolsetAndIsolatedSession(t *testing.T) {
 	}
 }
 
+// The full toolset is the built-in AI's tools, except that a stored secret's plaintext
+// is never handed to an external agent.
+func TestMCPFullToolsetNeverServesSecretValues(t *testing.T) {
+	served := mcpToolNames(mcp.ToolsetFull, nil)
+	require.Contains(t, served, "put_asset")
+	require.Contains(t, served, "list_audit")
+	require.NotContains(t, served, "get_asset_secret")
+}
+
 func TestMCPListAuditEnforcesSessionScopeAndLimitCap(t *testing.T) {
 	origAudit := audit_repo.Audit()
 	stub := &listAuditRepoStub{}
@@ -130,27 +138,27 @@ func (r *mcpAuditRecorder) WriteToolCall(_ context.Context, info audit.ToolCallI
 	r.entries = append(r.entries, info)
 }
 
-// put_asset's confirmation lives in the shared tool now; through MCP the human sees the
-// non-secret host before anything is written, and a denial leaves no secret in audit.
-func TestMCPPutAssetDeniedShowsTheHostAndKeepsSecretsOutOfAudit(t *testing.T) {
-	var seenDetail string
-	checker := permission.NewCommandPolicyChecker(func(_ context.Context, _ string, items []permission.ApprovalItem) permission.ApprovalResponse {
-		seenDetail = items[0].Detail
-		return permission.ApprovalResponse{Decision: "deny"}
-	})
+// Through opsctl mcp every put_asset asks the human, who sees the non-secret host before
+// anything is written; a denial leaves no secret in audit.
+func TestMCPPutAssetAsksShowingTheHostAndKeepsSecretsOutOfAudit(t *testing.T) {
+	var seenMessage string
 	auditRec := &mcpAuditRecorder{}
 	srv := mcp.NewServer(mcp.ServerConfig{
 		Tools:       mcpTools(mcp.ToolsetFull, "s"),
 		AuditWriter: auditRec,
-		PrepareCtx: func(ctx context.Context) context.Context {
-			return permission.WithPolicyChecker(ctx, checker)
-		},
+		PrepareCtx:  mcpCallContext(mcpApprover{sessionID: "s"}, nil),
 	})
 	serverT, clientT := mcpsdk.NewInMemoryTransports()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- srv.Run(ctx, serverT) }()
-	session, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "1.0.0"}, nil).Connect(ctx, clientT, nil)
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "1.0.0"}, &mcpsdk.ClientOptions{
+		ElicitationHandler: func(_ context.Context, req *mcpsdk.ElicitRequest) (*mcpsdk.ElicitResult, error) {
+			seenMessage = req.Params.Message
+			return &mcpsdk.ElicitResult{Action: "decline"}, nil
+		},
+	})
+	session, err := client.Connect(ctx, clientT, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = session.Close()
@@ -166,8 +174,8 @@ func TestMCPPutAssetDeniedShowsTheHostAndKeepsSecretsOutOfAudit(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	require.Contains(t, res.Content[0].(*mcpsdk.TextContent).Text, "USER DENIED")
-	require.Contains(t, seenDetail, "attacker.example", "the human must see where the credentials would go")
-	require.NotContains(t, seenDetail, "SUPER_SECRET_PASSWORD_123")
+	require.Contains(t, seenMessage, "attacker.example", "the human must see where the credentials would go")
+	require.NotContains(t, seenMessage, "SUPER_SECRET_PASSWORD_123")
 
 	auditRec.mu.Lock()
 	defer auditRec.mu.Unlock()

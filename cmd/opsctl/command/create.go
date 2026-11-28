@@ -88,7 +88,7 @@ func cmdCreate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			return writeApprovalFailure(os.Stderr, err)
 		}
 
-		return callHandler(ctx, handlers, "put_group", params, approvalResult.ToCheckResult())
+		return callHandler(ctx, handlers, "put_group", params)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: asset, group\n", resource)
@@ -512,7 +512,7 @@ func cmdUpdate(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, ar
 			return writeApprovalFailure(os.Stderr, err)
 		}
 
-		return callHandler(ctx, handlers, "put_group", params, approvalResult.ToCheckResult())
+		return callHandler(ctx, handlers, "put_group", params)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown resource %q. Supported: asset, group\n", resource)

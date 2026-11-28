@@ -49,15 +49,15 @@ func putArgs(args map[string]any) (map[string]any, error) {
 // 旧的巨型 schema 把 10 种类型的字段并集写进 JSON Schema，既是我们正在移除的类型分支的
 // 另一种写法，又漏掉了 oss——那类资产此前经 AI 完全无法创建。
 //
-// 顺序：解析 → Prepare（校验、算出去密投影）→ 人确认（confirmDataWrite）→ Commit。确认
-// 排在 Prepare 之后，人看到的是即将写入的去密配置，不会为一次注定失败的写入点头。
+// 顺序：解析 → Prepare（校验、算出去密投影）→ 入口要求时人确认（confirmDataWrite）→
+// Commit。确认排在 Prepare 之后，人看到的是即将写入的去密配置，不会为一次注定失败的写入点头。
 func handlePutAsset(ctx context.Context, args map[string]any) (string, error) {
 	// 一进来就落审计投影的基线：putArgs/校验/lookup 这些 Prepare 之前的早期返回没有
 	// producer 投影可用，若不先投影，runner 的 auditMiddleware 会回退到原始 c.Input，
 	// 把可能携带 write-only 秘密的 config 原样写进审计。这里只投影顶层非 config 字段
-	// （config 是自由对象、可能带秘密）；Prepare 成功后再用 producer 投影覆盖。
+	// （config 是自由对象、可能带秘密）；Prepare/Commit 成功后再用 producer 投影覆盖。
 	// 该投影是独立 map，绝不改写 args——执行/审批/ToolBlock/历史仍见原值。
-	aictx.RecordAuditRequest(ctx, PutAssetTopLevelAuditArgs(args))
+	aictx.RecordAuditRequest(ctx, putAssetTopLevelAuditArgs(args))
 
 	config, err := putArgs(args)
 	if err != nil {
@@ -153,15 +153,27 @@ func putAssetApprovalDetail(op, ref string, args map[string]any, prepared *asset
 	return string(b)
 }
 
-// confirmDataWrite asks the human once before put_asset / put_group writes. Asset and
-// group data is not a command pattern a policy or grant can pre-approve, and an asset's
-// connection settings decide where its stored credentials are sent, so every write is
-// confirmed (kind once: no "allow for this session"), like delete. A caller marked
-// permission.WithPreapproved — opsctl create/update, which confirmed on its own command
-// line — is not asked again. denied is the message for the model when the human says no.
+type confirmDataWritesKey struct{}
+
+// WithDataWriteConfirmation makes put_asset / put_group ask the human once before every
+// write (kind once: no "allow for this session"), like delete. opsctl mcp installs it:
+// it serves agents the user is not watching, asset and group data is not a command
+// pattern a policy or grant can pre-approve, and an asset's connection settings decide
+// where its stored credentials are sent. The desktop AI (the user is in the
+// conversation) and opsctl create/update (confirmed on the command line) do not.
+func WithDataWriteConfirmation(ctx context.Context) context.Context {
+	return context.WithValue(ctx, confirmDataWritesKey{}, true)
+}
+
+// confirmDataWrite asks the human before a put_asset / put_group write when the entry
+// asked for it (WithDataWriteConfirmation). denied is the message for the model when
+// the human says no.
 func confirmDataWrite(ctx context.Context, toolName string, item permission.ApprovalItem) (denied string, err error) {
-	checker, err := permission.RequireCheckerOrPreapproved(ctx)
-	if err != nil || checker == nil {
+	if on, _ := ctx.Value(confirmDataWritesKey{}).(bool); !on {
+		return "", nil
+	}
+	checker, err := permission.RequireChecker(ctx)
+	if err != nil {
 		return "", err
 	}
 	confirm := checker.ConfirmFunc()
@@ -177,8 +189,8 @@ func confirmDataWrite(ctx context.Context, toolName string, item permission.Appr
 	return "", nil
 }
 
-// PutAssetTopLevelAuditArgs 把 put_asset 顶层非 config 字段按类型 fail-closed 投影给
-// Audit，作为 handlePutAsset 及外层包装器入口的基线（record 在 putArgs/校验/lookup 之前）。config 是
+// putAssetTopLevelAuditArgs 把 put_asset 顶层非 config 字段按类型 fail-closed 投影给
+// Audit，作为 handlePutAsset 入口的基线（record 在 putArgs/校验/lookup 之前）。config 是
 // 自由对象、可能携带 write-only 秘密，任何 Prepare 之前的失败都绝不回退原始 config；顶层
 // 字段也只有类型正确的值才进入投影：string 身份字段（asset/name/type/description/icon）
 // 仅在实际值为 string 时保留，group_id 仅在实际值为工具边界支持的数值
@@ -187,7 +199,7 @@ func confirmDataWrite(ctx context.Context, toolName string, item permission.Appr
 // 嵌套秘密不能借任何允许键进入 Audit；非有限 float64（NaN/±Inf）与非法 json.Number 会让
 // audit middleware 的 json.Marshal 失败，同样省略。Prepare/Commit 成功后再用 producer
 // 投影覆盖基线。该投影是独立 map，绝不改写 args——执行/审批/ToolBlock/历史仍见原值。
-func PutAssetTopLevelAuditArgs(args map[string]any) map[string]any {
+func putAssetTopLevelAuditArgs(args map[string]any) map[string]any {
 	out := make(map[string]any)
 	for _, key := range []string{"asset", "name", "type", "description", "icon"} {
 		if s, ok := args[key].(string); ok {
@@ -281,6 +293,8 @@ func handlePutGroup(ctx context.Context, args map[string]any) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("group not found: %w", err)
 	}
+	// Built before the arguments are applied: a rename shows which group is renamed.
+	approvalItem := putGroupApprovalItem(args, group)
 	if name := aictx.ArgString(args, "name"); name != "" {
 		group.Name = name
 	}
@@ -297,7 +311,7 @@ func handlePutGroup(ctx context.Context, args map[string]any) (string, error) {
 	if _, ok := args["sort_order"]; ok {
 		group.SortOrder = aictx.ArgInt(args, "sort_order")
 	}
-	denied, err := confirmDataWrite(ctx, "put_group", putGroupApprovalItem(args, group))
+	denied, err := confirmDataWrite(ctx, "put_group", approvalItem)
 	if err != nil || denied != "" {
 		return denied, err
 	}
@@ -309,7 +323,8 @@ func handlePutGroup(ctx context.Context, args map[string]any) (string, error) {
 }
 
 // putGroupApprovalItem is put_group's approval item; existing is the group being
-// updated with the arguments already applied, nil on create.
+// updated as stored (before the arguments apply), nil on create. The arguments being
+// set, a new name included, are the detail.
 func putGroupApprovalItem(args map[string]any, existing *group_entity.Group) permission.ApprovalItem {
 	detail := map[string]any{}
 	for _, key := range []string{"name", "icon", "description"} {

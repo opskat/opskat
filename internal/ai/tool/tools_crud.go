@@ -22,8 +22,7 @@ func crudTools() []tool.Tool {
 				"(registered types: " + strings.Join(permission.RegisteredHelpTypes(), ", ") + "). Unknown config fields are rejected. " +
 				"Plaintext password and OSS secret_access_key are write-only asset-local secrets. credential_id reuses " +
 				"an existing type-checked managed credential; conflicting secret sources fail. K8s kubeconfig remains directly encrypted asset " +
-				"config. Every call asks the user to confirm it (secrets are not shown to them) and cannot be pre-approved, so put all changes to an asset in one call. " +
-				"Successful output contains only the asset ID and a safe authentication reference when applicable; never echo secrets.",
+				"config. Successful output contains only the asset ID and a safe authentication reference when applicable; never echo secrets.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
@@ -47,8 +46,7 @@ func crudTools() []tool.Tool {
 		},
 		&tool.RawTool{
 			NameStr: "put_group",
-			DescStr: "Create or update an asset group. Pass id to update an existing group; omit it to create. Groups nest via parent_id. " +
-				"Every call asks the user to confirm it and cannot be pre-approved.",
+			DescStr: "Create or update an asset group. Pass id to update an existing group; omit it to create. Groups nest via parent_id.",
 			SchemaVal: agent.Schema{
 				Type: "object",
 				Properties: map[string]*agent.Property{
