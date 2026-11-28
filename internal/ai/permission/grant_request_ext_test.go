@@ -201,6 +201,25 @@ func TestBuiltinGrantRequestIsUnchanged(t *testing.T) {
 	require.Equal(t, []string{"systemctl * nginx"}, persistedGrants(stub))
 }
 
+// A grant request's patterns are rules the model wrote and the human approved as shown,
+// so their wildcards stay wildcards: `object.delete mybucket/logs/*` must cover every
+// key under logs/, not only a key literally named `*`.
+func TestBuiltinGrantRequestKeepsTheWildcardsTheHumanApproved(t *testing.T) {
+	ctx, mockAsset, _ := setupPolicyTest(t)
+	mockAsset.EXPECT().Find(gomock.Any(), int64(5)).
+		Return(&asset_entity.Asset{ID: 5, Name: "logs-bucket", Type: asset_entity.AssetTypeOSS}, nil).AnyTimes()
+	mockAsset.EXPECT().Find(gomock.Any(), int64(6)).
+		Return(&asset_entity.Asset{ID: 6, Name: "grafana", Type: asset_entity.AssetTypeGeneric}, nil).AnyTimes()
+
+	_, oss, err := GrantPatternsForApproval(ctx, 5, grantApprovalItemType, "object.delete mybucket/logs/*", GrantOriginSystem)
+	require.NoError(t, err)
+	require.Equal(t, []string{"object.delete mybucket/logs/*"}, oss)
+
+	_, generic, err := GrantPatternsForApproval(ctx, 6, grantApprovalItemType, "GET /api/*", GrantOriginSystem)
+	require.NoError(t, err)
+	require.Equal(t, []string{"GET /api/*"}, generic)
+}
+
 // A built-in grant request is persisted the way exec's check splits the command: a
 // compound pattern becomes its sub-commands. Stored whole, no sub-command of
 // `ls /tmp && cat /etc/hosts` would ever match the grant row.

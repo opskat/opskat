@@ -883,6 +883,8 @@ func NormalizeGrantPatterns(approvalType, command string, origin GrantOrigin) []
 //   - request_permission 给内置类型资产的审批项标的是 grantApprovalItemType（弹窗里的
 //     「授权」标记），不是工具面：按它归一化会跳过资产类型注册的拆分（复合命令按子命令、
 //     OSS 的 DSL 派生策略串），整串落库后任何一次检查都匹配不上。这里先换成资产的真实审批面。
+//     它的 pattern 是模型写的规则、人照原样批准，通配就是要授的范围：按 GrantOriginUser
+//     归一化，不像系统从一条命令推出的主体那样收窄（否则 OSS / 通用资产的 `*` 被转义）。
 //   - 扩展类型的 pattern 是规则语法（`<action>[:<resource-glob>]`），经 extensionGrantFor
 //     落成 ext:<policyType>:… ——扩展调用只匹配这种形状；不合法时返回错误，什么也不落。
 //   - 其余类型经 NormalizeGrantPatternsFor 按类型注册的拆法归一化。
@@ -890,6 +892,7 @@ func GrantPatternsForApproval(ctx context.Context, assetID int64, approvalType, 
 	if approvalType == grantApprovalItemType && assetID > 0 {
 		if asset := resolveAssetForPolicy(ctx, assetID); asset != nil {
 			approvalType = ApprovalTypeFor(asset.Type)
+			origin = GrantOriginUser
 		}
 	}
 	grant, isExt, err := extensionGrantFor(approvalType, command)
