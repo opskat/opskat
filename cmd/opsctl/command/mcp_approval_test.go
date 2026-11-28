@@ -168,15 +168,58 @@ func TestMCPApproverPromptNamesTheAssetAndCommandInTheUserLanguage(t *testing.T)
 	_, shown := withPromptingClient(t, accept("deny"), "zh-cn", func(ctx context.Context) permission.ApprovalResponse {
 		return a.confirm(ctx, permission.ApprovalKindBatch, []permission.ApprovalItem{
 			sshExecItem,
-			{Type: "exec", AssetID: 4, AssetName: "db-01", Command: "rm -rf /var/tmp/cache", Review: &aictx.ReviewInfo{Outcome: "rejected", Reason: "deletes files"}},
+			{Type: "exec", AssetID: 4, AssetName: "db-01", Command: "rm -rf /var/tmp/cache", Review: &aictx.ReviewInfo{
+				Outcome: aictx.ReviewReject, Failed: []string{"deletes_data"},
+				FailedNames: map[string]map[string]string{"deletes_data": {"zh-CN": "删除数据", "en": "Deletes data"}},
+			}},
 		})
 	})
 	lines := strings.Split(shown[0].message, "\n")
 	require.Equal(t, "2 项操作待审批", lines[0])
 	require.Equal(t, "web-01 [exec] systemctl restart nginx", lines[1], "clients show only the first lines; each operation must fit on one")
 	require.Equal(t, "db-01 [exec] rm -rf /var/tmp/cache", lines[2])
-	require.Equal(t, "模型审核：rejected deletes files", lines[3], "the model review's reason is what the human needs to see")
+	require.Equal(t, "模型审核未通过（删除数据）", lines[3], "the review reads as it does in the terminal prompt, with the question's own name")
 	require.Equal(t, []string{"allow", "deny"}, shown[0].choices, "a batch can only be allowed once or denied")
+	require.NotContains(t, shown[0].message, "本会话允许", "a batch offers no session grant, so it names none")
+}
+
+// "Allow for this session" saves what permission.ApprovalRuleSubjects derives, which is
+// not always the command shown: a compound command is saved per sub-command and an
+// extension call touching several resources as one wildcard rule. The human picking it
+// must see that, as the terminal prompt shows its subjects.
+func TestMCPApproverPromptSaysWhatAllowForThisSessionWouldGrant(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	mockAsset := mock_asset_repo.NewMockAssetRepo(ctrl)
+	mockAsset.EXPECT().Find(gomock.Any(), int64(1)).Return(&asset_entity.Asset{ID: 1, Name: "mock-ssh", Type: asset_entity.AssetTypeSSH}, nil).AnyTimes()
+	origAsset := asset_repo.Asset()
+	asset_repo.RegisterAsset(mockAsset)
+	t.Cleanup(func() { asset_repo.RegisterAsset(origAsset) })
+
+	a := mcpApprover{sessionID: "mcp_s"}
+	review := &aictx.ReviewInfo{Outcome: aictx.ReviewReject, Failed: []string{"may_interrupt_service"},
+		FailedNames: map[string]map[string]string{"may_interrupt_service": {"zh-CN": "可能中断服务"}}}
+	compound := permission.ApprovalItem{Type: "exec", AssetID: 1, AssetName: "mock-ssh", Command: "touch /tmp/a && mkdir -p /tmp/b", Review: review}
+
+	_, shown := withPromptingClient(t, accept("deny"), "zh-cn", func(ctx context.Context) permission.ApprovalResponse {
+		return a.confirm(ctx, permission.ApprovalKindSingle, []permission.ApprovalItem{compound})
+	})
+	lines := strings.Split(shown[0].message, "\n")
+	require.Equal(t, "mock-ssh [exec] touch /tmp/a && mkdir -p /tmp/b", lines[0])
+	require.Equal(t, "模型审核未通过（可能中断服务）", lines[1], "clients show the first two lines: the review comes right after the operation")
+	require.Equal(t, "本会话允许将授权：touch /tmp/a；mkdir -p /tmp/b", lines[2])
+
+	ext := permission.ApprovalItem{Type: "grafana", AssetID: 9, AssetName: "grafana-prod", Command: "delete_dashboard --uid=cpu --uid=mem",
+		Action: "dashboard.delete", Resources: []string{"prod/cpu", "prod/mem"}, RememberPattern: "dashboard.delete:prod/*"}
+	_, shown = withPromptingClient(t, accept("deny"), "en", func(ctx context.Context) permission.ApprovalResponse {
+		return a.confirm(ctx, permission.ApprovalKindSingle, []permission.ApprovalItem{ext})
+	})
+	require.Contains(t, strings.Split(shown[0].message, "\n"), "Allow for this session grants: dashboard.delete:prod/*",
+		"the wildcard rule covers more than the two resources listed, so it must be spelled out")
+
+	_, shown = withPromptingClient(t, accept("deny"), "en", func(ctx context.Context) permission.ApprovalResponse {
+		return a.confirm(ctx, permission.ApprovalKindOnce, []permission.ApprovalItem{compound})
+	})
+	require.NotContains(t, shown[0].message, "Allow for this session", "a one-shot approval offers no session grant, so it names none")
 }
 
 func TestMCPApproverGrantPersistsApprovedPatternsAsSessionGrants(t *testing.T) {

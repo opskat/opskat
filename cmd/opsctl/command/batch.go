@@ -294,23 +294,14 @@ func cmdBatch(ctx context.Context, handlers map[string]tool.ToolHandlerFunc, arg
 			// 与单条 exec 同一个审批项构造：扩展资产上分类成功的调用带上动作、资源与
 			// 规则主体，终端提示、桌面端弹窗与 NEEDS AUTHORIZATION 都按它展示。
 			item := permission.ApprovalItemFor(ctx, cmd.asset.ID, cmd.asset.Name, cmd.asset.Type, cmd.checkCommand)
-			batchItems = append(batchItems, approval.BatchItem{
-				Type:      item.Type,
-				AssetID:   item.AssetID,
-				AssetName: item.AssetName,
-				Command:   item.Command,
-				// Detail 单独带 scope 与类型的审批展示补充（batchItemApprovalDetail），不掺进
-				// Command：Command 驱动策略匹配与 grant pattern 落库，掺入节点地址会让同一条
-				// 命令因 scope 不同匹配不上同一条规则——同 exec.go 的 execApprovalDetail。扩展
-				// 条目不取审批项的工具调用详情：它与命令同义，且会让带 detail 的批在弹窗里被
-				// 当成 cp 批折叠。
-				Detail:          cmd.detail,
-				Action:          item.Action,
-				Resource:        item.Resource,
-				Resources:       item.Resources,
-				RememberPattern: item.RememberPattern,
-				Review:          b.result.Review,
-			})
+			// Detail 单独带 scope 与类型的审批展示补充（batchItemApprovalDetail），不掺进
+			// Command：Command 驱动策略匹配与 grant pattern 落库，掺入节点地址会让同一条
+			// 命令因 scope 不同匹配不上同一条规则——同 exec.go 的 execApprovalDetail。扩展
+			// 条目不取审批项的工具调用详情：它与命令同义，且会让带 detail 的批在弹窗里被
+			// 当成 cp 批折叠。
+			item.Detail = cmd.detail
+			item.Review = b.result.Review
+			batchItems = append(batchItems, permission.BatchItemOfApprovalItem(item))
 		}
 
 		approvalResult, approvalErr := requireBatchApprovalFn(batchItems, session)

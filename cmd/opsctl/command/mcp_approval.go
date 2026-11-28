@@ -59,15 +59,16 @@ func (a mcpApprover) localToolGate() *tool.LocalToolGate {
 }
 
 // confirm answers a CommandPolicyChecker confirmation. "Allow for this session" is
-// offered exactly where the approval kind can persist a grant (ParseApprovalResponse
-// accepts allowAll only for those kinds); the checker then saves it under this session.
+// offered exactly where the approval kind can persist a grant
+// (permission.KindAllowsSessionGrant); the checker then saves it under this session.
 func (a mcpApprover) confirm(ctx context.Context, kind string, items []permission.ApprovalItem) permission.ApprovalResponse {
 	choices := []mcpChoice{choiceAllow}
-	if kind == permission.ApprovalKindSingle || kind == permission.ApprovalKindLocalTool {
+	offersSession := permission.KindAllowsSessionGrant(kind)
+	if offersSession {
 		choices = append(choices, choiceAllowSession)
 	}
 	choices = append(choices, choiceDeny)
-	if decision, asked := askMCPClient(ctx, approvalPromptMessage(ctx, items), choices); asked {
+	if decision, asked := askMCPClient(ctx, approvalPromptMessage(ctx, items, offersSession), choices); asked {
 		return permission.ApprovalResponse{Decision: decision}
 	}
 	return desktopMCPDecision(ctx, desktopApprovalRequest(a.sessionID, kind, items))
@@ -139,10 +140,15 @@ func askMCPClient(ctx context.Context, message string, choices []mcpChoice) (dec
 }
 
 // The prompt messages lead with what is being decided — "<asset> [<type>] <command>" —
-// because clients show only the first lines of a long message until it is expanded,
-// and already title the prompt with the server's name. Supporting detail follows.
+// because clients show only the first two lines of a long message until it is
+// expanded, and already title the prompt with the server's name. The model review,
+// when there is one, is the next most important line; supporting detail follows.
 
-func approvalPromptMessage(ctx context.Context, items []permission.ApprovalItem) string {
+// approvalPromptMessage renders a checker confirmation. offersSession says whether the
+// prompt offers "allow for this session"; when it does, the message names exactly what
+// that choice saves (permission.ApprovalRuleSubjects — the subjects the terminal prompt
+// lists and the checker persists), which is not always the command shown.
+func approvalPromptMessage(ctx context.Context, items []permission.ApprovalItem, offersSession bool) string {
 	var b strings.Builder
 	if len(items) > 1 {
 		b.WriteString(policy.PolicyFmt(ctx, "%d operations need approval", "%d 项操作待审批", len(items)))
@@ -152,18 +158,19 @@ func approvalPromptMessage(ctx context.Context, items []permission.ApprovalItem)
 			b.WriteString("\n")
 		}
 		fmt.Fprintf(&b, "%s [%s] %s", promptTarget(it), it.Type, it.Command)
+		if it.Review != nil {
+			b.WriteString("\n" + permission.ReviewSummary(ctx, it.Review))
+		}
+		if offersSession {
+			subjects := permission.ApprovalRuleSubjects(ctx, it.Type, it)
+			writePromptLine(ctx, &b, "Allow for this session grants", "本会话允许将授权",
+				strings.Join(subjects, policy.PolicyMsg(ctx, "; ", "；")))
+		}
 		if it.Action != "" {
 			writePromptLine(ctx, &b, "Action", "动作", it.Action+" "+strings.Join(it.Resources, ", "))
 		}
 		if it.Detail != it.Command {
 			writePromptLine(ctx, &b, "Detail", "详情", truncateRunes(it.Detail, maxPromptDetailRunes))
-		}
-		if it.Review != nil {
-			why := it.Review.Reason
-			if why == "" {
-				why = strings.Join(it.Review.Failed, ", ")
-			}
-			writePromptLine(ctx, &b, "Model review", "模型审核", strings.TrimSpace(string(it.Review.Outcome)+" "+why))
 		}
 	}
 	return b.String()
@@ -219,22 +226,16 @@ func truncateRunes(s string, n int) string {
 // desktop persists session grants itself (keyed by SessionID), so a desktop allow
 // comes back as a plain "allow".
 func desktopApprovalRequest(sessionID, kind string, items []permission.ApprovalItem) approval.ApprovalRequest {
-	req := approval.ApprovalRequest{Kind: kind, SessionID: sessionID}
+	var req approval.ApprovalRequest
 	if kind == permission.ApprovalKindBatch {
 		req.Type = "batch"
 		for _, it := range items {
-			req.BatchItems = append(req.BatchItems, approval.BatchItem{
-				Type: it.Type, AssetID: it.AssetID, AssetName: it.AssetName, Command: it.Command, Detail: it.Detail,
-				Action: it.Action, Resource: it.Resource, Resources: it.Resources, RememberPattern: it.RememberPattern,
-				Review: it.Review,
-			})
+			req.BatchItems = append(req.BatchItems, permission.BatchItemOfApprovalItem(it))
 		}
-		return req
+	} else {
+		req = permission.RequestOfApprovalItem(items[0]) // non-batch kinds always carry exactly one item (CommandPolicyChecker)
 	}
-	it := items[0] // non-batch kinds always carry exactly one item (CommandPolicyChecker)
-	req.Type, req.AssetID, req.AssetName, req.GroupID, req.GroupName = it.Type, it.AssetID, it.AssetName, it.GroupID, it.GroupName
-	req.Command, req.Detail, req.Review = it.Command, it.Detail, it.Review
-	req.Action, req.Resource, req.Resources, req.RememberPattern = it.Action, it.Resource, it.Resources, it.RememberPattern
+	req.Kind, req.SessionID = kind, sessionID
 	return req
 }
 

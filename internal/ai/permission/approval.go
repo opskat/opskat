@@ -63,6 +63,28 @@ func ApprovalItemOfBatchItem(item approval.BatchItem) ApprovalItem {
 	}
 }
 
+// RequestOfApprovalItem is ApprovalItemOfRequest's inverse: the wire request that asks
+// the desktop dialog about item, for an approver holding an item rather than a request
+// (opsctl mcp's desktop fallback). The caller sets Kind and SessionID.
+func RequestOfApprovalItem(item ApprovalItem) approval.ApprovalRequest {
+	return approval.ApprovalRequest{
+		Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName,
+		GroupID: item.GroupID, GroupName: item.GroupName,
+		Command: item.Command, Detail: item.Detail,
+		Action: item.Action, Resource: item.Resource, Resources: item.Resources, RememberPattern: item.RememberPattern,
+		Review: item.Review,
+	}
+}
+
+// BatchItemOfApprovalItem is ApprovalItemOfBatchItem's inverse.
+func BatchItemOfApprovalItem(item ApprovalItem) approval.BatchItem {
+	return approval.BatchItem{
+		Type: item.Type, AssetID: item.AssetID, AssetName: item.AssetName, Command: item.Command, Detail: item.Detail,
+		Action: item.Action, Resource: item.Resource, Resources: item.Resources, RememberPattern: item.RememberPattern,
+		Review: item.Review,
+	}
+}
+
 // ApprovalResponse 统一审批响应
 type ApprovalResponse struct {
 	Decision    string         `json:"decision"`               // "allow", "deny", "allowAll"
@@ -83,6 +105,14 @@ const (
 	// ApprovalKindDelete 删除类审批不可 grant，前端不渲染 rememberMode。
 	ApprovalKindDelete = "delete"
 )
+
+// KindAllowsSessionGrant reports whether an approval of kind may be answered with
+// allowAll ("allow for this session"): only single and local_tool carry a pattern a
+// grant can be saved under. ParseApprovalResponse enforces it; approvers that build
+// their own choices (opsctl mcp's client prompt) offer the option from the same rule.
+func KindAllowsSessionGrant(kind string) bool {
+	return kind == ApprovalKindSingle || kind == ApprovalKindLocalTool
+}
 
 // ApprovalDecision 是经过 ParseApprovalResponse 白名单解析后的 typed 决策。
 // Deny 是零值，使任何遗漏的 switch/default 都天然 fail-closed。
@@ -114,7 +144,7 @@ func ParseApprovalResponse(kind string, resp ApprovalResponse, expectedItems ...
 	case "allow":
 		parsed.Decision = ApprovalAllow
 	case "allowAll":
-		if kind != ApprovalKindSingle && kind != ApprovalKindLocalTool {
+		if !KindAllowsSessionGrant(kind) {
 			return ParsedApprovalResponse{Decision: ApprovalDeny},
 				fmt.Errorf("approval kind %q does not support allowAll", kind)
 		}
