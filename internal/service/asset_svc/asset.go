@@ -3,6 +3,7 @@ package asset_svc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/cago-frame/cago/pkg/logger"
@@ -29,10 +30,12 @@ type AssetSvc interface {
 	UpdateWithinTransaction(ctx context.Context, asset *asset_entity.Asset) error
 	Invalidate(ctx context.Context, id int64)
 	Delete(ctx context.Context, id int64) error
+	DeleteBatch(ctx context.Context, ids []int64) ([]*asset_entity.Asset, error)
 	DeleteByGroup(ctx context.Context, groupID int64) ([]*asset_entity.Asset, error)
 	MoveFromGroup(ctx context.Context, groupID int64) error
 	Move(ctx context.Context, id int64, direction string) error
 	Reorder(ctx context.Context, id, targetGroupID, beforeID int64) error
+	ReorderBatch(ctx context.Context, ids []int64, targetGroupID, beforeID int64) ([]*asset_entity.Asset, error)
 }
 
 type assetSvc struct{}
@@ -143,6 +146,67 @@ func (s *assetSvc) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
+func uniquePositiveIDs(ids []int64) ([]int64, error) {
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return nil, fmt.Errorf("资产 ID 无效: %d", id)
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+// DeleteBatch 在单个事务内批量软删除指定资产，返回删除前的资产快照（保持去重后的调用顺序），
+// 并在事务提交后逐个断开在用连接。审计由调用方按自身 source 逐条落库。
+func (s *assetSvc) DeleteBatch(ctx context.Context, ids []int64) ([]*asset_entity.Asset, error) {
+	uniqueIDs, err := uniquePositiveIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	if len(uniqueIDs) == 0 {
+		return nil, fmt.Errorf("资产 ID 列表不能为空")
+	}
+
+	var deleted []*asset_entity.Asset
+	err = dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
+		found, err := asset_repo.Asset().FindByIDs(txCtx, uniqueIDs)
+		if err != nil {
+			return err
+		}
+		byID := make(map[int64]*asset_entity.Asset, len(found))
+		for _, a := range found {
+			byID[a.ID] = a
+		}
+		ordered := make([]*asset_entity.Asset, 0, len(uniqueIDs))
+		for _, id := range uniqueIDs {
+			asset, ok := byID[id]
+			if !ok {
+				return fmt.Errorf("资产不存在: %d", id)
+			}
+			ordered = append(ordered, asset)
+		}
+		if err := asset_repo.Asset().DeleteByIDs(txCtx, uniqueIDs); err != nil {
+			return err
+		}
+		deleted = ordered
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	for _, asset := range deleted {
+		assetconn.CloseAsset(ctx, asset.ID)
+	}
+	return deleted, nil
+}
+
 // DeleteByGroup 删除指定分组下的全部资产，并返回删除前的资产信息。
 // 调用方可用返回值在事务提交后断开连接、写入带名称和类型的审计记录。
 func (s *assetSvc) DeleteByGroup(ctx context.Context, groupID int64) ([]*asset_entity.Asset, error) {
@@ -183,18 +247,55 @@ func (s *assetSvc) Move(ctx context.Context, id int64, direction string) error {
 // Reorder 把 id 移动到 targetGroupID 内 beforeID 之前。beforeID == 0 表示插到末尾。
 // 跨分组时同步 GroupID。重排目标容器内所有兄弟的 sort_order，等间距 (10/20/30...)。
 func (s *assetSvc) Reorder(ctx context.Context, id, targetGroupID, beforeID int64) error {
-	return dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
-		asset, err := asset_repo.Asset().Find(txCtx, id)
+	_, err := s.ReorderBatch(ctx, []int64{id}, targetGroupID, beforeID)
+	return err
+}
+
+// ReorderBatch 在单个事务内把 ids（去重并保持传入顺序）整体移动到 targetGroupID 内 beforeID 之前；
+// beforeID == 0 表示插到末尾。跨分组时批量更新 GroupID，并返回发生分组变更的资产列表（GroupID 已更新为目标值），
+// 供上层按需落审计。仅调整分组/排序不改变连接配置，因此不触发连接失效。
+func (s *assetSvc) ReorderBatch(ctx context.Context, ids []int64, targetGroupID, beforeID int64) ([]*asset_entity.Asset, error) {
+	uniqueIDs, err := uniquePositiveIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	if len(uniqueIDs) == 0 {
+		return nil, fmt.Errorf("资产 ID 列表不能为空")
+	}
+	if targetGroupID < 0 {
+		return nil, fmt.Errorf("目标分组 ID 无效")
+	}
+
+	var movedCrossGroup []*asset_entity.Asset
+	err = dbutil.WithTransaction(ctx, func(txCtx context.Context) error {
+		found, err := asset_repo.Asset().FindByIDs(txCtx, uniqueIDs)
 		if err != nil {
 			return err
 		}
+		byID := make(map[int64]*asset_entity.Asset, len(found))
+		for _, a := range found {
+			byID[a.ID] = a
+		}
 
-		// 跨分组迁移
-		if asset.GroupID != targetGroupID {
-			if err := asset_repo.Asset().UpdateGroupID(txCtx, id, targetGroupID); err != nil {
+		crossGroupIDs := make([]int64, 0)
+		crossAssets := make([]*asset_entity.Asset, 0)
+		for _, id := range uniqueIDs {
+			asset, ok := byID[id]
+			if !ok {
+				return fmt.Errorf("资产不存在: %d", id)
+			}
+			if asset.GroupID != targetGroupID {
+				crossGroupIDs = append(crossGroupIDs, id)
+				copied := *asset
+				copied.GroupID = targetGroupID
+				crossAssets = append(crossAssets, &copied)
+			}
+		}
+
+		if len(crossGroupIDs) > 0 {
+			if err := asset_repo.Asset().UpdateGroupIDs(txCtx, crossGroupIDs, targetGroupID); err != nil {
 				return err
 			}
-			asset.GroupID = targetGroupID
 		}
 
 		siblings, err := asset_repo.Asset().List(txCtx, asset_repo.ListOptions{GroupID: targetGroupID, ExactGroupID: true})
@@ -202,19 +303,29 @@ func (s *assetSvc) Reorder(ctx context.Context, id, targetGroupID, beforeID int6
 			return err
 		}
 
-		reordered := sortutil.ReorderSiblings(siblings, id, beforeID,
+		reordered := sortutil.ReorderSiblingsBatch(siblings, uniqueIDs, beforeID,
 			func(item *asset_entity.Asset) int64 { return item.ID },
 		)
 
+		movedSet := make(map[int64]struct{}, len(uniqueIDs))
+		for _, id := range uniqueIDs {
+			movedSet[id] = struct{}{}
+		}
+
 		for i, item := range reordered {
 			newOrder := (i + 1) * 10
-			if item.SortOrder == newOrder && item.ID != id {
+			if _, isMoved := movedSet[item.ID]; !isMoved && item.SortOrder == newOrder {
 				continue
 			}
 			if err := asset_repo.Asset().UpdateSortOrder(txCtx, item.ID, newOrder); err != nil {
 				return err
 			}
 		}
+		movedCrossGroup = crossAssets
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return movedCrossGroup, nil
 }

@@ -36,7 +36,7 @@ import { getAssetType, pageTabPrefix } from "@/lib/assetTypes";
 import { openPageTab, openSettingsTab, useTabStore } from "@/stores/tabStore";
 import { useSnippetStore } from "@/stores/snippetStore";
 import { bootstrapExtensions } from "@/extension/init";
-import { openAssetConnection } from "@/lib/openAsset";
+import { openAssetConnection, reconnectAssetConnection } from "@/lib/openAsset";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useExternalEditStore } from "@/stores/externalEditStore";
 import { useAIStore } from "@/stores/aiStore";
@@ -252,6 +252,7 @@ function App() {
   // 分组对话框
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<group_entity.Group | null>(null);
+  const [defaultParentGroupId, setDefaultParentGroupId] = useState(0);
 
   const selectAsset = useAssetStore((s) => s.selectAsset);
   const deleteAsset = useAssetStore((s) => s.deleteAsset);
@@ -262,6 +263,12 @@ function App() {
     setEditingAsset(null);
     setDefaultGroupId(groupId ?? 0);
     setAssetFormOpen(true);
+  };
+
+  const handleAddGroup = (parentId?: number) => {
+    setEditingGroup(null);
+    setDefaultParentGroupId(parentId ?? 0);
+    setGroupDialogOpen(true);
   };
 
   const handleEditAsset = (asset: asset_entity.Asset) => {
@@ -294,6 +301,10 @@ function App() {
 
   const handleConnectAsset = async (asset: asset_entity.Asset) => {
     await openAssetConnection(asset);
+  };
+
+  const handleReconnectAsset = async (asset: asset_entity.Asset) => {
+    await reconnectAssetConnection(asset);
   };
 
   const handleConnectAssetInNewTab = async (asset: asset_entity.Asset) => {
@@ -406,10 +417,7 @@ function App() {
                           sidebarHidden={sidebarHidden}
                           onShowSidebar={toggleSidebarHidden}
                           onAddAsset={handleAddAsset}
-                          onAddGroup={() => {
-                            setEditingGroup(null);
-                            setGroupDialogOpen(true);
-                          }}
+                          onAddGroup={handleAddGroup}
                           onEditGroup={(group) => {
                             setEditingGroup(group);
                             setGroupDialogOpen(true);
@@ -418,6 +426,7 @@ function App() {
                           onEditAsset={handleEditAsset}
                           onCopyAsset={handleCopyAsset}
                           onConnectAsset={handleConnectAsset}
+                          onReconnectAsset={handleReconnectAsset}
                           onConnectAssetInNewTab={handleConnectAssetInNewTab}
                           onOpenFileManager={handleOpenFileManager}
                           onSelectAsset={handleSelectAsset}
@@ -447,10 +456,7 @@ function App() {
                       sidebarHidden={sidebarHidden}
                       onShowSidebar={toggleSidebarHidden}
                       onAddAsset={handleAddAsset}
-                      onAddGroup={() => {
-                        setEditingGroup(null);
-                        setGroupDialogOpen(true);
-                      }}
+                      onAddGroup={handleAddGroup}
                       onEditGroup={(group) => {
                         setEditingGroup(group);
                         setGroupDialogOpen(true);
@@ -459,6 +465,7 @@ function App() {
                       onEditAsset={handleEditAsset}
                       onCopyAsset={handleCopyAsset}
                       onConnectAsset={handleConnectAsset}
+                      onReconnectAsset={handleReconnectAsset}
                       onConnectAssetInNewTab={handleConnectAssetInNewTab}
                       onOpenFileManager={handleOpenFileManager}
                       onSelectAsset={handleSelectAsset}
@@ -496,7 +503,12 @@ function App() {
               />
             )}
             {groupDialogOpen && (
-              <GroupDialog open={groupDialogOpen} onOpenChange={setGroupDialogOpen} editGroup={editingGroup} />
+              <GroupDialog
+                open={groupDialogOpen}
+                onOpenChange={setGroupDialogOpen}
+                editGroup={editingGroup}
+                defaultParentId={defaultParentGroupId}
+              />
             )}
           </Suspense>
           <PermissionDialog suspended={quitActivities !== null} />

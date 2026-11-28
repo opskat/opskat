@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { TFunction } from "i18next";
 import {
+  isMorePermissiveMode,
   parseReviewInfo,
+  resolveEffectivePermissionMode,
   resolveInheritedPermissionMode,
   reviewSummary,
   reviewWithMode,
@@ -95,14 +97,27 @@ describe("resolveInheritedPermissionMode", () => {
     expect(resolveInheritedPermissionMode(9, [g(1, 0, "autopilot")])).toEqual(none);
   });
 
-  it("和后端一样最多向上找 5 层", () => {
-    const groups = [g(1, 0, "autopilot"), g(2, 1), g(3, 2), g(4, 3), g(5, 4), g(6, 5)];
+  it("超过 5 层嵌套时仍完整沿分组链继承", () => {
+    const groups = [g(1, 0, "autopilot"), g(2, 1), g(3, 2), g(4, 3), g(5, 4), g(6, 5), g(7, 6)];
     expect(resolveInheritedPermissionMode(5, groups).mode).toBe("autopilot");
-    expect(resolveInheritedPermissionMode(6, groups)).toEqual(none);
+    expect(resolveInheritedPermissionMode(6, groups)).toEqual({ mode: "autopilot", from: groups[0] });
+    expect(resolveInheritedPermissionMode(7, groups)).toEqual({ mode: "autopilot", from: groups[0] });
   });
 
   it("分组链成环时不死循环", () => {
     expect(resolveInheritedPermissionMode(1, [g(1, 2), g(2, 1)])).toEqual(none);
+    expect(resolveInheritedPermissionMode(1, [g(1, 1)])).toEqual(none);
+  });
+
+  it("解析资产实际生效模式并判断是否变宽松", () => {
+    const groups = [g(1, 0, "assisted"), g(2, 0, "autopilot")];
+    expect(resolveEffectivePermissionMode({ GroupID: 1, permissionMode: "" }, groups)).toBe("assisted");
+    expect(resolveEffectivePermissionMode({ GroupID: 1, permissionMode: "default" }, groups)).toBe("default");
+    expect(resolveEffectivePermissionMode({ GroupID: 2, permissionMode: "" }, groups)).toBe("autopilot");
+    expect(isMorePermissiveMode("default", "assisted")).toBe(true);
+    expect(isMorePermissiveMode("assisted", "autopilot")).toBe(true);
+    expect(isMorePermissiveMode("autopilot", "assisted")).toBe(false);
+    expect(isMorePermissiveMode("assisted", "assisted")).toBe(false);
   });
 });
 

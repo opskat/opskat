@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { CancelSSHConnect, ConnectSSHAsync, SplitSSH } from "../../../wailsjs/go/ssh/SSH";
-import { EventsOn } from "../../../wailsjs/runtime/runtime";
+import { EventsOff, EventsOn } from "../../../wailsjs/runtime/runtime";
 import { asset_entity } from "../../../wailsjs/go/models";
 import { useTabStore, type Tab } from "../tabStore";
 import { useAssetStore } from "../assetStore";
 import { __resetTerminalSyncListenersForTest, useTerminalStore, type SplitNode } from "../terminalStore";
+import { getTabConnectionPhase, reconnectTabIfNeeded } from "@/lib/tabReconnect";
 
 // 终端窗格的连接状态机:任何一次失败 / 取消之后,窗格里必须有一个可操作的连接条目
 // (失败原因 + 重新连接 + 关闭窗格)。分屏树里出现 connecting 节点却没有对应 connections
@@ -88,6 +89,9 @@ beforeEach(() => {
   vi.mocked(EventsOn).mockImplementation((eventName, handler) => {
     handlers.set(eventName, handler as (event: unknown) => void);
     return vi.fn();
+  });
+  vi.mocked(EventsOff).mockImplementation((eventName) => {
+    handlers.delete(eventName);
   });
   vi.spyOn(useAssetStore.getState(), "getAssetPath").mockReturnValue("Server 1");
   useAssetStore.setState({ assets: [sshAsset(1)] });
@@ -402,5 +406,129 @@ describe("分屏失败", () => {
       first: { type: "terminal", sessionId: "s1" },
       second: { type: "terminal", sessionId: "s2" },
     });
+  });
+});
+
+describe("在途连接强制重试与连接状态跟踪", () => {
+  it("连接中调用 retryConnect 立即取消旧连接并解绑监听，旧连接迟到事件不会污染新重试", async () => {
+    vi.mocked(ConnectSSHAsync).mockResolvedValueOnce("conn-1");
+    await useTerminalStore.getState().connect(sshAsset(1));
+    expect(useTerminalStore.getState().connectingAssetIds.has(1)).toBe(true);
+
+    let resolveRetry: (id: string) => void = () => {};
+    vi.mocked(ConnectSSHAsync).mockReturnValueOnce(new Promise<string>((r) => (resolveRetry = r)));
+
+    useTerminalStore.getState().retryConnect("conn-1");
+
+    // 必须立刻取消旧连接并解绑旧监听，同时保持 connectingAssetIds 为连接中
+    expect(CancelSSHConnect).toHaveBeenCalledWith("conn-1");
+    expect(EventsOff).toHaveBeenCalledWith("ssh:connect:conn-1");
+    expect(handlers.has("ssh:connect:conn-1")).toBe(false);
+    expect(useTerminalStore.getState().connectingAssetIds.has(1)).toBe(true);
+
+    resolveRetry("conn-2");
+    await flush();
+    expect(onlyConnectingId("conn-1")).toBe("conn-2");
+    expect(useTerminalStore.getState().connectingAssetIds.has(1)).toBe(true);
+
+    emit("ssh:connect:conn-2", { type: "connected", sessionId: "s2" });
+    expect(useTerminalStore.getState().connectingAssetIds.has(1)).toBe(false);
+    expect(useTabStore.getState().tabs.map((t) => t.id)).toEqual(["s2"]);
+  });
+
+  it("reconnect 过程中准确维护 connectingAssetIds 并在失败或连上后清除", async () => {
+    seedConnectedTab("s1");
+    vi.mocked(ConnectSSHAsync).mockResolvedValueOnce("conn-2");
+
+    useTerminalStore.getState().reconnect("s1");
+    expect(useTerminalStore.getState().connectingAssetIds.has(1)).toBe(true);
+    await flush();
+    expect(useTerminalStore.getState().connectingAssetIds.has(1)).toBe(true);
+
+    emit("ssh:connect:conn-2", { type: "error", error: "refused" });
+    expect(useTerminalStore.getState().connectingAssetIds.has(1)).toBe(false);
+  });
+
+  it("分屏标签页通过 tabReconnect 仅检测并重连 activePaneId，不打扰健康兄弟窗格", async () => {
+    const tab = terminalTab("s1");
+    useTabStore.setState({ tabs: [tab], activeTabId: "s1" });
+    useTerminalStore.setState({
+      tabData: {
+        s1: {
+          splitTree: {
+            type: "split",
+            direction: "horizontal",
+            ratio: 0.5,
+            first: { type: "terminal", sessionId: "s1" },
+            second: { type: "terminal", sessionId: "s2" },
+          },
+          activePaneId: "s1",
+          panes: {
+            s1: { sessionId: "s1", transport: "ssh", connected: true, connectedAt: 1 },
+            s2: { sessionId: "s2", transport: "ssh", connected: false, connectedAt: 1 },
+          },
+          directoryFollowMode: "off",
+        },
+      },
+    });
+
+    // 焦点在健康窗格 s1：视为 connected，双击不触发重连
+    expect(getTabConnectionPhase(tab)).toBe("connected");
+    expect(await reconnectTabIfNeeded(tab)).toBe(false);
+    expect(ConnectSSHAsync).not.toHaveBeenCalled();
+
+    // 焦点切到掉线窗格 s2：视为 disconnected，双击仅重连 s2，s1 保持原样
+    useTerminalStore.getState().setActivePaneId("s1", "s2");
+    expect(getTabConnectionPhase(tab)).toBe("disconnected");
+    vi.mocked(ConnectSSHAsync).mockResolvedValueOnce("conn-s2");
+    expect(await reconnectTabIfNeeded(tab)).toBe(true);
+    await flush();
+
+    const tree = useTerminalStore.getState().tabData.s1.splitTree;
+    expect(tree).toMatchObject({
+      first: { type: "terminal", sessionId: "s1" },
+      second: { type: "connecting", connectionId: "conn-s2" },
+    });
+    expect(useTerminalStore.getState().tabData.s1.panes.s1.connected).toBe(true);
+  });
+
+  it("reconnectPane 发起后在 ConnectSSHAsync 尚未返回的窗口内，getPhase 报告 connecting 且双击不会打断重试", async () => {
+    seedConnectedTab("s1");
+    const tab = useTabStore.getState().tabs[0];
+    let resolveConnect: (id: string) => void = () => {};
+    vi.mocked(ConnectSSHAsync).mockReturnValueOnce(new Promise<string>((r) => (resolveConnect = r)));
+
+    useTerminalStore.getState().reconnect("s1");
+    expect(ConnectSSHAsync).toHaveBeenCalledTimes(1);
+    expect(getTabConnectionPhase(tab)).toBe("connecting");
+    expect(await reconnectTabIfNeeded(tab)).toBe(false);
+    expect(ConnectSSHAsync).toHaveBeenCalledTimes(1);
+
+    resolveConnect("conn-2");
+    await flush();
+    expect(onlyConnectingId("s1")).toBe("conn-2");
+  });
+
+  it("retryConnect 等待 ConnectSSHAsync 期间取消，connectingAssetIds 立即清零而不滞留到迟到 Promise 返回", async () => {
+    seedConnectedTab("s1");
+    vi.mocked(ConnectSSHAsync).mockResolvedValueOnce("conn-2");
+    useTerminalStore.getState().reconnect("s1");
+    await flush();
+    emit("ssh:connect:conn-2", { type: "error", error: "timeout" });
+
+    let resolveRetry: (id: string) => void = () => {};
+    vi.mocked(ConnectSSHAsync).mockReturnValueOnce(new Promise<string>((r) => (resolveRetry = r)));
+    useTerminalStore.getState().retryConnect("conn-2");
+    expect(useTerminalStore.getState().connectingAssetIds.has(1)).toBe(true);
+
+    // 取消必须立即清掉 connectingAssetIds，而不是等旧 Promise settle
+    useTerminalStore.getState().cancelConnect("conn-2");
+    expect(useTerminalStore.getState().connectingAssetIds.has(1)).toBe(false);
+    expect(useTerminalStore.getState().connections["conn-2"].status).toBe("cancelled");
+
+    resolveRetry("conn-3");
+    await flush();
+    expect(CancelSSHConnect).toHaveBeenCalledWith("conn-3");
+    expect(useTerminalStore.getState().connectingAssetIds.has(1)).toBe(false);
   });
 });

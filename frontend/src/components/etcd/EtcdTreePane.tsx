@@ -4,7 +4,6 @@ import { ChevronRight, ChevronDown, Folder, FileText } from "lucide-react";
 import { Input } from "@opskat/ui";
 import { AsyncState } from "@/components/common/AsyncState";
 import { PanelSidebar, SidebarRefreshButton } from "@/components/common/PanelSidebar";
-import { errorMessage } from "@/lib/errorMessage";
 import { useEtcdStore, etcdCacheKey, type EtcdTreeNode } from "@/stores/etcdStore";
 
 export interface EtcdTreePaneProps {
@@ -20,52 +19,33 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
   const { t } = useTranslation();
   const treeCache = useEtcdStore((s) => s.treeCache);
   const truncatedAt = useEtcdStore((s) => s.truncatedAt);
+  const prefixErrors = useEtcdStore((s) => s.prefixErrors);
+  const loadingPrefixes = useEtcdStore((s) => s.loadingPrefixes);
+  const refreshing = useEtcdStore((s) => s.refreshingAssets.has(assetId));
   const loadPrefix = useEtcdStore((s) => s.loadPrefix);
-  const invalidate = useEtcdStore((s) => s.invalidate);
+  const refreshAsset = useEtcdStore((s) => s.refreshAsset);
 
-  // treeCache / truncatedAt 按 `${assetId}:${prefix}` 索引,避免多 asset 同 prefix 互污。
+  // treeCache / truncatedAt / prefixErrors 按 `${assetId}:${prefix}` 索引,避免多 asset 同 prefix 互污。
   const nodesFor = (prefix: string) => treeCache.get(etcdCacheKey(assetId, prefix));
   const truncatedFor = (prefix: string) => truncatedAt.get(etcdCacheKey(assetId, prefix));
+  const errorFor = (prefix: string) => prefixErrors.get(etcdCacheKey(assetId, prefix)) ?? null;
+  const loadingFor = (prefix: string) => loadingPrefixes.has(etcdCacheKey(assetId, prefix));
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([ROOT_PREFIX]));
   const [filter, setFilter] = useState("");
-  const [refreshing, setRefreshing] = useState(false);
-  // 各层(含根)列举失败的原因,按 prefix 记;该层显示原因与重试,其余层照常可用。
-  const [loadErrors, setLoadErrors] = useState<ReadonlyMap<string, string>>(() => new Map());
-
-  function setLoadError(prefix: string, error: string | null) {
-    setLoadErrors((prev) => {
-      if (error === null && !prev.has(prefix)) return prev;
-      const next = new Map(prev);
-      if (error === null) next.delete(prefix);
-      else next.set(prefix, error);
-      return next;
-    });
-  }
 
   function load(prefix: string, opts?: { force?: boolean }) {
-    setLoadError(prefix, null);
-    return loadPrefix(assetId, prefix, opts).catch((e) => setLoadError(prefix, errorMessage(e)));
+    return loadPrefix(assetId, prefix, opts).catch(() => undefined);
   }
 
   // 刷新 keyspace：清缓存后重拉根 + 当前所有已展开层级，保持展开状态不塌。
-  async function refreshTree() {
-    if (refreshing) return;
-    setRefreshing(true);
-    invalidate(assetId);
-    const prefixes = new Set<string>([ROOT_PREFIX, ...expanded]);
-    try {
-      await Promise.all([...prefixes].map((p) => load(p, { force: true })));
-    } finally {
-      setRefreshing(false);
-    }
+  function refreshTree() {
+    return refreshAsset(assetId, expanded);
   }
 
   // 首次加载根 prefix —— 不需要显式展开根（根永远渲染顶层）
   useEffect(() => {
-    loadPrefix(assetId, ROOT_PREFIX)
-      .then(() => setLoadError(ROOT_PREFIX, null))
-      .catch((e) => setLoadError(ROOT_PREFIX, errorMessage(e)));
+    loadPrefix(assetId, ROOT_PREFIX).catch(() => undefined);
   }, [assetId, loadPrefix]);
 
   function toggleExpand(prefix: string) {
@@ -111,7 +91,8 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
 
     const isExpanded = expanded.has(node.prefix);
     const children = nodesFor(node.prefix);
-    const childError = loadErrors.get(node.prefix) ?? null;
+    const childError = errorFor(node.prefix);
+    const childLoading = loadingFor(node.prefix);
     const truncated = truncatedFor(node.prefix);
 
     return (
@@ -131,24 +112,42 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
           <span className="truncate font-medium text-foreground">{node.name}</span>
         </button>
         {isExpanded && (
-          <AsyncState
-            status={childError !== null ? "error" : children ? "ready" : "loading"}
-            error={childError}
-            onRetry={() => void load(node.prefix)}
-            empty={children && children.length === 0 ? t("etcd.tree.empty") : undefined}
-            className="items-start py-1 pr-2 text-left"
-          >
-            {children?.map((c) => renderNode(c, depth + 1))}
-            {truncated && (
-              <div
-                data-testid="etcd-tree-truncated"
-                className="px-2 py-1 text-xs italic text-muted-foreground"
-                style={{ paddingLeft: padding + 16 }}
-              >
-                {t("etcd.tree.truncated", { limit: LIST_LIMIT })}
-              </div>
+          <>
+            {childError !== null && children !== undefined && !childLoading && (
+              <AsyncState
+                status="error"
+                error={childError}
+                onRetry={() => void load(node.prefix, { force: true })}
+                className="items-start py-1 pr-2 text-left"
+              />
             )}
-          </AsyncState>
+            <AsyncState
+              status={
+                childLoading && !children
+                  ? "loading"
+                  : childError !== null && !children
+                    ? "error"
+                    : children
+                      ? "ready"
+                      : "loading"
+              }
+              error={childError}
+              onRetry={() => void load(node.prefix, { force: true })}
+              empty={children && children.length === 0 ? t("etcd.tree.empty") : undefined}
+              className="items-start py-1 pr-2 text-left"
+            >
+              {children?.map((c) => renderNode(c, depth + 1))}
+              {truncated && (
+                <div
+                  data-testid="etcd-tree-truncated"
+                  className="px-2 py-1 text-xs italic text-muted-foreground"
+                  style={{ paddingLeft: padding + 16 }}
+                >
+                  {t("etcd.tree.truncated", { limit: LIST_LIMIT })}
+                </div>
+              )}
+            </AsyncState>
+          </>
         )}
       </div>
     );
@@ -156,14 +155,22 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
 
   const rootNodes = nodesFor(ROOT_PREFIX);
   const rootTruncated = truncatedFor(ROOT_PREFIX);
-  const rootError = loadErrors.get(ROOT_PREFIX) ?? null;
-  const rootStatus = rootError !== null ? "error" : rootNodes ? "ready" : "loading";
+  const rootError = errorFor(ROOT_PREFIX);
+  const rootLoading = loadingFor(ROOT_PREFIX);
+  const rootStatus =
+    rootLoading && !rootNodes
+      ? "loading"
+      : rootError !== null && !rootNodes
+        ? "error"
+        : rootNodes
+          ? "ready"
+          : "loading";
 
   return (
     <PanelSidebar
       panelType="etcd"
       title={t("etcd.tree.title")}
-      actions={<SidebarRefreshButton onClick={() => void refreshTree()} loading={refreshing} />}
+      actions={<SidebarRefreshButton onClick={() => void refreshTree()} loading={refreshing || rootLoading} />}
       filter={
         <Input
           value={filter}
@@ -173,10 +180,14 @@ export function EtcdTreePane({ assetId, onSelectKey, selectedKey }: EtcdTreePane
         />
       }
     >
+      {/* 根列表已缓存后重连/刷新失败时保留现有树可用，原因与强制重试置顶显示（与 MongoDB / Redis 面板一致）。 */}
+      {rootError !== null && rootNodes !== undefined && !rootLoading && (
+        <AsyncState status="error" error={rootError} onRetry={() => void load(ROOT_PREFIX, { force: true })} />
+      )}
       <AsyncState
         status={rootStatus}
         error={rootError}
-        onRetry={() => void load(ROOT_PREFIX)}
+        onRetry={() => void load(ROOT_PREFIX, { force: true })}
         empty={rootNodes && rootNodes.length === 0 ? t("etcd.tree.empty") : undefined}
         className="flex-1"
       >

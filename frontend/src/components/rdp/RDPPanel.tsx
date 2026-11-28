@@ -21,6 +21,7 @@ import { decodeFrameBytes } from "./rdpFrame";
 import { pointerCursorStyle } from "./rdpCursor";
 import { RDPSessionOverlay, RDPStatusBar, RDPToolbar, type RDPStatus, type RDPViewMode } from "./RDPChrome";
 import { errorMessage } from "@/lib/errorMessage";
+import { registerLiveTabReconnector, type TabConnectionPhase } from "@/lib/tabReconnect";
 
 interface RDPConfig {
   host?: string;
@@ -83,8 +84,15 @@ function buttonFlag(button: number): number {
   return PTR_BUTTON1;
 }
 
-export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?: () => void }) {
+function toTabConnectionPhase(status: RDPStatus): TabConnectionPhase {
+  if (status === "error") return "failed";
+  if (status === "closed") return "disconnected";
+  return status;
+}
+
+export function RDPPanel({ tabId, asset, onEdit }: { tabId?: string; asset: asset_entity.Asset; onEdit?: () => void }) {
   const { t } = useTranslation();
+  const resolvedTabId = tabId ?? `rdp-${asset.ID}`;
   const parsedConfig = useMemo(() => parseConfig(asset), [asset]);
   const cfg = parsedConfig.config;
   const configError = parsedConfig.error;
@@ -125,6 +133,20 @@ export function RDPPanel({ asset, onEdit }: { asset: asset_entity.Asset; onEdit?
   const [cursorStyle, setCursorStyle] = useState("default");
   const [elapsed, setElapsed] = useState(0);
   const [reconnectNonce, setReconnectNonce] = useState(0);
+  const statusRef = useRef<RDPStatus>(status);
+
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  useEffect(
+    () =>
+      registerLiveTabReconnector(resolvedTabId, {
+        getPhase: () => toTabConnectionPhase(statusRef.current),
+        reconnect: () => setReconnectNonce((n) => n + 1),
+      }),
+    [resolvedTabId]
+  );
 
   const handleInputFailure = useCallback(
     (operationError: unknown) => {

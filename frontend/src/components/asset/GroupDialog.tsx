@@ -17,14 +17,16 @@ import { GroupSelect } from "@/components/asset/GroupSelect";
 import { useAssetStore } from "@/stores/assetStore";
 import { group_entity } from "../../../wailsjs/go/models";
 import { errorMessage } from "@/lib/errorMessage";
+import { notifySuccess } from "@/lib/notify";
 
 interface GroupDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   editGroup?: group_entity.Group | null;
+  defaultParentId?: number;
 }
 
-export function GroupDialog({ open, onOpenChange, editGroup }: GroupDialogProps) {
+export function GroupDialog({ open, onOpenChange, editGroup, defaultParentId = 0 }: GroupDialogProps) {
   const { t } = useTranslation();
   const { createGroup, updateGroup } = useAssetStore();
   const [name, setName] = useState("");
@@ -33,14 +35,18 @@ export function GroupDialog({ open, onOpenChange, editGroup }: GroupDialogProps)
   const [icon, setIcon] = useState("folder");
   const [saving, setSaving] = useState(false);
 
-  // 打开(或换编辑对象)时回填表单:渲染期对比上次 open/editGroup,替代 effect 里的级联 setState。
-  const [prevSync, setPrevSync] = useState<{ open: boolean; editGroup?: group_entity.Group | null }>({ open: false });
-  if (open !== prevSync.open || editGroup !== prevSync.editGroup) {
-    setPrevSync({ open, editGroup });
+  // 打开(或换编辑对象/默认父级)时回填表单:渲染期对比上次状态,替代 effect 里的级联 setState。
+  const [prevSync, setPrevSync] = useState<{
+    open: boolean;
+    editGroup?: group_entity.Group | null;
+    defaultParentId: number;
+  }>({ open: false, defaultParentId: 0 });
+  if (open !== prevSync.open || editGroup !== prevSync.editGroup || defaultParentId !== prevSync.defaultParentId) {
+    setPrevSync({ open, editGroup, defaultParentId });
     if (open) {
       setName(editGroup?.Name ?? "");
       setDescription(editGroup?.Description || "");
-      setParentId(editGroup?.ParentID || 0);
+      setParentId(editGroup ? editGroup.ParentID || 0 : defaultParentId);
       setIcon(editGroup?.Icon || "folder");
     }
   }
@@ -59,6 +65,8 @@ export function GroupDialog({ open, onOpenChange, editGroup }: GroupDialogProps)
             Icon: icon,
           })
         );
+        if (parentId > 0) useAssetStore.getState().expandGroup(parentId);
+        notifySuccess(t("asset.groupUpdated"));
       } else {
         await createGroup(
           new group_entity.Group({
@@ -68,6 +76,8 @@ export function GroupDialog({ open, onOpenChange, editGroup }: GroupDialogProps)
             Icon: icon,
           })
         );
+        if (parentId > 0) useAssetStore.getState().expandGroup(parentId);
+        notifySuccess(t("asset.groupCreated"));
       }
       onOpenChange(false);
     } catch (e) {
@@ -79,7 +89,7 @@ export function GroupDialog({ open, onOpenChange, editGroup }: GroupDialogProps)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm" onInteractOutside={(e) => e.preventDefault()}>
+      <DialogContent data-testid="group-dialog" className="sm:max-w-sm" onInteractOutside={(e) => e.preventDefault()}>
         <DialogHeader>
           <DialogTitle>
             {editGroup ? t("action.edit") : t("action.add")} {t("asset.group")}
@@ -89,6 +99,7 @@ export function GroupDialog({ open, onOpenChange, editGroup }: GroupDialogProps)
           <div className="grid gap-2">
             <Label>{t("asset.groupName")}</Label>
             <Input
+              data-testid="group-dialog-name-input"
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
@@ -122,7 +133,7 @@ export function GroupDialog({ open, onOpenChange, editGroup }: GroupDialogProps)
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {t("action.cancel")}
           </Button>
-          <Button onClick={handleSubmit} disabled={saving || !name.trim()}>
+          <Button data-testid="group-dialog-submit" onClick={handleSubmit} disabled={saving || !name.trim()}>
             {t("action.save")}
           </Button>
         </DialogFooter>

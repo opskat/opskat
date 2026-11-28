@@ -48,6 +48,8 @@ type System struct {
 	emit func(event string, data ...any)
 	// autoBackup 默认是 auto_backup_svc.Default()；测试注入使用临时状态文件的实例。
 	autoBackup *auto_backup_svc.Service
+	// bootShow 保证隐藏启动的窗口只显示一次：加载界面报告就绪与超时兜底先到者生效。
+	bootShow sync.Once
 }
 
 func (s *System) SetConfirmQuitHandler(handler func()) { s.confirmQuit = handler }
@@ -90,13 +92,16 @@ type windowRuntimeOps struct {
 	Unminimise     func(context.Context)
 	Show           func(context.Context)
 	SetAlwaysOnTop func(context.Context, bool)
+	// SetBackgroundColour 是原生窗口底色，网页透明处（含页面尚未绘制时）透出它。
+	SetBackgroundColour func(ctx context.Context, r, g, b, a uint8)
 }
 
 var windowOps = windowRuntimeOps{
-	IsMinimised:    wailsRuntime.WindowIsMinimised,
-	Unminimise:     wailsRuntime.WindowUnminimise,
-	Show:           wailsRuntime.WindowShow,
-	SetAlwaysOnTop: wailsRuntime.WindowSetAlwaysOnTop,
+	IsMinimised:         wailsRuntime.WindowIsMinimised,
+	Unminimise:          wailsRuntime.WindowUnminimise,
+	Show:                wailsRuntime.WindowShow,
+	SetAlwaysOnTop:      wailsRuntime.WindowSetAlwaysOnTop,
+	SetBackgroundColour: wailsRuntime.WindowSetBackgroundColour,
 }
 
 // New 构造 System binder。appCtx 来自 main.go 的根 context（cancel 后所有 binder 退出）。
@@ -109,9 +114,11 @@ func New(appCtx context.Context, skill SkillContent) *System {
 	}
 }
 
-// Startup Wails 启动回调：保存 Wails ctx 后续 EventsEmit 用，并触发自动更新检查、emit 系统状态。
+// Startup Wails 启动回调：保存 Wails ctx 后续 EventsEmit 用，启动隐藏窗口的显示兜底，
+// 并触发自动更新检查、emit 系统状态。
 func (s *System) Startup(ctx context.Context) {
 	s.ctx = ctx
+	s.startBootShowTimeout(bootShowTimeout)
 	s.subscribeQuitConfirmShown(ctx)
 	s.startAutoUpdateCheck()
 	s.emitSystemStatusImpl()

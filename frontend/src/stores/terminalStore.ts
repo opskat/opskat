@@ -31,6 +31,7 @@ import { errorMessage } from "../lib/errorMessage";
 import { createOrderedQueue, type OrderedQueue } from "../lib/orderedQueue";
 import { useTabStore, registerTabCloseHook, registerTabRestoreHook, type TerminalTabMeta } from "./tabStore";
 import { useAssetStore } from "./assetStore";
+import { registerTabReconnectAdapter, type TabConnectionPhase } from "../lib/tabReconnect";
 
 function disposeTerminalInstance(sessionId: string): void {
   import("@/components/terminal/terminalRegistry")
@@ -248,7 +249,8 @@ function getLeafIds(node: SplitNode): string[] {
   if (node.type === "terminal") return [node.sessionId];
   if (node.type === "pending") return [node.pendingId];
   if (node.type === "connecting") return [node.connectionId];
-  return [...getLeafIds(node.first), ...getLeafIds(node.second)];
+  if (node.type === "split") return [...getLeafIds(node.first), ...getLeafIds(node.second)];
+  return [];
 }
 
 function getConnectingIds(node: SplitNode): string[] {
@@ -324,6 +326,8 @@ const syncListeners = new Set<string>();
 
 export function __resetTerminalSyncListenersForTest() {
   syncListeners.clear();
+  pendingStarts.clear();
+  paneAttemptTokens.clear();
 }
 
 function registerSessionSyncListener(sessionId: string) {
@@ -524,12 +528,61 @@ function connectEventName(conn: ConnectionState): string {
 
 let failedAttemptSeq = 0;
 
+// 发起中（connectAsync 尚未返回、标签还没建）的连接，按资产索引：这段窗口里再次
+// connect 同一资产应复用它，而不是再拨一条连接。
+const startingConnects = new Map<number, Promise<string>>();
+// 重连 / 重试发起中（startPaneConnection 尚未拿到后端 connectionId）的槽位表：
+// 按 slotId 追踪 { assetId, token }，使 cancel/close 能立刻清除在途状态，且 getPhase 能识别连接中窗口。
+const pendingStarts = new Map<string, { assetId: number; token: number }>();
+// 每个窗格槽位单调递增的尝试序号：用于作废重试 / 取消 / 关闭前发出的迟到连接。
+const paneAttemptTokens = new Map<string, number>();
+
+function bumpSlotAttempt(slotId: string): number {
+  const next = (paneAttemptTokens.get(slotId) ?? 0) + 1;
+  paneAttemptTokens.set(slotId, next);
+  return next;
+}
+
+function invalidateSlotAttempt(slotId: string): number {
+  pendingStarts.delete(slotId);
+  return bumpSlotAttempt(slotId);
+}
+
+function isSlotAttemptCurrent(slotId: string, token: number): boolean {
+  return paneAttemptTokens.get(slotId) === token;
+}
+
+function hasInFlightForAsset(connections: Record<string, ConnectionState>, assetId: number): boolean {
+  if (startingConnects.has(assetId)) return true;
+  for (const entry of pendingStarts.values()) {
+    if (entry.assetId === assetId) return true;
+  }
+  return Object.values(connections).some((c) => c.assetId === assetId && isConnectionInFlight(c));
+}
+
+function syncConnectingAsset(assetId: number) {
+  useTerminalStore.setState((s) => {
+    const shouldBeConnecting = hasInFlightForAsset(s.connections, assetId);
+    const isConnecting = s.connectingAssetIds.has(assetId);
+    if (shouldBeConnecting === isConnecting) return s;
+    const next = new Set(s.connectingAssetIds);
+    if (shouldBeConnecting) next.add(assetId);
+    else next.delete(assetId);
+    return { connectingAssetIds: next };
+  });
+}
+
 /** 把窗格 slotId(终端或连接中节点)原位换成新的连接节点,并移除它原有的窗格/连接条目。 */
-function replaceSlotWithConnection(tabId: string, slotId: string, conn: ConnectionState) {
+function replaceSlotWithConnection(
+  tabId: string,
+  slotId: string,
+  conn: ConnectionState,
+  opts?: { skipOldCancel?: boolean }
+) {
   const state = useTerminalStore.getState();
   const old = state.connections[slotId];
   if (old) {
-    if (isConnectionInFlight(old)) CancelSSHConnect(slotId);
+    if (!opts?.skipOldCancel && isConnectionInFlight(old)) CancelSSHConnect(slotId);
     EventsOff(connectEventName(old));
   }
   if (state.tabData[tabId].panes[slotId]) disposeTerminalInstance(slotId);
@@ -558,10 +611,25 @@ function replaceSlotWithConnection(tabId: string, slotId: string, conn: Connecti
 
 /**
  * 为窗格 slotId 发起一次连接。owningTab 在后端返回时判定这次尝试是否仍被需要
- * (返回所在 tab id),窗格已关闭/取消时返回 undefined,迟到的后端连接随即被取消。
+ * (返回所在 tab id),窗格已关闭/取消/被新重试取代时返回 undefined,迟到的后端连接随即被取消。
  * 后端直接拒绝时窗格进入 error 态并显示原因。
  */
-function startPaneConnection(slotId: string, attempt: ConnectAttempt, owningTab: () => string | undefined) {
+function startPaneConnection(
+  slotId: string,
+  attempt: ConnectAttempt,
+  owningTab: () => string | undefined,
+  opts?: { skipOldCancel?: boolean }
+) {
+  const token = bumpSlotAttempt(slotId);
+  pendingStarts.set(slotId, { assetId: attempt.assetId, token });
+  syncConnectingAsset(attempt.assetId);
+
+  const finishPendingStart = () => {
+    if (pendingStarts.get(slotId)?.token === token) {
+      pendingStarts.delete(slotId);
+    }
+  };
+
   TRANSPORTS[attempt.transport]
     .connectAsync(attempt.assetId, {
       cols: 80,
@@ -571,25 +639,40 @@ function startPaneConnection(slotId: string, attempt: ConnectAttempt, owningTab:
     })
     .then(
       (connectionId: string) => {
-        const tabId = owningTab();
+        finishPendingStart();
+        const tabId = isSlotAttemptCurrent(slotId, token) ? owningTab() : undefined;
         if (!tabId) {
           CancelSSHConnect(connectionId);
+          syncConnectingAsset(attempt.assetId);
           return;
         }
-        replaceSlotWithConnection(tabId, slotId, newConnectionEntry(connectionId, attempt));
+        paneAttemptTokens.delete(slotId);
+        replaceSlotWithConnection(tabId, slotId, newConnectionEntry(connectionId, attempt), opts);
         watchConnection(connectionId);
+        syncConnectingAsset(attempt.assetId);
       },
       (err: unknown) => {
+        finishPendingStart();
         console.error("Connect failed:", err);
-        const tabId = owningTab();
-        if (!tabId) return;
+        const tabId = isSlotAttemptCurrent(slotId, token) ? owningTab() : undefined;
+        if (!tabId) {
+          syncConnectingAsset(attempt.assetId);
+          return;
+        }
+        paneAttemptTokens.delete(slotId);
         const message = errorMessage(err);
-        replaceSlotWithConnection(tabId, slotId, {
-          ...newConnectionEntry(`failed-${++failedAttemptSeq}`, attempt),
-          status: "error",
-          error: message,
-          logs: [{ message, timestamp: Date.now(), type: "error" }],
-        });
+        replaceSlotWithConnection(
+          tabId,
+          slotId,
+          {
+            ...newConnectionEntry(`failed-${++failedAttemptSeq}`, attempt),
+            status: "error",
+            error: message,
+            logs: [{ message, timestamp: Date.now(), type: "error" }],
+          },
+          opts
+        );
+        syncConnectingAsset(attempt.assetId);
       }
     );
 }
@@ -634,16 +717,17 @@ function attachSession(connectionId: string, sessionId: string) {
   }
 }
 
-// 发起中（connectAsync 尚未返回、标签还没建）的连接，按资产索引：这段窗口里再次
-// connect 同一资产应复用它，而不是再拨一条连接。
-const startingConnects = new Map<number, Promise<string>>();
-
 function watchConnection(connectionId: string, onFinished?: () => void) {
   const conn = useTerminalStore.getState().connections[connectionId];
+  if (!conn) return;
+  const assetId = conn.assetId;
   setupConnectionListener(
     connectionId,
     (sessionId) => attachSession(connectionId, sessionId),
-    onFinished,
+    () => {
+      syncConnectingAsset(assetId);
+      onFinished?.();
+    },
     conn.transport
   );
 }
@@ -820,21 +904,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       }));
 
       // Clear connectingAssetIds on connected or error
-      watchConnection(connectionId, () => {
-        set((s) => {
-          const next = new Set(s.connectingAssetIds);
-          next.delete(assetId);
-          return { connectingAssetIds: next };
-        });
-      });
+      watchConnection(connectionId);
 
       return connectionId;
     } catch (e) {
-      set((state) => {
-        const next = new Set(state.connectingAssetIds);
-        next.delete(assetId);
-        return { connectingAssetIds: next };
-      });
+      syncConnectingAsset(assetId);
       throw e;
     }
   },
@@ -855,11 +929,24 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const conn = get().connections[connectionId];
     if (!conn) return;
 
+    // 先中止仍在途的旧连接并解绑监听，避免旧连接的迟到 error / connected 事件打断本次重试。
+    if (isConnectionInFlight(conn)) CancelSSHConnect(connectionId);
+    EventsOff(connectEventName(conn));
+
     // 在原窗格内重试:旧条目先回到 connecting(显示进度与取消),后端返回后由新连接原位接管。
     set((s) => ({
       connections: {
         ...s.connections,
-        [connectionId]: { ...conn, status: "connecting", error: undefined, authFailed: undefined },
+        [connectionId]: {
+          ...conn,
+          status: "connecting",
+          currentStep: "resolve",
+          logs: [],
+          error: undefined,
+          authFailed: undefined,
+          challenge: undefined,
+          hostKeyVerify: undefined,
+        },
       },
     }));
 
@@ -878,7 +965,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         // 等待期间被取消或关闭:这次重试作废。
         if (s.connections[connectionId]?.status !== "connecting") return undefined;
         return findTabIdByLeaf(s.tabData, connectionId);
-      }
+      },
+      { skipOldCancel: true }
     );
 
     if (password) {
@@ -934,21 +1022,18 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const conn = get().connections[connectionId];
     if (!conn || !isConnectionInFlight(conn)) return;
 
+    invalidateSlotAttempt(connectionId);
     CancelSSHConnect(connectionId);
     EventsOff(connectEventName(conn));
 
     // 窗格留在 cancelled 态:可在原处重新连接,或关闭窗格。
-    set((s) => {
-      const next = new Set(s.connectingAssetIds);
-      next.delete(conn.assetId);
-      return {
-        connectingAssetIds: next,
-        connections: {
-          ...s.connections,
-          [connectionId]: { ...conn, status: "cancelled", challenge: undefined, hostKeyVerify: undefined },
-        },
-      };
-    });
+    set((s) => ({
+      connections: {
+        ...s.connections,
+        [connectionId]: { ...conn, status: "cancelled", challenge: undefined, hostKeyVerify: undefined },
+      },
+    }));
+    syncConnectingAsset(conn.assetId);
   },
 
   closeConnectionPane: (connectionId) => {
@@ -965,17 +1050,15 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       return;
     }
 
+    invalidateSlotAttempt(connectionId);
     if (isConnectionInFlight(conn)) CancelSSHConnect(connectionId);
     EventsOff(connectEventName(conn));
 
     set((s) => {
       const connections = { ...s.connections };
       delete connections[connectionId];
-      const next = new Set(s.connectingAssetIds);
-      next.delete(conn.assetId);
       return {
         connections,
-        connectingAssetIds: next,
         tabData: {
           ...s.tabData,
           [tabId]: {
@@ -986,6 +1069,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         },
       };
     });
+    syncConnectingAsset(conn.assetId);
   },
 
   disconnect: (sessionId) => {
@@ -1170,6 +1254,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }
 
     const pane = data.panes[sessionId];
+    const pending = pendingStarts.get(sessionId);
+    invalidateSlotAttempt(sessionId);
     unregisterSessionSyncListener(sessionId);
     if (pane?.connected) {
       TRANSPORTS[pane.transport].disconnect(sessionId);
@@ -1194,6 +1280,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
     // Drop the persistent xterm now that it's no longer in the tree.
     disposeTerminalInstance(sessionId);
+    if (pending) syncConnectingAsset(pending.assetId);
   },
 
   setSplitRatio: (tabId, path, ratio) => {
@@ -1219,6 +1306,11 @@ registerTabCloseHook((tab) => {
   const data = state.tabData[tab.id];
 
   // Cancel every pane still connecting (first connect, reconnect or retry) and drop its entry.
+  if (data) {
+    for (const leafId of getLeafIds(data.splitTree)) {
+      invalidateSlotAttempt(leafId);
+    }
+  }
   const conns = data
     ? getConnectingIds(data.splitTree).flatMap((id) => (state.connections[id] ? [state.connections[id]] : []))
     : [];
@@ -1243,13 +1335,55 @@ registerTabCloseHook((tab) => {
     const newTabData = { ...s.tabData };
     delete newTabData[tab.id];
     const newConnections = { ...s.connections };
-    const next = new Set(s.connectingAssetIds);
     for (const conn of conns) {
       delete newConnections[conn.connectionId];
-      next.delete(conn.assetId);
     }
-    return { tabData: newTabData, connections: newConnections, connectingAssetIds: next };
+    return { tabData: newTabData, connections: newConnections };
   });
+  const affectedAssetIds = new Set<number>([
+    (tab.meta as TerminalTabMeta).assetId,
+    ...conns.map((conn) => conn.assetId),
+  ]);
+  for (const assetId of affectedAssetIds) {
+    syncConnectingAsset(assetId);
+  }
+});
+
+// === Reconnect Adapter ===
+
+function connectionPhaseOf(conn: ConnectionState): TabConnectionPhase {
+  switch (conn.status) {
+    case "error":
+      return "failed";
+    case "cancelled":
+      return "cancelled";
+    case "auth_challenge":
+    case "host_key_verify":
+      return "waiting_input";
+    case "connected":
+      return "connected";
+    default:
+      return "connecting";
+  }
+}
+
+registerTabReconnectAdapter({
+  match: (tab) => tab.type === "terminal",
+  getPhase: (tab) => {
+    const state = useTerminalStore.getState();
+    const data = state.tabData[tab.id];
+    if (!data) return "disconnected";
+    if (pendingStarts.has(data.activePaneId)) return "connecting";
+    const activeConn = state.connections[data.activePaneId];
+    if (activeConn) return connectionPhaseOf(activeConn);
+    const activePane = data.panes[data.activePaneId];
+    if (activePane) return activePane.connected ? "connected" : "disconnected";
+    // 分屏中的 pending 节点
+    return "connecting";
+  },
+  reconnect: (tab) => {
+    useTerminalStore.getState().reconnect(tab.id);
+  },
 });
 
 // === Restore Hook: initialize tabData + auto-reconnect ===

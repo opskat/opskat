@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useTerminalThemeStore } from "@/stores/terminalThemeStore";
+import { useShortcutStore } from "@/stores/shortcutStore";
+import { cloneDefaultMouseShortcuts, MOUSE_SHORTCUTS_BACKUP_KEY } from "@/stores/terminalMouseShortcuts";
 import { BackupImportDialog, type BackupImportSource } from "@/components/settings/BackupImportDialog";
 import { backup_svc } from "../../../../wailsjs/go/models";
 
@@ -70,5 +72,36 @@ describe("BackupImportDialog", () => {
     await waitFor(() => expect(useTerminalThemeStore.getState().customThemes[0].name).toBe("Mine v2"));
     expect(useTerminalThemeStore.getState().customThemes).toHaveLength(1);
     expect(useTerminalThemeStore.getState().selectedThemeId).toBe("custom-mine");
+  });
+
+  it("restores customized terminal mouse shortcuts embedded under $mouseShortcuts", async () => {
+    useShortcutStore.setState({ mouseShortcuts: cloneDefaultMouseShortcuts() });
+    const summary = new backup_svc.BackupSummary({
+      version: "1.0",
+      exported_at: "2026-11-25T00:00:00Z",
+      asset_count: 0,
+      group_count: 0,
+      has_shortcuts: true,
+    });
+    const source = fileSource(summary);
+    vi.mocked(source.execute).mockResolvedValue(
+      new backup_svc.ImportResult({
+        shortcuts: JSON.stringify({
+          [MOUSE_SHORTCUTS_BACKUP_KEY]: { right: "terminal.copyOrPaste", back: "none" },
+        }),
+      })
+    );
+    render(<BackupImportDialog open onOpenChange={vi.fn()} source={source} />);
+
+    fireEvent.click(screen.getByRole("switch", { name: "backup.importShortcuts" }));
+    fireEvent.click(screen.getByRole("button", { name: "backup.import" }));
+
+    await waitFor(() => expect(useShortcutStore.getState().mouseShortcuts.right).toBe("terminal.copyOrPaste"));
+    expect(useShortcutStore.getState().mouseShortcuts).toEqual({
+      right: "terminal.copyOrPaste",
+      middle: "terminal.paste",
+      back: "none",
+      forward: "tab.next",
+    });
   });
 });

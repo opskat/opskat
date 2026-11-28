@@ -191,12 +191,13 @@ func (s *SSH) ConnectSSHAsync(req SSHConnectRequest) (string, error) {
 	eventName := "ssh:connect:" + connectionID
 
 	emitEvent := func(event SSHConnectEvent) {
-		wailsRuntime.EventsEmit(s.ctx, eventName, event)
+		s.emit(eventName, event)
 	}
 
 	go func() {
 		defer func() {
 			s.pendingConnections.Delete(connectionID)
+			cancel()
 		}()
 
 		emitEvent(SSHConnectEvent{Type: "progress", Step: "resolve", Message: "正在解析凭证..."})
@@ -239,13 +240,13 @@ func (s *SSH) ConnectSSHAsync(req SSHConnectRequest) (string, error) {
 			InitialWorkdir:           req.InitialWorkdir,
 			StartupCommand:           sshCfg.StartupCommand,
 			OnData: func(sid string, data []byte) {
-				wailsRuntime.EventsEmit(s.ctx, "ssh:data:"+sid, base64.StdEncoding.EncodeToString(data))
+				s.emit("ssh:data:"+sid, base64.StdEncoding.EncodeToString(data))
 			},
 			OnClosed: func(sid string) {
-				wailsRuntime.EventsEmit(s.ctx, "ssh:closed:"+sid, nil)
+				s.emit("ssh:closed:"+sid, nil)
 			},
 			OnSync: func(sid string, state ssh_svc.DirectorySyncState) {
-				wailsRuntime.EventsEmit(s.ctx, "ssh:sync:"+sid, state)
+				s.emit("ssh:sync:"+sid, state)
 			},
 			OnProgress: func(step, message string) {
 				emitEvent(SSHConnectEvent{Type: "progress", Step: step, Message: message})
@@ -343,11 +344,22 @@ func (s *SSH) ConnectSSHAsync(req SSHConnectRequest) (string, error) {
 
 		sessionID, err := s.manager.Connect(connectCfg)
 		if err != nil {
+			if connCtx.Err() != nil {
+				logger.Ctx(connCtx).Info("ssh async connect canceled",
+					zap.Int64("assetID", req.AssetID), zap.String("connectionID", connectionID))
+				return
+			}
 			emitEvent(SSHConnectEvent{
 				Type:       "error",
 				Error:      err.Error(),
 				AuthFailed: isSSHAuthError(err),
 			})
+			return
+		}
+		if connCtx.Err() != nil {
+			logger.Ctx(connCtx).Info("ssh async connect canceled after session established, disconnecting orphan session",
+				zap.Int64("assetID", req.AssetID), zap.String("connectionID", connectionID), zap.String("sessionID", sessionID))
+			s.manager.Disconnect(sessionID)
 			return
 		}
 

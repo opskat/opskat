@@ -37,7 +37,7 @@ export function K8sClusterPage({ asset }: Props) {
   const assetId = asset.ID;
   const cluster = useK8sStore((s) => s.clusters[assetId]);
   const initCluster = useK8sStore((s) => s.initCluster);
-  const loadVersion = useK8sStore((s) => s.loadVersion);
+  const retryCluster = useK8sStore((s) => s.retryCluster);
   const refreshAll = useK8sStore((s) => s.refreshAll);
   const setNamespace = useK8sStore((s) => s.setNamespace);
 
@@ -55,7 +55,7 @@ export function K8sClusterPage({ asset }: Props) {
       <AsyncState
         status={version?.status === "error" ? "error" : "loading"}
         error={version?.error}
-        onRetry={() => void loadVersion(assetId)}
+        onRetry={() => void retryCluster(assetId)}
         className="h-full"
       />
     );

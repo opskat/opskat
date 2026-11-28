@@ -529,3 +529,248 @@ describe("AssetTree load states", () => {
     expect(await screen.findByText("asset.emptyTitle")).toBeTruthy();
   });
 });
+
+describe("AssetTree session status indicator alignment", () => {
+  const renderTree = () =>
+    render(
+      <TooltipProvider>
+        <AssetTree
+          collapsed={false}
+          onAddAsset={() => {}}
+          onAddGroup={() => {}}
+          onEditGroup={() => {}}
+          onGroupDetail={() => {}}
+          onEditAsset={() => {}}
+          onCopyAsset={() => {}}
+          onConnectAsset={() => {}}
+          onSelectAsset={() => {}}
+        />
+      </TooltipProvider>
+    );
+
+  const makeGroupedAsset = (id: number, name: string, groupId: number) =>
+    new asset_entity.Asset({
+      ID: id,
+      Name: name,
+      Type: "ssh",
+      GroupID: groupId,
+      Icon: "",
+      Status: 1,
+      SortOrder: id,
+    });
+
+  const makeGroup = (id: number, name: string, parentId = 0) =>
+    new group_entity.Group({
+      ID: id,
+      Name: name,
+      ParentID: parentId,
+      Icon: "",
+      SortOrder: id,
+      Status: 1,
+    });
+
+  const getRowInner = (name: string) => {
+    const label = screen.getByText(name);
+    const rowInner = label.parentElement as HTMLElement;
+    expect(rowInner).toBeTruthy();
+    return { label, rowInner };
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    useTabStore.setState({ tabs: [], activeTabId: null });
+    useTerminalStore.setState({ tabData: {}, connections: {}, connectingAssetIds: new Set() });
+    useQueryStore.setState({ dbStates: {}, redisStates: {}, mongoStates: {} });
+    useAssetStore.setState({
+      assets: [],
+      groups: [],
+      selectedAssetId: null,
+      selectedGroupId: null,
+      collapsedGroupIds: [],
+      loading: false,
+      initialized: false,
+      loadErrors: { assets: null, groups: null },
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("places the active session indicator to the left of the icon without shifting sibling rows across depths", async () => {
+    const rootGroup = makeGroup(1, "hanna", 0);
+    const childGroup = makeGroup(2, "wh-local", 1);
+    const nestedIdle = makeGroupedAsset(11, "LAN-Dev-113", 2);
+    const nestedActive = makeGroupedAsset(12, "LAN-Dev-85", 2);
+    const ungroupedActive = makeGroupedAsset(13, "Root-Active", 0);
+    const ungroupedIdle = makeGroupedAsset(14, "Root-Idle", 0);
+
+    vi.mocked(ListGroups).mockResolvedValue([rootGroup, childGroup]);
+    vi.mocked(ListAssets).mockResolvedValue([nestedIdle, nestedActive, ungroupedActive, ungroupedIdle]);
+
+    useTabStore.setState({
+      tabs: [
+        {
+          id: "sess-12",
+          type: "terminal",
+          label: "LAN-Dev-85",
+          meta: {
+            type: "terminal",
+            assetId: 12,
+            assetName: "LAN-Dev-85",
+            assetIcon: "",
+            host: "10.0.0.12",
+            port: 22,
+            username: "root",
+          },
+        },
+        {
+          id: "sess-13",
+          type: "terminal",
+          label: "Root-Active",
+          meta: {
+            type: "terminal",
+            assetId: 13,
+            assetName: "Root-Active",
+            assetIcon: "",
+            host: "10.0.0.13",
+            port: 22,
+            username: "root",
+          },
+        },
+      ],
+      activeTabId: "sess-12",
+    });
+    useTerminalStore.setState({
+      tabData: {
+        "sess-12": {
+          splitTree: { type: "terminal", sessionId: "sess-12" },
+          activePaneId: "sess-12",
+          panes: { "sess-12": { sessionId: "sess-12", transport: "ssh", connected: true, connectedAt: Date.now() } },
+          directoryFollowMode: "off",
+        },
+        "sess-13": {
+          splitTree: { type: "terminal", sessionId: "sess-13" },
+          activePaneId: "sess-13",
+          panes: { "sess-13": { sessionId: "sess-13", transport: "ssh", connected: true, connectedAt: Date.now() } },
+          directoryFollowMode: "off",
+        },
+      },
+      connections: {},
+      connectingAssetIds: new Set(),
+    });
+
+    renderTree();
+
+    expect(await screen.findByText("LAN-Dev-85")).toBeTruthy();
+
+    // Nested depth = 2 siblings: active and inactive keep identical 3-slot structure and left offset
+    // (paddingLeft 32px + 6px status slot + 6px gap = 44px icon X, unchanged from 20 + 2 * 12).
+    const idleNested = getRowInner("LAN-Dev-113");
+    const activeNested = getRowInner("LAN-Dev-85");
+
+    expect(idleNested.rowInner.style.paddingLeft).toBe("32px");
+    expect(activeNested.rowInner.style.paddingLeft).toBe("32px");
+    expect(idleNested.rowInner.children).toHaveLength(3);
+    expect(activeNested.rowInner.children).toHaveLength(3);
+
+    const [idleSlot, idleIcon, idleName] = Array.from(idleNested.rowInner.children) as HTMLElement[];
+    const [activeSlot, activeIcon, activeName] = Array.from(activeNested.rowInner.children) as HTMLElement[];
+
+    // Nothing sits between icon and asset name on either row.
+    expect(idleIcon.nextElementSibling).toBe(idleName);
+    expect(activeIcon.nextElementSibling).toBe(activeName);
+    expect(idleIcon.tagName.toLowerCase()).toBe("svg");
+    expect(activeIcon.tagName.toLowerCase()).toBe("svg");
+
+    // Leading slot reserves identical width for both siblings; only the active row renders the status dot inside it.
+    expect(idleSlot.className).toContain("w-1.5");
+    expect(idleSlot.className).toContain("shrink-0");
+    expect(idleSlot.querySelector(".bg-success")).toBeNull();
+
+    expect(activeSlot.className).toContain("w-1.5");
+    expect(activeSlot.className).toContain("shrink-0");
+    const nestedDot = activeSlot.querySelector(".bg-success") as HTMLElement | null;
+    expect(nestedDot).not.toBeNull();
+    expect(nestedDot?.getAttribute("title")).toBe("ssh.session.connected");
+    expect(nestedDot?.getAttribute("aria-label")).toBe("ssh.session.connected");
+
+    // Ungrouped depth = 1 siblings: paddingLeft 20px (+ 6px slot + 6px gap = 32px icon X, unchanged from 20 + 1 * 12).
+    const activeUngrouped = getRowInner("Root-Active");
+    const idleUngrouped = getRowInner("Root-Idle");
+    expect(activeUngrouped.rowInner.style.paddingLeft).toBe("20px");
+    expect(idleUngrouped.rowInner.style.paddingLeft).toBe("20px");
+    expect(activeUngrouped.rowInner.children).toHaveLength(3);
+    expect(idleUngrouped.rowInner.children).toHaveLength(3);
+    expect(activeUngrouped.rowInner.children[0].querySelector(".bg-success")).not.toBeNull();
+    expect(idleUngrouped.rowInner.children[0].querySelector(".bg-success")).toBeNull();
+    expect(activeUngrouped.rowInner.children[1].nextElementSibling).toBe(activeUngrouped.label);
+  });
+
+  it("keeps the left status slot aligned while connecting and during search filtering", async () => {
+    const user = userEvent.setup();
+    const rootGroup = makeGroup(1, "prod", 0);
+    const connectingOnly = makeGroupedAsset(21, "Web-Connecting", 1);
+    const activeAndConnecting = makeGroupedAsset(22, "Web-Active-Connecting", 1);
+
+    vi.mocked(ListGroups).mockResolvedValue([rootGroup]);
+    vi.mocked(ListAssets).mockResolvedValue([connectingOnly, activeAndConnecting]);
+
+    useTabStore.setState({
+      tabs: [
+        {
+          id: "sess-22",
+          type: "terminal",
+          label: "Web-Active-Connecting",
+          meta: {
+            type: "terminal",
+            assetId: 22,
+            assetName: "Web-Active-Connecting",
+            assetIcon: "",
+            host: "10.0.0.22",
+            port: 22,
+            username: "root",
+          },
+        },
+      ],
+      activeTabId: "sess-22",
+    });
+    useTerminalStore.setState({
+      tabData: {
+        "sess-22": {
+          splitTree: { type: "terminal", sessionId: "sess-22" },
+          activePaneId: "sess-22",
+          panes: { "sess-22": { sessionId: "sess-22", transport: "ssh", connected: true, connectedAt: Date.now() } },
+          directoryFollowMode: "off",
+        },
+      },
+      connections: {},
+      connectingAssetIds: new Set([21, 22]),
+    });
+
+    renderTree();
+    expect(await screen.findByText("Web-Active-Connecting")).toBeTruthy();
+
+    const connOnlyRow = getRowInner("Web-Connecting");
+    const activeConnRow = getRowInner("Web-Active-Connecting");
+
+    expect(connOnlyRow.rowInner.style.paddingLeft).toBe("20px");
+    expect(activeConnRow.rowInner.style.paddingLeft).toBe("20px");
+    expect(connOnlyRow.rowInner.children).toHaveLength(3);
+    expect(activeConnRow.rowInner.children).toHaveLength(3);
+
+    // Spinner stays in the icon slot (index 1); status dot stays in the leading slot (index 0).
+    expect(connOnlyRow.rowInner.children[0].querySelector(".bg-success")).toBeNull();
+    expect(connOnlyRow.rowInner.children[1].getAttribute("class")).toContain("animate-spin");
+    expect(activeConnRow.rowInner.children[0].querySelector(".bg-success")).not.toBeNull();
+    expect(activeConnRow.rowInner.children[1].getAttribute("class")).toContain("animate-spin");
+    expect(activeConnRow.rowInner.children[1].nextElementSibling).toBe(activeConnRow.label);
+
+    // Search filtering preserves the same left status slot and row padding.
+    await user.type(screen.getByTestId("asset-tree-search"), "Active");
+    const filteredRow = getRowInner("Web-Active-Connecting");
+    expect(filteredRow.rowInner.style.paddingLeft).toBe("20px");
+    expect(filteredRow.rowInner.children[0].querySelector(".bg-success")).not.toBeNull();
+    expect(filteredRow.rowInner.children[1].nextElementSibling).toBe(filteredRow.label);
+  });
+});

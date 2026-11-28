@@ -9,7 +9,8 @@ import {
 } from "../../../wailsjs/go/k8s/K8s";
 import type { k8s } from "../../../wailsjs/go/models";
 import { objectsKey, resourceTabId, useK8sStore } from "../k8sStore";
-import { useTabStore } from "../tabStore";
+import { useTabStore, type Tab } from "../tabStore";
+import { getTabConnectionPhase, reconnectTab, reconnectTabIfNeeded } from "@/lib/tabReconnect";
 
 const TYPES = {
   types: [
@@ -460,5 +461,47 @@ describe("k8sStore", () => {
     useTabStore.getState().closeTab(`k8s-${assetId}`);
     expect(ReleaseK8sConnections).toHaveBeenCalledTimes(1);
     expect(ReleaseK8sConnections).toHaveBeenCalledWith(assetId);
+  });
+
+  it("retryCluster retries version, types, and namespaces together and integrates with tabReconnect", async () => {
+    const tab: Tab = {
+      id: `k8s-${assetId}`,
+      type: "page",
+      label: "prod",
+      meta: { type: "page", pageId: "k8s-cluster", assetId },
+    };
+
+    vi.mocked(GetK8sClusterVersion).mockRejectedValueOnce(new Error("dial timeout"));
+    vi.mocked(GetK8sResourceTypes).mockRejectedValueOnce(new Error("dial timeout"));
+    vi.mocked(ListK8sResources).mockRejectedValueOnce(new Error("dial timeout"));
+
+    useK8sStore.getState().initCluster(assetId, "");
+    expect(getTabConnectionPhase(tab)).toBe("connecting");
+    await flush();
+
+    const failed = useK8sStore.getState().clusters[assetId];
+    expect(failed.version.status).toBe("error");
+    expect(failed.types.status).toBe("error");
+    expect(failed.namespaces.status).toBe("error");
+    expect(getTabConnectionPhase(tab)).toBe("failed");
+
+    // Reconnecting via tabReconnect invokes retryCluster, recovering version + types + namespaces together.
+    mockCluster(namespacesOK);
+    expect(await reconnectTabIfNeeded(tab)).toBe(true);
+    await flush();
+
+    const recovered = useK8sStore.getState().clusters[assetId];
+    expect(recovered.version.status).toBe("ready");
+    expect(recovered.types.status).toBe("ready");
+    expect(recovered.namespaces.status).toBe("ready");
+    expect(getTabConnectionPhase(tab)).toBe("connected");
+
+    // Once connected, reconnectTabIfNeeded does not trigger reload, while explicit reconnectTab calls refreshAll.
+    vi.mocked(GetK8sClusterVersion).mockClear();
+    expect(await reconnectTabIfNeeded(tab)).toBe(false);
+    expect(GetK8sClusterVersion).not.toHaveBeenCalled();
+
+    expect(await reconnectTab(tab)).toBe(true);
+    expect(GetK8sClusterVersion).toHaveBeenCalledTimes(1);
   });
 });

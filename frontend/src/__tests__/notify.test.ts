@@ -14,6 +14,15 @@ describe("notify helpers", () => {
     expect(toast.success).toHaveBeenCalledWith("已复制", { position: "top-center", duration: 1000 });
   });
 
+  it("notifyCopied 支持传 id 覆盖前一条复制提示", () => {
+    notifyCopied("已复制", { id: "terminal-copied" });
+    expect(toast.success).toHaveBeenCalledWith("已复制", {
+      position: "top-center",
+      duration: 1000,
+      id: "terminal-copied",
+    });
+  });
+
   it("notifySuccess 顶部居中，沿用默认停留时长", () => {
     notifySuccess("已保存");
     expect(toast.success).toHaveBeenCalledWith("已保存", { position: "top-center" });

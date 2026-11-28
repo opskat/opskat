@@ -27,11 +27,16 @@ func FormatDenyMessage(_ context.Context, assetName, command, reason string, hin
 	return sb.String()
 }
 
-// ResolveGroupChain 递归获取组链（组 → 父组 → ... → 根），最大深度 5
+// ResolveGroupChain 递归获取组链（组 → 父组 → ... → 根），通过 visited 集合防止成环死循环。
 func ResolveGroupChain(ctx context.Context, groupID int64) []*group_entity.Group {
 	var chain []*group_entity.Group
+	visited := make(map[int64]struct{})
 	currentID := groupID
-	for i := 0; i < 5 && currentID > 0; i++ {
+	for currentID > 0 {
+		if _, seen := visited[currentID]; seen {
+			break
+		}
+		visited[currentID] = struct{}{}
 		g, err := group_repo.Group().Find(ctx, currentID)
 		if err != nil {
 			break

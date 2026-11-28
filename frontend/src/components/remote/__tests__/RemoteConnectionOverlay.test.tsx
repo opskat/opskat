@@ -17,7 +17,8 @@ describe("RemoteConnectionOverlay", () => {
     );
     expect(container.firstChild).toBeNull();
   });
-  it("shows host:port while connecting", () => {
+  it("shows host:port and an explicit reconnect button while connecting (without reusing error reconnectTestId)", () => {
+    const onReconnect = vi.fn();
     render(
       <RemoteConnectionOverlay
         status="connecting"
@@ -25,11 +26,15 @@ describe("RemoteConnectionOverlay", () => {
         host="10.0.0.1"
         port={5901}
         labels={labels}
-        onReconnect={() => {}}
+        onReconnect={onReconnect}
+        reconnectTestId="x-reconnect"
       />
     );
     expect(screen.getByText("Connecting...")).toBeInTheDocument();
     expect(screen.getByText("10.0.0.1:5901")).toBeInTheDocument();
+    expect(screen.queryByTestId("x-reconnect")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("x-reconnect-connecting"));
+    expect(onReconnect).toHaveBeenCalledTimes(1);
   });
   it("shows error + reconnect/edit with testids and fires callbacks", () => {
     const onReconnect = vi.fn();

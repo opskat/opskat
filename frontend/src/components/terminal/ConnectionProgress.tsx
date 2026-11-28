@@ -215,17 +215,28 @@ export function ConnectionProgress({ connectionId, isTabActive, isPaneActive }: 
           />
         )}
 
-        {/* Cancel button (when connecting) */}
+        {/* Connecting actions: retry immediately or cancel */}
         {connection.status === "connecting" && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground"
-            onClick={() => cancelConnect(connectionId)}
-          >
-            <X className="h-3.5 w-3.5 mr-1" />
-            {t("action.cancel")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              data-testid="ssh-connecting-retry"
+              onClick={() => retryConnect(connectionId)}
+            >
+              <RotateCcw className="h-3.5 w-3.5 mr-1" />
+              {t("ssh.connectProgress.retry")}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground"
+              onClick={() => cancelConnect(connectionId)}
+            >
+              <X className="h-3.5 w-3.5 mr-1" />
+              {t("action.cancel")}
+            </Button>
+          </div>
         )}
       </div>
 

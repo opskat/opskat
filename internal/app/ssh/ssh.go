@@ -57,6 +57,9 @@ type SSH struct {
 
 	connIDGen *sessionid.Generator
 
+	// emit 向前端发事件；默认走 Wails EventsEmit，测试可替换以观测事件。
+	emit func(event string, payload any)
+
 	pendingAuthResponses    sync.Map // map[string]chan []string
 	pendingHostKeyResponses sync.Map // map[string]chan ssh_svc.HostKeyAction
 	pendingConnections      sync.Map // map[string]context.CancelFunc
@@ -71,6 +74,9 @@ func New(appCtx context.Context, lang LangProvider, mgr *ssh_svc.Manager, sftp *
 		sftp:      sftp,
 		pool:      pool,
 		connIDGen: sessionid.NewGenerator("conn"),
+	}
+	s.emit = func(event string, payload any) {
+		wailsRuntime.EventsEmit(s.ctx, event, payload)
 	}
 	// ZMODEM 文件桥的进度复用 SFTP 同一套 "transfer:progress:<id>" 事件管线。
 	// emit 在调用时才读 s.ctx（Startup 注入），传输总发生在 Startup 之后，故安全。

@@ -12,13 +12,22 @@ import {
   quoteFamilyName,
   resolveTerminalFontFamily,
 } from "@/data/terminalFonts";
+import {
+  migrateLegacyCopyBehaviorStorage,
+  TERMINAL_THEME_STORAGE_KEY,
+  type TerminalSelectionAction,
+} from "@/stores/terminalMouseShortcuts";
+
+export type { TerminalSelectionAction };
+
+// Run one-time migration before Zustand persist hydrates from localStorage.
+migrateLegacyCopyBehaviorStorage();
 
 export const SCROLLBACK_MIN = 100;
 export const SCROLLBACK_MAX = 1000000;
 export const SCROLLBACK_DEFAULT = 25000;
 
 export type WebglFailureCause = "init-threw" | "context-loss";
-export type TerminalCopyBehavior = "popover-menu" | "smart-right-click" | "select-copy-right-paste";
 
 export interface WebglFailure {
   cause: WebglFailureCause;
@@ -41,7 +50,7 @@ interface TerminalThemeState {
   // 系统剪贴板。默认开启（多数现代终端如此）；仅"写入"透传，读回请求始终被拒绝，所以
   // 最坏情况是恶意远端覆盖剪贴板，连接不受信主机时可在设置里关掉。
   osc52ClipboardEnabled: boolean;
-  copyBehavior: TerminalCopyBehavior;
+  selectionAction: TerminalSelectionAction;
   // 分屏窗格顶部工具条：true = 固定常驻；false = 隐藏，鼠标移到窗格顶部时向下滑出。
   toolbarPinned: boolean;
   // 最近一次 WebGL 自动关闭的原因。setWebglEnabled(true) 会把它清掉，所以只在
@@ -56,7 +65,7 @@ interface TerminalThemeState {
   setWebglEnabled: (enabled: boolean) => void;
   setHighlightLinks: (enabled: boolean) => void;
   setOsc52ClipboardEnabled: (enabled: boolean) => void;
-  setCopyBehavior: (behavior: TerminalCopyBehavior) => void;
+  setSelectionAction: (action: TerminalSelectionAction) => void;
   setToolbarPinned: (pinned: boolean) => void;
   reportWebglFailure: (failure: WebglFailure) => void;
   addCustomTheme: (theme: TerminalTheme) => void;
@@ -92,7 +101,7 @@ export const useTerminalThemeStore = create<TerminalThemeState>()(
       webglEnabled: true,
       highlightLinks: false,
       osc52ClipboardEnabled: true,
-      copyBehavior: "popover-menu",
+      selectionAction: "popover",
       toolbarPinned: true,
       webglError: null,
 
@@ -102,7 +111,7 @@ export const useTerminalThemeStore = create<TerminalThemeState>()(
       setWebglEnabled: (enabled) => set(enabled ? { webglEnabled: true, webglError: null } : { webglEnabled: false }),
       setHighlightLinks: (enabled) => set({ highlightLinks: enabled }),
       setOsc52ClipboardEnabled: (enabled) => set({ osc52ClipboardEnabled: enabled }),
-      setCopyBehavior: (behavior) => set({ copyBehavior: behavior }),
+      setSelectionAction: (selectionAction) => set({ selectionAction }),
       setToolbarPinned: (pinned) => set({ toolbarPinned: pinned }),
       reportWebglFailure: (failure) => set({ webglError: failure }),
 
@@ -181,7 +190,7 @@ export const useTerminalThemeStore = create<TerminalThemeState>()(
       },
     }),
     {
-      name: "terminal_theme",
+      name: TERMINAL_THEME_STORAGE_KEY,
       // fontFamily 是从 fontPresetId / customFontFamily 派生的字段,不要让它
       // 进入 localStorage —— 否则常量 DEFAULT_TERMINAL_FONT_FAMILY 一旦变更,
       // 老用户重新水合时 fontFamily 还指向旧字符串,withTerminalFontFallback

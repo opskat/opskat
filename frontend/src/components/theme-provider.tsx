@@ -1,4 +1,5 @@
 import { createContext, use, useEffect, useState } from "react";
+import { syncWindowBackground } from "@/lib/windowBackground";
 
 export type Theme = "dark" | "light" | "system";
 
@@ -33,10 +34,12 @@ export function ThemeProvider({
     if (theme === "system") {
       const systemTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
       root.classList.add(systemTheme);
+      syncWindowBackground();
       return;
     }
 
     root.classList.add(theme);
+    syncWindowBackground();
   }, [theme]);
 
   useEffect(() => {
@@ -46,6 +49,7 @@ export function ThemeProvider({
       const root = window.document.documentElement;
       root.classList.remove("light", "dark");
       root.classList.add(mediaQuery.matches ? "dark" : "light");
+      syncWindowBackground();
     };
     mediaQuery.addEventListener("change", handler);
     return () => mediaQuery.removeEventListener("change", handler);

@@ -88,4 +88,19 @@ describe("AssetDetail policy when the type definition registers late", () => {
     // 不能因为 policyFields 停在 {} 而把已有 allow/deny 覆盖掉
     expect(saved).toEqual({ allow_list: ["list", "get"], deny_list: ["delete"] });
   });
+
+  it("keeps the Connect button clickable while isConnecting is true so clicking focuses the connecting tab", () => {
+    const onConnect = vi.fn();
+    const sshAsset = new asset_entity.Asset({ ID: 8, Name: "web-01", Type: "ssh", Config: "{}" });
+    render(
+      <TooltipProvider>
+        <AssetDetail asset={sshAsset} isConnecting onEdit={vi.fn()} onDelete={vi.fn()} onConnect={onConnect} />
+      </TooltipProvider>
+    );
+
+    const connectBtn = screen.getByRole("button", { name: "ssh.connect" });
+    expect(connectBtn).not.toBeDisabled();
+    fireEvent.click(connectBtn);
+    expect(onConnect).toHaveBeenCalledTimes(1);
+  });
 });

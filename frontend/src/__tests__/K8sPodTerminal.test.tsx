@@ -38,8 +38,11 @@ vi.mock("@xterm/xterm", () => ({
     rows = 24;
     options: Record<string, unknown>;
     ctorOptions: Record<string, unknown>;
+    modes = { mouseTrackingMode: "none" as const };
     write = vi.fn();
     dispose = vi.fn();
+    clear = vi.fn();
+    clearSelection = vi.fn();
     onDataHandler?: (data: string) => void;
     constructor(options: Record<string, unknown>) {
       this.ctorOptions = options;
@@ -52,6 +55,9 @@ vi.mock("@xterm/xterm", () => ({
     }
     onData(handler: (data: string) => void) {
       this.onDataHandler = handler;
+      return { dispose: vi.fn() };
+    }
+    onSelectionChange() {
       return { dispose: vi.fn() };
     }
     focus() {}
